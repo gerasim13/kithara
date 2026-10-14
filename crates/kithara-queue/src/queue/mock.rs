@@ -120,6 +120,41 @@ pub async fn loaded_fixture(
     loaded
 }
 
+/// Builds orchestration PCM whose immutable source facts are supplied by the test.
+///
+/// # Panics
+/// Panics for invalid chunk geometry or exhausted fixture pools.
+#[cfg(test)]
+pub(crate) fn opened_with_source(
+    opened: kithara_play::OpenedTrack,
+    source: kithara_signal::AudioChunkInfo,
+) -> (kithara_play::OpenedTrack, kithara_render::mock::PacketRing) {
+    use kithara_render::{
+        PcmPacket,
+        mock::PacketRing,
+        rt::track::{PcmConsumer, PlayerResource},
+    };
+    use kithara_signal::AudioChunk;
+    use kithara_test_utils::bufpool::sample_buffer;
+
+    let frames = usize::try_from(source.frames).expect("fixture frames fit usize");
+    let samples = vec![0.5; frames * usize::from(source.spec.channels)];
+    let region = pools();
+    let mut packets = PacketRing::with_duration(source.spec, source.media_end, 2);
+    packets.push(PcmPacket::Chunk(Box::new(AudioChunk::new(
+        source,
+        sample_buffer(&region, &samples),
+    ))));
+    let kithara_play::OpenedTrack { pcm, abr, metadata } = opened;
+    let src = pcm.src().clone();
+    let receiver = packets.receiver.take().expect("fixture receiver");
+    let pcm = Box::new(
+        PlayerResource::new(PcmConsumer::new(receiver), src, &region)
+            .expect("fixture playback resource"),
+    );
+    (kithara_play::OpenedTrack { pcm, abr, metadata }, packets)
+}
+
 /// Opens and settles the queue's pending fixture load.
 ///
 /// # Panics

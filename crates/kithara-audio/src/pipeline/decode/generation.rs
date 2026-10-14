@@ -92,6 +92,48 @@ pub(crate) struct DecoderGeneration {
 }
 
 impl DecoderGeneration {
+    pub(crate) fn visible_duration(&self, mode: GaplessMode) -> Option<Duration> {
+        crate::pipeline::gapless::visible_duration(
+            self.decoder.duration(),
+            self.gapless_profile,
+            mode,
+            self.visible_origin,
+            self.media_origin,
+        )
+    }
+
+    pub(crate) fn media_end(
+        &self,
+        mode: GaplessMode,
+        physical: Option<Duration>,
+        decoded_end: Option<Duration>,
+        physical_reconciled: bool,
+    ) -> Option<Duration> {
+        let declared = self.decoder.duration();
+        let (physical, origin) = match declared {
+            Some(kithara_decode::DecoderDuration::RawLength(raw))
+                if matches!(mode, GaplessMode::SilenceTrim(_))
+                    && self.gapless_profile.gapless().is_none()
+                    && !physical_reconciled =>
+            {
+                (
+                    Some(raw),
+                    self.decoder.initial_pcm_origin().map(PcmOrigin::position),
+                )
+            }
+            _ => (physical, self.visible_origin),
+        };
+        crate::pipeline::gapless::media_end(
+            declared,
+            self.gapless_profile,
+            mode,
+            physical,
+            origin,
+            self.media_origin,
+            decoded_end,
+        )
+    }
+
     pub(crate) fn new(
         decoder: Box<dyn Decoder>,
         media_info: Option<MediaInfo>,
@@ -449,7 +491,7 @@ mod tests {
     }
 
     impl Decoder for EofDecoder {
-        fn duration(&self) -> Option<Duration> {
+        fn duration(&self) -> Option<kithara_decode::DecoderDuration> {
             None
         }
 
@@ -967,7 +1009,7 @@ mod tests {
                 .map(|position| PcmOrigin::new(position, position))
         }
 
-        fn duration(&self) -> Option<Duration> {
+        fn duration(&self) -> Option<kithara_decode::DecoderDuration> {
             None
         }
 

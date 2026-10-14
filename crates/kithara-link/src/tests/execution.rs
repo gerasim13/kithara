@@ -15,7 +15,7 @@ use kithara_render::{
     bridge::{DeckMixSettings, DeckProtocol, DeckSnapshot, Slot, SlotMark},
     rt::DeckMixerConfig,
 };
-use kithara_signal::{AudioSpec, FrameCount, SegmentId, SessionFrame};
+use kithara_signal::{AudioChunkInfo, AudioSpec, FrameCount, SegmentId, SessionFrame};
 use kithara_test_utils::{
     TestTempDir,
     bufpool::{TestPools, pools},
@@ -393,6 +393,16 @@ async fn native_linked(
         .load_fixture(request.item, request.position)
         .await
         .expect("PCM fixture");
+    assert_eq!(
+        opened
+            .opened
+            .pcm
+            .next_chunk_info()
+            .expect("the dispatcher prepared actual source PCM")
+            .media_end,
+        Some(position(48_000)),
+        "the source packet must declare the one-second fixture endpoint"
+    );
     rig.opens
         .resume(loading, (), ())
         .expect("owner load resumes")
@@ -473,8 +483,14 @@ fn native_marked<R>(
         lane: LaneFrame { segment, frame: 0 },
         position: position(0),
     });
-    snapshot.slots[0].media_origin = Some(position(0));
-    snapshot.slots[0].visible_origin = Some(position(0));
+    snapshot.slots[0].source = Some(AudioChunkInfo {
+        spec: AudioSpec::new(2, mock::SAMPLE_RATE),
+        segment,
+        media_origin: Some(position(0)),
+        visible_origin: Some(position(0)),
+        media_end: Some(position(48_000)),
+        ..AudioChunkInfo::default()
+    });
     let pass = DeckPass {
         mix: DeckMixSettings::default(),
         suspended: false,

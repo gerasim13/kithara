@@ -12,6 +12,7 @@ struct ThresholdRig {
     queue: Queue<TestPools>,
     mixer: mock::MixerRig,
     loads: mock::DeckRig<TestPools>,
+    source_packets: Option<kithara_render::mock::PacketRing>,
     _dir: TestTempDir,
     source: TrackSource<TestPools>,
     frame: i64,
@@ -27,15 +28,15 @@ struct ThresholdRig {
 impl ThresholdRig {
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     async fn playing(duration: f64, fade: f32, lead: f32, frames: Option<usize>) -> Self {
-        use kithara_render::{Dispatched, DispatcherCommand};
+        use kithara_render::{Dispatched, DispatcherCommand, PcmPacket};
+        use kithara_signal::AudioChunk;
 
         let dir = TestTempDir::new();
         let path = dir.path().join("test.mp3");
-        let frames = frames.unwrap_or_else(|| {
-            (duration * f64::from(mock::SAMPLE_RATE.get()))
-                .to_usize()
-                .expect("fixture frame count fits usize")
-        });
+        let declared_frames = (duration * f64::from(mock::SAMPLE_RATE.get()))
+            .to_usize()
+            .expect("fixture declared frame count fits usize");
+        let frames = frames.unwrap_or(declared_frames);
         mock::write_pcm_wav(
             &path,
             &vec![0.5; frames * 2],
@@ -77,6 +78,7 @@ impl ThresholdRig {
             ),
             mixer: mock::MixerRig::new(config, shape, &pools()).expect("real threshold mixer"),
             loads: mock::DeckRig::new(config).expect("threshold dispatcher"),
+            source_packets: None,
             _dir: dir,
             source,
             frame: 0,
@@ -121,7 +123,49 @@ impl ThresholdRig {
                 }
             }
         };
-        loaded.opened.duration = Some(Duration::from_secs_f64(duration));
+        if frames != declared_frames {
+            let source = loaded
+                .opened
+                .pcm
+                .next_chunk_info()
+                .expect("prepared source");
+            assert_eq!(usize::try_from(source.frames).ok(), Some(frames));
+            let end = source
+                .source_span
+                .expect("mapped source")
+                .position_at(u64::from(source.frames))
+                .expect("physical source endpoint");
+            let declared = Some(Duration::from_secs_f64(duration));
+            let (opened, mut packets) = crate::mock::opened_with_source(
+                loaded.opened,
+                AudioChunkInfo {
+                    media_end: declared,
+                    ..source
+                },
+            );
+            assert_eq!(
+                opened
+                    .pcm
+                    .next_chunk_info()
+                    .expect("declared source")
+                    .media_end,
+                declared
+            );
+            packets.push(PcmPacket::Chunk(Box::new(AudioChunk::new(
+                AudioChunkInfo {
+                    frames: 0,
+                    lane_frame: source.lane_frame + u64::from(source.frames),
+                    frame_offset: source.frame_offset + u64::from(source.frames),
+                    timestamp: end,
+                    source_span: None,
+                    end_of_track: true,
+                    ..source
+                },
+                kithara_test_utils::bufpool::sample_buffer(&pools(), &[]),
+            ))));
+            loaded.opened = opened;
+            rig.source_packets = Some(packets);
+        }
         rig.loads
             .opens
             .resume(seq, (), ())
@@ -298,6 +342,9 @@ impl ThresholdRig {
         }
         self.frame += i64::try_from(frames).expect("read frame count fits session clock");
         self.pass(|_, _| ());
+        if let Some(packets) = self.source_packets.as_mut() {
+            while packets.returned().is_some() {}
+        }
         hang_reset!();
         pcm
     }
@@ -532,6 +579,19 @@ async fn handover_uses_buffered_eof_when_duration_is_overestimated() {
     let pcm = rig.read(THRESHOLD_BLOCK).await;
     let observed = rig.mixer.ends.snapshot.read();
     let slot = &observed.slots[0];
+    let source = slot.source.expect("consumed source timing");
+    assert_eq!(
+        source.segment,
+        slot.mark.expect("consumed mark").lane.segment
+    );
+    let raw_end = source
+        .media_origin
+        .expect("source media origin")
+        .checked_add(source.media_end.expect("source media endpoint"))
+        .expect("raw source endpoint");
+    let duration = raw_end
+        .checked_sub(source.visible_origin.expect("original visible origin"))
+        .expect("physical visible span");
     assert_eq!(
         slot.state,
         SlotState::Playing,
@@ -545,20 +605,20 @@ async fn handover_uses_buffered_eof_when_duration_is_overestimated() {
         512
     );
     assert_eq!(
-        (slot.duration * f64::from(mock::SAMPLE_RATE.get()))
+        (duration.as_secs_f64() * f64::from(mock::SAMPLE_RATE.get()))
             .round()
             .to_usize()
             .expect("duration frames fit usize"),
         900
     );
     assert_eq!(
-        ((slot.duration - slot.position) * f64::from(mock::SAMPLE_RATE.get()))
+        ((raw_end.as_secs_f64() - slot.position) * f64::from(mock::SAMPLE_RATE.get()))
             .round()
             .to_usize()
             .expect("remaining frames fit usize"),
         388
     );
-    assert!(slot.duration < 10.0);
+    assert!(duration < Duration::from_secs(10));
     assert_eq!(pcm[0].len(), 512);
     assert!(
         pcm[0][511] > 0.0,
@@ -648,13 +708,26 @@ async fn answer_duration(
     rig: &mut mock::DeckRig<TestPools>,
     dir: &TestTempDir,
     duration: f64,
-) {
+) -> kithara_render::mock::PacketRing {
     let mut loaded = loaded_fixture(rig, dir).await;
-    loaded.opened.duration = Some(Duration::from_secs_f64(duration));
+    let source = loaded
+        .opened
+        .pcm
+        .next_chunk_info()
+        .expect("prepared fixture source");
+    let (opened, packets) = crate::mock::opened_with_source(
+        loaded.opened,
+        AudioChunkInfo {
+            media_end: Some(Duration::from_secs_f64(duration)),
+            ..source
+        },
+    );
+    loaded.opened = opened;
     let receipt = rig.open(Ok(loaded)).expect("duration load receipt");
     with_outbox(queue, rig, |queue, out| {
         Player::settle(queue, TrackReceipt::Loaded(receipt), out)
     });
+    packets
 }
 
 fn block(queue: &mut Queue<TestPools>, rig: &mut mock::DeckRig<TestPools>, at: i64) {
@@ -664,7 +737,7 @@ fn block(queue: &mut Queue<TestPools>, rig: &mut mock::DeckRig<TestPools>, at: i
 #[kithara::test(tokio)]
 async fn a_fade_in_makes_its_track_leading_and_a_preload_does_not() {
     let (mut queue, _, second, mut rig, dir) = pending_selection();
-    answer_duration(&mut queue, &mut rig, &dir, 64.0).await;
+    let leading_source = answer_duration(&mut queue, &mut rig, &dir, 64.0).await;
     crate::mock::finish(&mut queue, &mut rig);
     assert_eq!(queue.control().duration_seconds(), Some(64.0));
     with_outbox(&mut queue, &mut rig, |queue, out| {
@@ -678,7 +751,7 @@ async fn a_fade_in_makes_its_track_leading_and_a_preload_does_not() {
         )
     })
     .expect("prepare successor");
-    answer_duration(&mut queue, &mut rig, &dir, 162.0).await;
+    let successor_source = answer_duration(&mut queue, &mut rig, &dir, 162.0).await;
     block(&mut queue, &mut rig, 0);
     assert_eq!(
         queue.control().duration_seconds(),
@@ -689,6 +762,7 @@ async fn a_fade_in_makes_its_track_leading_and_a_preload_does_not() {
     block(&mut queue, &mut rig, 256);
     assert_eq!(queue.control().position_seconds(), Some(0.0));
     assert_eq!(queue.control().duration_seconds(), Some(162.0));
+    drop((leading_source, successor_source));
 }
 
 #[kithara::test(tokio)]

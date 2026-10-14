@@ -6,6 +6,15 @@ use crate::{
     gapless::{GaplessInfo, GaplessTailCompensation},
 };
 
+/// Meaning of a decoder's declared duration.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DecoderDuration {
+    /// Raw PCM span length before configured gapless trimming.
+    RawLength(Duration),
+    /// Logical media endpoint before configured trailing trimming.
+    MediaEnd(Duration),
+}
+
 /// Decoder-owned per-track playback contract.
 ///
 /// `#[non_exhaustive]` because callers construct it with

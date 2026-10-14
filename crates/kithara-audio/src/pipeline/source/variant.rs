@@ -167,6 +167,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                     enqueue_generation_installed(
                         emit,
                         &GenerationInstalled {
+                            gapless_mode: self.decode.gapless_mode(),
                             backend: self.decoder_backend,
                             cause: DecoderChangeCause::VariantSwitch,
                             generation: self.decode.active(),

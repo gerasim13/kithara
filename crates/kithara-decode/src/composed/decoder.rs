@@ -363,7 +363,7 @@ where
         BlenderProfile::new(self.spec)
     }
 
-    fn duration(&self) -> Option<Duration> {
+    fn duration(&self) -> Option<crate::DecoderDuration> {
         self.duration
     }
 

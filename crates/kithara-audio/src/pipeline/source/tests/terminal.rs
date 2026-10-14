@@ -38,8 +38,10 @@ struct FailedDecoder {
 }
 
 impl Decoder for FailedDecoder {
-    fn duration(&self) -> Option<Duration> {
-        Some(Duration::from_secs(60))
+    fn duration(&self) -> Option<kithara_decode::DecoderDuration> {
+        Some(kithara_decode::DecoderDuration::RawLength(
+            Duration::from_secs(60),
+        ))
     }
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         Err(DecodeError::InvalidData {
@@ -372,7 +374,7 @@ struct ByteEofDecoder {
 }
 
 impl Decoder for ByteEofDecoder {
-    fn duration(&self) -> Option<Duration> {
+    fn duration(&self) -> Option<kithara_decode::DecoderDuration> {
         None
     }
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {

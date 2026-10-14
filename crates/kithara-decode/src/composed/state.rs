@@ -34,7 +34,7 @@ pub(crate) struct ComposedDecoder<D: Demuxer, C: FrameCodec, S> {
     pub(super) demuxer: D,
     pub(super) head_strip: HeadStrip,
     pub(super) byte_len_handle: Option<Arc<AtomicU64>>,
-    pub(super) duration: Option<Duration>,
+    pub(super) duration: Option<crate::DecoderDuration>,
     pub(super) origin: PcmOriginState,
     /// Reader-side event sink. Single-owner `Box<dyn ReaderEventSink>` -
     /// `None` skips emission entirely; `Some(_)` calls `on_chunk` /

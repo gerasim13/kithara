@@ -435,7 +435,7 @@ where
 
     delegate::delegate! {
         to self.decoder {
-            fn duration(&self) -> Option<Duration>;
+            fn duration(&self) -> Option<crate::DecoderDuration>;
             fn flush_reader_signals(&mut self);
             fn metadata(&self) -> TrackMetadata;
             fn update_byte_len(&self, len: u64);
@@ -658,8 +658,8 @@ mod origin_tests {
         fn initial_pcm_origin(&self) -> Option<PcmOrigin> {
             self.original
         }
-        fn duration(&self) -> Option<Duration> {
-            Some(Duration::from_secs(60))
+        fn duration(&self) -> Option<crate::DecoderDuration> {
+            Some(crate::DecoderDuration::RawLength(Duration::from_secs(60)))
         }
         fn spec(&self) -> AudioSpec {
             AudioSpec::new(1, NonZeroU32::new(1_000).expect("source rate"))
@@ -1017,8 +1017,8 @@ mod tests {
     }
 
     impl Decoder for ScriptedDecoder {
-        fn duration(&self) -> Option<Duration> {
-            Some(Duration::from_secs(2))
+        fn duration(&self) -> Option<crate::DecoderDuration> {
+            Some(crate::DecoderDuration::RawLength(Duration::from_secs(2)))
         }
 
         fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {

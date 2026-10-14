@@ -101,6 +101,7 @@ where
     }
 
     fn fail(&mut self, failure: TrackFailureKind) {
+        self.source.reject_preparation(failure);
         if let Some(activity) = &mut self.activity {
             activity.set_playing(false);
         }
@@ -126,6 +127,14 @@ where
         let Some(pending) = self.pending.take() else {
             return TickResult::Waiting;
         };
+        if let PcmPacket::Chunk(chunk) = &pending.packet
+            && chunk.frames() > 0
+            && let Err(failure) = self.source.check_admission(&chunk.meta)
+        {
+            self.retire(pending.packet);
+            self.fail(failure);
+            return TickResult::Progress;
+        }
         let (meta, terminal) = match &pending.packet {
             PcmPacket::Chunk(chunk) => (
                 Some(chunk.meta),
@@ -142,14 +151,14 @@ where
                             self.source.commit_source_end(end, meta);
                         }
                         if !meta.end_of_track && meta.frames > 0 {
-                            self.source.admitted(&meta);
+                            self.source.admitted();
                         }
                         kithara::probe_event!(chunk_admitted, segment = meta.segment.get());
                     }
                 }
                 if let Some(terminal) = terminal {
-                    self.source.finish_preload();
                     if terminal.is_ok() {
+                        self.source.finish_preload();
                         self.source.finish_segment();
                     }
                     self.terminal = Some(terminal);
@@ -172,9 +181,20 @@ where
             activity.set_playing(false);
         }
         let cursor = self.source.cursor();
-        let source_span = (self.last_output.segment == cursor.segment)
-            .then_some(self.last_output.source_span)
-            .flatten()
+        let discontinuity = self.source.discontinuity();
+        let current = self.last_output.segment == cursor.segment
+            && discontinuity
+                .is_none_or(|active| active.revision() == self.last_output.source_revision);
+        let previous = if current {
+            self.last_output
+        } else {
+            AudioChunkInfo {
+                spec: discontinuity.map_or(self.last_output.spec, |active| *active.spec()),
+                ..AudioChunkInfo::default()
+            }
+        };
+        let source_span = previous
+            .source_span
             .and_then(|span| span.for_output_range(span.output_frames()..span.output_frames()));
         let position = source_span
             .and_then(|span| span.position_at(0))
@@ -182,14 +202,20 @@ where
         let mut samples = self.pools.get::<f32>();
         samples.clear();
         let meta = AudioChunkInfo {
+            spec: discontinuity.map_or(self.last_output.spec, |active| *active.spec()),
             segment: cursor.segment,
+            source_revision: discontinuity
+                .map_or(previous.source_revision, |active| active.revision()),
+            media_origin: self.source.media_origin(),
+            visible_origin: self.source.visible_origin(),
+            media_end: self.source.media_end(),
             lane_frame: cursor.frame,
             timestamp: position,
             end_timestamp: position,
             frames: 0,
             end_of_track: true,
             source_span,
-            ..self.last_output
+            ..previous
         };
         self.pending = Some(PendingPacket {
             packet: PcmPacket::Chunk(Box::new(AudioChunk::new(meta, samples))),

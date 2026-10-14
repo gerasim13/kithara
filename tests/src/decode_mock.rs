@@ -8,8 +8,8 @@ use std::{
 
 use kithara::{
     decode::{
-        DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, DecoderTrackInfo,
-        mock::DecoderMock,
+        DecodeResult, Decoder, DecoderChunkOutcome, DecoderDuration, DecoderSeekOutcome,
+        DecoderTrackInfo, mock::DecoderMock,
     },
     platform::{sync::Arc, time::Duration},
     signal::{AudioChunk, AudioChunkInfo, AudioSpec},
@@ -78,12 +78,13 @@ pub struct ScriptedOptions {
 /// positions and consumes preconfigured results in order. When the
 /// queue is exhausted, seek returns [`DecoderSeekOutcome::Landed`] at
 /// the requested position by default.
+/// `raw_length` declares the physical PCM span before configured trimming.
 #[must_use]
 pub fn scripted_decoder(
     spec: AudioSpec,
     chunks: Vec<AudioChunk>,
     seek_results: Vec<DecodeResult<DecoderSeekOutcome>>,
-    duration: Option<Duration>,
+    raw_length: Option<Duration>,
     options: ScriptedOptions,
 ) -> (Box<dyn Decoder>, DecoderLogs) {
     let chunk_queue = Arc::new(MockLog::new(VecDeque::from(chunks)));
@@ -100,7 +101,7 @@ pub fn scripted_decoder(
                 }))
         },
         seek_results,
-        duration,
+        raw_length,
         options.track_info,
         options.verify_in_drop,
     )
@@ -170,7 +171,7 @@ fn build_decoder_mock<F>(
     spec: AudioSpec,
     next_chunk: F,
     seek_results: Vec<DecodeResult<DecoderSeekOutcome>>,
-    duration: Option<Duration>,
+    raw_length: Option<Duration>,
     track_info: DecoderTrackInfo,
     verify_in_drop: bool,
 ) -> (Box<dyn Decoder>, DecoderLogs)
@@ -216,7 +217,7 @@ where
             .at_least_times(0),
         DecoderMock::duration
             .each_call(matching!())
-            .returns(duration)
+            .returns(raw_length.map(DecoderDuration::RawLength))
             .at_least_times(0),
         DecoderMock::track_info
             .each_call(matching!())

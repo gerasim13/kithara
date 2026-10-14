@@ -392,7 +392,9 @@ async fn a_nonzero_initial_media_load_reaches_its_raw_source_target_without_reop
         .expect("actual attachment block");
     let raw = mixer.ends.snapshot.read().slots[usize::from(slot.get())];
     let mark = raw.mark.expect("first real source mark");
-    assert_eq!(raw.media_origin, Some(media_origin));
+    let source = raw.source.expect("first real source timing");
+    assert_eq!(source.segment, mark.lane.segment);
+    assert_eq!(source.media_origin, Some(media_origin));
     assert_eq!(
         spec.frame_at(mark.position).expect("raw marked frame"),
         expected_raw_frame
@@ -456,7 +458,12 @@ async fn a_nonzero_initial_media_load_reaches_its_raw_source_target_without_reop
     assert!(left.iter().chain(&right).all(|sample| sample.is_finite()));
     assert!(left.iter().chain(&right).any(|sample| sample.abs() > 0.0));
     let consumed = mixer.ends.snapshot.read().slots[usize::from(slot.get())];
-    assert_eq!(consumed.media_origin, Some(media_origin));
+    let source = consumed.source.expect("consumed source timing");
+    assert_eq!(
+        source.segment,
+        consumed.mark.expect("consumed source mark").lane.segment
+    );
+    assert_eq!(source.media_origin, Some(media_origin));
     assert_eq!(
         spec.frame_at(consumed.mark.expect("consumed source mark").position)
             .expect("consumed raw frame"),

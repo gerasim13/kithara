@@ -47,7 +47,7 @@ impl OriginDecoder {
 }
 
 impl Decoder for OriginDecoder {
-    fn duration(&self) -> Option<Duration> {
+    fn duration(&self) -> Option<kithara_decode::DecoderDuration> {
         None
     }
 

@@ -227,7 +227,7 @@ where
         )
     }
 
-    fn duration(&self) -> Option<Duration> {
+    fn duration(&self) -> Option<crate::DecoderDuration> {
         self.track_info.duration
     }
 
@@ -323,7 +323,7 @@ where
                 detail: "no segment covers the requested seek time",
             });
         };
-        if let Some(duration) = self.track_info.duration
+        if let Some(crate::DecoderDuration::MediaEnd(duration)) = self.track_info.duration
             && desc.decode_time >= duration
         {
             self.seek_skip_to = None;
@@ -436,7 +436,7 @@ fn build_track_info(init: &Fmp4InitInfo, duration: Option<Duration>) -> TrackInf
     let extra_data = init.config.as_ref().to_vec();
     TrackInfo {
         extra_data,
-        duration,
+        duration: duration.map(crate::DecoderDuration::MediaEnd),
         codec: init.codec,
         sample_rate: init.sample_rate,
         channels: init.channels,
@@ -446,7 +446,7 @@ fn build_track_info(init: &Fmp4InitInfo, duration: Option<Duration>) -> TrackInf
 
 fn compute_duration(segments: &Arc<dyn ByteMap>) -> Option<Duration> {
     let last = segments.segment_at_time(Duration::from_secs(u64::MAX / 2))?;
-    Some(last.decode_time.saturating_add(last.duration))
+    last.decode_time.checked_add(last.duration)
 }
 
 /// Index of the first frame whose decode time covers `skip`.

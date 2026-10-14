@@ -78,7 +78,7 @@ impl StubDemuxer {
 }
 
 impl Demuxer for StubDemuxer {
-    fn duration(&self) -> Option<Duration> {
+    fn duration(&self) -> Option<crate::DecoderDuration> {
         None
     }
     fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {

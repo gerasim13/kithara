@@ -19,6 +19,8 @@ pub struct AudioChunkInfo {
     pub timestamp: Duration,
     /// Raw decoded-source coordinate of track-media zero, independent of trimming.
     pub media_origin: Option<Duration>,
+    /// Audio-owned logical media endpoint for this source revision, when known.
+    pub media_end: Option<Duration>,
     /// Original visible position in this chunk's raw source clock, when known.
     pub visible_origin: Option<Duration>,
     /// Audio-owned raw source-coordinate discontinuity represented by this chunk.
@@ -73,6 +75,7 @@ impl Default for AudioChunkInfo {
             end_timestamp: Duration::ZERO,
             timestamp: Duration::ZERO,
             media_origin: None,
+            media_end: None,
             visible_origin: None,
             source_revision: 0,
             source_span: None,
@@ -184,5 +187,6 @@ mod tests {
         assert_eq!(info.spec.channels, 0);
         assert_eq!(info.frame_offset, 0);
         assert_eq!(info.timestamp, Duration::ZERO);
+        assert_eq!(info.media_end, None);
     }
 }

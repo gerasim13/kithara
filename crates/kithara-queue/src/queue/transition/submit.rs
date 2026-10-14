@@ -43,9 +43,13 @@ where
         let replacement = self.active.is_replacement(incoming);
         let current = self.active_current_index();
         let outgoing = current.filter(|index| {
-            self.active
-                .get(*index)
-                .is_some_and(|current| current.slot != slot)
+            self.active.get(*index).is_some_and(|current| {
+                current.slot != slot
+                    && !matches!(
+                        current.track.snapshot().as_ref().status,
+                        PlayingStatus::Failed { .. } | PlayingStatus::Released
+                    )
+            })
         });
         let predecessor = current
             .and_then(|index| self.active.get(index))

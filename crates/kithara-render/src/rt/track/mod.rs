@@ -5,6 +5,7 @@ mod feeder;
 mod gate;
 mod read;
 mod sink;
+mod view;
 
 #[cfg(test)]
 mod legacy_tests;

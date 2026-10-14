@@ -3,7 +3,9 @@ use std::num::NonZeroU16;
 use kithara::{
     beat::BeatGridModel,
     platform::time::Duration,
-    signal::{AudioSpec, ExponentialApproach, SegmentId, SessionEpoch, SessionFrame},
+    signal::{
+        AudioChunkInfo, AudioSpec, ExponentialApproach, SegmentId, SessionEpoch, SessionFrame,
+    },
     warp::{
         AssetAxis, AssetExtent, AssetFrame, Beat, BeatGridId, BeatGridQuery, BeatGridRevision,
         BeatGridSnapshot, MapPoint, MapPosition, SessionAnchor, SpeedCurve,
@@ -84,7 +86,9 @@ pub(super) fn check(
         .mark
         .ok_or_else(|| "binding has no consumed PCM mark".to_owned())?;
     let media_origin = consumed
-        .media_origin
+        .source
+        .filter(|info| info.segment == mark.lane.segment)
+        .and_then(|info| info.media_origin)
         .ok_or_else(|| "binding has no known media origin".to_owned())?;
     let media = mark
         .position
@@ -182,7 +186,11 @@ fn applied_curves(
             .mark
             .ok_or_else(|| format!("speed {:?} has no consumed source mark", command.seq))?;
         if command.sample_rate != Some(rate)
-            || slot.media_origin.is_none()
+            || slot
+                .source
+                .filter(|info| info.segment == current.lane.segment)
+                .and_then(|info| info.media_origin)
+                .is_none()
             || before.lane_at(current.session) != Some(current.lane)
         {
             return Err(format!(
@@ -292,7 +300,9 @@ fn consumed_media(slot: SlotSnapshot) -> Result<(SlotMark, Duration), String> {
         .mark
         .ok_or_else(|| "law has no consumed PCM mark".to_owned())?;
     let origin = slot
-        .media_origin
+        .source
+        .filter(|info| info.segment == mark.lane.segment)
+        .and_then(|info| info.media_origin)
         .ok_or_else(|| "law has no known media origin".to_owned())?;
     let media = mark
         .position
@@ -1597,7 +1607,12 @@ pub(super) fn executed_law(
     }
     let (start_mark, _) = consumed_media(capture_start)?;
     if start_mark.lane.segment != mark.lane.segment
-        || capture_start.media_origin != consumed.media_origin
+        || capture_start
+            .source
+            .map(|info| (info.source_revision, info.media_origin))
+            != consumed
+                .source
+                .map(|info| (info.source_revision, info.media_origin))
     {
         return Err("capture changed its consumed Segment or source origin".to_owned());
     }
@@ -1947,7 +1962,9 @@ impl SelectedBinding {
             .mark
             .ok_or_else(|| "selected binding has no consumed PCM mark".to_owned())?;
         let media_origin = consumed
-            .media_origin
+            .source
+            .filter(|info| info.segment == mark.lane.segment)
+            .and_then(|info| info.media_origin)
             .ok_or_else(|| "selected binding has no known media origin".to_owned())?;
         let media = mark
             .position
@@ -1987,7 +2004,9 @@ impl SelectedBinding {
             )]);
         }
         let origin = consumed
-            .media_origin
+            .source
+            .filter(|info| info.segment == mark.lane.segment)
+            .and_then(|info| info.media_origin)
             .ok_or_else(|| "selected correction has no known media origin".to_owned())?;
         let delta = mark
             .session
@@ -2212,7 +2231,12 @@ fn direct_grid_binding_rejects_a_frame_a_beat_and_a_missing_origin() {
             },
             position: Duration::from_millis(4_012),
         }),
-        media_origin: Some(Duration::from_millis(12)),
+        source: Some(AudioChunkInfo {
+            spec: AudioSpec::new(2, output_rate),
+            segment: SegmentId::FIRST,
+            media_origin: Some(Duration::from_millis(12)),
+            ..AudioChunkInfo::default()
+        }),
         ..SlotSnapshot::default()
     };
     let binding = check(&model, source_rate, &host_grid, consumed, 0.9, 4)
@@ -2269,7 +2293,10 @@ fn direct_grid_binding_rejects_a_frame_a_beat_and_a_missing_origin() {
             source_rate,
             &host_grid,
             SlotSnapshot {
-                media_origin: None,
+                source: consumed.source.map(|info| AudioChunkInfo {
+                    media_origin: None,
+                    ..info
+                }),
                 ..consumed
             },
             0.9,
@@ -2282,7 +2309,10 @@ fn direct_grid_binding_rejects_a_frame_a_beat_and_a_missing_origin() {
         source_rate,
         &host_grid,
         SlotSnapshot {
-            media_origin: Some(Duration::ZERO),
+            source: consumed.source.map(|info| AudioChunkInfo {
+                media_origin: Some(Duration::ZERO),
+                ..info
+            }),
             ..consumed
         },
         0.9,
@@ -2386,7 +2416,12 @@ fn direct_grid_anchor_rejects_a_whole_bar_and_a_wrong_selected_cue() {
             },
             position: Duration::from_millis(4_012),
         }),
-        media_origin: Some(Duration::from_millis(12)),
+        source: Some(AudioChunkInfo {
+            spec: AudioSpec::new(2, evaluation_rate),
+            segment: SegmentId::FIRST,
+            media_origin: Some(Duration::from_millis(12)),
+            ..AudioChunkInfo::default()
+        }),
         ..SlotSnapshot::default()
     };
     assert!(
@@ -2476,6 +2511,10 @@ fn direct_grid_anchor_rejects_a_whole_bar_and_a_wrong_selected_cue() {
         1
     );
     let wrong_segment = SlotSnapshot {
+        source: consumed.source.map(|info| AudioChunkInfo {
+            segment: SegmentId::FIRST.next(),
+            ..info
+        }),
         mark: consumed.mark.map(|mark| SlotMark {
             lane: LaneFrame {
                 segment: SegmentId::FIRST.next(),
@@ -2505,7 +2544,10 @@ fn direct_grid_anchor_rejects_a_whole_bar_and_a_wrong_selected_cue() {
                 evaluation_rate,
                 &host_grid,
                 SlotSnapshot {
-                    media_origin: None,
+                    source: consumed.source.map(|info| AudioChunkInfo {
+                        media_origin: None,
+                        ..info
+                    }),
                     ..consumed
                 },
                 SegmentId::FIRST

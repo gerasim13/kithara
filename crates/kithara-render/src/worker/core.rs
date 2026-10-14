@@ -254,6 +254,7 @@ where
                 spec,
                 media_origin: audio.media_origin(),
                 visible_origin: audio.visible_origin(),
+                media_end: audio.media_end(),
                 timestamp: position,
                 end_timestamp: position,
                 ..AudioChunkInfo::default()

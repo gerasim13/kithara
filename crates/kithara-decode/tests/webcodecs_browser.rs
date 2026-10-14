@@ -124,7 +124,9 @@ async fn seek_generation() {
         time::sleep(Duration::ZERO).await;
     }
 
-    let duration = decoder.duration().expect("MP3 duration must be known");
+    let Some(kithara_decode::DecoderDuration::RawLength(duration)) = decoder.duration() else {
+        panic!("standalone MP3 must declare a raw PCM length");
+    };
     let target = Duration::from_secs_f64(duration.as_secs_f64() * 0.6);
     assert!(
         matches!(
@@ -174,7 +176,9 @@ async fn seek_trim_no_preroll_leak() {
         "mp3",
         DecoderBackend::WebCodecs,
     );
-    let duration = decoder.duration().expect("MP3 duration must be known");
+    let Some(kithara_decode::DecoderDuration::RawLength(duration)) = decoder.duration() else {
+        panic!("standalone MP3 must declare a raw PCM length");
+    };
     let spec = decoder.spec();
 
     for ratio in [0.17, 0.37, 0.73] {

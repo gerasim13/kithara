@@ -159,28 +159,6 @@ async fn render_until(
     }
 }
 
-/// The source second Prepare maps deck 0's cue to: the next downbeat of a
-/// metered grid, the next beat of an unmetered one, which has no downbeats.
-fn prepared_mark(harness: &ProductHarness, cue: Start) -> f64 {
-    let ArtifactSource::Value(grid) = harness.provider_grid(0) else {
-        panic!("fixture grid is materialized");
-    };
-    let seconds = harness.start_seconds(0, cue);
-    let raw = grid.as_raw();
-    raw.downbeats
-        .iter()
-        .filter(|_| raw.meter.is_some())
-        .map(|beat| beat.at)
-        .chain(
-            raw.beats
-                .iter()
-                .filter(|_| raw.meter.is_none())
-                .map(|beat| beat.at),
-        )
-        .find(|at| *at >= seconds)
-        .expect("fixture contains the prepared cue mark")
-}
-
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn prepare_cue(
     harness: &mut ProductHarness,
@@ -188,10 +166,26 @@ async fn prepare_cue(
     rate: f64,
     cue: Start,
 ) -> Operation {
-    // Ruling: spec 4.5 leaves a paused Sync cue unchanged; Prepare maps its source cue to its prepared mark before Seek, then awaits Ready and enables Sync.
+    // Paused Sync preserves its cue. Prepare on a supplied downbeat when metered,
+    // or a supplied beat otherwise, before enabling Sync.
     let seconds = harness.start_seconds(0, cue);
     assert!((seconds * rate).is_finite(), "fixture cue is finite");
-    let prepared = prepared_mark(harness, cue);
+    let ArtifactSource::Value(grid) = harness.provider_grid(0) else {
+        panic!("fixture grid is materialized");
+    };
+    let raw = grid.as_raw();
+    let prepared = if raw.meter.is_some() {
+        raw.downbeats
+            .iter()
+            .find(|beat| beat.at >= seconds)
+            .map(|beat| beat.at)
+    } else {
+        raw.beats
+            .iter()
+            .find(|beat| beat.at >= seconds)
+            .map(|beat| beat.at)
+    }
+    .expect("fixture contains the next supplied phase anchor");
     let control = harness.decks[0].control().clone();
     harness
         .host
@@ -413,7 +407,23 @@ async fn a_cued_sync_installs_mapped_pcm_before_anything_sounds(
         !snapshot.track.pending_lane,
         "paused SYNC segment is Ready before Play"
     );
-    let prepared = prepared_mark(&harness, cue);
+    let ArtifactSource::Value(grid) = harness.provider_grid(0) else {
+        panic!("fixture grid is materialized");
+    };
+    let required = harness.start_seconds(0, cue);
+    let raw = grid.as_raw();
+    let prepared = if raw.meter.is_some() {
+        raw.downbeats
+            .iter()
+            .find(|beat| beat.at >= required)
+            .map(|beat| beat.at)
+    } else {
+        raw.beats
+            .iter()
+            .find(|beat| beat.at >= required)
+            .map(|beat| beat.at)
+    }
+    .expect("fixture contains the next supplied phase anchor");
     assert!(
         (snapshot.track.position.as_secs_f64() - prepared).abs() <= 1.0 / rate,
         "the Ready segment begins at the exact prepared source frame"

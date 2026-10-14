@@ -54,7 +54,8 @@ pub(super) fn build_track_info(
         .as_ref()
         .map(|d| d.to_vec())
         .unwrap_or_default();
-    let duration = calculate_track_duration(track, codec, format);
+    let duration =
+        calculate_track_duration(track, codec, format).map(crate::DecoderDuration::RawLength);
 
     Ok(TrackInfo {
         codec,

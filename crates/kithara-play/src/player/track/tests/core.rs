@@ -7,7 +7,7 @@ pub(super) use kithara_render::{
     bridge::{DeckEvent, DeckMixSettings, SlotSnapshot},
     rt::DeckMixerConfig,
 };
-pub(super) use kithara_signal::AudioSpec;
+pub(super) use kithara_signal::{AudioChunkInfo, AudioSpec};
 pub(super) use kithara_test_utils::{TestTempDir, kithara};
 pub(super) use kithara_warp::{SpeedCurve, StretchKind};
 
@@ -833,7 +833,11 @@ fn processor_set_paused_updates_playback(#[case] mapped: bool) {
     let output = mock::output(None).get();
     let deck = crate::DeckSnapshot {
         slots: vec![SlotSnapshot {
-            media_origin: Some(Duration::ZERO),
+            source: Some(AudioChunkInfo {
+                segment: track.segment,
+                media_origin: Some(Duration::ZERO),
+                ..AudioChunkInfo::default()
+            }),
             position: observed.as_secs_f64(),
             mark: Some(SlotMark {
                 session: frame(0),
@@ -1347,7 +1351,11 @@ fn withdrawing_the_newest_epoch_unpublishes_the_seek() {
     let output = mock::output(None).get();
     let deck = crate::DeckSnapshot {
         slots: vec![SlotSnapshot {
-            media_origin: Some(Duration::ZERO),
+            source: Some(AudioChunkInfo {
+                segment: track.segment,
+                media_origin: Some(Duration::ZERO),
+                ..AudioChunkInfo::default()
+            }),
             position: 8.0,
             mark: Some(SlotMark {
                 session: frame(0),
@@ -1445,10 +1453,14 @@ fn an_epoch_adopted_before_it_is_published_reports_the_audio_thread() {
     let output = mock::output(None).get();
     let deck = crate::DeckSnapshot {
         slots: vec![SlotSnapshot {
-            media_origin: Some(Duration::ZERO),
             position: 1.5,
-            duration: 162.0,
-            visible_origin: Some(Duration::ZERO),
+            source: Some(AudioChunkInfo {
+                segment: track.segment,
+                media_origin: Some(Duration::ZERO),
+                media_end: Some(Duration::from_secs(162)),
+                visible_origin: Some(Duration::ZERO),
+                ..AudioChunkInfo::default()
+            }),
             mark: Some(SlotMark {
                 session: frame(0),
                 lane: LaneFrame {
@@ -2072,7 +2084,11 @@ fn a_native_stop_answers_without_overwriting_a_new_segments_position(
     let output = mock::output(None).get();
     let deck = crate::DeckSnapshot {
         slots: vec![SlotSnapshot {
-            media_origin: Some(Duration::ZERO),
+            source: Some(AudioChunkInfo {
+                segment: track.segment,
+                media_origin: Some(Duration::ZERO),
+                ..AudioChunkInfo::default()
+            }),
             position: position.as_secs_f64(),
             mark: Some(SlotMark {
                 session: frame(0),
@@ -2183,7 +2199,10 @@ fn an_evicting_track_takes_the_slot_over_on_its_frame() {
     let output = mock::output(None).get();
     let deck = crate::DeckSnapshot {
         slots: vec![SlotSnapshot {
-            media_origin: Some(Duration::ZERO),
+            source: Some(AudioChunkInfo {
+                media_origin: Some(Duration::ZERO),
+                ..AudioChunkInfo::default()
+            }),
             state: SlotState::Playing,
             ..Default::default()
         }],
@@ -2380,7 +2399,10 @@ fn superseding_a_scheduled_batch_leaves_the_slot_sounding_as_it_was(
     let output = mock::output(None).get();
     let deck = crate::DeckSnapshot {
         slots: vec![SlotSnapshot {
-            media_origin: Some(Duration::ZERO),
+            source: Some(AudioChunkInfo {
+                media_origin: Some(Duration::ZERO),
+                ..AudioChunkInfo::default()
+            }),
             state: SlotState::Playing,
             ..Default::default()
         }],
@@ -2940,7 +2962,8 @@ fn failed_deck_event_preserves_item_identity_and_the_first_terminal_cause() {
     use kithara_audio::TrackFailureKind;
     use kithara_render::bridge::PlaybackFault;
     let mut rig = rig();
-    let mut player = track(A);
+    let (mut player, _lane) = loaded(&mut rig, A, "failed-deck-event");
+    assert!(player.attached());
     let item = player.snapshot().item;
     player.status = TrackStatus::Playing { since: frame(0) };
     let fault = PlaybackFault::Source(TrackFailureKind::SourceCancelled);
@@ -2996,7 +3019,8 @@ fn stale_or_paused_failure_does_not_change_the_scoped_player(#[case] paused: boo
     use kithara_audio::{DecodeErrorKind, TrackFailureKind};
     use kithara_render::bridge::PlaybackFault;
     let mut rig = rig();
-    let mut player = track(A);
+    let (mut player, _lane) = loaded(&mut rig, A, "stale-or-paused-failure");
+    assert!(player.attached());
     player.status = if paused {
         TrackStatus::Paused { at: Position::ZERO }
     } else {
@@ -3026,7 +3050,7 @@ fn stale_or_paused_failure_does_not_change_the_scoped_player(#[case] paused: boo
 fn planned_end_uses_the_visible_length_in_the_raw_source_clock(#[case] origin: Option<Duration>) {
     let mut track = track(A);
     track.visible_origin = origin;
-    track.duration = Some(Duration::from_millis(952));
+    track.duration = origin.map(|_| Duration::from_millis(1_669));
     track.status = TrackStatus::Playing { since: frame(0) };
     track.mark = Some(SlotMark {
         session: frame(0),
@@ -3047,14 +3071,14 @@ fn planned_end_uses_the_visible_length_in_the_raw_source_clock(#[case] origin: O
         track.mark.expect("raw mark").position,
         Duration::from_millis(1_500)
     );
-    assert_eq!(track.duration, Some(Duration::from_millis(952)));
+    assert_eq!(track.duration, origin.map(|_| Duration::from_millis(1_669)));
 }
 
 #[kithara::test]
 fn planned_end_projects_a_raw_jump_through_the_same_original_origin() {
     let mut track = track(A);
     track.visible_origin = Some(Duration::from_millis(717));
-    track.duration = Some(Duration::from_millis(952));
+    track.duration = Some(Duration::from_millis(1_669));
     track.status = TrackStatus::Playing { since: frame(0) };
     track.mark = Some(SlotMark {
         session: frame(0),

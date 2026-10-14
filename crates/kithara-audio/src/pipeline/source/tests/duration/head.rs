@@ -6,7 +6,8 @@ use super::fixtures::*;
 async fn natural_eof_measures_trimmed_pcm_from_its_nonzero_original_origin(
     #[case] declared: Option<Duration>,
 ) {
-    let extent = extent(declared, 700, false);
+    let mut extent = extent(declared, 700, false);
+    extent.media_origin = Some(Duration::from_millis(700));
     let mut source = physical_source(extent).await;
     let chunks = drain(&mut source, extent);
     assert_eq!(
@@ -25,6 +26,7 @@ async fn natural_eof_measures_trimmed_pcm_from_its_nonzero_original_origin(
         1_669
     );
     assert_eq!(source.playhead.duration(), Some(Duration::from_millis(952)));
+    assert_eq!(source.media_end(), Some(Duration::from_millis(969)));
     let landed = source
         .seek(Duration::from_millis(1_500))
         .expect("raw seek after genuine EOF");
@@ -46,6 +48,7 @@ async fn natural_eof_measures_trimmed_pcm_from_its_nonzero_original_origin(
     );
     assert_eq!(replay.last().expect("replay tail").frame_range().end, 1_669);
     assert_eq!(source.playhead.duration(), Some(Duration::from_millis(952)));
+    assert_eq!(source.media_end(), Some(Duration::from_millis(969)));
     let past = source
         .seek(Duration::from_millis(1_669))
         .expect("raw terminal seek");
@@ -53,6 +56,26 @@ async fn natural_eof_measures_trimmed_pcm_from_its_nonzero_original_origin(
         if duration == Duration::from_millis(1_669)));
     assert_eq!(source.playhead.position(), Duration::from_millis(1_669));
     assert_eq!(source.playhead.duration(), Some(Duration::from_millis(952)));
+    for (origin, expected_end) in [(576, 2_000), (0, 1_424)] {
+        let mut exact = super::fixtures::extent(Some(Duration::from_secs(2)), origin, true);
+        exact.frames = 2_000;
+        exact.gapless = None;
+        exact.media_origin = Some(Duration::from_millis(576));
+        let mut owner = physical_source(exact).await;
+        assert_eq!(owner.playhead.duration(), Some(Duration::from_secs(2)));
+        assert_eq!(owner.media_end(), Some(Duration::from_millis(expected_end)));
+        let pcm = drain(&mut owner, exact);
+        assert_eq!(
+            pcm.iter().map(|meta| u64::from(meta.frames)).sum::<u64>(),
+            2_000
+        );
+        assert!(
+            pcm.iter()
+                .all(|meta| meta.media_end == Some(Duration::from_millis(expected_end)))
+        );
+        assert_eq!(owner.playhead.duration(), Some(Duration::from_secs(2)));
+        assert_eq!(owner.media_end(), Some(Duration::from_millis(expected_end)));
+    }
 }
 
 #[kithara::test(tokio)]
@@ -112,12 +135,15 @@ async fn first_nonzero_seek_keeps_full_duration_and_removes_padding_once(
 async fn unknown_original_position_never_promotes_the_first_sought_suffix(
     #[case] declared: Option<Duration>,
 ) {
-    let extent = extent(declared, 700, false);
+    let mut extent = extent(declared, 700, false);
+    extent.media_origin = Some(Duration::from_millis(700));
     let mut source = physical_source(extent).await;
     let initial = source.playhead.duration();
+    assert_eq!(source.media_end(), None);
     source
         .seek(Duration::from_millis(1_500))
         .expect("seek before original observation");
+    assert_eq!(source.media_end(), None);
     let chunks = drain(&mut source, extent);
     assert_eq!(
         chunks
@@ -132,6 +158,61 @@ async fn unknown_original_position_never_promotes_the_first_sought_suffix(
         1_669
     );
     assert_eq!(source.playhead.duration(), initial);
+    assert!(
+        chunks
+            .iter()
+            .all(|meta| meta.visible_origin.is_none() && meta.media_end.is_none())
+    );
+    assert_eq!(source.media_end(), Some(Duration::from_millis(969)));
+    for mode in [
+        GaplessMode::Disabled,
+        GaplessMode::MediaOnly,
+        GaplessMode::CodecPriming,
+    ] {
+        let mut media = super::fixtures::extent(None, 700, false);
+        media.declared = Some(kithara_decode::DecoderDuration::MediaEnd(
+            Duration::from_secs(1),
+        ));
+        media.media_origin = Some(Duration::from_millis(700));
+        let mut owner = physical_source_with_mode(media, mode).await;
+        let expected = if matches!(mode, GaplessMode::Disabled) {
+            1_000
+        } else {
+            969
+        };
+        let endpoint = Some(Duration::from_millis(expected));
+        assert_eq!(owner.playhead.duration(), None);
+        assert_eq!(owner.media_end(), endpoint);
+        owner
+            .install_replacement(
+                RecreateState {
+                    media_info: Some(media_info(0)),
+                    offset: 0,
+                    cause: RecreateCause::HostRateChange,
+                },
+                Some(crate::SourceEnd::new(
+                    1_500,
+                    NonZeroU32::new(1_000).expect("source rate"),
+                )),
+            )
+            .expect("recreate before any original PCM");
+        assert_eq!(owner.decode.active().visible_origin(), None);
+        assert_eq!(owner.playhead.duration(), None);
+        assert_eq!(owner.media_end(), endpoint);
+        let sought = first_chunk(&mut owner);
+        assert_eq!(sought.meta.visible_origin, None);
+        assert_eq!(sought.meta.media_end, endpoint);
+        assert_eq!(sought.meta.frame_offset, 1_500);
+        assert_eq!(&sought.samples[..2], &[0.08; 2]);
+        let tail = drain(&mut owner, media);
+        assert_eq!(
+            u64::from(sought.meta.frames)
+                + tail.iter().map(|meta| u64::from(meta.frames)).sum::<u64>(),
+            expected - 800
+        );
+        assert_eq!(owner.playhead.duration(), None);
+        assert_eq!(owner.media_end(), endpoint);
+    }
 }
 
 #[kithara::test(tokio)]
@@ -274,6 +355,7 @@ async fn first_nonzero_seek_after_original_pipeline_output_retains_its_origin() 
 async fn heuristic_trim_refines_from_the_original_output_it_actually_emits() {
     let mut extent = extent(Some(Duration::from_secs(60)), 700, false);
     extent.gapless = None;
+    extent.media_origin = Some(Duration::from_millis(700));
     let mode = GaplessMode::SilenceTrim(
         SilenceTrimParams::builder()
             .threshold_db(60.0)
@@ -282,6 +364,7 @@ async fn heuristic_trim_refines_from_the_original_output_it_actually_emits() {
             .build(),
     );
     let mut source = physical_source_with_mode(extent, mode).await;
+    assert_eq!(source.media_end(), None);
     let first = first_chunk(&mut source);
     assert_eq!(first.meta.frame_offset, 711);
     assert_eq!(first.meta.timestamp, Duration::from_millis(711));
@@ -290,6 +373,8 @@ async fn heuristic_trim_refines_from_the_original_output_it_actually_emits() {
         Some(first.meta.timestamp)
     );
     assert_eq!(source.playhead.duration(), Some(Duration::from_secs(60)));
+    assert_eq!(source.media_end(), Some(Duration::from_secs(60)));
+    assert_eq!(first.meta.media_end, Some(Duration::from_secs(60)));
     let mut served = u64::from(first.meta.frames);
     let mut endpoint = first.meta.timestamp
         + first
@@ -304,6 +389,7 @@ async fn heuristic_trim_refines_from_the_original_output_it_actually_emits() {
                 let chunk = produced_data(fetch);
                 assert!(chunk.samples.iter().all(|sample| sample.is_finite()));
                 assert_eq!(chunk.meta.timestamp, endpoint);
+                assert_eq!(chunk.meta.media_end, Some(Duration::from_secs(60)));
                 served += u64::from(chunk.meta.frames);
                 endpoint = chunk.meta.timestamp
                     + chunk
@@ -320,6 +406,7 @@ async fn heuristic_trim_refines_from_the_original_output_it_actually_emits() {
     assert_eq!(served, 989);
     assert_eq!(endpoint, Duration::from_millis(1_700));
     assert_eq!(source.playhead.duration(), Some(Duration::from_millis(989)));
+    assert_eq!(source.media_end(), Some(Duration::from_secs(1)));
     assert_eq!(
         source
             .decode
@@ -328,6 +415,13 @@ async fn heuristic_trim_refines_from_the_original_output_it_actually_emits() {
             .and_then(|origin| origin.checked_add(source.playhead.duration()?)),
         Some(endpoint)
     );
+    source
+        .seek(Duration::from_millis(1_000))
+        .expect("raw seek after measured heuristic EOF");
+    assert_eq!(source.media_end(), Some(Duration::from_secs(1)));
+    let replay = first_chunk(&mut source);
+    assert_eq!(replay.meta.media_end, Some(Duration::from_secs(1)));
+    assert_eq!(source.playhead.duration(), Some(Duration::from_millis(989)));
 }
 
 #[kithara::test(tokio)]

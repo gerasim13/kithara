@@ -27,7 +27,6 @@ use crate::{
             step::tick,
             transition::OutgoingFrontier,
         },
-        gapless::visible_duration,
         rebuild::{RecreateCause, RecreateState},
         seek::{ResumeTarget, emit::commit_outcome},
         stream::shared::SharedStream,
@@ -114,7 +113,6 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
         }
         self.release_seek_abr();
     }
-
     delegate::delegate! {
         to self.decode.active() {
             fn media_origin(&self) -> Option<Duration>;
@@ -122,6 +120,20 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
         }
     }
 
+    fn media_end(&self) -> Option<Duration> {
+        let decoded_end = if matches!(self.phase, OwnerPhase::AtEof) {
+            self.resume
+                .decoded_end(self.decode.discontinuity().revision())
+        } else {
+            None
+        };
+        self.decode.active().media_end(
+            self.decode.gapless_mode(),
+            self.playhead.duration(),
+            decoded_end,
+            self.duration_reconciled,
+        )
+    }
     fn discontinuity(&self) -> Option<crate::SourceDiscontinuity> {
         Some(self.decode.discontinuity())
     }
@@ -236,11 +248,8 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
         self.waiting_for_source = false;
         if !self.duration_reconciled {
             let active = self.decode.active();
-            if let Some(duration) = visible_duration(
-                active.decoder().duration(),
-                active.gapless_profile(),
-                self.decode.gapless_mode(),
-            ) && Some(duration) > self.playhead.duration()
+            if let Some(duration) = active.visible_duration(self.decode.gapless_mode())
+                && Some(duration) > self.playhead.duration()
             {
                 self.playhead.set_duration(Some(duration));
             }
@@ -249,6 +258,8 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
             &mut self.decode,
             DecodeCtx {
                 cursor: &mut self.resume,
+                physical_duration: self.playhead.duration(),
+                physical_reconciled: self.duration_reconciled,
                 stream: &self.shared_stream,
                 emit: Some(&self.emit),
             },
@@ -566,6 +577,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                 backend: self.decoder_backend,
                 cause,
                 generation: self.decode.active(),
+                gapless_mode: self.decode.gapless_mode(),
                 host_sample_rate: self.host_rate.map_or(0, NonZeroU32::get),
                 playback_resampler_backend: self.playback_resampler_backend,
                 recreates_on_route: true,

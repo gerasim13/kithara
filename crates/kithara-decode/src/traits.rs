@@ -208,7 +208,7 @@ pub trait Decoder: Send + 'static {
     /// Get total duration from track metadata.
     ///
     /// Returns `None` if duration cannot be determined.
-    fn duration(&self) -> Option<Duration>;
+    fn duration(&self) -> Option<crate::DecoderDuration>;
 
     /// Publish reader-hook events queued during decode.
     ///

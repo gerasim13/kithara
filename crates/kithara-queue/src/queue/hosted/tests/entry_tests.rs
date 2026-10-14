@@ -14,7 +14,7 @@ pub(super) use kithara_render::{
     LaneFrame,
     bridge::{Returned, SlotMark},
 };
-pub(super) use kithara_signal::{AudioSpec, FrameCount, SessionFrame};
+pub(super) use kithara_signal::{AudioChunkInfo, AudioSpec, FrameCount, SessionFrame};
 pub(super) use kithara_test_utils::{TestTempDir, kithara};
 
 use super::*;
@@ -302,7 +302,7 @@ async fn selected_source_clock() -> (
     Queue<TestPools>,
     mock::DeckRig<TestPools>,
     TestTempDir,
-    kithara_signal::AudioChunkInfo,
+    AudioChunkInfo,
 ) {
     let (mut queue, _, _, mut rig, dir) = pending_selection();
     let seq = queue
@@ -402,8 +402,15 @@ async fn only_the_accepted_seek_receipt_relinquishes_the_requested_position() {
         .checked_add(Duration::from_secs_f64(before.expect("fixture position")))
         .expect("fixture raw position");
     let snapshot = &mut queue.deck.mixer.slots[usize::from(slot.get())];
-    snapshot.media_origin = clock.media_origin;
-    snapshot.visible_origin = clock.visible_origin;
+    snapshot.source = Some(AudioChunkInfo {
+        spec: clock.spec,
+        segment,
+        source_revision: 0,
+        media_origin: clock.media_origin,
+        visible_origin: clock.visible_origin,
+        media_end: clock.media_end,
+        ..AudioChunkInfo::default()
+    });
     snapshot.position = raw_position.as_secs_f64();
     snapshot.mark = Some(SlotMark {
         session: SessionFrame::new(256),
@@ -483,8 +490,15 @@ async fn an_applied_seek_keeps_its_target_until_the_matching_render_mark() {
         .checked_add(Duration::from_secs_f64(0.25))
         .expect("old fixture raw position");
     let snapshot = &mut queue.deck.mixer.slots[usize::from(slot.get())];
-    snapshot.media_origin = clock.media_origin;
-    snapshot.visible_origin = clock.visible_origin;
+    snapshot.source = Some(AudioChunkInfo {
+        spec: clock.spec,
+        segment: kithara_signal::SegmentId::FIRST,
+        source_revision: 0,
+        media_origin: clock.media_origin,
+        visible_origin: clock.visible_origin,
+        media_end: clock.media_end,
+        ..AudioChunkInfo::default()
+    });
     snapshot.position = raw_position.as_secs_f64();
     snapshot.mark = Some(SlotMark {
         session: SessionFrame::new(256),
@@ -502,6 +516,11 @@ async fn an_applied_seek_keeps_its_target_until_the_matching_render_mark() {
         .checked_add(Duration::from_secs_f64(2.25))
         .expect("matching fixture raw position");
     queue.deck.mixer.slots[usize::from(slot.get())].position = raw_position.as_secs_f64();
+    queue.deck.mixer.slots[usize::from(slot.get())]
+        .source
+        .as_mut()
+        .expect("declared fixture source")
+        .segment = segment;
     queue.deck.mixer.slots[usize::from(slot.get())].mark = Some(SlotMark {
         session: SessionFrame::new(384),
         lane: LaneFrame { segment, frame: 0 },
@@ -548,6 +567,12 @@ async fn atomic_track_id_cas_arm_then_disarm() {
         .expect("select sounding predecessor");
     });
     let loaded = arm_current_fixture(&mut rig, &dir).await;
+    let media_end = loaded
+        .opened
+        .pcm
+        .next_chunk_info()
+        .and_then(|info| info.media_end)
+        .expect("decoded predecessor endpoint");
     answer_loaded(&mut queue, &mut rig, loaded);
     crate::mock::finish(&mut queue, &mut rig);
     assert_eq!(queue.current, Some(TrackId(2)));
@@ -557,8 +582,15 @@ async fn atomic_track_id_cas_arm_then_disarm() {
         .snapshot()
         .slot
         .expect("seated predecessor");
-    queue.deck.mixer.slots[usize::from(slot.get())].visible_origin = Some(Duration::ZERO);
-    queue.deck.mixer.slots[usize::from(slot.get())].media_origin = Some(Duration::ZERO);
+    queue.deck.mixer.slots[usize::from(slot.get())].source = Some(AudioChunkInfo {
+        spec: AudioSpec::new(2, mock::SAMPLE_RATE),
+        segment: kithara_signal::SegmentId::FIRST,
+        source_revision: 0,
+        visible_origin: Some(Duration::ZERO),
+        media_origin: Some(Duration::ZERO),
+        media_end: Some(media_end),
+        ..AudioChunkInfo::default()
+    });
     queue.deck.mixer.slots[usize::from(slot.get())].mark = Some(SlotMark {
         session: SessionFrame::new(256),
         lane: LaneFrame {

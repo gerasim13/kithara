@@ -146,15 +146,87 @@ fn public_media_extent_uses_the_same_basis_as_public_position(
     #[case] visible_ms: u64,
     #[case] expected_ms: u64,
 ) {
-    let mut track = track(A);
-    track.media_origin = Some(Duration::from_millis(576));
-    track.visible_origin = Some(Duration::from_millis(visible_ms));
-    track.duration = Some(Duration::from_secs(2));
-    assert_eq!(
-        track.snapshot().duration,
-        Some(Duration::from_millis(expected_ms))
+    let spec = AudioSpec::new(2, NonZeroU32::new(1_000).expect("millisecond source clock"));
+    let mut packets = kithara_render::mock::PacketRing::with_origin(
+        spec,
+        Duration::from_secs(2),
+        1,
+        Duration::from_millis(visible_ms),
     );
-    assert_eq!(track.duration, Some(Duration::from_secs(2)));
+    let mut pcm = kithara_render::mock::chunk(spec, SegmentId::FIRST, 0, visible_ms, &[0.5; 2]);
+    pcm.meta.media_origin = Some(Duration::from_millis(576));
+    packets.push(kithara_render::PcmPacket::Chunk(Box::new(pcm)));
+    let receiver = packets.receiver.take().expect("prepared source receiver");
+    assert_eq!(receiver.duration(), Some(Duration::from_secs(2)));
+    let source = receiver.next_chunk_info().expect("immutable source packet");
+    let mut rig = rig();
+    let output = mock::output(None).get();
+    let mut deck = crate::DeckSnapshot {
+        slots: vec![SlotSnapshot {
+            mark: Some(SlotMark {
+                session: frame(0),
+                lane: LaneFrame {
+                    segment: source.segment,
+                    frame: source.lane_frame,
+                },
+                position: source.timestamp,
+            }),
+            source: Some(source),
+            position: source.timestamp.as_secs_f64(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    for mark in [deck.slots[0].mark, None] {
+        let mut track = track(A);
+        track.attach_at = Some(frame(0));
+        deck.slots[0].mark = mark;
+        deck.slots[0].source = Some(source);
+        {
+            let fixture = &mut *rig;
+            let mut scope = fixture
+                .ring
+                .scope(fixture.scope)
+                .expect("live source scope");
+            let out = Outbox::new(&mut scope, &mut fixture.dispatcher).in_pass(crate::DeckPass {
+                mix: DeckMixSettings::default(),
+                suspended: false,
+                now: frame(0),
+                delivery: FrameCount::new(0),
+                output: &output,
+                deck: &deck,
+            });
+            track.observe(&out);
+            assert_eq!(
+                track.snapshot().duration,
+                Some(Duration::from_millis(expected_ms))
+            );
+        }
+        deck.slots[0].source = Some(AudioChunkInfo {
+            segment: source.segment.next(),
+            media_end: Some(Duration::from_secs(999)),
+            ..source
+        });
+        let fixture = &mut *rig;
+        let mut scope = fixture
+            .ring
+            .scope(fixture.scope)
+            .expect("live source scope");
+        let out = Outbox::new(&mut scope, &mut fixture.dispatcher).in_pass(crate::DeckPass {
+            mix: DeckMixSettings::default(),
+            suspended: false,
+            now: frame(0),
+            delivery: FrameCount::new(0),
+            output: &output,
+            deck: &deck,
+        });
+        track.observe(&out);
+        assert_eq!(
+            track.snapshot().duration,
+            Some(Duration::from_millis(expected_ms))
+        );
+    }
+    assert_eq!(receiver.duration(), Some(Duration::from_secs(2)));
 }
 
 #[kithara::test]
@@ -337,8 +409,13 @@ fn stopped_raw_mark_stays_raw_while_pause_and_resume_publish_media_position(
                 state: SlotState::Stopped,
                 mark: Some(old_mark),
                 position: old_mark.position.as_secs_f64(),
-                media_origin: track.media_origin,
-                visible_origin: track.visible_origin,
+                source: Some(AudioChunkInfo {
+                    segment: old_mark.lane.segment,
+                    media_origin: track.media_origin,
+                    visible_origin: track.visible_origin,
+                    media_end: track.duration,
+                    ..AudioChunkInfo::default()
+                }),
                 ..Default::default()
             }],
             ..Default::default()
@@ -444,8 +521,13 @@ fn cancelled_parked_repeat_restores_the_raw_coordinate_without_reapplying_media_
             state: SlotState::Playing,
             mark,
             position: mark.map_or(0.0, |mark| mark.position.as_secs_f64()),
-            media_origin: track.media_origin,
-            visible_origin: track.visible_origin,
+            source: Some(AudioChunkInfo {
+                segment: original,
+                media_origin: track.media_origin,
+                visible_origin: track.visible_origin,
+                media_end: track.duration,
+                ..AudioChunkInfo::default()
+            }),
             ..Default::default()
         }],
         ..Default::default()

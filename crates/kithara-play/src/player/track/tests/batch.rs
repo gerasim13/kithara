@@ -1,5 +1,8 @@
 use std::num::NonZeroUsize;
 
+use kithara_audio::TrackFailureKind;
+use kithara_command::Target;
+
 use super::*;
 use crate::Bound;
 
@@ -59,6 +62,592 @@ fn a_segment_entry_keeps_its_native_curve_and_waits_for_native_readiness(#[case]
     assert_eq!(track.entry(bound), applied.then_some(frame(128)));
     track.status = TrackStatus::Loaded;
     assert_eq!(track.entry(bound), applied.then_some(frame(128)));
+    if !applied {
+        for host_rate in [false, true] {
+            for status in [
+                TrackStatus::Loaded,
+                TrackStatus::Paused { at: Duration::ZERO },
+                TrackStatus::Loading,
+            ] {
+                assert_preparation_refusal(host_rate, status, false);
+            }
+            assert_preparation_refusal(host_rate, TrackStatus::Loaded, true);
+            assert_obsolete_preparation_refusal(host_rate);
+            for tick_before_receipt in [false, true] {
+                for release_before_receipt in [false, true] {
+                    assert_failed_replacement_keeps_incumbent(
+                        host_rate,
+                        tick_before_receipt,
+                        release_before_receipt,
+                    );
+                }
+            }
+        }
+        assert_terminal_adoption_refusal(false, false);
+        assert_terminal_adoption_refusal(false, true);
+        assert_terminal_adoption_refusal(true, false);
+    }
+}
+
+fn assert_preparation_refusal(host_rate: bool, initial: TrackStatus, reserved: bool) {
+    let mut rig = rig();
+    let (mut track, mut inbox) = if reserved || initial == TrackStatus::Loading {
+        let mut track = track(A);
+        if reserved {
+            track.slot = None;
+        }
+        load(&mut track, &mut rig, Duration::ZERO);
+        let opened = opened_fixture(&mut rig, "refused-preparation");
+        let receipt = rig.open(Ok(opened)).expect("native opened source");
+        rig.with_outbox(|out| track.settle(TrackReceipt::Loaded(receipt), out))
+            .expect("live scope");
+        let (sender, inbox) = lane();
+        track.lane = Some(sender);
+        (track, inbox)
+    } else {
+        prepared_track()
+    };
+    if matches!(initial, TrackStatus::Paused { .. }) {
+        command_at_zero(&mut track, &mut rig, TrackCommand::Pause { at: When::Next });
+    } else if initial == TrackStatus::Loaded && !reserved {
+        command_at_zero(&mut track, &mut rig, TrackCommand::Play { at: When::Next });
+    }
+    assert_eq!(track.status(), initial);
+    command_at_zero(
+        &mut track,
+        &mut rig,
+        if host_rate {
+            TrackCommand::SetHostRate {
+                rate: mock::SAMPLE_RATE,
+            }
+        } else {
+            TrackCommand::Seek { to: Duration::ZERO }
+        },
+    );
+    let segment = track.segment;
+    command_at_zero(&mut track, &mut rig, TrackCommand::Play { at: When::Next });
+    assert_eq!(track.play, Some(When::Next));
+    let prepared = track.lane_commands.last().expect("native preparation").seq;
+    let later = track
+        .send_lane(LaneCommand::SetSpeed(SpeedCurve::Constant(1.0)), When::Next)
+        .expect("later native control");
+    assert_ne!(prepared, later);
+    inbox.drain();
+    let due = inbox
+        .next_due(LaneFrame { segment, frame: 0 }, 1)
+        .expect("native preparation refusal");
+    assert_eq!(due.seq(), prepared);
+    let failure = TrackFailureKind::Render;
+    due.refuse(failure);
+    assert!(matches!(
+        in_pass(&mut rig, frame(32), |out| track.prepare_entry(frame(128), out)),
+        Err(PlayError::Lane(reason)) if reason == failure
+    ));
+    assert_eq!(track.entry(Bound::AtOrAfter(frame(128))), None);
+    assert!(matches!(
+        in_pass(&mut rig, frame(32), |out| track.admit(
+            TrackSettingsChange::Speed(1.25), When::Next, out
+        )),
+        Err(PlayError::Lane(reason)) if reason == failure
+    ));
+    in_pass(&mut rig, frame(64), |out| track.tick(frame(64), out));
+    let failed = TrackStatus::Failed {
+        at: frame(64),
+        fault: PlaybackFault::Source(failure),
+    };
+    assert_eq!(track.status(), failed);
+    assert_eq!(track.snapshot().status, failed);
+    assert_eq!(track.play, None);
+    assert_eq!(track.ready, None);
+    if let Some(attaching) = track.attaching {
+        assert_eq!(attaching.play, None);
+    }
+    let receipts = track.adopting.len()
+        + track.playback_commands.len()
+        + usize::from(track.attaching.is_some());
+    for _ in 0..receipts {
+        let receipt = answer_next(&mut rig, Ok(()));
+        answer_track(&mut track, &mut rig, receipt);
+        assert_eq!(track.snapshot().status, failed);
+    }
+    inbox
+        .next_due(LaneFrame { segment, frame: 0 }, 1)
+        .expect("later control refusal")
+        .refuse(TrackFailureKind::ChannelClosed);
+    in_pass(&mut rig, frame(256), |out| track.tick(frame(256), out));
+    assert_eq!(track.snapshot().status, failed);
+    assert_eq!(track.play, None);
+    assert_eq!(track.entry(Bound::AtOrAfter(frame(384))), None);
+    assert!(!track.snapshot().pending_lane);
+}
+
+fn assert_obsolete_preparation_refusal(host_rate: bool) {
+    let mut rig = rig();
+    let (mut track, mut inbox) = prepared_track();
+    command_at_zero(
+        &mut track,
+        &mut rig,
+        if host_rate {
+            TrackCommand::SetHostRate {
+                rate: mock::SAMPLE_RATE,
+            }
+        } else {
+            TrackCommand::Seek { to: Duration::ZERO }
+        },
+    );
+    let current = track.segment;
+    let obsolete = track.lane_commands.last().expect("first preparation").seq;
+    let replacement = track
+        .send_lane(
+            if host_rate {
+                LaneCommand::SetHostRate {
+                    id: current,
+                    rate: mock::SAMPLE_RATE,
+                }
+            } else {
+                LaneCommand::Segment {
+                    id: current,
+                    from: Duration::ZERO,
+                    speed: SpeedCurve::Constant(1.0),
+                }
+            },
+            When::Next,
+        )
+        .expect("same-segment replacement");
+    assert_ne!(obsolete, replacement);
+    assert!(
+        track
+            .lane_commands
+            .iter()
+            .all(|operation| matches!(operation.command,
+        LaneCommand::Segment { id, .. } | LaneCommand::SetHostRate { id, .. } if id == current))
+    );
+    inbox.drain();
+    let due = inbox
+        .next_due(
+            LaneFrame {
+                segment: current,
+                frame: 0,
+            },
+            1,
+        )
+        .expect("obsolete preparation");
+    assert_eq!(due.seq(), obsolete);
+    due.refuse(TrackFailureKind::Render);
+    assert!(
+        !in_pass(&mut rig, frame(64), |out| track
+            .prepare_entry(frame(128), out))
+        .expect("obsolete same-segment refusal cannot reject replacement")
+    );
+    in_pass(&mut rig, frame(64), |out| track.tick(frame(64), out));
+    assert_eq!(track.snapshot().status, TrackStatus::Loaded);
+    let due = inbox
+        .next_due(
+            LaneFrame {
+                segment: current,
+                frame: 0,
+            },
+            1,
+        )
+        .expect("replacement preparation");
+    assert_eq!(due.seq(), replacement);
+    due.refuse(TrackFailureKind::SourceCancelled);
+    assert!(matches!(
+        in_pass(&mut rig, frame(128), |out| track
+            .prepare_entry(frame(256), out)),
+        Err(PlayError::Lane(TrackFailureKind::SourceCancelled))
+    ));
+    in_pass(&mut rig, frame(128), |out| track.tick(frame(128), out));
+    assert_eq!(
+        track.snapshot().status,
+        TrackStatus::Failed {
+            at: frame(128),
+            fault: PlaybackFault::Source(TrackFailureKind::SourceCancelled),
+        }
+    );
+}
+
+fn playing_incumbent(support: &mut Rig) -> (mock::MixerRig, [[f32; 32]; 2]) {
+    let incumbent = opened_fixture(support, "failed-replacement-incumbent").opened;
+    let shape = kithara_render::rt::StreamShape::new(
+        NonZeroU32::new(32).expect("host block"),
+        mock::SAMPLE_RATE,
+    );
+    let mut mixer = mock::MixerRig::new(DeckMixerConfig::default(), shape, &pools())
+        .expect("real offline mixer");
+    mixer
+        .send(
+            When::Next,
+            DeckPart::Attach {
+                slot: A,
+                item_id: TrackId::allocate(),
+                pcm: incumbent.pcm,
+                segment: SegmentId::FIRST,
+            },
+        )
+        .expect("native incumbent Attach");
+    let mut pcm = [[0.0; 32]; 2];
+    let [left, right] = &mut pcm;
+    mixer
+        .block(frame(0), [left, right])
+        .expect("native incumbent attachment");
+    while let Some(receipt) = mixer.ring.receipt() {
+        let kithara_command::ScopedReceipt::Scope(_, receipt) = receipt else {
+            panic!("incumbent scope");
+        };
+        assert!(matches!(receipt.outcome(), Outcome::Applied { .. }));
+    }
+    mixer
+        .send(
+            When::Next,
+            DeckPart::Start {
+                slot: A,
+                fade: Fade::Declick,
+            },
+        )
+        .expect("native incumbent Start");
+    let [left, right] = &mut pcm;
+    mixer
+        .block(frame(32), [left, right])
+        .expect("incumbent produces PCM");
+    assert!(pcm.iter().flatten().any(|sample| *sample != 0.0));
+    while let Some(receipt) = mixer.ring.receipt() {
+        let kithara_command::ScopedReceipt::Scope(_, receipt) = receipt else {
+            panic!("incumbent scope");
+        };
+        assert!(matches!(receipt.outcome(), Outcome::Applied { .. }));
+    }
+    (mixer, pcm)
+}
+
+fn assert_incumbent_survives_release(
+    newcomer: &mut Track,
+    support: &mut Rig,
+    mixer: &mut mock::MixerRig,
+    pcm: &mut [[f32; 32]; 2],
+) {
+    for at in [96, 128, 160, 192, 224, 256] {
+        with_mixer(mixer, &mut support.dispatcher, frame(at), |out| {
+            newcomer.tick(frame(at), out);
+        });
+        let [left, right] = &mut *pcm;
+        mixer
+            .block(frame(at), [left, right])
+            .expect("incumbent survives refused replacement");
+        assert!(pcm.iter().flatten().any(|sample| *sample != 0.0));
+        assert_eq!(
+            mixer.ends.snapshot.read().slots[A.index()].state,
+            SlotState::Playing
+        );
+        assert_eq!(
+            mixer.ends.snapshot.read().slots[A.index()]
+                .source
+                .expect("incumbent source")
+                .segment,
+            SegmentId::FIRST
+        );
+        while let Some(receipt) = mixer.ring.receipt() {
+            let kithara_command::ScopedReceipt::Scope(_, receipt) = receipt else {
+                panic!("incumbent scope");
+            };
+            assert!(!receipt.batch().commands.iter().any(|part| matches!(
+                part,
+                DeckPart::Detach { .. }
+                    | DeckPart::Returned(Returned::Pcm { .. })
+                    | DeckPart::Replace { .. }
+            )));
+        }
+    }
+    assert!(!newcomer.attached());
+    assert!(!newcomer.releasing);
+}
+
+fn settle_refused_replacement(
+    newcomer: &mut Track,
+    support: &mut Rig,
+    mixer: &mut mock::MixerRig,
+    replacement: Seq,
+) {
+    let mut refused = false;
+    while let Some(receipt) = mixer.ring.receipt() {
+        let kithara_command::ScopedReceipt::Scope(_, receipt) = receipt else {
+            panic!("replacement scope");
+        };
+        let seq = receipt.seq();
+        let (outcome, mut batch) = receipt.into();
+        assert!(
+            !batch
+                .commands
+                .iter()
+                .any(|part| matches!(part, DeckPart::Detach { .. }))
+        );
+        if seq == replacement {
+            assert!(matches!(outcome, Outcome::Rejected(Rejection::Stale)));
+            refused = true;
+        }
+        with_mixer(mixer, &mut support.dispatcher, frame(64), |out| {
+            newcomer.settle(
+                TrackReceipt::Deck {
+                    seq,
+                    outcome: &outcome,
+                    batch: &mut batch,
+                },
+                out,
+            )
+        });
+    }
+    assert!(refused);
+    assert!(!newcomer.attached());
+    assert_eq!(newcomer.attach_at, None);
+    assert!(!newcomer.releasing);
+}
+
+fn assert_failed_replacement_keeps_incumbent(
+    host_rate: bool,
+    tick_before_receipt: bool,
+    release_before_receipt: bool,
+) {
+    let mut support = rig();
+    let (mut mixer, mut pcm) = playing_incumbent(&mut support);
+    let mut newcomer = track(A);
+    newcomer.slot = None;
+    load(&mut newcomer, &mut support, Duration::ZERO);
+    let opened = opened_fixture(&mut support, "failed-replacement-newcomer");
+    let receipt = support.open(Ok(opened)).expect("native newcomer open");
+    with_mixer(&mut mixer, &mut support.dispatcher, frame(64), |out| {
+        newcomer.settle(TrackReceipt::Loaded(receipt), out)
+    });
+    assert_eq!(newcomer.status(), TrackStatus::Loaded);
+    assert!(!newcomer.attached());
+    let (sender, mut inbox) = lane();
+    newcomer.lane = Some(sender);
+    let group = with_mixer(&mut mixer, &mut support.dispatcher, frame(64), |out| {
+        let at = When::At(frame(256));
+        out.together_owned(at, |out| {
+            newcomer.apply(TrackCommand::Seat { slot: A, at }, out)?;
+            newcomer.apply(
+                TrackCommand::Fade {
+                    at,
+                    settings: CrossfadeSettings::default(),
+                    dir: FadeDir::In,
+                },
+                out,
+            )?;
+            Ok(())
+        })
+    });
+    let replacement = match group {
+        Ok(((), Some(seq))) => {
+            newcomer.finish_group(Ok(seq));
+            seq
+        }
+        Ok(((), None)) => panic!("native replacement group"),
+        Err((error, mut parts)) => {
+            newcomer.finish_group(Err(&mut parts));
+            panic!("replacement admission: {error}");
+        }
+    };
+    let segment = newcomer.segment;
+    let source = newcomer
+        .send_lane(
+            if host_rate {
+                LaneCommand::SetHostRate {
+                    id: segment,
+                    rate: mock::SAMPLE_RATE,
+                }
+            } else {
+                LaneCommand::Segment {
+                    id: segment,
+                    from: Duration::ZERO,
+                    speed: SpeedCurve::Constant(1.0),
+                }
+            },
+            When::Next,
+        )
+        .expect("native source preparation");
+    inbox.drain();
+    let due = inbox
+        .next_due(LaneFrame { segment, frame: 0 }, 1)
+        .expect("native source refusal");
+    assert_eq!(due.seq(), source);
+    due.refuse(TrackFailureKind::Render);
+    assert!(matches!(
+        with_mixer(&mut mixer, &mut support.dispatcher, frame(64), |out| {
+            newcomer.prepare_entry(frame(256), out)
+        }),
+        Err(PlayError::Lane(TrackFailureKind::Render))
+    ));
+    let failure = TrackStatus::Failed {
+        at: frame(64),
+        fault: PlaybackFault::Source(TrackFailureKind::Render),
+    };
+    if tick_before_receipt {
+        with_mixer(&mut mixer, &mut support.dispatcher, frame(64), |out| {
+            newcomer.tick(frame(64), out);
+        });
+        assert_eq!(newcomer.status(), failure);
+    }
+    with_mixer(&mut mixer, &mut support.dispatcher, frame(64), |out| {
+        if release_before_receipt {
+            newcomer.apply(TrackCommand::Release, out).map(drop)
+        } else {
+            out.supersede(A)
+        }
+    })
+    .expect("cancel the pending replacement without touching its incumbent");
+    let [left, right] = &mut pcm;
+    mixer
+        .block(frame(64), [left, right])
+        .expect("native replacement rejection");
+    assert!(pcm.iter().flatten().any(|sample| *sample != 0.0));
+    settle_refused_replacement(&mut newcomer, &mut support, &mut mixer, replacement);
+    with_mixer(&mut mixer, &mut support.dispatcher, frame(96), |out| {
+        newcomer.tick(frame(96), out);
+    });
+    if release_before_receipt {
+        assert_eq!(newcomer.status(), TrackStatus::Released);
+    } else {
+        assert_eq!(
+            newcomer.status(),
+            if tick_before_receipt {
+                failure
+            } else {
+                TrackStatus::Failed {
+                    at: frame(96),
+                    fault: PlaybackFault::Source(TrackFailureKind::Render),
+                }
+            }
+        );
+        with_mixer(&mut mixer, &mut support.dispatcher, frame(96), |out| {
+            newcomer.apply(TrackCommand::Release, out)
+        })
+        .expect("release the refused resource without detaching its incumbent");
+    }
+    assert_eq!(newcomer.status(), TrackStatus::Released);
+    assert_incumbent_survives_release(&mut newcomer, &mut support, &mut mixer, &mut pcm);
+}
+
+fn assert_terminal_adoption_refusal(cancelled: bool, outdated: bool) {
+    for tick_before_receipt in [false, true] {
+        for release_before_receipt in [false, true] {
+            let mut rig = rig();
+            let (mut track, mut inbox) = loaded(&mut rig, A, "terminal-adoption");
+            let deferred = cancelled || !outdated;
+            let original = command_at_zero(
+                &mut track,
+                &mut rig,
+                if deferred {
+                    TrackCommand::PlayAfter { track: A }
+                } else {
+                    TrackCommand::Seek { to: Duration::ZERO }
+                },
+            )
+            .expect("native adoption");
+            let segment = track.segment;
+            if cancelled {
+                command_at_zero(&mut track, &mut rig, TrackCommand::Supersede);
+                assert!(
+                    track
+                        .adopting
+                        .iter()
+                        .any(|adoption| adoption.cancelled && adoption.parked.is_some())
+                );
+            } else if !outdated {
+                rig.with_outbox(|out| out.supersede(A))
+                    .expect("live scope")
+                    .expect("native stale basis");
+            }
+            inbox.drain();
+            if deferred {
+                inbox
+                    .next_deferred()
+                    .expect("parked source preparation")
+                    .refuse(TrackFailureKind::Render);
+            } else {
+                inbox
+                    .next_due(LaneFrame { segment, frame: 0 }, 1)
+                    .expect("source preparation")
+                    .refuse(TrackFailureKind::Render);
+            }
+            assert!(matches!(
+                in_pass(&mut rig, frame(64), |out| track
+                    .prepare_entry(frame(128), out)),
+                Err(PlayError::Lane(TrackFailureKind::Render))
+            ));
+            if tick_before_receipt {
+                in_pass(&mut rig, frame(64), |out| track.tick(frame(64), out));
+                assert!(matches!(track.status(), TrackStatus::Failed { .. }));
+            }
+            let mut held = if outdated {
+                let receipt = answer_next(&mut rig, Err(DeckRefusal::Outdated { slot: A }));
+                assert_eq!(receipt.seq(), original);
+                Answer::from(receipt)
+            } else {
+                let mut receipts = rig.block(frame(64), 0.0);
+                let index = receipts
+                    .iter()
+                    .position(|receipt| receipt.seq == original)
+                    .expect("actual stale adoption answer");
+                let receipt = receipts.remove(index);
+                assert!(
+                    matches!(receipt.outcome, Outcome::Rejected(Rejection::Stale)),
+                    "native stale adoption: cancelled={cancelled}, tick_before_receipt={tick_before_receipt}, release_before_receipt={release_before_receipt}, outcome={:?}",
+                    receipt.outcome
+                );
+                receipt
+            };
+            if release_before_receipt {
+                in_pass(&mut rig, frame(128), |out| {
+                    track.apply(TrackCommand::Release, out)
+                })
+                .expect("explicit terminal release");
+                let mut receipts = rig.block(frame(128), 0.0);
+                settle(&mut track, &mut rig, &mut receipts);
+                assert_eq!(track.status(), TrackStatus::Released);
+                assert!(!track.attached());
+            }
+            let lane_count = track.lane_commands.len();
+            in_pass(&mut rig, frame(192), |out| {
+                track.settle(
+                    TrackReceipt::Deck {
+                        seq: held.seq,
+                        outcome: &held.outcome,
+                        batch: &mut held.batch,
+                    },
+                    out,
+                )
+            });
+            assert!(track.adopting.is_empty());
+            assert_eq!(track.newest_epoch_pending, None);
+            assert_eq!(track.segment, segment);
+            assert_eq!(track.lane_commands.len(), lane_count);
+            in_pass(&mut rig, frame(256), |out| track.tick(frame(256), out));
+            assert_eq!(track.segment, segment);
+            assert_eq!(track.lane_commands.len(), lane_count);
+            assert_eq!(track.newest_epoch_pending, None);
+            if release_before_receipt {
+                assert_eq!(track.status(), TrackStatus::Released);
+            } else {
+                assert_eq!(
+                    track.status(),
+                    TrackStatus::Failed {
+                        at: frame(if tick_before_receipt { 64 } else { 256 }),
+                        fault: PlaybackFault::Source(TrackFailureKind::Render),
+                    }
+                );
+            }
+            assert!(
+                rig.block(frame(256), 0.0).is_empty(),
+                "terminal receipt cannot enqueue a new Adopt"
+            );
+            inbox.drain();
+            assert!(inbox.next_due(LaneFrame { segment, frame: 0 }, 1).is_none());
+            assert!(
+                inbox.next_deferred().is_none(),
+                "cancelled terminal repeat cannot restore a Segment"
+            );
+        }
+    }
 }
 
 #[kithara::test]
@@ -381,7 +970,7 @@ fn an_alignment_uses_one_credit_and_settles_every_part(#[case] applied: bool) {
         track
             .lane_commands
             .iter()
-            .all(|operation| operation.seq == seq && operation.applied == Some(applied))
+            .all(|operation| operation.seq == seq && operation.applied() == Some(applied))
     );
     let receipt = track.speed_receipt().expect("batch verdict");
     assert!(match receipt {

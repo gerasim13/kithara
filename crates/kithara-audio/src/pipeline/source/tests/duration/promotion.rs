@@ -218,6 +218,7 @@ async fn an_incoming_with_other_priming_reports_its_own_visible_origin(
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn a_finished_empty_incoming_tail_does_not_refine_from_the_outgoing_endpoint() {
     let mut outgoing = extent(Some(Duration::from_secs(60)), 700, true);
+    outgoing.media_origin = Some(Duration::ZERO);
     outgoing.frames = 64;
     let mut incoming = outgoing;
     incoming.origin = 0;
@@ -246,6 +247,14 @@ async fn a_finished_empty_incoming_tail_does_not_refine_from_the_outgoing_endpoi
     );
     assert_eq!(source.playhead.duration(), declared);
     assert_ne!(declared, Some(Duration::from_millis(716)));
+    let revision = source
+        .discontinuity()
+        .expect("incoming revision")
+        .revision();
+    assert_ne!(revision, original.meta.source_revision);
+    assert_eq!(source.resume.decoded_end(revision), None);
+    assert_eq!(source.media_end(), Some(Duration::from_millis(59_969)));
+    assert_ne!(source.media_end(), Some(original.meta.end_timestamp));
 }
 
 #[kithara::test(tokio)]

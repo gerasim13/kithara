@@ -1,6 +1,7 @@
 use std::num::NonZeroU32;
 
 use kithara_abr::AbrHandle;
+use kithara_audio::TrackFailureKind;
 use kithara_command::{Rejection, Seq, When};
 use kithara_decode::TrackMetadata;
 use kithara_events::TrackId;
@@ -178,7 +179,13 @@ pub(super) struct LaneOperation {
     pub(super) segment: SegmentId,
     pub(super) session: Option<SessionFrame>,
     pub(super) command: LaneCommand,
-    pub(super) applied: Option<bool>,
+    pub(super) verdict: Option<Result<(), Rejection<TrackFailureKind>>>,
+}
+
+impl LaneOperation {
+    pub(super) fn applied(&self) -> Option<bool> {
+        self.verdict.map(|verdict| verdict.is_ok())
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

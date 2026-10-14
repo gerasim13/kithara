@@ -24,7 +24,7 @@ pub(crate) trait Demuxer: Send {
 
     /// Total duration if the container can compute one (HLS playlist
     /// total, mp4 `mvhd`, …); `None` for live or unbounded streams.
-    fn duration(&self) -> Option<Duration>;
+    fn duration(&self) -> Option<crate::DecoderDuration>;
 
     /// Pull the next demuxed frame, borrowing the bytes from internal
     /// demuxer state. The caller must consume the frame (typically by
@@ -78,7 +78,7 @@ pub(crate) struct TrackInfo {
     /// Audio codec carried by this track.
     pub(crate) codec: AudioCodec,
     /// Total track duration if available.
-    pub(crate) duration: Option<Duration>,
+    pub(crate) duration: Option<crate::DecoderDuration>,
     /// Container-level gapless metadata — populated by demuxers that
     /// can extract it without consuming the decoder (MP4 `iTunSMPB`
     /// or track `elst`, FLAC `padded_sample_count`, etc.). `None` when

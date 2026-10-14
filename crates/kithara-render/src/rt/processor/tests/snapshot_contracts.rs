@@ -146,7 +146,8 @@ fn snapshot_carries_the_owner_origin_without_rewriting_raw_pcm_position() {
         snapshot.mark.expect("physical mark").position,
         Duration::from_millis(1_500)
     );
-    assert_eq!(snapshot.visible_origin, Some(Duration::from_millis(717)));
-    assert_eq!(snapshot.duration, 0.952);
+    let source = snapshot.source.expect("observed source facts");
+    assert_eq!(source.visible_origin, Some(Duration::from_millis(717)));
+    assert_eq!(source.media_end, Some(Duration::from_millis(1_669)));
     assert_eq!(snapshot.frontier, 1.669);
 }

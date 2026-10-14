@@ -178,10 +178,26 @@ async fn seek_frame_index_clamps_unrepresentable_targets(
         .expect("selected load")
         .seq();
     let mut loaded = crate::mock::loaded_request(&mut rig, seq).await;
-    loaded.opened.duration = duration;
+    let source = loaded
+        .opened
+        .pcm
+        .next_chunk_info()
+        .expect("prepared fixture source");
+    let (opened, source_packets) = crate::mock::opened_with_source(
+        loaded.opened,
+        kithara_signal::AudioChunkInfo {
+            media_end: duration,
+            ..source
+        },
+    );
+    loaded.opened = opened;
     answer_loaded(&mut queue, &mut rig, loaded);
     finish(&mut queue, &mut rig);
     let control = queue.control();
+    assert_eq!(
+        control.duration_seconds(),
+        duration.map(|duration| duration.as_secs_f64())
+    );
     let result = drive_call(
         &mut queue,
         control.clone(),
@@ -214,4 +230,5 @@ async fn seek_frame_index_clamps_unrepresentable_targets(
             .expect("clamped position frames fit u64"),
         expected_frame
     );
+    drop(source_packets);
 }

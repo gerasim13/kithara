@@ -113,6 +113,7 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(
 ) {
     const PRELOAD_CHUNKS: usize = 64;
     const RING_CHUNKS: usize = 96;
+    const RENDER_QUANTUM_FRAMES: usize = 512;
     const SOURCE_RATE: u32 = 44_100;
     const TARGET_RATE: u32 = 48_000;
 
@@ -142,6 +143,9 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(
         .warp(
             WarpConfig::builder()
                 .speed(0.5)
+                .render_quantum_frames(
+                    NonZeroUsize::new(RENDER_QUANTUM_FRAMES).expect("render quantum is non-zero"),
+                )
                 .backend(backend)
                 .keylock(true)
                 .build(),
@@ -157,6 +161,7 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(
     kithara_integration_tests::mock::wait_for_preload(&mut audio, "non-unity source").await;
 
     let (mut audio, first) = wait_for_chunk(audio, Duration::from_secs(2)).await;
+    assert_eq!(first.frames(), RENDER_QUANTUM_FRAMES);
     let resume_margin = first
         .meta
         .end_timestamp
@@ -352,6 +357,7 @@ async fn truncated_wav_surfaces_decode_error_or_eof(audio_wav_44100: &'static [u
         .await
         .expect("audio construction");
 
+    let audio = kithara_integration_tests::mock::with_blocking_reads(audio);
     let (_audio, saw_terminal) = blocking_audio(audio, read_truncated_to_terminal).await;
     assert!(
         saw_terminal,

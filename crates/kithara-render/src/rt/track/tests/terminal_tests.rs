@@ -100,9 +100,15 @@ fn committed_pcm_is_drained_before_an_unmarked_producer_closure(#[case] blocking
 #[kithara::test]
 fn process_fetch_must_distinguish_failure_from_natural_eof() {
     let (receiver, mut producer) = terminal_ring(false, spec());
+    let mut prefix = crate::mock::chunk(spec(), SegmentId::FIRST, 0, 5, &[0.25, 0.5]);
+    prefix.meta.source_revision = 1;
+    prefix.meta.media_end = Some(Duration::from_secs(10));
+    assert!(producer(PcmPacket::Chunk(Box::new(prefix))).is_ok());
     let eof = AudioChunk::new(
         AudioChunkInfo {
             spec: spec(),
+            source_revision: 2,
+            media_end: Some(Duration::from_secs(2)),
             end_of_track: true,
             ..Default::default()
         },
@@ -110,7 +116,76 @@ fn process_fetch_must_distinguish_failure_from_natural_eof() {
     );
     assert!(producer(PcmPacket::Chunk(Box::new(eof))).is_ok());
     let mut natural = resource(receiver);
+    let mut left = [0.0];
+    let mut right = [0.0];
+    assert_eq!(
+        natural.read(None, &mut [&mut left, &mut right], 0..1, &mut 8),
+        ReadOutcome::Full { frames: 1 }
+    );
+    assert_eq!(left, [0.25]);
+    assert_eq!(right, [0.5]);
+    assert!(natural.mark(SessionFrame::new(1)).is_some());
+    assert_eq!(
+        natural.source_info().expect("consumed prefix").media_end,
+        Some(Duration::from_secs(10)),
+        "a future revision cannot refine the consumed source"
+    );
     assert_eq!(observe(&mut natural), Some(ReadOutcome::Eof));
+    assert_eq!(natural.mark(SessionFrame::new(1)), None);
+    let terminal = natural.source_info().expect("current terminal metadata");
+    assert_eq!(terminal.source_revision, 2);
+    assert_eq!(terminal.visible_origin, None);
+    assert_eq!(terminal.media_end, Some(Duration::from_secs(2)));
+    for segment in [SegmentId::FIRST, SegmentId::FIRST.next()] {
+        let (receiver, mut producer) = terminal_ring(false, spec());
+        let mut prefix = crate::mock::chunk(spec(), SegmentId::FIRST, 0, 5, &[0.25, 0.5]);
+        prefix.meta.source_revision = 1;
+        prefix.meta.media_end = Some(Duration::from_secs(10));
+        let observed = prefix.meta;
+        let end = observed
+            .source_span
+            .expect("mapped prefix")
+            .position_at(1)
+            .expect("prefix endpoint");
+        assert!(producer(PcmPacket::Chunk(Box::new(prefix))).is_ok());
+        let terminal = AudioChunk::new(
+            AudioChunkInfo {
+                segment,
+                frames: 0,
+                lane_frame: 1,
+                frame_offset: 6,
+                timestamp: end,
+                source_span: None,
+                media_end: Some(end),
+                end_of_track: true,
+                ..observed
+            },
+            sample_buffer(&pools(), &[]),
+        );
+        assert!(producer(PcmPacket::Chunk(Box::new(terminal))).is_ok());
+        let mut reader = resource(receiver);
+        assert_eq!(reader.source_info(), None);
+        assert_eq!(
+            reader.read(None, &mut [&mut left, &mut right], 0..1, &mut 8),
+            ReadOutcome::Full { frames: 1 }
+        );
+        assert_eq!(left, [0.25]);
+        assert_eq!(right, [0.5]);
+        let current = reader.source_info().expect("consumed source");
+        assert_eq!(current.source_span, observed.source_span);
+        assert_eq!(current.media_origin, observed.media_origin);
+        assert_eq!(current.visible_origin, observed.visible_origin);
+        let matching = segment == observed.segment;
+        assert_eq!(
+            current.media_end,
+            if matching {
+                Some(end)
+            } else {
+                observed.media_end
+            }
+        );
+        assert_eq!(observe(&mut reader), matching.then_some(ReadOutcome::Eof));
+    }
     let (receiver, mut producer) = terminal_ring(false, spec());
     assert!(producer(failed_packet(TrackFailureKind::SourceCancelled)).is_ok());
     let mut failed = resource(receiver);

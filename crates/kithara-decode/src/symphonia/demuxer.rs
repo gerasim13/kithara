@@ -311,7 +311,12 @@ mod raw_clock_tests {
         assert_eq!(first.0, Duration::from_millis(700));
         assert_eq!(second.0, Duration::from_secs(1));
         assert_eq!(second.0 - first.0 - first.1, Duration::from_millis(280));
-        assert_eq!(demuxer.duration(), Some(Duration::from_nanos(333_061_224)));
+        assert_eq!(
+            demuxer.duration(),
+            Some(crate::DecoderDuration::RawLength(Duration::from_nanos(
+                333_061_224
+            )))
+        );
     }
 }
 
@@ -407,7 +412,12 @@ mod ogg_raw_clock_tests {
             DemuxOutcome::Eof
         ));
         assert_eq!(coded_frames, raw_extent);
-        assert_eq!(demuxer.duration(), Some(duration(raw_extent, rate)));
+        assert_eq!(
+            demuxer.duration(),
+            Some(crate::DecoderDuration::RawLength(duration(
+                raw_extent, rate
+            )))
+        );
     }
 
     #[kithara::test]
@@ -484,7 +494,12 @@ mod ogg_raw_clock_tests {
         let mut decoder =
             DecoderFactory::create_from_media_info(Cursor::new(bytes.to_vec()), &media, config)
                 .expect("real Ogg codec");
-        assert_eq!(decoder.duration(), Some(duration(raw_extent, rate)));
+        assert_eq!(
+            decoder.duration(),
+            Some(crate::DecoderDuration::RawLength(duration(
+                raw_extent, rate
+            )))
+        );
         let mut frames = 0u64;
         loop {
             hang_tick!();
@@ -657,7 +672,7 @@ impl Demuxer for SymphoniaDemuxer {
             .map(|d| d.variant_index)
     }
 
-    fn duration(&self) -> Option<Duration> {
+    fn duration(&self) -> Option<crate::DecoderDuration> {
         self.track_info.duration
     }
 
@@ -711,7 +726,7 @@ impl Demuxer for SymphoniaDemuxer {
         self.resume_ts = seeked.actual_ts.get();
         self.resume_pending = None;
 
-        if let Some(duration) = self.track_info.duration
+        if let Some(crate::DecoderDuration::RawLength(duration)) = self.track_info.duration
             && landed_at >= duration
         {
             return Ok(DemuxSeekOutcome::PastEof { duration });
@@ -971,12 +986,12 @@ mod tests {
 
     fn track_frames(demuxer: &SymphoniaDemuxer) -> i64 {
         let info = demuxer.track_info();
-        let millis = i64::try_from(
-            info.duration
-                .expect("WAV fixture must publish a duration")
-                .as_millis(),
-        )
-        .unwrap_or(i64::MAX);
+        let crate::DecoderDuration::RawLength(duration) =
+            info.duration.expect("WAV fixture must publish a duration")
+        else {
+            panic!("WAV duration must describe a raw span");
+        };
+        let millis = i64::try_from(duration.as_millis()).unwrap_or(i64::MAX);
         millis * i64::from(info.sample_rate) / 1000
     }
 

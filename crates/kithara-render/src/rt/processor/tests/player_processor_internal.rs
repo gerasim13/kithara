@@ -119,14 +119,20 @@ async fn processor_clear_unloads_tracks_and_resets_snapshot() {
     block(&mut processor);
     assert_eq!(count(&processor), 1);
 
-    assert_eq!(control.ends.deck.snapshot.read().slots[0].duration, 60.0);
+    assert_eq!(
+        control.ends.deck.snapshot.read().slots[0]
+            .source
+            .expect("prepared source")
+            .media_end,
+        Some(Duration::from_secs(60))
+    );
 
     push(&mut control, DeckPart::Detach { slot: item_id });
     block(&mut processor);
 
     assert_eq!(count(&processor), 0, "arena must be empty after Clear");
     assert_eq!(control.ends.deck.snapshot.read().slots[0].position, 0.0);
-    assert_eq!(control.ends.deck.snapshot.read().slots[0].duration, 0.0);
+    assert_eq!(control.ends.deck.snapshot.read().slots[0].source, None);
     assert!(control.ends.deck.snapshot.read().slots[0].state != SlotState::Playing);
 }
 

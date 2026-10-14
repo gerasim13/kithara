@@ -26,8 +26,30 @@ pub async fn prepared_node<T>(
 where
     T: AudioSource<Chunk = AudioChunk>,
 {
-    let pools = pools();
     let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("rate"));
+    prepared_node_with_info(
+        source,
+        capacity,
+        preload,
+        AudioChunkInfo {
+            spec,
+            ..AudioChunkInfo::default()
+        },
+    )
+    .await
+}
+
+pub(in crate::worker) async fn prepared_node_with_info<T>(
+    source: T,
+    capacity: usize,
+    preload: usize,
+    initial: AudioChunkInfo,
+) -> (DecoderNode<T, TestPools>, PcmReceiver, Sender<LaneProtocol>)
+where
+    T: AudioSource<Chunk = AudioChunk>,
+{
+    let pools = pools();
+    let spec = initial.spec;
     let (lane, inbox) = channel(ChannelConfig::builder().build());
     let config = WarpConfig::builder()
         .source_block_frames(NonZeroUsize::new(65_536).expect("source block"))
@@ -47,24 +69,14 @@ where
     );
     let (receiver, producer) = PacketRing::new(spec, Duration::from_secs(1), capacity).into_ends();
     (
-        DecoderNode::new(
-            source,
-            producer,
-            None,
-            AudioChunkInfo {
-                spec,
-                ..AudioChunkInfo::default()
-            },
-            None,
-            pools,
-            None,
-        ),
+        DecoderNode::new(source, producer, None, initial, None, pools, None),
         receiver,
         lane,
     )
 }
 
 pub struct ScriptedSource {
+    pub(crate) landing: Option<Duration>,
     pub(crate) steps: std::collections::VecDeque<TrackStep<AudioChunk>>,
     pub(crate) commits: Arc<Mutex<Vec<SourceEnd>>>,
 }
@@ -75,6 +87,7 @@ impl ScriptedSource {
         Steps: IntoIterator<Item = TrackStep<AudioChunk>>,
     {
         Self {
+            landing: None,
             steps: steps.into_iter().collect(),
             commits: Arc::new(Mutex::new(Vec::new())),
         }
@@ -92,7 +105,7 @@ impl AudioSource for ScriptedSource {
     fn seek(&mut self, target: Duration) -> Result<SeekOutcome, kithara_audio::AudioReadError> {
         Ok(SeekOutcome::Landed {
             target,
-            landed_at: target,
+            landed_at: self.landing.unwrap_or(target),
         })
     }
     fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}

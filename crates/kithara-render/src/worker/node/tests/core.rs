@@ -32,20 +32,6 @@ pub(super) use crate::mock::ScriptedSource;
 pub(super) fn produced() -> TrackStep<AudioChunk> {
     TrackStep::Produced(Fetch::data(empty_chunk(&pools())))
 }
-/// Where [`segment`] positions the source.
-pub(in crate::worker) const SEGMENT_FROM: Duration = Duration::from_secs(1);
-/// The first chunk a source produces once it landed at `at`.
-fn produced_at(at: Duration) -> TrackStep<AudioChunk> {
-    let spec = empty_chunk(&pools()).spec();
-    let frame = spec.frame_at(at).expect("representable landing");
-    TrackStep::Produced(Fetch::data(chunk(
-        spec,
-        SegmentId::FIRST,
-        0,
-        frame,
-        &[0.0, 0.0],
-    )))
-}
 pub(in crate::worker) fn segment(lane: &mut Sender<LaneProtocol>) -> SegmentId {
     let id = SegmentId::FIRST.next();
     lane.send(
@@ -54,7 +40,7 @@ pub(in crate::worker) fn segment(lane: &mut Sender<LaneProtocol>) -> SegmentId {
             basis: Vec::new(),
             commands: vec![LaneCommand::Segment {
                 id,
-                from: SEGMENT_FROM,
+                from: Duration::from_secs(1),
                 speed: kithara_warp::SpeedCurve::Constant(1.0),
             }],
         },
@@ -198,6 +184,73 @@ async fn decoder_node_does_not_republish_exhausted_warp_source_eof() {
     assert_eq!(node.tick(), TickResult::Backpressured);
     assert_eq!(node.tick(), TickResult::Backpressured);
     assert!(receiver.pop().is_none(), "one terminal packet");
+
+    use kithara_audio::{SourceDiscontinuity, mock::AudioSourceMock};
+    use kithara_signal::{AudioChunkInfo, SourceSpan};
+    use unimock::{MockFn, Unimock};
+
+    let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("source rate"));
+    let mapping = std::num::NonZeroU64::new(3);
+    for (old_segment, old_revision) in [
+        (SegmentId::FIRST, 7),
+        (SegmentId::FIRST, 6),
+        (SegmentId::FIRST.next(), 7),
+    ] {
+        let source = Unimock::new((
+            AudioSourceMock::discontinuity
+                .each_call(unimock::matching!())
+                .returns(Some(SourceDiscontinuity::new(7, spec))),
+            AudioSourceMock::media_origin
+                .each_call(unimock::matching!())
+                .returns(Some(Duration::from_millis(500))),
+            AudioSourceMock::visible_origin
+                .each_call(unimock::matching!())
+                .returns(None),
+            AudioSourceMock::media_end
+                .each_call(unimock::matching!())
+                .returns(Some(Duration::from_secs(2))),
+            AudioSourceMock::step_track
+                .some_call(unimock::matching!())
+                .returns(TrackStep::Eof)
+                .once(),
+        ));
+        let initial = AudioChunkInfo {
+            spec,
+            segment: old_segment,
+            source_revision: old_revision,
+            source_span: SourceSpan::new(5, 10, spec.sample_rate, 5)
+                .map(|span| span.with_mapping_revision(mapping)),
+            mapping_revision: mapping,
+            source_byte_offset: Some(42),
+            segment_index: Some(13),
+            variant_index: Some(2),
+            ..AudioChunkInfo::default()
+        };
+        let (mut node, mut receiver, _lane) =
+            fixture::prepared_node_with_info(source, 1, 1, initial).await;
+        assert_eq!(node.tick(), TickResult::Progress);
+        assert_eq!(node.tick(), TickResult::Progress);
+        let Some(PcmPacket::Chunk(terminal)) = receiver.pop() else {
+            panic!("natural terminal packet")
+        };
+        assert!(terminal.meta.end_of_track);
+        assert_eq!(terminal.meta.segment, SegmentId::FIRST);
+        assert_eq!(terminal.meta.source_revision, 7);
+        assert_eq!(terminal.meta.media_origin, Some(Duration::from_millis(500)));
+        assert_eq!(terminal.meta.visible_origin, None);
+        assert_eq!(terminal.meta.media_end, Some(Duration::from_secs(2)));
+        let current = old_segment == SegmentId::FIRST && old_revision == 7;
+        assert_eq!(
+            terminal.meta.mapping_revision,
+            current.then_some(mapping).flatten()
+        );
+        assert_eq!(terminal.meta.source_span.is_some(), current);
+        assert_eq!(terminal.meta.source_byte_offset, current.then_some(42));
+        assert_eq!(terminal.meta.segment_index, current.then_some(13));
+        assert_eq!(terminal.meta.variant_index, current.then_some(2));
+        assert_eq!(node.tick(), TickResult::Backpressured);
+        assert!(receiver.pop().is_none());
+    }
 }
 
 #[kithara::test(tokio)]
@@ -372,11 +425,7 @@ async fn decoder_node_preload_gate_stays_shut_below_the_chunk_quota() {
 
 #[kithara::test(tokio)]
 async fn decoder_node_seek_rearms_preload_gate() {
-    let source = ScriptedSource::new([
-        produced(),
-        TrackStep::StateChanged,
-        produced_at(SEGMENT_FROM),
-    ]);
+    let source = ScriptedSource::new([produced(), TrackStep::StateChanged, produced()]);
     let (mut node, mut receiver, mut lane) = prepared_node(source, 1, 1).await;
     assert_eq!(node.tick(), TickResult::Progress);
     assert!(node.source.is_preloaded(), "first chunk opens preload");

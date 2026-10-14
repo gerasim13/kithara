@@ -65,8 +65,8 @@ enum SeekTrimLayout {
 }
 
 impl Demuxer for ThreeFrameDemuxer {
-    fn duration(&self) -> Option<Duration> {
-        Some(Duration::from_millis(60))
+    fn duration(&self) -> Option<crate::DecoderDuration> {
+        Some(crate::DecoderDuration::RawLength(Duration::from_millis(60)))
     }
     fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
         let pts_ms = match self.idx {
@@ -90,7 +90,7 @@ impl Demuxer for ThreeFrameDemuxer {
 }
 
 impl Demuxer for BoundaryFrameDemuxer {
-    fn duration(&self) -> Option<Duration> {
+    fn duration(&self) -> Option<crate::DecoderDuration> {
         None
     }
 

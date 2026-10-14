@@ -97,7 +97,10 @@ impl AppleAudioFileDemuxer {
         if total_bytes == 0 {
             return None;
         }
-        let total = self.track_info.duration?.as_nanos();
+        let crate::DecoderDuration::RawLength(duration) = self.track_info.duration? else {
+            return None;
+        };
+        let total = duration.as_nanos();
         if total == 0 {
             return None;
         }
@@ -230,7 +233,7 @@ impl AppleAudioFileDemuxer {
 
         let track_info = TrackInfo {
             codec,
-            duration,
+            duration: duration.map(crate::DecoderDuration::RawLength),
             extra_data,
             channels,
             sample_rate,
@@ -350,7 +353,7 @@ impl Demuxer for AppleAudioFileDemuxer {
             .map(|segment| segment.variant_index)
     }
 
-    fn duration(&self) -> Option<Duration> {
+    fn duration(&self) -> Option<crate::DecoderDuration> {
         self.track_info.duration
     }
 
@@ -813,7 +816,10 @@ mod tests {
         .expect("streaming FLAC open");
         assert_eq!(dx.track_info().sample_rate, 96_000);
         assert_eq!(dx.track_info().channels, 2);
-        assert_eq!(dx.duration(), Some(Duration::from_secs(6)));
+        assert_eq!(
+            dx.duration(),
+            Some(crate::DecoderDuration::RawLength(Duration::from_secs(6)))
+        );
 
         let target = Duration::from_secs(1);
         for index in 0..4 {
@@ -961,7 +967,10 @@ mod tests {
         ));
         let (last_pts, last_duration, _) = packets.last().expect("fixture packets");
         let duration = Duration::from_secs(6);
-        assert_eq!(dx.duration(), Some(duration));
+        assert_eq!(
+            dx.duration(),
+            Some(crate::DecoderDuration::RawLength(duration))
+        );
         assert!(*last_pts < duration && *last_pts + *last_duration >= duration);
         assert!(matches!(
             dx.next_frame().expect("stable natural EOF"),

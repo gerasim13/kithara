@@ -114,6 +114,10 @@ impl<S> PlayerImpl<S> {
         if let Some(index) = self.adopting.iter().position(|adopt| adopt.seq == seq) {
             let adoption = self.adopting.remove(index);
             answered = adoption.caller;
+            if self.preparation_closed() {
+                self.repeat = false;
+                return Settled::Pending;
+            }
             if adoption.cancelled {
                 if adoption.segment == self.segment
                     && matches!(outcome, Outcome::Rejected(Rejection::Stale))
@@ -162,7 +166,14 @@ impl<S> PlayerImpl<S> {
                     self.attaching = None;
                     let returned = self.restore_attachment(&mut batch.commands);
                     self.loading = None;
-                    self.status = TrackStatus::Released;
+                    self.attach_at = None;
+                    if self.releasing
+                        || !matches!(self.status, TrackStatus::Failed { .. })
+                            && self.preparation_failure().is_none()
+                    {
+                        self.status = TrackStatus::Released;
+                    }
+                    self.releasing = false;
                     self.ready = None;
                     self.play = None;
                     self.playback_commands.clear();
@@ -231,6 +242,8 @@ impl<S> PlayerImpl<S> {
 
     fn released(&mut self, out: &mut Outbox<'_, S>) {
         self.status = TrackStatus::Released;
+        self.attach_at = None;
+        self.releasing = false;
         self.mark = None;
         self.play = None;
         self.ready = None;
@@ -243,6 +256,10 @@ impl<S> PlayerImpl<S> {
     }
 
     pub(super) fn adopt_newest_epoch(&mut self, out: &mut Outbox<'_, S>) {
+        if self.preparation_closed() {
+            self.newest_epoch_pending = None;
+            return;
+        }
         let Some(caller) = self.newest_epoch_pending else {
             return;
         };

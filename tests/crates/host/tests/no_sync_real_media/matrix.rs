@@ -510,61 +510,7 @@ async fn capture_pass(
         .iter()
         .map(|deck| deck.player.control().position_seconds().unwrap_or(0.0))
         .collect::<Vec<_>>();
-    let spec = host.spec().await;
-    let snapshots = decks
-        .iter()
-        .map(|deck| deck.snapshot.clone())
-        .collect::<Vec<_>>();
-    let (snapshots, cursor) = host
-        .observe(move || {
-            snapshots
-                .iter()
-                .map(|snapshot| snapshot.lock().clone())
-                .collect::<Vec<_>>()
-        })
-        .await;
-    let capture_frame = SessionFrame::new(i64::try_from(cursor).expect("capture frame fits i64"));
-    let starts = snapshots
-        .iter()
-        .zip(decks.iter())
-        .enumerate()
-        .map(|(index, (snapshot, deck))| {
-            if deck.player.control().rate() != 1.0 {
-                return Err(format!(
-                    "deck {index} is not playing at unit rate at capture start"
-                ));
-            }
-            if snapshot.sample_rate != spec.sample_rate.get() {
-                return Err(format!("deck {index} has a different capture sample rate"));
-            }
-            let slot = snapshot
-                .slots
-                .iter()
-                .find(|slot| {
-                    slot.state == SlotState::Playing
-                        && slot.mark.is_some_and(|mark| {
-                            Some(mark.lane.segment) == deck.seek_complete_segment
-                        })
-                })
-                .ok_or_else(|| format!("deck {index} has no consumed capture segment"))?;
-            let mark = slot
-                .mark
-                .ok_or_else(|| format!("deck {index} has no source mark"))?;
-            let elapsed = capture_frame
-                .frames_since(mark.session)
-                .ok_or_else(|| format!("deck {index} source mark follows capture start"))?;
-            let elapsed = spec
-                .duration_for(elapsed)
-                .map_err(|error| error.to_string())?;
-            let media = mark
-                .position
-                .checked_add(elapsed)
-                .and_then(|raw| raw.checked_sub(slot.media_origin?))
-                .ok_or_else(|| format!("deck {index} has no capture media coordinate"))?;
-            Ok(media.as_secs_f64())
-        })
-        .collect::<Result<Vec<_>, String>>();
-    let start_positions_secs = match starts {
+    let start_positions_secs = match capture_start_positions(host, decks).await {
         Ok(starts) => starts,
         Err(error) => {
             failures.push(format!("{} {label}: {error}", case.label));
@@ -632,6 +578,71 @@ async fn capture_pass(
         tap_matches_output,
         start_positions_secs,
     }
+}
+
+async fn capture_start_positions(
+    host: &OfflineHostHarness<TestPools>,
+    decks: &[Deck],
+) -> Result<Vec<f64>, String> {
+    let spec = host.spec().await;
+    let snapshots = decks
+        .iter()
+        .map(|deck| deck.snapshot.clone())
+        .collect::<Vec<_>>();
+    let (snapshots, cursor) = host
+        .observe(move || {
+            snapshots
+                .iter()
+                .map(|snapshot| snapshot.lock().clone())
+                .collect::<Vec<_>>()
+        })
+        .await;
+    let capture_frame = SessionFrame::new(i64::try_from(cursor).expect("capture frame fits i64"));
+    snapshots
+        .iter()
+        .zip(decks.iter())
+        .enumerate()
+        .map(|(index, (snapshot, deck))| {
+            if deck.player.control().rate() != 1.0 {
+                return Err(format!(
+                    "deck {index} is not playing at unit rate at capture start"
+                ));
+            }
+            if snapshot.sample_rate != spec.sample_rate.get() {
+                return Err(format!("deck {index} has a different capture sample rate"));
+            }
+            let slot = snapshot
+                .slots
+                .iter()
+                .find(|slot| {
+                    slot.state == SlotState::Playing
+                        && slot.mark.is_some_and(|mark| {
+                            Some(mark.lane.segment) == deck.seek_complete_segment
+                        })
+                })
+                .ok_or_else(|| format!("deck {index} has no consumed capture segment"))?;
+            let mark = slot
+                .mark
+                .ok_or_else(|| format!("deck {index} has no source mark"))?;
+            let elapsed = capture_frame
+                .frames_since(mark.session)
+                .ok_or_else(|| format!("deck {index} source mark follows capture start"))?;
+            let elapsed = spec
+                .duration_for(elapsed)
+                .map_err(|error| error.to_string())?;
+            let media = mark
+                .position
+                .checked_add(elapsed)
+                .and_then(|raw| {
+                    let source = slot
+                        .source
+                        .filter(|info| info.segment == mark.lane.segment)?;
+                    raw.checked_sub(source.media_origin?)
+                })
+                .ok_or_else(|| format!("deck {index} has no capture media coordinate"))?;
+            Ok(media.as_secs_f64())
+        })
+        .collect()
 }
 
 async fn reset_for_capture(

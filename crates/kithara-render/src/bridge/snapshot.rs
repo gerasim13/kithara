@@ -1,5 +1,5 @@
 use kithara_effects::GainDb;
-use kithara_platform::time::Duration;
+use kithara_signal::AudioChunkInfo;
 
 use super::{RtMetricsSnapshot, SlotMark, SlotState};
 use crate::rt::DeckMixerConfig;
@@ -63,12 +63,8 @@ pub struct SlotSnapshot {
     pub mark: Option<SlotMark>,
     /// Raw decoded-source position in seconds.
     pub position: f64,
-    /// Visible decoded-source length in seconds; `0.0` when unknown.
-    pub duration: f64,
-    /// Raw coordinate of track-media zero for the same PCM as `mark`.
-    pub media_origin: Option<Duration>,
-    /// Immutable original source position for interpreting this visible length.
-    pub visible_origin: Option<Duration>,
+    /// Immutable source facts from the current segment's observed PCM or terminal packet.
+    pub source: Option<AudioChunkInfo>,
     /// Decoded-ahead frontier in seconds, never behind `position`.
     pub frontier: f64,
     /// How much of the source is on disk, in seconds.

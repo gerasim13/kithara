@@ -22,13 +22,15 @@ struct NativeClock {
 }
 
 impl Demuxer for NativeClock {
+    fn duration(&self) -> Option<crate::DecoderDuration> {
+        Some(crate::DecoderDuration::MediaEnd(Duration::from_secs(2)))
+    }
     fn media_origin(&self) -> Option<Duration> {
         self.media_origin
     }
 
     delegate::delegate! {
         to self.inner {
-            fn duration(&self) -> Option<Duration>;
             fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>>;
             fn track_info(&self) -> &TrackInfo;
         }
@@ -103,7 +105,15 @@ fn media_zero_uses_native_translation_and_codec_rebase_without_observing_pcm(
     let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
     let expected = expected.map(Duration::from_millis);
     assert_eq!(decoder.media_origin(), expected);
+    assert_eq!(
+        decoder.duration(),
+        Some(crate::DecoderDuration::MediaEnd(Duration::from_secs(2)))
+    );
     assert_eq!(decoder.initial_pcm_origin(), None);
+    assert_eq!(
+        decoder.duration(),
+        Some(crate::DecoderDuration::MediaEnd(Duration::from_secs(2)))
+    );
 
     decoder
         .seek(Duration::from_millis(1_200))

@@ -240,15 +240,15 @@ mod apple_factory_tests {
     }
 
     impl Demuxer for PacketDemuxer {
-        fn duration(&self) -> Option<Duration> {
-            Some(
+        fn duration(&self) -> Option<crate::DecoderDuration> {
+            Some(crate::DecoderDuration::RawLength(
                 self.source_spec()
                     .duration_for(
                         self.packet_count
                             .saturating_mul(u64::from(self.packet_frames)),
                     )
                     .expect("test duration is representable"),
-            )
+            ))
         }
 
         fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
