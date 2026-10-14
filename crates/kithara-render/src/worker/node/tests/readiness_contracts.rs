@@ -96,17 +96,50 @@ async fn a_chunk_from_another_decode_epoch_proves_nothing() {
     for control_before_output in [false, true] {
         entry_under_backpressure(control_before_output).await;
     }
-    for (target, landing, first_frame, rate) in [
+    for (target, landing, first_frame, rate, visible_origin, accepts_entry) in [
         (
             Duration::from_secs(1),
             Duration::from_millis(900),
             44_100,
             44_100,
+            Some(Duration::ZERO),
+            true,
         ),
-        (Duration::ZERO, Duration::ZERO, 480, 48_000),
-        (Duration::from_millis(15), Duration::ZERO, 720, 48_000),
+        (
+            Duration::ZERO,
+            Duration::ZERO,
+            480,
+            48_000,
+            Some(Duration::from_millis(10)),
+            true,
+        ),
+        (
+            Duration::from_millis(15),
+            Duration::ZERO,
+            720,
+            48_000,
+            Some(Duration::from_millis(10)),
+            true,
+        ),
+        (Duration::ZERO, Duration::ZERO, 480, 48_000, None, false),
+        (
+            Duration::from_millis(15),
+            Duration::ZERO,
+            480,
+            48_000,
+            Some(Duration::from_millis(10)),
+            false,
+        ),
     ] {
-        post_trim_entry(target, landing, first_frame, rate).await;
+        post_trim_entry(
+            target,
+            landing,
+            first_frame,
+            rate,
+            visible_origin,
+            accepts_entry,
+        )
+        .await;
     }
 }
 
@@ -218,15 +251,14 @@ fn next_rendered(node: &mut DecoderNode<ScriptedSource, TestPools>) -> Fetch<Aud
 
 async fn entry_under_backpressure(control_before_output: bool) {
     let origin = 48_510;
+    let visible_origin = Duration::from_millis(1_100);
     let mut source = ScriptedSource::new((0..4).map(|index| {
-        TrackStep::Produced(Fetch::data(entry(
-            SegmentId::FIRST,
-            0,
-            origin + index * 1_024,
-            0,
-        )))
+        let mut packet = entry(SegmentId::FIRST, 0, origin + index * 1_024, 0);
+        packet.meta.media_origin = Some(Duration::ZERO);
+        packet.meta.visible_origin = Some(visible_origin);
+        TrackStep::Produced(Fetch::data(packet))
     }));
-    source.landing = Some(Duration::from_millis(1_100));
+    source.landing = Some(visible_origin);
     let (mut node, mut receiver, mut lane) = prepared_node(source, 1, 2).await;
     admit(&mut node, entry(SegmentId::FIRST, 0, 0, 0));
     let positioned = SegmentId::FIRST.next();
@@ -370,17 +402,21 @@ fn assert_host_rate_entry(
     assert!(lane.receipts().next().is_none());
 }
 
-async fn post_trim_entry(target: Duration, landing: Duration, first_frame: u64, rate: u32) {
+async fn post_trim_entry(
+    target: Duration,
+    landing: Duration,
+    first_frame: u64,
+    rate: u32,
+    visible_origin: Option<Duration>,
+    accepts_entry: bool,
+) {
     let spec = AudioSpec::new(2, NonZeroU32::new(rate).expect("post-trim source rate"));
     let mut source = ScriptedSource::new((0..2).map(|index| {
         let frame = first_frame + index * 1_024;
-        TrackStep::Produced(Fetch::data(chunk(
-            spec,
-            SegmentId::FIRST,
-            0,
-            frame,
-            &[0.5; 2_048],
-        )))
+        let mut packet = chunk(spec, SegmentId::FIRST, 0, frame, &[0.5; 2_048]);
+        packet.meta.media_origin = Some(Duration::ZERO);
+        packet.meta.visible_origin = visible_origin;
+        TrackStep::Produced(Fetch::data(packet))
     }));
     source.landing = Some(landing);
     let (mut node, mut receiver, mut lane) = prepared_node_with_info(
@@ -421,6 +457,36 @@ async fn post_trim_entry(target: Duration, landing: Duration, first_frame: u64, 
             source_end,
         });
         assert_eq!(node.tick(), TickResult::Progress);
+        if !accepts_entry {
+            let receipt = lane.receipts().next().expect("missed entry verdict");
+            assert_eq!(receipt.seq(), seq);
+            assert!(matches!(
+                receipt.outcome(),
+                Outcome::Rejected(Rejection::Refused(TrackFailureKind::Render))
+            ));
+            assert!(
+                receiver.pop().is_none(),
+                "missed entry PCM was never published"
+            );
+            assert!(!node.source.is_preloaded());
+            assert!(matches!(
+                node.preload_status(),
+                Err(LoadRefusal::Source(TrackFailureKind::Render))
+            ));
+            assert_eq!(node.tick(), TickResult::Progress);
+            assert!(matches!(
+                receiver.pop(),
+                Some(PcmPacket::Failed {
+                    segment,
+                    failure: TrackFailureKind::Render,
+                }) if segment == positioned
+            ));
+            assert_eq!(node.tick(), TickResult::Backpressured);
+            assert!(receiver.pop().is_none());
+            assert!(lane.receipts().next().is_none());
+            assert!(!node.source.is_preloaded());
+            return;
+        }
         assert!(receiver.pop().is_some());
         assert_eq!(node.source.is_preloaded(), index == 1);
         if index == 0 {

@@ -122,6 +122,7 @@ struct Preparation {
     at: LaneFrame,
     entry: LaneFrame,
     source: Option<AudioChunkInfo>,
+    requested_entry: Option<Duration>,
     render_revision: u64,
     latency: FrameCount,
 }
@@ -140,7 +141,15 @@ impl Preparation {
             return false;
         }
         self.source.is_some_and(|source| {
-            span.sample_rate() == source.spec.sample_rate
+            self.requested_entry.is_none_or(|requested| {
+                let position = source
+                    .visible_origin
+                    .map_or(requested, |origin| origin.max(requested));
+                source
+                    .spec
+                    .frame_at(position)
+                    .is_ok_and(|frame| frame == source.frame_offset)
+            }) && span.sample_rate() == source.spec.sample_rate
                 && span.source_ratio_at(0)
                     == Some((u128::from(source.frame_offset), NonZeroU128::MIN))
         })
@@ -320,6 +329,7 @@ impl Lane {
             let revision = due.seq().get();
             let at = due.at();
             let mut segment = None;
+            let mut requested_entry = None;
             let mut restored_same = false;
             let mut cancelled_deferred = None;
             for command in due.commands() {
@@ -339,12 +349,11 @@ impl Lane {
                     LaneCommand::SetKeylock(on) => warp.set_keylock(*on),
                     LaneCommand::SetBackend(kind) => warp.set_backend(*kind),
                     LaneCommand::Jump { to } => {
-                        let frames = declick_frames;
                         let gain = self.jump.map_or(1.0, |jump| jump.gain(self.cursor.frame));
                         self.jump = Some(Jump::Down {
                             to: *to,
                             start: self.cursor.frame,
-                            frames,
+                            frames: declick_frames,
                             gain,
                         });
                     }
@@ -369,6 +378,7 @@ impl Lane {
                             |(cursor, _)| cursor,
                         );
                         let from = restored.map_or(*from, |(_, position)| position);
+                        requested_entry = Some(from);
                         self.position = Some(landing_position(
                             source
                                 .seek(from)
@@ -411,6 +421,7 @@ impl Lane {
                     at,
                     entry: self.cursor,
                     source: None,
+                    requested_entry,
                     render_revision: warp.render_revision(),
                     latency,
                 });
