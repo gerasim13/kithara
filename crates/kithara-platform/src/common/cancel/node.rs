@@ -1,10 +1,12 @@
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::{
-    sync::{
-        Mutex, MutexGuard, PoisonError,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::atomic::{AtomicBool, Ordering},
     task::Waker,
 };
+
+#[cfg(target_arch = "wasm32")]
+use wasm_safe_thread::{Mutex, guard::Guard as MutexGuard};
 
 use crate::sync::{Arc, Weak};
 
@@ -152,8 +154,14 @@ impl Node {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock_sync()
 }
 
 #[cfg(test)]
