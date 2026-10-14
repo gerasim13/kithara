@@ -395,6 +395,12 @@ fn source_media_at(
     let position = match query {
         BeatGridQuery::Resolved(position) => position,
         BeatGridQuery::OutsideDomain => return Ok(None),
+        BeatGridQuery::Uncovered { required }
+            if required.start() == required.end()
+                && grid_beat_at(grid, required.start()).is_ok_and(|start| beat < start) =>
+        {
+            return Ok(None);
+        }
         _ => {
             return Err(format!(
                 "source beat {beat:.12} has no declared grid position: {query:?}"
@@ -827,6 +833,40 @@ fn direct_grid_anchor_rejects_a_whole_bar_and_a_wrong_selected_cue() {
     .expect("nearest nonnegative source position");
     assert_eq!(nonnegative.media, Duration::from_millis(1_500));
     assert_eq!(nonnegative.source_beat, 3.0);
+
+    let mut shifted = model.as_raw().clone();
+    for beat in &mut shifted.beats {
+        beat.ordinal += 2;
+        beat.at += 1.0;
+    }
+    for downbeat in &mut shifted.downbeats {
+        downbeat.beat_ordinal += 2;
+        downbeat.at += 1.0;
+    }
+    shifted
+        .meter
+        .as_mut()
+        .expect("declared fixture meter")
+        .origin_beat_ordinal += 2;
+    let shifted = BeatGridModel::try_from(shifted).expect("shifted declared source grid");
+    let head_grid = declared_source_grid(&shifted, evaluation_rate).expect("shifted grid head");
+    assert_eq!(
+        source_media_at(&head_grid, evaluation_rate, 1.0).expect("physical extrapolated head"),
+        Some(Duration::from_millis(500))
+    );
+    assert!(source_media_at(&head_grid, evaluation_rate, 26.0).is_err());
+    let declared = select_nearest(
+        &shifted,
+        evaluation_rate,
+        &host_grid,
+        Duration::from_secs(1),
+        SessionFrame::new(73_500),
+        4,
+    )
+    .expect("nearest mapped source position within its head");
+    assert_eq!(declared.media, Duration::from_millis(500));
+    assert_eq!(declared.source_beat, 1.0);
+
     let entry = select_entry(
         &model,
         evaluation_rate,
