@@ -46,6 +46,8 @@ consumer (currently `kithara-app`).
 
 <tr><td><code>beat-nn</code></td><td>no</td><td>NN beat/downbeat detector backend through <code>kithara-beat</code></td></tr>
 
+<tr><td><code>beat-cuda</code></td><td>no</td><td>CUDA NN construction with a caller-owned native ONNX Runtime environment</td></tr>
+
 <tr><td><code>apple</code> / <code>android</code> / <code>webcodecs</code></td><td>no</td><td>Forward an alternate decoder backend to the supplied <code>kithara-audio</code> reader contract</td></tr>
 
 <tr><td><code>client-wreq</code> / <code>tls-native</code></td><td>no</td><td>Forward alternate network and TLS selections through the reader and watchdog dependencies</td></tr>
@@ -64,6 +66,13 @@ region budget as the rest of the application instead of receiving a separate
 pool. Persisting a `TrackAnalysis` through `AssetStore`, choosing cache keys,
 and eviction policy remain application responsibilities. `write_to` appends to
 caller-owned `Vec<u8>` output.
+
+With `beat-cuda`, `BeatAnalysisConfig::builder().cuda_environment(environment.clone())`
+passes the caller's SDK environment to NN detector construction. Load it once
+from the retained `BeatConfig` library path and keep the caller handle alive
+across detector replacement. The native handle is a construction resource;
+configuration documents cannot set it and analysis fingerprints exclude it.
+CPU defaults require no native environment.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-analysis) for the scheduling, ingest, waveform, and codec
 contracts.

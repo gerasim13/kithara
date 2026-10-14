@@ -383,13 +383,28 @@ where
             return Ok(outcome);
         }
         let outcome = self.decode_prepared()?;
+        if matches!(outcome, DecoderChunkOutcome::Pending(_)) {
+            self.prefill = Prefill::Needed;
+        }
         self.emit_chunk_signal(&outcome);
         Ok(outcome)
     }
 
+    fn has_prepared_result(&self) -> bool {
+        matches!(
+            self.prefill,
+            Prefill::Buffered(
+                Ok(DecoderChunkOutcome::Chunk(_) | DecoderChunkOutcome::Eof) | Err(_)
+            )
+        ) || matches!(self.output, Some(Err(_)))
+    }
+
     fn prepare_next_chunk(&mut self) {
-        if matches!(self.prefill, Prefill::Buffered(_)) {
+        if self.has_prepared_result() {
             return;
+        }
+        if matches!(self.prefill, Prefill::Buffered(_)) {
+            self.prefill = Prefill::Needed;
         }
         if let Err(error) = self.demuxer.prepare_frame() {
             self.output = Some(Err(error));
@@ -407,6 +422,9 @@ where
     fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
         let outcome = self.seek_inner(pos)?;
         self.prefill = Prefill::Needed;
+        if matches!(self.output, Some(Err(_))) {
+            self.output = None;
+        }
         self.emit_seek_signal(&outcome);
         Ok(outcome)
     }

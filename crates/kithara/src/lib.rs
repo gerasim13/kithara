@@ -220,7 +220,7 @@ pub mod prelude {
     #[cfg(feature = "events")]
     pub use kithara_events::{BusScope, Event, EventBus, EventReceiver};
     #[cfg(feature = "file")]
-    pub use kithara_file::{File, FileConfig, FileEvent};
+    pub use kithara_file::{File, FileConfig, FileEvent, FileReaderEvent};
     #[cfg(feature = "hls")]
     pub use kithara_hls::{Hls, HlsConfig, HlsEvent};
     #[cfg(feature = "host")]

@@ -8,6 +8,7 @@ mod common {
 
 mod abr_auto_switch;
 mod abr_mode_switch;
+mod abr_playback;
 mod abr_switch_playback;
 mod idle_behavior;
 mod live_stress_real_stream;

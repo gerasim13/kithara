@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use anyhow::{Result, bail};
 
 #[derive(Debug)]
@@ -15,6 +17,7 @@ pub(super) struct TestRequest {
     /// passed-through `-E` is a union member, so it could widen a selection;
     /// this one only takes tests away.
     pub(super) narrow: Option<String>,
+    pub(super) expected_tests: Option<PathBuf>,
     pub(super) passthrough: Vec<String>,
     pub(super) touched: bool,
 }
@@ -28,6 +31,7 @@ impl TestRequest {
             load: None,
             loom: None,
             narrow: None,
+            expected_tests: None,
             passthrough: Vec::new(),
             flash: None,
             touched: false,
@@ -77,6 +81,9 @@ impl TestRequest {
                 "--narrow" => {
                     request.narrow = Some(filterset(iter.next().map(String::as_str))?);
                 }
+                "--expected-tests" => {
+                    request.expect_tests(iter.next().map(String::as_str))?;
+                }
                 "--net-backend" => {
                     let value = iter
                         .next()
@@ -106,6 +113,9 @@ impl TestRequest {
                 _ if arg.starts_with("--narrow=") => {
                     request.narrow = Some(filterset(arg.strip_prefix("--narrow="))?);
                 }
+                _ if arg.starts_with("--expected-tests=") => {
+                    request.expect_tests(arg.strip_prefix("--expected-tests="))?;
+                }
                 _ if arg.starts_with("--net-backend=") => {
                     let value = arg.trim_start_matches("--net-backend=");
                     request.net_backend = Some(value.to_owned());
@@ -113,7 +123,31 @@ impl TestRequest {
                 _ => request.passthrough.push(arg.clone()),
             }
         }
+        if request.expected_tests.is_some() {
+            request.validate_expected_selection()?;
+        }
         Ok(request)
+    }
+
+    fn expect_tests(&mut self, value: Option<&str>) -> Result<()> {
+        if self.expected_tests.is_some() {
+            bail!("--expected-tests may be supplied only once");
+        }
+        match value {
+            Some(path) if !path.trim().is_empty() => {
+                self.expected_tests = Some(PathBuf::from(path));
+                Ok(())
+            }
+            _ => bail!("--expected-tests needs a path to an exact identity TSV"),
+        }
+    }
+
+    fn validate_expected_selection(&self) -> Result<()> {
+        if self.touched {
+            bail!("--expected-tests requires one lane and cannot be combined with --touched");
+        }
+        super::inventory::inventory_args(&self.passthrough)?;
+        Ok(())
     }
 }
 

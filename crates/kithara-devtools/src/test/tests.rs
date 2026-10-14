@@ -150,7 +150,7 @@ fn every_typed_lane_key_renders_the_recorded_command() {
     );
 }
 
-fn synthetic_project() -> ProjectConfig {
+pub(super) fn synthetic_project() -> ProjectConfig {
     let packages = |names: &[&str]| TestCargoOptions {
         packages: names.iter().map(|name| (*name).to_owned()).collect(),
         ..TestCargoOptions::default()
