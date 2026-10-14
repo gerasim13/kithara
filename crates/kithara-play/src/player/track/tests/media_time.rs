@@ -300,6 +300,114 @@ fn stopped_raw_mark_stays_raw_while_pause_and_resume_publish_media_position(
         );
     }
     assert_eq!(track.snapshot().position, Duration::from_secs(2));
+
+    if !pending_lane {
+        let paused = command_at_zero(
+            &mut track,
+            &mut rig,
+            TrackCommand::Pause {
+                at: When::At(frame(384)),
+            },
+        )
+        .expect("second Stop");
+        let mut paused_receipts = rig.block(frame(384), 2.576);
+        let old_mark = paused_receipts
+            .iter()
+            .find(|receipt| receipt.seq == paused)
+            .expect("second Stop owner receipt")
+            .batch
+            .commands
+            .iter()
+            .find_map(|part| match part {
+                DeckPart::Returned(Returned::Stopped {
+                    slot: A,
+                    resume: Some(mark),
+                }) => Some(*mark),
+                _ => None,
+            })
+            .expect("renderer-owned stopped mark");
+        settle(&mut track, &mut rig, &mut paused_receipts);
+        assert_eq!(track.resume, Some(old_mark));
+
+        let target = Duration::from_secs(10);
+        let raw_target = Duration::from_millis(10_576);
+        let output = mock::output(None).get();
+        let deck = crate::DeckSnapshot {
+            slots: vec![SlotSnapshot {
+                state: SlotState::Stopped,
+                mark: Some(old_mark),
+                position: old_mark.position.as_secs_f64(),
+                media_origin: track.media_origin,
+                visible_origin: track.visible_origin,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let sought = old_mark.lane.segment.next();
+        let seek = {
+            let fixture = &mut *rig;
+            let mut scope = fixture.ring.scope(fixture.scope).expect("live scope");
+            let mut out =
+                Outbox::new(&mut scope, &mut fixture.dispatcher).in_pass(crate::DeckPass {
+                    mix: DeckMixSettings::default(),
+                    suspended: false,
+                    now: frame(384),
+                    delivery: FrameCount::new(0),
+                    output: &output,
+                    deck: &deck,
+                });
+            let seek = track
+                .apply(TrackCommand::Seek { to: target }, &mut out)
+                .expect("paused seek")
+                .expect("seek adoption");
+            assert_eq!(track.segment, sought);
+            assert_eq!(track.ready, None);
+            assert_eq!(
+                track
+                    .apply(
+                        TrackCommand::Play {
+                            at: When::At(frame(512)),
+                        },
+                        &mut out,
+                    )
+                    .expect("Play waits for the seek lane"),
+                None
+            );
+            assert_eq!(track.segment, sought, "Play preserves the admitted seek");
+            assert_eq!(track.mark, Some(old_mark));
+            seek
+        };
+        inbox.drain();
+        let due = inbox.next_due(old_mark.lane, 1).expect("seek lane command");
+        assert!(matches!(due.commands(),
+            [LaneCommand::Segment { id, from, .. }]
+                if *id == sought && *from == raw_target
+        ));
+        due.apply(kithara_render::LaneApplied {
+            engine_latency: FrameCount::new(0),
+            ready: Some(sought),
+        });
+        assert!(
+            inbox.next_due(old_mark.lane, 1).is_none(),
+            "immediate Play does not add a backwards segment"
+        );
+        rig.with_outbox(|out| track.tick(frame(512), out))
+            .expect("ready seek tick");
+        assert_eq!(track.snapshot().position, target);
+        let mut receipts = rig.block(frame(512), raw_target.as_secs_f64());
+        let settled = settle(&mut track, &mut rig, &mut receipts);
+        assert!(
+            settled
+                .iter()
+                .any(|settled| { matches!(settled, Settled::Applied { seq, .. } if *seq == seek) })
+        );
+        assert_eq!(track.segment, sought);
+        assert_eq!(
+            track.snapshot().status,
+            TrackStatus::Playing { since: frame(512) }
+        );
+        assert_eq!(track.snapshot().position, target);
+    }
 }
 
 #[kithara::test]

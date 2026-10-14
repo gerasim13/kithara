@@ -100,7 +100,8 @@ impl<S> PlayerImpl<S> {
                     TrackStatus::Loaded | TrackStatus::Paused { .. }
                 )
             })
-        }) {
+        }) && resume.lane.segment == self.segment
+        {
             let pending = self
                 .lane_commands
                 .iter()
