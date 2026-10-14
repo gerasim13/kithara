@@ -255,21 +255,12 @@ raw_output = "target/stress"
 report_output = "target/stress-report.md"
 workflow_job_timeout_minutes = 1380
 
-# A night repeats the player's core, one domain lane at a time, so a flake
-# names the domain it belongs to. Positive package selections keep new
-# workspace members out until reviewed.
+# A night repeats the player's core. Its domains share one build per mode:
+# a lane per domain cost a build each, and a repeat waits on its slowest test,
+# so nine small lanes left the host idle between repeats. `warp` keeps its own
+# lane because it runs without an audio backend.
 [stress.tiers.nightly]
-lanes = [
-  "core",
-  "audio",
-  "sync",
-  "warp",
-  "file",
-  "hls",
-  "host",
-  "play",
-  "queue",
-]
+lanes = ["player", "warp"]
 
 # A week repeats every engine contract, including distinct backend and
 # analysis feature builds.
@@ -644,6 +635,37 @@ cargo.exclude = [
   "kithara-test-macros",
   "kithara-ffi-web-tests",
   "kithara-ffi-web-analysis-tests",
+]
+cargo.profile = "test-release"
+
+# The player's core domains in one build: what a night repeats. Its features
+# are the union of theirs, as `engine` takes them.
+[test.lanes.player]
+default_features = ["kithara-platform/tokio-rt-multi-thread"]
+cargo.packages = [
+  "kithara-bufpool",
+  "kithara-events",
+  "kithara-platform",
+  "kithara-signal",
+  "kithara-stream",
+  "kithara-stream-tests",
+  "kithara-audio",
+  "kithara-record",
+  "kithara-resampler",
+  "kithara-stretch",
+  "kithara-audio-tests",
+  "kithara-sync",
+  "kithara-sync-tests",
+  "kithara-file",
+  "kithara-file-tests",
+  "kithara-hls",
+  "kithara-hls-tests",
+  "kithara-host",
+  "kithara-host-tests",
+  "kithara-play",
+  "kithara-play-tests",
+  "kithara-queue",
+  "kithara-queue-tests",
 ]
 cargo.profile = "test-release"
 
