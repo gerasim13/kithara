@@ -60,7 +60,10 @@ impl ResolvedLane {
     /// nextest unions repeated `-E`. A caller package selection replaces a
     /// workspace selection, so `-p` narrows any workspace lane.
     pub(crate) fn command(&self, action: NextestAction, caller: &[String]) -> Result<Command> {
-        let mut command = Command::new("cargo");
+        let mut command = Command::new(match &self.runner {
+            TestRunner::Nextest(_) => "cargo-nextest",
+            TestRunner::Cargo(_) => "cargo",
+        });
         command.envs(&self.env);
         match &self.runner {
             TestRunner::Nextest(nextest) => {

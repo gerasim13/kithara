@@ -36,6 +36,11 @@ its siblings — never the pin, so a pin bump cannot strand a lane on an image
 nobody built: the pin says what to build, the floating tag says what to run,
 and whatever builds an image moves the tag onto it.
 
+Declared lanes select the checkout's nextest pin in child `PATH` from a
+versioned cache scoped to trust and host platform. A cache miss installs it as
+the CI user into that cache while host setup retains ownership of global tools
+and privileged fleet provisioning.
+
 ## Provisioning
 
 `ci host provision` is the roll-out, run on the machine it provisions and

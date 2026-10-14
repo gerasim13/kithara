@@ -664,7 +664,7 @@ fn the_default_lane_renders_its_selection_features_and_the_callers_profile() {
     )
     .expect("command");
 
-    assert_eq!(command.get_program().to_string_lossy(), "cargo");
+    assert_eq!(command.get_program().to_string_lossy(), "cargo-nextest");
     assert_eq!(
         args_of(&command),
         [

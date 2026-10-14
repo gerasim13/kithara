@@ -14,29 +14,29 @@
 # docs [-E test(seek)]
   cargo test --doc --workspace --exclude demo-web --features base-feature -E test(seek)
 # loom []
-  cargo nextest run --workspace --cargo-profile test-release --features base-feature,demo/loom -E test(loom_model_)
+  cargo-nextest nextest run --workspace --cargo-profile test-release --features base-feature,demo/loom -E test(loom_model_)
 # loom [--profile ci --timings]
-  cargo nextest run --workspace --cargo-profile test-release --features base-feature,demo/loom -E test(loom_model_) --profile ci --timings
+  cargo-nextest nextest run --workspace --cargo-profile test-release --features base-feature,demo/loom -E test(loom_model_) --profile ci --timings
 # loom [-E test(seek)]
-  cargo nextest run --workspace --cargo-profile test-release --features base-feature,demo/loom -E '(test(loom_model_)) & ((test(seek)))'
+  cargo-nextest nextest run --workspace --cargo-profile test-release --features base-feature,demo/loom -E '(test(loom_model_)) & ((test(seek)))'
 # suite []
-  cargo nextest run --workspace --exclude demo-tools --exclude demo-web --features base-feature,virtual-time
+  cargo-nextest nextest run --workspace --exclude demo-tools --exclude demo-web --features base-feature,virtual-time
 # suite [--profile ci --timings]
-  cargo nextest run --workspace --exclude demo-tools --exclude demo-web --features base-feature,virtual-time --profile ci --timings
+  cargo-nextest nextest run --workspace --exclude demo-tools --exclude demo-web --features base-feature,virtual-time --profile ci --timings
 # suite [-E test(seek)]
-  cargo nextest run --workspace --exclude demo-tools --exclude demo-web --features base-feature,virtual-time -E test(seek)
+  cargo-nextest nextest run --workspace --exclude demo-tools --exclude demo-web --features base-feature,virtual-time -E test(seek)
 # tools []
-  cargo nextest run -p demo-tools --features base-feature
+  cargo-nextest nextest run -p demo-tools --features base-feature
 # tools [--profile ci --timings]
-  cargo nextest run -p demo-tools --features base-feature --profile ci --timings
+  cargo-nextest nextest run -p demo-tools --features base-feature --profile ci --timings
 # tools [-E test(seek)]
-  cargo nextest run -p demo-tools --features base-feature -E test(seek)
+  cargo-nextest nextest run -p demo-tools --features base-feature -E test(seek)
 # typed []
-  cargo nextest run -p demo -p demo-tests --cargo-profile test-release --lib --test suite --features base-feature,cpu-load,demo/native-net,nb-detect,virtual-time --test-threads 1 --ignore-default-filter -E test(fast)
+  cargo-nextest nextest run -p demo -p demo-tests --cargo-profile test-release --lib --test suite --features base-feature,cpu-load,demo/native-net,nb-detect,virtual-time --test-threads 1 --ignore-default-filter -E test(fast)
     DEMO_MODE=strict
 # typed [--profile ci --timings]
-  cargo nextest run -p demo -p demo-tests --cargo-profile test-release --lib --test suite --features base-feature,cpu-load,demo/native-net,nb-detect,virtual-time --test-threads 1 --ignore-default-filter -E test(fast) --profile ci --timings
+  cargo-nextest nextest run -p demo -p demo-tests --cargo-profile test-release --lib --test suite --features base-feature,cpu-load,demo/native-net,nb-detect,virtual-time --test-threads 1 --ignore-default-filter -E test(fast) --profile ci --timings
     DEMO_MODE=strict
 # typed [-E test(seek)]
-  cargo nextest run -p demo -p demo-tests --cargo-profile test-release --lib --test suite --features base-feature,cpu-load,demo/native-net,nb-detect,virtual-time --test-threads 1 --ignore-default-filter -E '(test(fast)) & ((test(seek)))'
+  cargo-nextest nextest run -p demo -p demo-tests --cargo-profile test-release --lib --test suite --features base-feature,cpu-load,demo/native-net,nb-detect,virtual-time --test-threads 1 --ignore-default-filter -E '(test(fast)) & ((test(seek)))'
     DEMO_MODE=strict

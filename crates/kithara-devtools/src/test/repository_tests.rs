@@ -222,7 +222,10 @@ fn the_pinned_nextest_builds_exactly_the_cargo_arguments_a_lane_derives() {
          `cargo install cargo-nextest --version {pin} --locked`"
     );
     let temp = TempDir::new().expect("temp dir");
-    let real_cargo = std::env::var_os("CARGO").expect("the test runner names the cargo it uses");
+    let real_cargo = MetadataCommand::new()
+        .cargo_command()
+        .get_program()
+        .to_os_string();
     let graph = temp.path().join("metadata.json");
     let shim = temp.path().join("cargo");
     fs::write(
@@ -356,24 +359,48 @@ fn the_pinned_nextest_rejects_an_earlier_failed_stress_iteration() {
     let config = temp.path().join("nextest.toml");
     fs::write(&config, "[profile.default.junit]\npath = \"junit.xml\"\n")
         .expect("write isolated nextest configuration");
-    let outcome = Command::new("cargo-nextest")
-        .args([
-            "nextest",
-            "run",
-            "--offline",
-            "--profile",
-            "default",
-            "--stress-count",
-            "2",
-            "--no-fail-fast",
-            "--retries",
-            "0",
-            "--color",
-            "never",
-            "--user-config-file",
-            "none",
-            "--config-file",
-        ])
+    let cargo_home = temp.path().join("cargo-home");
+    fs::create_dir_all(cargo_home.join("bin")).expect("isolated Cargo-home tools");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let stale = cargo_home.join("bin/cargo-nextest");
+        fs::write(
+            &stale,
+            "#!/bin/sh\nprintf '%s\\n' 'selected' > \"$CARGO_HOME/stale-selected\"\nprintf '%s\\n' 'stale Cargo-home nextest selected' >&2\nexit 0\n",
+        )
+        .expect("controlled stale Cargo-home executable");
+        fs::set_permissions(stale, fs::Permissions::from_mode(0o755))
+            .expect("stale Cargo-home executable permissions");
+    }
+    let lane = resolve::ResolvedLane {
+        env: BTreeMap::from([("CARGO_HOME".to_owned(), cargo_home.display().to_string())]),
+        backend: "fixture".to_owned(),
+        lane: "fixture".to_owned(),
+        cargo: TestCargoOptions::default(),
+        runner: TestRunner::default(),
+        features: Vec::new(),
+    };
+    let caller = [
+        "--offline",
+        "--profile",
+        "default",
+        "--stress-count",
+        "2",
+        "--no-fail-fast",
+        "--retries",
+        "0",
+        "--color",
+        "never",
+        "--user-config-file",
+        "none",
+        "--config-file",
+    ]
+    .map(str::to_owned);
+    let outcome = lane
+        .command(NextestAction::Run, &caller)
+        .expect("canonical nextest lane command")
         .arg(&config)
         .env_remove("RUSTFLAGS")
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
@@ -381,6 +408,14 @@ fn the_pinned_nextest_rejects_an_earlier_failed_stress_iteration() {
         .current_dir(temp.path())
         .output()
         .expect("run the pinned nextest stress fixture");
+    #[cfg(unix)]
+    assert!(
+        !cargo_home.join("stale-selected").exists(),
+        "the canonical lane must bypass stale Cargo-home tools; nested exit {:?}, marker {:?}: {}",
+        outcome.status.code(),
+        fs::read_to_string(cargo_home.join("stale-selected")).ok(),
+        String::from_utf8_lossy(&outcome.stderr)
+    );
     let xml = fs::read_to_string(temp.path().join("target/nextest/default/junit.xml"))
         .expect("nextest retained both stress iterations");
     let cases = crate::junit::parse_junit(&xml).expect("parse actual nextest stress results");
