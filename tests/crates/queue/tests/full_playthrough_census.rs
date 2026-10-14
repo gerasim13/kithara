@@ -1234,3 +1234,22 @@ async fn symphonia_mpeg_uses_the_same_full_playthrough_oracles(
     prepared.backend = Some(DecoderBackend::Symphonia);
     let _ = census_provenance(prepared, Seam::Gapless, &temp_dir).await;
 }
+
+#[cfg(not(target_os = "android"))]
+#[kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(180)),
+    hang_timeout_secs(20)
+)]
+#[case::gapless(Seam::Gapless)]
+#[case::crossfade(Seam::Crossfade)]
+async fn symphonia_aac_uses_the_same_full_playthrough_oracles(
+    #[case] seam: Seam,
+    temp_dir: TestTempDir,
+) {
+    let mut prepared =
+        prepare_tracks([Origin::RemoteSignal(SignalAsset::PROFILE_M4A_AAC_44100_2CH); 3]).await;
+    prepared.backend = Some(DecoderBackend::Symphonia);
+    let _ = census_provenance(prepared, seam, &temp_dir).await;
+}

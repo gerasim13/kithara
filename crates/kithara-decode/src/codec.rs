@@ -25,8 +25,8 @@ pub(crate) const fn access_unit_frames(codec: AudioCodec) -> u32 {
 }
 
 /// Access units needed to warm a mid-stream decode; zero for codecs without fixed units.
-/// AAC's four units cover its measured 1685-frame head strip plus 1024 overlap frames
-/// with margin (4096 total); MP3 needs two of its larger units.
+/// AAC's four units cover its two-unit SBR/PS pre-roll plus 1024 overlap frames with
+/// margin (4096 total); MP3 needs two of its larger units.
 pub(crate) const fn seek_warmup_access_units(codec: AudioCodec) -> u32 {
     match codec {
         AudioCodec::Mp3 => 2,
@@ -47,9 +47,10 @@ pub(crate) const fn seek_warmup_access_units(codec: AudioCodec) -> u32 {
 pub(crate) trait FrameCodec: Send + 'static {
     /// Decode one demuxed frame into `out` (interleaved f32, from the shared typed pool
     /// region); returns frames written, `0` for a consumed packet that produced no PCM
-    /// (warm-up / backpressure). `pts` is the demuxer presentation time (diagnostics
-    /// only). `packet_desc` carries opaque per-packet VBR metadata (Apple MP3/ALAC
-    /// serialize an `AudioStreamPacketDescription`); empty for CBR.
+    /// (warm-up / backpressure). `pts` is the demuxer presentation time; a codec that
+    /// owns its output clock anchors it there. `packet_desc` carries opaque per-packet
+    /// VBR metadata (Apple MP3/ALAC serialize an `AudioStreamPacketDescription`); empty
+    /// for CBR.
     ///
     /// # Errors
     ///
