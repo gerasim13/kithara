@@ -1,0 +1,10 @@
+[package]
+name = "nextest-stress-contract"
+version = "0.0.0"
+edition = "2024"
+
+[workspace]
+
+[[test]]
+name = "stress"
+path = "stress.rs"

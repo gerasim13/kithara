@@ -345,3 +345,62 @@ fn the_pinned_nextest_builds_exactly_the_cargo_arguments_a_lane_derives() {
         "the pinned nextest must request the all-feature workspace graph"
     );
 }
+
+#[test]
+fn the_pinned_nextest_rejects_an_earlier_failed_stress_iteration() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/nextest-stress");
+    let temp = TempDir::new().expect("isolated stress fixture");
+    for name in ["Cargo.toml", "stress.rs"] {
+        fs::copy(fixture.join(name), temp.path().join(name)).expect("copy stress fixture");
+    }
+    let config = temp.path().join("nextest.toml");
+    fs::write(&config, "[profile.default.junit]\npath = \"junit.xml\"\n")
+        .expect("write isolated nextest configuration");
+    let outcome = Command::new("cargo-nextest")
+        .args([
+            "nextest",
+            "run",
+            "--offline",
+            "--profile",
+            "default",
+            "--stress-count",
+            "2",
+            "--no-fail-fast",
+            "--retries",
+            "0",
+            "--color",
+            "never",
+            "--user-config-file",
+            "none",
+            "--config-file",
+        ])
+        .arg(&config)
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env("CARGO_TARGET_DIR", temp.path().join("build"))
+        .current_dir(temp.path())
+        .output()
+        .expect("run the pinned nextest stress fixture");
+    let xml = fs::read_to_string(temp.path().join("target/nextest/default/junit.xml"))
+        .expect("nextest retained both stress iterations");
+    let cases = crate::junit::parse_junit(&xml).expect("parse actual nextest stress results");
+    assert!(cases.iter().all(|case| {
+        case.name == "an_earlier_iteration_fails" && case.suite == "nextest-stress-contract::stress"
+    }));
+    let mut iterations = cases
+        .iter()
+        .map(|case| (case.iteration, case.failed, case.flaky))
+        .collect::<Vec<_>>();
+    iterations.sort();
+    assert_eq!(
+        iterations,
+        [(Some(0), true, false), (Some(1), false, false)],
+        "the first iteration must fail and the last must pass without retries: {xml}"
+    );
+    assert_eq!(
+        outcome.status.code(),
+        Some(100),
+        "an earlier stress failure must fail the command: {}",
+        String::from_utf8_lossy(&outcome.stderr)
+    );
+}
