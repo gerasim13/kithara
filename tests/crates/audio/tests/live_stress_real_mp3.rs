@@ -41,7 +41,6 @@ type TestAudio = RegisteredAudio<Stream<File<TestPools>>, TestPools>;
 
 #[derive(Debug, Default)]
 struct LiveStats {
-    read_progress_events: usize,
     request_started_events: usize,
     request_completed_events: usize,
     errors: usize,
@@ -56,7 +55,6 @@ fn observe_transfers(bus: &EventBus) -> impl Future<Output = LiveStats> + Send +
             collect_stats(downloader_events, "downloader", LiveStats::record_download),
         );
         LiveStats {
-            read_progress_events: file.read_progress_events,
             request_started_events: downloader.request_started_events,
             request_completed_events: downloader.request_completed_events,
             errors: file.errors.saturating_add(downloader.errors),
@@ -83,12 +81,8 @@ async fn collect_stats<E: Event>(
 
 impl LiveStats {
     fn record_file(&mut self, event: &FileEvent) {
-        match event {
-            FileEvent::ReadProgress { .. } => {
-                self.read_progress_events = self.read_progress_events.saturating_add(1);
-            }
-            FileEvent::Error { .. } => self.errors = self.errors.saturating_add(1),
-            _ => {}
+        if matches!(event, FileEvent::Error { .. }) {
+            self.errors = self.errors.saturating_add(1);
         }
     }
 
@@ -114,27 +108,36 @@ async fn transfer_stats_ignore_unobserved_topic_overflow() {
         audio::AudioEvent,
         download::RequestId,
         events::{DEFAULT_EVENT_BUS_CAPACITY, TryRecvError},
-        file::FileError,
+        file::{FileError, FileReaderEvent},
         net::NetError,
     };
 
     let bus = EventBus::default();
     let mut audio_events = bus.subscribe::<AudioEvent>();
     let stats_task = spawn(observe_transfers(&bus));
+    bus.publish(FileEvent::Error {
+        error: FileError::Io("before reader burst".into()),
+    });
+    let mut reader_events = bus.subscribe::<FileReaderEvent>();
     for _ in 0..=DEFAULT_EVENT_BUS_CAPACITY {
         bus.publish(AudioEvent::OutputAvailable);
+        bus.publish(FileReaderEvent::ReadProgress {
+            position: 64,
+            total: Some(128),
+        });
     }
     assert!(matches!(
         audio_events.try_recv(),
         Err(TryRecvError::Lagged(1))
     ));
+    assert!(matches!(
+        reader_events.try_recv(),
+        Err(TryRecvError::Lagged(1))
+    ));
     drop(audio_events);
-    bus.publish(FileEvent::ReadProgress {
-        position: 64,
-        total: Some(128),
-    });
+    drop(reader_events);
     bus.publish(FileEvent::Error {
-        error: FileError::Io("observer fixture".into()),
+        error: FileError::Io("after reader burst".into()),
     });
     let request_id = RequestId::new(NonZeroU64::MIN);
     bus.publish(DownloaderEvent::RequestStarted {
@@ -155,10 +158,9 @@ async fn transfer_stats_ignore_unobserved_topic_overflow() {
     drop(bus);
 
     let stats = stats_task.await.expect("transfer collection must complete");
-    assert_eq!(stats.read_progress_events, 1);
     assert_eq!(stats.request_started_events, 1);
     assert_eq!(stats.request_completed_events, 1);
-    assert_eq!(stats.errors, 2);
+    assert_eq!(stats.errors, 3);
 }
 
 #[kithara::test(tokio)]
@@ -167,15 +169,14 @@ async fn transfer_stats_ignore_unobserved_topic_overflow() {
 async fn transfer_stats_reject_observed_topic_overflow(#[case] file_topic: bool) {
     use std::num::NonZeroU64;
 
-    use kithara::{download::RequestId, events::DEFAULT_EVENT_BUS_CAPACITY};
+    use kithara::{download::RequestId, events::DEFAULT_EVENT_BUS_CAPACITY, file::FileError};
 
     let bus = EventBus::default();
     let stats_task = spawn(observe_transfers(&bus));
     for _ in 0..=DEFAULT_EVENT_BUS_CAPACITY {
         if file_topic {
-            bus.publish(FileEvent::ReadProgress {
-                position: 64,
-                total: Some(128),
+            bus.publish(FileEvent::Error {
+                error: FileError::Io("observer fixture".into()),
             });
         } else {
             bus.publish(DownloaderEvent::RequestStarted {
@@ -457,8 +458,7 @@ async fn live_stress_real_mp3_seek_read_cache(
         "expected no file download/read errors during stress"
     );
     let transfer_events = final_stats
-        .read_progress_events
-        .saturating_add(final_stats.request_started_events)
+        .request_started_events
         .saturating_add(final_stats.request_completed_events);
     assert!(
         transfer_events > 0,
