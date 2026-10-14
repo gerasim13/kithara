@@ -199,6 +199,8 @@ impl<S> Audio<S> {
             }
             TrackStep::Produced(Fetch::NaturalEof) | TrackStep::Eof => {
                 self.release_seek_lock();
+                self.publish_final_progress();
+                self.emit.flush();
                 Ok(ChunkOutcome::Eof {
                     position: self.position(),
                 })
@@ -382,12 +384,29 @@ impl<S> Audio<S> {
     }
 
     fn publish_progress(&mut self) {
-        let position_ms = u64::try_from(self.position().as_millis()).unwrap_or(u64::MAX);
+        let position_ms = self.position_ms();
         if self.last_progress_emit.is_some_and(|last| {
             position_ms.abs_diff(last) < crate::consts::PROGRESS_EMIT_MIN_DELTA_MS
         }) {
             return;
         }
+        self.emit_progress(position_ms);
+    }
+
+    /// The end of the track is the throttle's trailing edge: observers always
+    /// see the final committed position.
+    fn publish_final_progress(&mut self) {
+        let position_ms = self.position_ms();
+        if self.last_progress_emit != Some(position_ms) {
+            self.emit_progress(position_ms);
+        }
+    }
+
+    fn position_ms(&self) -> u64 {
+        u64::try_from(self.position().as_millis()).unwrap_or(u64::MAX)
+    }
+
+    fn emit_progress(&mut self, position_ms: u64) {
         self.last_progress_emit = Some(position_ms);
         let total_ms = self
             .duration()
@@ -554,13 +573,17 @@ impl<S: 'static> AudioSource for Audio<S> {
             }
         }
         let step = self.source.step_track();
-        if matches!(
-            step,
-            TrackStep::Produced(Fetch::NaturalEof | Fetch::Failure { .. })
-                | TrackStep::Eof
-                | TrackStep::Failed(_)
-        ) {
-            self.release_seek_lock();
+        match step {
+            TrackStep::Produced(Fetch::NaturalEof) | TrackStep::Eof => {
+                self.release_seek_lock();
+                self.publish_final_progress();
+            }
+            TrackStep::Produced(Fetch::Failure { .. }) | TrackStep::Failed(_) => {
+                self.release_seek_lock();
+            }
+            TrackStep::Produced(Fetch::Data { .. })
+            | TrackStep::Blocked(_)
+            | TrackStep::StateChanged => {}
         }
         step
     }
@@ -700,5 +723,81 @@ mod tests {
             events.try_recv().is_err(),
             "the middle commit stays throttled"
         );
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum Consumer {
+        Lane,
+        Chunks,
+    }
+
+    #[kithara::test(native, tokio)]
+    #[case::render_lane(Consumer::Lane)]
+    #[case::chunk_reader(Consumer::Chunks)]
+    async fn the_end_of_track_publishes_the_final_committed_position(#[case] consumer: Consumer) {
+        use crate::{AudioEvent, AudioSource, SeekOutcome};
+
+        let mut audio = prepared_audio().await;
+        audio.warm_up();
+        let first = produced_audio(&mut audio);
+        audio.finish_deferred();
+        let duration = audio.duration().expect("WAV duration");
+        let chunk = first.meta.end_timestamp - first.meta.timestamp;
+        // WHY: one and a half chunks before the end puts the last two
+        // commits inside one throttle window.
+        let target = duration - chunk * 3 / 2;
+        assert!(matches!(
+            AudioSource::seek(&mut audio, target),
+            Ok(SeekOutcome::Landed { .. })
+        ));
+        let mut events = audio.events::<AudioEvent>();
+        drain_to_end(&mut audio, consumer);
+        audio.finish_deferred();
+        let mut published = Vec::new();
+        while let Ok(envelope) = events.try_recv() {
+            if let AudioEvent::PlaybackProgress { position_ms, .. } = envelope.event {
+                published.push(position_ms);
+            }
+        }
+        let end_ms = u64::try_from(audio.position().as_millis()).expect("position in millis");
+        assert_eq!(
+            published.last(),
+            Some(&end_ms),
+            "the throttled tail reaches observers: {published:?}"
+        );
+    }
+
+    #[kithara::hang_watchdog]
+    #[kithara::flash(io)]
+    fn drain_to_end<S: 'static>(audio: &mut Audio<S>, consumer: Consumer) {
+        use crate::{AudioSource, Fetch, TrackStep};
+
+        loop {
+            hang_tick!();
+            match consumer {
+                Consumer::Lane => {
+                    let _ = audio.prepare_deferred();
+                    match audio.step_track() {
+                        TrackStep::Produced(Fetch::Data { data, .. }) => {
+                            let end = source_end(&data.meta, u64::from(data.meta.frames))
+                                .expect("source boundary");
+                            audio.commit_source_end(end, data.meta);
+                            hang_reset!();
+                        }
+                        TrackStep::Produced(Fetch::NaturalEof) | TrackStep::Eof => return,
+                        TrackStep::StateChanged | TrackStep::Blocked(_) => {}
+                        _ => panic!("the WAV fixture plays to its end"),
+                    }
+                    audio.finish_deferred();
+                }
+                Consumer::Chunks => match audio.next_chunk().expect("chunk read") {
+                    ChunkOutcome::Chunk(_) => {
+                        hang_reset!();
+                    }
+                    ChunkOutcome::Eof { .. } => return,
+                    ChunkOutcome::Pending { .. } => {}
+                },
+            }
+        }
     }
 }
