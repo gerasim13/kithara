@@ -1,6 +1,6 @@
 use kithara_platform::time::{Duration, Instant, WallInstant};
 use kithara_test_utils::kithara;
-use masonry::vello::wgpu::SurfaceError;
+use wgpu_vello::SurfaceError;
 use winit::dpi::PhysicalPosition;
 
 use super::runner::{Clicks, FrameClock, IdleClock, SurfaceRecovery, surface_recovery};

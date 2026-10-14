@@ -6386,7 +6386,6 @@ dependencies = [
  "kithara-ui-shaping",
  "lucide-icons",
  "masonry",
- "naga 26.0.0",
  "naga 27.0.3",
  "num-traits",
  "png 0.18.1",
@@ -6400,6 +6399,7 @@ dependencies = [
  "unicode-segmentation",
  "velato",
  "vello",
+ "wgpu 26.0.1",
  "window_clipboard",
  "winit",
  "yaml_serde",
@@ -6463,6 +6463,7 @@ dependencies = [
  "ron",
  "serde",
  "vello",
+ "wgpu 26.0.1",
 ]
 
 [[package]]

@@ -466,9 +466,6 @@ masonry = "0.4"
 memory-stats = "1.2"
 mmap-io = { version = "1.0", default-features = false }
 naga = { version = "27", features = ["wgsl-in", "termcolor"] }
-# Vello 0.6 uses the older parser; both parser versions share codespan's
-# termcolor feature and therefore need the matching diagnostic writer.
-naga-vello = { package = "naga", version = "26", default-features = false, features = ["termcolor"] }
 ndk-context = "0.1.1"
 nix = { version = "0.31", features = ["resource", "signal"] }
 num-traits = { version = "0.2", default-features = false }
@@ -574,6 +571,8 @@ web-sys = { version = "0.3", features = ["AudioData", "AudioDataCopyToOptions", 
 web-time = "1.1"
 # `hardened` opens only http and https URLs.
 webbrowser = { version = "1.2.4", features = ["hardened"] }
+# Keep Masonry's WGPU/Naga diagnostic writer aligned with iced's.
+wgpu-vello = { package = "wgpu", version = "26", default-features = false, features = ["naga-ir"] }
 window_clipboard = "0.5.1"
 # The Windows native secret store for keyring-core.
 windows-native-keyring-store = "1.1.0"
