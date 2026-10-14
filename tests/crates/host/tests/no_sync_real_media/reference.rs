@@ -9,6 +9,7 @@ use kithara::{
     file::{File, FileConfig},
     hls::{AbrMode, Hls, HlsConfig},
     platform::{
+        CancelToken,
         time::{self, Duration},
         tokio::sync::broadcast::error::TryRecvError,
     },
@@ -20,8 +21,9 @@ use kithara_integration_tests::{
     event::TestEvent,
     memory_asset_store,
     mock::{LaneAudio, load_audio, wait_for_preload},
+    reads::blocking_audio,
 };
-use kithara_test_utils::bufpool::TestPools;
+use kithara_test_utils::{bufpool::TestPools, cancel_token};
 
 pub(super) enum ReferenceAudio {
     File(LaneAudio<Stream<File<TestPools>>, TestPools>),
@@ -39,6 +41,12 @@ impl ReferenceAudio {
         match self {
             Self::File(audio) => audio.spec(),
             Self::Hls(audio) => audio.spec(),
+        }
+    }
+    fn media_origin(&self) -> Option<Duration> {
+        match self {
+            Self::File(audio) => audio.media_origin(),
+            Self::Hls(audio) => audio.media_origin(),
         }
     }
     fn segment(&self) -> SegmentId {
@@ -136,10 +144,10 @@ use super::{BLOCK_FRAMES, CHANNELS, CapturedAudio, Case, Deck, PRELOAD_TIMEOUT};
 
 pub(super) async fn capture_references(
     case: &Case,
-    decks: &mut [Deck],
+    decks: Vec<Deck>,
     capture: &CapturedAudio,
     failures: &mut Vec<String>,
-) -> Vec<Vec<f32>> {
+) -> (Vec<Deck>, Vec<Vec<f32>>) {
     if capture.start_positions_secs.len() != decks.len() {
         failures.push(format!(
             "{}: final capture recorded {} starts for {} decks",
@@ -147,16 +155,29 @@ pub(super) async fn capture_references(
             capture.start_positions_secs.len(),
             decks.len(),
         ));
-        return Vec::new();
+        return (decks, Vec::new());
     }
 
     let mut references = Vec::with_capacity(decks.len());
-    for (deck_index, (deck, start)) in decks
-        .iter_mut()
+    let mut restored_decks = Vec::with_capacity(decks.len());
+    for (deck_index, (mut deck, start)) in decks
+        .into_iter()
         .zip(capture.start_positions_secs.iter().copied())
         .enumerate()
     {
-        let target = Duration::from_secs_f64(start);
+        let Some(target) = deck
+            .reference
+            .media_origin()
+            .and_then(|origin| origin.checked_add(Duration::from_secs_f64(start)))
+        else {
+            failures.push(format!(
+                "{} deck {deck_index} reference has no raw coordinate for media start {start:.9}s",
+                case.label,
+            ));
+            references.push(Vec::new());
+            restored_decks.push(deck);
+            continue;
+        };
         drain_reference_events(&mut deck.reference_events);
         let seek_ready = match deck.reference.seek(target) {
             Ok(SeekOutcome::Landed { .. }) => true,
@@ -178,6 +199,7 @@ pub(super) async fn capture_references(
         };
         if !seek_ready {
             references.push(Vec::new());
+            restored_decks.push(deck);
             continue;
         }
         let preload = time::timeout(PRELOAD_TIMEOUT, deck.reference.preload()).await;
@@ -189,6 +211,7 @@ pub(super) async fn capture_references(
                     case.label,
                 ));
                 references.push(Vec::new());
+                restored_decks.push(deck);
                 continue;
             }
             Err(_) => {
@@ -197,46 +220,57 @@ pub(super) async fn capture_references(
                     case.label,
                 ));
                 references.push(Vec::new());
+                restored_decks.push(deck);
                 continue;
             }
         }
 
-        match time::timeout(
+        let requested_frames = capture.requested_frames;
+        let source_channels = case.source_channels;
+        let cancel = cancel_token();
+        let capture_cancel = cancel.clone();
+        let deadline = time::WallInstant::now() + PRELOAD_TIMEOUT;
+        let (deck, result) = time::timeout(
             PRELOAD_TIMEOUT,
-            read_reference_pcm(
-                &mut deck.reference,
-                &mut deck.reference_events,
-                capture.requested_frames,
-                case.source_channels,
-            ),
+            blocking_audio(deck, move |deck| {
+                read_reference_pcm(
+                    &mut deck.reference,
+                    &mut deck.reference_events,
+                    requested_frames,
+                    source_channels,
+                    &capture_cancel,
+                    deadline,
+                )
+            }),
         )
         .await
-        {
-            Ok(Ok(pcm)) => references.push(pcm),
-            Ok(Err(error)) => {
+        .unwrap_or_else(|_| {
+            cancel.cancel();
+            panic!("{} deck {deck_index} reference read timed out", case.label,)
+        });
+        match result {
+            Ok(pcm) => references.push(pcm),
+            Err(error) => {
                 failures.push(format!(
                     "{} deck {deck_index} reference read failed: {error}",
                     case.label,
                 ));
                 references.push(Vec::new());
             }
-            Err(_) => {
-                failures.push(format!(
-                    "{} deck {deck_index} reference read timed out",
-                    case.label,
-                ));
-                references.push(Vec::new());
-            }
         }
+        restored_decks.push(deck);
     }
-    references
+    (restored_decks, references)
 }
 
-async fn read_reference_pcm(
+#[kithara_test_utils::kithara::hang_watchdog(timeout = PRELOAD_TIMEOUT, ctx = String)]
+fn read_reference_pcm(
     resource: &mut ReferenceAudio,
     events: &mut EventReceiver<TestEvent>,
     requested_frames: usize,
     source_channels: u16,
+    cancel: &CancelToken,
+    deadline: time::WallInstant,
 ) -> Result<Vec<f32>, String> {
     // The reference decodes the source's channels and reads them into
     // `CHANNELS` planes, the same shape the engine renders. A source that is
@@ -253,6 +287,14 @@ async fn read_reference_pcm(
     let mut right = vec![0.0; BLOCK_FRAMES];
     while pcm.len() / usize::from(CHANNELS) < requested_frames {
         let completed = pcm.len() / usize::from(CHANNELS);
+        if cancel.is_cancelled() || time::WallInstant::now() >= deadline {
+            return Err(format!(
+                "reference read timed out after {completed}/{requested_frames} frames",
+            ));
+        }
+        hang_tick!(format!(
+            "reference segment {requested_segment:?}: {completed}/{requested_frames} frames",
+        ));
         let frames = (requested_frames - completed).min(BLOCK_FRAMES);
         let mut planar = [&mut left[..frames], &mut right[..frames]];
         match resource
@@ -272,8 +314,9 @@ async fn read_reference_pcm(
                     pcm.push(left[frame]);
                     pcm.push(right[frame]);
                 }
+                hang_reset!();
             }
-            ReadOutcome::Pending { .. } => time::sleep(Duration::from_millis(1)).await,
+            ReadOutcome::Pending { .. } => continue,
             ReadOutcome::Eof { position } => {
                 return Err(format!(
                     "reference reached EOF at {:.9}s after {completed}/{requested_frames} frames",

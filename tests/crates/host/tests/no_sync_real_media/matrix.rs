@@ -9,7 +9,7 @@ use kithara::{
     platform::time::{self, Duration},
     play::{CrossfadeSettings, PlayWorker, PlayWorkerConfig, ResourcePrep, TrackSettings},
     queue::{Queue, QueueConfig, QueueControl, QueueError, QueueSettings, TrackSource, Transition},
-    signal::TransportRevision,
+    signal::{SessionFrame, TransportRevision},
     warp::{StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
@@ -18,6 +18,7 @@ use kithara_integration_tests::{
 };
 #[cfg(not(target_os = "android"))]
 use kithara_integration_tests::{audio_artifact::write_audio_artifact, cochlea::CochleaReport};
+use kithara_render::bridge::SlotState;
 use kithara_test_fixtures::{SignalAsset, assets::by_name};
 use kithara_test_utils::{
     TestTempDir,
@@ -339,7 +340,8 @@ async fn run_case(
         &mut failures,
     )
     .await;
-    let direct_references = capture_references(case, &mut decks, &final_mix, &mut failures).await;
+    let (decks, direct_references) =
+        capture_references(case, decks, &final_mix, &mut failures).await;
     let direct_reference_pcm = direct_references
         .iter()
         .map(Vec::as_slice)
@@ -508,6 +510,67 @@ async fn capture_pass(
         .iter()
         .map(|deck| deck.player.control().position_seconds().unwrap_or(0.0))
         .collect::<Vec<_>>();
+    let spec = host.spec().await;
+    let snapshots = decks
+        .iter()
+        .map(|deck| deck.snapshot.clone())
+        .collect::<Vec<_>>();
+    let (snapshots, cursor) = host
+        .observe(move || {
+            snapshots
+                .iter()
+                .map(|snapshot| snapshot.lock().clone())
+                .collect::<Vec<_>>()
+        })
+        .await;
+    let capture_frame = SessionFrame::new(i64::try_from(cursor).expect("capture frame fits i64"));
+    let starts = snapshots
+        .iter()
+        .zip(decks.iter())
+        .enumerate()
+        .map(|(index, (snapshot, deck))| {
+            if deck.player.control().rate() != 1.0 {
+                return Err(format!(
+                    "deck {index} is not playing at unit rate at capture start"
+                ));
+            }
+            if snapshot.sample_rate != spec.sample_rate.get() {
+                return Err(format!("deck {index} has a different capture sample rate"));
+            }
+            let slot = snapshot
+                .slots
+                .iter()
+                .find(|slot| {
+                    slot.state == SlotState::Playing
+                        && slot.mark.is_some_and(|mark| {
+                            Some(mark.lane.segment) == deck.seek_complete_segment
+                        })
+                })
+                .ok_or_else(|| format!("deck {index} has no consumed capture segment"))?;
+            let mark = slot
+                .mark
+                .ok_or_else(|| format!("deck {index} has no source mark"))?;
+            let elapsed = capture_frame
+                .frames_since(mark.session)
+                .ok_or_else(|| format!("deck {index} source mark follows capture start"))?;
+            let elapsed = spec
+                .duration_for(elapsed)
+                .map_err(|error| error.to_string())?;
+            let media = mark
+                .position
+                .checked_add(elapsed)
+                .and_then(|raw| raw.checked_sub(slot.media_origin?))
+                .ok_or_else(|| format!("deck {index} has no capture media coordinate"))?;
+            Ok(media.as_secs_f64())
+        })
+        .collect::<Result<Vec<_>, String>>();
+    let start_positions_secs = match starts {
+        Ok(starts) => starts,
+        Err(error) => {
+            failures.push(format!("{} {label}: {error}", case.label));
+            Vec::new()
+        }
+    };
     let mut pcm = Vec::with_capacity(requested_frames * usize::from(CHANNELS));
     let mut zero_blocks = Vec::new();
     for block_index in 0..capture_blocks {
@@ -567,7 +630,7 @@ async fn capture_pass(
         requested_frames,
         tap_drops,
         tap_matches_output,
-        start_positions_secs: positions_before,
+        start_positions_secs,
     }
 }
 

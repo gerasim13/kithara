@@ -26,6 +26,7 @@ kithara = { workspace = true, features = ["usdt", "mock", "offline", "resample-r
 kithara-command = { workspace = true }
 kithara-config = { workspace = true }
 kithara-integration-tests = { workspace = true, features = ["all"] }
+kithara-render = { workspace = true }
 kithara-test-dylib = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["signal"] }
 kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock"] }

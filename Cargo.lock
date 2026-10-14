@@ -5736,6 +5736,7 @@ dependencies = [
  "kithara-command",
  "kithara-config",
  "kithara-integration-tests",
+ "kithara-render",
  "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
