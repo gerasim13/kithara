@@ -2,11 +2,12 @@
 
 use std::{cell::RefCell, rc::Rc};
 
-use js_sys::{Float32Array, Float64Array, Reflect};
+use js_sys::{Array, Float32Array, Float64Array, Object, Reflect};
 use kithara::platform::time::{Duration, sleep};
 use kithara_ffi::player::AudioPlayer;
 use wasm_bindgen::{JsCast, JsValue, prelude::Closure};
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
+use web_sys::{BroadcastChannel, MessageEvent};
 
 wasm_bindgen_test_configure!(run_in_browser);
 
@@ -17,6 +18,62 @@ const DEADLINE_MS: u64 = 30_000;
 const RESTART_SAMPLE: usize = 3;
 
 type Events = Rc<RefCell<Vec<JsValue>>>;
+
+struct BroadcastObservation {
+    channel: BroadcastChannel,
+    _listener: Closure<dyn FnMut(MessageEvent)>,
+    messages: Events,
+}
+
+impl BroadcastObservation {
+    fn new(name: &str) -> Self {
+        let channel = BroadcastChannel::new(name).expect("diagnostic channel");
+        let messages: Events = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&messages);
+        let listener = Closure::wrap(Box::new(move |event: MessageEvent| {
+            let data = event.data();
+            let summary = Object::new();
+            let analysis = get(&data, "scope").as_string().as_deref() == Some("analysis");
+            for key in keys(&data) {
+                let value = get(&data, &key);
+                // Keep analysis array lengths instead of retaining or printing their contents.
+                let value =
+                    if analysis && matches!(key.as_str(), "waveform" | "beats" | "downbeats") {
+                        get(&value, "length")
+                    } else {
+                        value
+                    };
+                Reflect::set(&summary, &JsValue::from_str(&key), &value)
+                    .expect("diagnostic message field");
+            }
+            sink.borrow_mut().push(summary.into());
+        }) as Box<dyn FnMut(MessageEvent)>);
+        channel.set_onmessage(Some(listener.as_ref().unchecked_ref()));
+        Self {
+            channel,
+            _listener: listener,
+            messages,
+        }
+    }
+
+    fn report(&self) -> String {
+        let messages = Array::new();
+        for message in self.messages.borrow().iter() {
+            messages.push(message);
+        }
+        js_sys::JSON::stringify(&messages)
+            .expect("diagnostic messages serialize")
+            .as_string()
+            .expect("diagnostic report string")
+    }
+}
+
+impl Drop for BroadcastObservation {
+    fn drop(&mut self) {
+        self.channel.set_onmessage(None);
+        self.channel.close();
+    }
+}
 
 fn get(value: &JsValue, key: &str) -> JsValue {
     Reflect::get(value, &JsValue::from_str(key)).expect("analysis field")
@@ -32,18 +89,23 @@ fn boolean(value: &JsValue, key: &str) -> bool {
 
 /// What a pass that never reached its end managed to publish, so a deadline
 /// says whether the analysis stalled at the start or merely ran out of budget.
-fn progress_report(events: &Events) -> String {
+fn progress_report(events: &Events, diagnostics: &[BroadcastObservation; 2]) -> String {
     let received = events.borrow();
-    let Some(last) = received.last() else {
-        return "no publication at all".to_string();
+    let publications = match received.last() {
+        Some(last) => format!(
+            "{} publication(s), last revision {} over {} source frame(s), settled={}, beatFinal={}",
+            received.len(),
+            number(last, "revision"),
+            number(last, "sourceFrames"),
+            boolean(last, "settled"),
+            boolean(last, "beatFinal"),
+        ),
+        None => "no publication at all".to_string(),
     };
     format!(
-        "{} publication(s), last revision {} over {} source frame(s), settled={}, beatFinal={}",
-        received.len(),
-        number(last, "revision"),
-        number(last, "sourceFrames"),
-        boolean(last, "settled"),
-        boolean(last, "beatFinal"),
+        "{publications}; kithara-reply={}; kithara-events (analysis arrays are lengths)={}",
+        diagnostics[0].report(),
+        diagnostics[1].report(),
     )
 }
 
@@ -55,7 +117,11 @@ fn revisions(events: &Events) -> Vec<f64> {
         .collect()
 }
 
-fn observed_player() -> (AudioPlayer, Events) {
+fn observed_player() -> (AudioPlayer, Events, [BroadcastObservation; 2]) {
+    let diagnostics = [
+        BroadcastObservation::new("kithara-reply"),
+        BroadcastObservation::new("kithara-events"),
+    ];
     let events: Events = Rc::new(RefCell::new(Vec::new()));
     let player = AudioPlayer::new_js();
 
@@ -67,7 +133,7 @@ fn observed_player() -> (AudioPlayer, Events) {
         .set_analysis_observer_js(observer.as_ref().clone())
         .expect("analysis observer accepted");
     observer.forget();
-    (player, events)
+    (player, events, diagnostics)
 }
 
 fn clicks_url() -> String {
@@ -76,7 +142,7 @@ fn clicks_url() -> String {
 
 #[wasm_bindgen_test]
 async fn a_queued_track_publishes_analysis_until_the_pass_settles() {
-    let (player, events) = observed_player();
+    let (player, events, diagnostics) = observed_player();
     let track_id = player.append_js(clicks_url()).expect("append");
     player.analyze_js(track_id).expect("analyze accepted");
 
@@ -90,7 +156,7 @@ async fn a_queued_track_publishes_analysis_until_the_pass_settles() {
     let Some(waited) = settled else {
         panic!(
             "no publication carries a final grid; {}",
-            progress_report(&events)
+            progress_report(&events, &diagnostics)
         );
     };
 
@@ -155,7 +221,7 @@ async fn a_queued_track_publishes_analysis_until_the_pass_settles() {
 
 #[wasm_bindgen_test]
 async fn analyzing_again_starts_a_new_revision_sequence_and_silences_the_old_pass() {
-    let (player, events) = observed_player();
+    let (player, events, diagnostics) = observed_player();
     let track_id = player.append_js(clicks_url()).expect("append");
     player.analyze_js(track_id).expect("analyze accepted");
 
@@ -166,7 +232,7 @@ async fn analyzing_again_starts_a_new_revision_sequence_and_silences_the_old_pas
     assert!(
         settled.is_some(),
         "the first pass never settled after {DEADLINE_MS} ms; {}",
-        progress_report(&events)
+        progress_report(&events, &diagnostics)
     );
 
     let before = events.borrow().len();
@@ -179,8 +245,9 @@ async fn analyzing_again_starts_a_new_revision_sequence_and_silences_the_old_pas
     .await;
     assert!(
         restarted.is_some(),
-        "the restarted pass published {} time(s)",
-        events.borrow().len() - before
+        "the restarted pass published {} time(s); {}",
+        events.borrow().len() - before,
+        progress_report(&events, &diagnostics)
     );
 
     let revisions = revisions(&events);
