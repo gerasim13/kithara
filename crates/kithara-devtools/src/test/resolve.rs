@@ -4,6 +4,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use cargo_metadata::MetadataCommand;
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -64,6 +65,12 @@ impl ResolvedLane {
             TestRunner::Nextest(_) => "cargo-nextest",
             TestRunner::Cargo(_) => "cargo",
         });
+        if matches!(&self.runner, TestRunner::Nextest(_)) {
+            command.env(
+                "CARGO",
+                MetadataCommand::new().cargo_command().get_program(),
+            );
+        }
         command.envs(&self.env);
         match &self.runner {
             TestRunner::Nextest(nextest) => {

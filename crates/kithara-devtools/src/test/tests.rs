@@ -133,7 +133,17 @@ fn every_typed_lane_key_renders_the_recorded_command() {
             report.push('\n');
             let mut envs = envs_of(&command);
             envs.sort();
-            for (key, value) in envs {
+            for (key, mut value) in envs {
+                if key == "CARGO" && !test.lanes[name].env.contains_key("CARGO") {
+                    assert_eq!(
+                        value,
+                        cargo_metadata::MetadataCommand::new()
+                            .cargo_command()
+                            .get_program()
+                            .to_string_lossy()
+                    );
+                    value = "<cargo>".to_owned();
+                }
                 report.push_str(&format!("    {key}={value}\n"));
             }
         }
@@ -863,14 +873,37 @@ fn every_lane_takes_the_callers_profile() {
 }
 
 #[test]
-fn a_lane_that_names_none_runs_with_none() {
-    let project = synthetic_project();
+fn a_nextest_lane_supplies_cargo_unless_the_lane_names_it() {
+    let mut project = synthetic_project();
     let request = TestRequest::parse(&[]).expect("parse request");
     let name = select_lane(&project.test, &request).expect("select default lane");
 
     let cmd = lane_command(&project.test, name, &request).expect("default lane command");
 
-    assert!(envs_of(&cmd).is_empty());
+    assert_eq!(
+        envs_of(&cmd),
+        vec![(
+            "CARGO".to_owned(),
+            cargo_metadata::MetadataCommand::new()
+                .cargo_command()
+                .get_program()
+                .to_string_lossy()
+                .into_owned()
+        )]
+    );
+
+    project
+        .test
+        .lanes
+        .get_mut("workspace")
+        .expect("default lane")
+        .env
+        .insert("CARGO".to_owned(), "lane-cargo".to_owned());
+    let command = lane_command(&project.test, "workspace", &request).expect("lane override");
+    assert_eq!(
+        envs_of(&command),
+        vec![("CARGO".to_owned(), "lane-cargo".to_owned())]
+    );
 }
 
 /// A lane is clean only once its report agrees. The verdict lives past
