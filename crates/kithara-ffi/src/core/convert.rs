@@ -389,10 +389,7 @@ impl TryFrom<&FileEvent> for FfiItemEvent {
             FileEvent::CacheComplete { total_bytes } => Ok(Self::FileCacheComplete {
                 total_bytes: *total_bytes,
             }),
-            FileEvent::ReadProgress { .. }
-            | FileEvent::ReaderSeek { .. }
-            | FileEvent::Error { .. }
-            | FileEvent::EndOfStream => Err(NotForwarded),
+            FileEvent::Error { .. } | FileEvent::EndOfStream => Err(NotForwarded),
         }
     }
 }
