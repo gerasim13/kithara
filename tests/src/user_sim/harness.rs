@@ -770,7 +770,6 @@ where
     {
         return Ok(p);
     }
-    let budget = deadline.min(__hang_detector.remaining());
     let mut previous = queue.position_seconds();
     let wait = async {
         loop {
@@ -789,7 +788,7 @@ where
             }
         }
     };
-    match timeout(budget, wait).await {
+    match timeout(deadline, wait).await {
         Ok(res) => res,
         Err(_) => Err(format!(
             "no PlaybackProgress satisfied predicate within {deadline:?} \
@@ -819,7 +818,6 @@ where
             | TrackStatus::Cancelled => {}
         }
     }
-    let budget = deadline.min(__hang_detector.remaining());
     let mut rx = queue.subscribe();
     let mut previous = queue.track(id).map(|entry| entry.status);
     let wait = async {
@@ -858,7 +856,7 @@ where
             }
         }
     };
-    match timeout(budget, wait).await {
+    match timeout(deadline, wait).await {
         Ok(res) => res,
         Err(_) => Err(format!(
             "timeout {deadline:?} (last={:?})",
