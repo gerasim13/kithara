@@ -1,4 +1,3 @@
-#[cfg(feature = "thread-cpu-time")]
 pub use cpu_time::ThreadTime;
 pub use tokio_time::sleep;
 pub use web_time::Instant;
