@@ -442,19 +442,19 @@ impl Track<TestPools> for ScriptedTrack {
         &self,
         at: SessionFrame,
         sample_rate: NonZeroU32,
-    ) -> Result<(Position, f32), PlayError> {
+    ) -> Result<(Position, f64), PlayError> {
         let track = self.snapshot();
         if !track.attached {
             return Err(PlayError::NotReady);
         }
         let TrackStatus::Playing { since } = track.status else {
-            return Ok((track.position, track.speed));
+            return Ok((track.position, f64::from(track.speed)));
         };
         let frames = at.frames_since(since).ok_or(PlayError::Late)?;
         let frames: f64 = frames.as_();
         let elapsed =
             Position::from_secs_f64(frames * f64::from(track.speed) / f64::from(sample_rate.get()));
-        Ok((track.position + elapsed, track.speed))
+        Ok((track.position + elapsed, f64::from(track.speed)))
     }
 
     fn planned_end(&self, _rate: NonZeroU32) -> Result<Option<SessionFrame>, PlayError> {
@@ -705,4 +705,15 @@ pub(super) fn sounding() -> (Deck, Control, Rig, Seq) {
     });
     control.clear();
     (deck, control, rig, load)
+}
+
+pub(super) fn source_grid(model: &BeatGridModel) -> kithara_sync::SourceGrid {
+    kithara_sync::SourceGrid::new(
+        model,
+        kithara_warp::AssetAxis::new(
+            NonZeroU32::new(48_000).expect("fixture rate"),
+            kithara_warp::AssetExtent::Unknown,
+        ),
+    )
+    .expect("served source geometry")
 }

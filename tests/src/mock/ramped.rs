@@ -119,7 +119,7 @@ impl Track<TestPools> for RampedTrack {
             fn projected(&self) -> TrackSettings;
             fn prepared_speed(&self) -> Option<&SpeedCurve>;
             fn prepare_entry(&mut self, at: SessionFrame, out: &mut Outbox<'_, TestPools>) -> Result<bool, PlayError>;
-            fn planned(&self, at: SessionFrame, sample_rate: NonZeroU32) -> Result<(Duration, f32), PlayError>;
+            fn planned(&self, at: SessionFrame, sample_rate: NonZeroU32) -> Result<(Duration, f64), PlayError>;
             fn planned_end(&self, sample_rate: NonZeroU32) -> Result<Option<SessionFrame>, PlayError>;
             fn speed_receipt(&mut self) -> Option<Settled>;
             fn speed_applied(&mut self, seq: Seq) -> Option<bool>;

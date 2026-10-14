@@ -15,12 +15,12 @@ use kithara::{
         TrackFactory, TrackReceipt, TrackSettings, TrackSettingsChange, TrackSnapshot,
     },
     queue::{Queue, QueueCommand, QueueControl, TrackSource, Transition},
-    signal::{FrameCount, SessionFrame},
+    signal::{FrameCount, SegmentId, SessionFrame},
 };
 use kithara_command::{Outcome, Rejection, Seq, When};
 use kithara_render::{
     LoadRefusal,
-    bridge::{DeckPart, SlotSnapshot},
+    bridge::{DeckPart, SlotSnapshot, SlotState},
     rt::DeckMixerConfig,
 };
 
@@ -61,9 +61,12 @@ pub struct LinkObservation {
     pub consumed: Vec<(TrackId, SlotSnapshot)>,
     pub consumed_rate: Option<NonZeroU32>,
     pub placements: Vec<LinkPlacement>,
+    pub speeds: Vec<LinkSpeed>,
+    pub cue_curves: Vec<LinkCue>,
+    pub owner_inputs: Vec<LinkOwnerInput>,
     pub placement_applied: Vec<(TrackId, Seq, bool)>,
     pub placement_receipts: Vec<(TrackId, LinkReceiptOrigin, Settled)>,
-    pub sync_requests: Vec<(bool, Option<Seq>)>,
+    pub sync_requests: Vec<LinkSyncRequest>,
     pub settled: Vec<(TrackId, Settled)>,
     pub loads: Vec<(TrackId, Seq)>,
     pub cues: Vec<(TrackId, Seq)>,
@@ -95,7 +98,61 @@ pub struct LinkPlacement {
     pub delivery: FrameCount,
     pub before: TrackSnapshot,
     pub consumed: SlotSnapshot,
-    pub planned: Result<(Position, f32), PlayError>,
+    pub planned: Result<(Position, f64), PlayError>,
+    pub input: Option<usize>,
+}
+
+#[derive(Debug)]
+pub struct LinkSyncRequest {
+    pub on: bool,
+    pub seq: Option<Seq>,
+    pub input: usize,
+    pub tracks: Vec<LinkedSnapshot<TrackSnapshot>>,
+    pub placements: std::ops::Range<usize>,
+}
+
+#[derive(Debug)]
+pub struct LinkSpeed {
+    pub item: TrackId,
+    pub seq: Seq,
+    pub curve: kithara::warp::SpeedCurve,
+    pub at: When<SessionFrame>,
+    pub landing: Option<(Position, SessionFrame)>,
+    pub before: TrackSnapshot,
+    pub consumed: Option<SlotSnapshot>,
+    pub sample_rate: Option<NonZeroU32>,
+    pub input: Option<usize>,
+    pub host_input: Option<usize>,
+    pub planned: Option<Result<(Position, f64), PlayError>>,
+}
+
+#[derive(Debug)]
+pub struct LinkOwnerInput {
+    pub item: Option<TrackId>,
+    pub at: Option<SessionFrame>,
+    pub trajectory: Option<TempoTrajectory>,
+    pub kind: LinkOwnerInputKind,
+}
+
+#[derive(Clone, Debug)]
+pub enum LinkOwnerInputKind {
+    Retime,
+    Realign,
+    Sync { on: bool },
+    Grid { answer: GridAnswer },
+}
+
+#[derive(Debug)]
+pub struct LinkCue {
+    pub item: TrackId,
+    pub seq: Seq,
+    pub position: Position,
+    pub curve: kithara::warp::SpeedCurve,
+    pub before: TrackSnapshot,
+    pub consumed: Option<SlotSnapshot>,
+    pub host_input: Option<usize>,
+    pub native: Option<LinkReceiptOrigin>,
+    pub segment: Option<SegmentId>,
 }
 
 pub struct ObservedFactory<S> {
@@ -150,6 +207,55 @@ impl<S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static> ObservedTrack<S> {
         }));
     }
 
+    fn trace_command(&self, command: &TrackCommand<S>, out: &Outbox<'_, S>) -> bool {
+        let details = match command {
+            TrackCommand::Load { position, .. } => {
+                Some(serde_json::json!({"Load": {"position_ns": position.as_nanos().to_string()}}))
+            }
+            TrackCommand::Seat { slot, at } => {
+                Some(serde_json::json!({"Seat": {"slot": slot.get(), "at": format!("{at:?}")}}))
+            }
+            TrackCommand::Fade { at, settings, dir } => Some(
+                serde_json::json!({"Fade": {"at": format!("{at:?}"), "settings": format!("{settings:?}"), "dir": format!("{dir:?}")}}),
+            ),
+            TrackCommand::Play { at } => Some(serde_json::json!({"Play": format!("{at:?}")})),
+            TrackCommand::Pause { at } => Some(serde_json::json!({"Pause": format!("{at:?}")})),
+            TrackCommand::Seek { to } => {
+                Some(serde_json::json!({"Seek": to.as_nanos().to_string()}))
+            }
+            TrackCommand::Jump { to, at } => Some(
+                serde_json::json!({"Jump": {"to_ns": to.as_nanos().to_string(), "at": i64::from(*at)}}),
+            ),
+            TrackCommand::Align { to, speed, at } => Some(
+                serde_json::json!({"Align": {"to_ns": to.as_nanos().to_string(), "speed": format!("{speed:?}"), "at": i64::from(*at)}}),
+            ),
+            TrackCommand::SetSpeed { speed, at } => Some(
+                serde_json::json!({"SetSpeed": {"speed": format!("{speed:?}"), "at": format!("{at:?}")}}),
+            ),
+            _ => None,
+        };
+        if let Some(details) = details {
+            self.trace("command", &details, out);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn native_seek(&self, command: &TrackCommand<S>) -> Option<(Position, TrackSnapshot)> {
+        match command {
+            TrackCommand::Seek { to }
+                if !matches!(
+                    self.inner.snapshot().status,
+                    kithara::play::TrackStatus::Playing { .. }
+                ) =>
+            {
+                Some((*to, self.inner.snapshot()))
+            }
+            _ => None,
+        }
+    }
+
     fn record(&self, settled: &Settled, origin: Option<LinkReceiptOrigin>) {
         if !matches!(settled, Settled::Pending) {
             let item = self.inner.snapshot().item;
@@ -173,10 +279,21 @@ where
 
     delegate::delegate! {
         to self.inner {
-            fn entry(&self, bound: Bound) -> Option<SessionFrame>;
-
             fn snapshot(&self) -> Self::Snapshot;
         }
+    }
+
+    fn entry(&self, bound: Bound) -> Option<SessionFrame> {
+        let result = self.inner.entry(bound);
+        let snapshot = self.inner.snapshot();
+        self.observation.lock().timeline.push(serde_json::json!({
+            "event": "entry",
+            "item": u64::from(snapshot.item),
+            "bound": format!("{bound:?}"),
+            "frame": result.map(i64::from),
+            "track": format!("{snapshot:?}"),
+        }));
+        result
     }
 
     fn tick(&mut self, now: SessionFrame, out: &mut Outbox<'_, S>) {
@@ -244,6 +361,61 @@ where
                 }
             }
         }
+        let native: Vec<_> = self
+            .observation
+            .lock()
+            .cue_curves
+            .iter()
+            .filter_map(|cue| {
+                (cue.item == item && cue.native.is_some()).then_some((cue.seq, cue.native))
+            })
+            .collect();
+        for (seq, origin) in native {
+            let ready = if origin == Some(LinkReceiptOrigin::Lane) {
+                self.inner.speed_applied(seq) == Some(true)
+            } else {
+                self.observation.lock().placement_receipts.iter().any(|(owner, origin, receipt)| *owner == item
+                    && *origin == LinkReceiptOrigin::Deck && matches!(receipt, Settled::Applied { seq: answered, .. } if *answered == seq))
+            };
+            if ready {
+                let mut observation = self.observation.lock();
+                if !observation.ready_cues.contains(&(item, seq)) {
+                    observation.ready_cues.push((item, seq));
+                }
+            }
+        }
+        let snapshot = self.inner.snapshot();
+        if let Some(mark) = snapshot.mark
+            && let Some(pass) = out.pass()
+            && let Some(slot) = snapshot
+                .slot
+                .and_then(|slot| pass.deck.slots.get(usize::from(slot.get())))
+            && slot.mark == Some(mark)
+            && slot.state == SlotState::Playing
+        {
+            let mut observation = self.observation.lock();
+            if !observation.cue_curves.iter().any(|cue| {
+                cue.item == item
+                    && cue
+                        .consumed
+                        .and_then(|slot| slot.mark)
+                        .is_some_and(|first| first.lane.segment == mark.lane.segment)
+            }) && let Some(index) = observation.cue_curves.iter().rposition(|cue| {
+                cue.item == item
+                    && cue.consumed.is_none()
+                    && observation.ready_cues.contains(&(item, cue.seq))
+                    && cue
+                        .before
+                        .mark
+                        .is_none_or(|before| before.lane.segment != mark.lane.segment)
+                    && cue
+                        .segment
+                        .is_none_or(|segment| segment == mark.lane.segment)
+                    && (cue.native != Some(LinkReceiptOrigin::Deck) || cue.segment.is_some())
+            }) {
+                observation.cue_curves[index].consumed = Some(*slot);
+            }
+        }
     }
 
     fn apply(
@@ -251,27 +423,9 @@ where
         command: Self::Command,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
-        let details = match &command {
-            TrackCommand::Play { at } => Some(serde_json::json!({"Play": format!("{at:?}")})),
-            TrackCommand::Pause { at } => Some(serde_json::json!({"Pause": format!("{at:?}")})),
-            TrackCommand::Seek { to } => {
-                Some(serde_json::json!({"Seek": to.as_nanos().to_string()}))
-            }
-            TrackCommand::Jump { to, at } => Some(
-                serde_json::json!({"Jump": {"to_ns": to.as_nanos().to_string(), "at": i64::from(*at)}}),
-            ),
-            TrackCommand::Align { to, speed, at } => Some(
-                serde_json::json!({"Align": {"to_ns": to.as_nanos().to_string(), "speed": format!("{speed:?}"), "at": i64::from(*at)}}),
-            ),
-            TrackCommand::SetSpeed { speed, at } => Some(
-                serde_json::json!({"SetSpeed": {"speed": format!("{speed:?}"), "at": format!("{at:?}")}}),
-            ),
-            _ => None,
-        };
-        if let Some(details) = details.as_ref() {
-            self.trace("command", details, out);
-        }
+        let traced = self.trace_command(&command, out);
         let loading = matches!(command, TrackCommand::Load { .. });
+        let native = self.native_seek(&command);
         let seek_origin = matches!(command, TrackCommand::Seek { .. }).then(|| {
             if self.inner.snapshot().attached {
                 LinkReceiptOrigin::Deck
@@ -280,6 +434,30 @@ where
             }
         });
         let aligned = matches!(command, TrackCommand::Align { .. });
+        let speed = match &command {
+            TrackCommand::SetSpeed { speed, at } => Some((speed.clone(), *at, None)),
+            TrackCommand::Align { to, speed, at } => Some((
+                speed.clone(),
+                When::At(*at - self.inner.snapshot().declick),
+                Some((*to, *at)),
+            )),
+            _ => None,
+        }
+        .map(|(curve, at, landing)| {
+            let before = self.inner.snapshot();
+            let pass = out.pass();
+            let consumed = pass.and_then(|pass| {
+                before
+                    .slot
+                    .and_then(|slot| pass.deck.slots.get(usize::from(slot.get())).copied())
+            });
+            let sample_rate = pass.and_then(|pass| NonZeroU32::new(pass.deck.sample_rate));
+            let planned = match (at, sample_rate) {
+                (When::At(frame), Some(rate)) => Some(self.inner.planned(frame, rate)),
+                _ => None,
+            };
+            (curve, at, landing, before, consumed, sample_rate, planned)
+        });
         let placement = out.pass().and_then(|pass| {
             let before = self.inner.snapshot();
             let consumed = before
@@ -302,10 +480,57 @@ where
             }
         });
         let result = self.inner.apply(command, out);
-        if details.is_some() {
+        if traced {
             self.trace("admission", &serde_json::json!(format!("{result:?}")), out);
         }
         let seq = result?;
+        if let Some(seq) = seq
+            && let Some((position, before)) = native
+            && let Some(curve) = self.inner.prepared_speed().cloned()
+        {
+            let mut observation = self.observation.lock();
+            let host_input = observation
+                .owner_inputs
+                .iter()
+                .rposition(|input| input.trajectory.is_some());
+            observation.cue_curves.push(LinkCue {
+                item: before.item,
+                seq,
+                position,
+                curve,
+                before,
+                consumed: None,
+                host_input,
+                native: seek_origin,
+                segment: None,
+            });
+        }
+        if let Some(seq) = seq
+            && let Some((curve, at, landing, before, consumed, sample_rate, planned)) = speed
+        {
+            let mut observation = self.observation.lock();
+            let input = observation
+                .owner_inputs
+                .iter()
+                .rposition(|input| input.item.is_none_or(|item| item == before.item));
+            let host_input = observation
+                .owner_inputs
+                .iter()
+                .rposition(|input| input.trajectory.is_some());
+            observation.speeds.push(LinkSpeed {
+                item: before.item,
+                seq,
+                curve,
+                at,
+                landing,
+                before,
+                consumed,
+                sample_rate,
+                input,
+                host_input,
+                planned,
+            });
+        }
         if let Some(seq) = seq
             && let Some(origin) = seek_origin
         {
@@ -318,6 +543,12 @@ where
             && let Some(((to, planned), at, now, delivery, before, consumed)) = placement
         {
             let item = before.item;
+            let input = self
+                .observation
+                .lock()
+                .owner_inputs
+                .iter()
+                .rposition(|input| input.item.is_none_or(|owner| owner == item));
             let placement = LinkPlacement {
                 item,
                 seq,
@@ -329,6 +560,7 @@ where
                 before,
                 consumed,
                 planned,
+                input,
             };
             self.observation.lock().placements.push(placement);
         }
@@ -342,6 +574,13 @@ where
     }
 
     fn settle(&mut self, receipt: TrackReceipt<'_, S>, out: &mut Outbox<'_, S>) -> Settled {
+        if let TrackReceipt::Loaded(receipt) = &receipt {
+            self.trace(
+                "load receipt",
+                &serde_json::json!({"seq": receipt.seq().get(), "outcome": format!("{:?}", receipt.outcome())}),
+                out,
+            );
+        }
         if let TrackReceipt::Loaded(receipt) = &receipt
             && let Outcome::Applied {
                 data: kithara_render::Dispatched::Loaded(loaded),
@@ -363,6 +602,20 @@ where
         } = &receipt
         {
             let snapshot = self.inner.snapshot();
+            let segment = batch.commands.iter().find_map(|part| match part {
+                DeckPart::Adopt { slot, segment } if Some(*slot) == snapshot.slot => Some(*segment),
+                _ => None,
+            });
+            if let Some(segment) = segment {
+                let mut observation = self.observation.lock();
+                if let Some(cue) = observation.cue_curves.iter_mut().find(|cue| {
+                    cue.item == snapshot.item
+                        && cue.seq == *seq
+                        && cue.native == Some(LinkReceiptOrigin::Deck)
+                }) {
+                    cue.segment = Some(segment);
+                }
+            }
             if batch.commands.iter().any(
                 |part| matches!(part, DeckPart::Start { slot, .. } if Some(*slot) == snapshot.slot),
             ) {
@@ -373,10 +626,45 @@ where
                 }
             }
         }
-        if let TrackReceipt::Deck { seq, outcome, .. } = &receipt {
+        if let TrackReceipt::Deck {
+            seq,
+            outcome,
+            batch,
+        } = &receipt
+        {
+            let parts = batch
+                .commands
+                .iter()
+                .filter_map(|part| match part {
+                    DeckPart::Attach {
+                        slot,
+                        item_id,
+                        segment,
+                        ..
+                    } => Some(
+                        serde_json::json!({"Attach": {"slot": slot.get(), "item": item_id.as_u64(), "segment": segment.get()}}),
+                    ),
+                    DeckPart::Replace {
+                        slot,
+                        item_id,
+                        segment,
+                        ..
+                    } => Some(
+                        serde_json::json!({"Replace": {"slot": slot.get(), "item": item_id.as_u64(), "segment": segment.get()}}),
+                    ),
+                    DeckPart::Start { slot, fade } => Some(
+                        serde_json::json!({"Start": {"slot": slot.get(), "fade": format!("{fade:?}")}}),
+                    ),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let applied_frame = match outcome {
+                Outcome::Applied { at, .. } => Some(i64::from(*at)),
+                Outcome::Rejected(_) => None,
+            };
             self.trace(
                 "deck receipt",
-                &serde_json::json!({"seq": seq.get(), "outcome": format!("{outcome:?}")}),
+                &serde_json::json!({"seq": seq.get(), "outcome": format!("{outcome:?}"), "applied_frame": applied_frame, "parts": parts}),
                 out,
             );
         }
@@ -406,7 +694,7 @@ where
         &self,
         at: SessionFrame,
         sample_rate: NonZeroU32,
-    ) -> Result<(Position, f32), PlayError> {
+    ) -> Result<(Position, f64), PlayError> {
         let result = self.inner.planned(at, sample_rate);
         self.observation.lock().timeline.push(serde_json::json!({
             "event": "planned",
@@ -425,6 +713,8 @@ where
         speed: kithara::warp::SpeedCurve,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
+        let before = self.inner.snapshot();
+        let curve = speed.clone();
         self.trace(
             "cue",
             &serde_json::json!({"position_ns": position.as_nanos().to_string(), "speed": format!("{speed:?}")}),
@@ -435,6 +725,21 @@ where
             let item = self.inner.snapshot().item;
             let mut observation = self.observation.lock();
             observation.cues.push((item, seq));
+            let host_input = observation
+                .owner_inputs
+                .iter()
+                .rposition(|input| input.trajectory.is_some());
+            observation.cue_curves.push(LinkCue {
+                item,
+                seq,
+                position,
+                curve,
+                before,
+                consumed: None,
+                host_input,
+                native: None,
+                segment: None,
+            });
         }
         Ok(seq)
     }
@@ -685,16 +990,54 @@ where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
     fn sync(&mut self, on: bool, out: &mut Outbox<'_, S>) -> Result<Option<Seq>, PlayError> {
+        let (input, start) = {
+            let mut observation = self.observation.lock();
+            let input = observation.owner_inputs.len();
+            let start = observation.placements.len();
+            observation.owner_inputs.push(LinkOwnerInput {
+                item: None,
+                at: out.pass().map(|pass| pass.now),
+                trajectory: None,
+                kind: LinkOwnerInputKind::Sync { on },
+            });
+            drop(observation);
+            (input, start)
+        };
         let seq = LinkedPlayer::sync(&mut self.inner, on, out)?;
-        self.observation.lock().sync_requests.push((on, seq));
+        let tracks = self.inner.tracks_active().map(Player::snapshot).collect();
+        {
+            let mut observation = self.observation.lock();
+            let end = observation.placements.len();
+            observation.sync_requests.push(LinkSyncRequest {
+                on,
+                seq,
+                input,
+                tracks,
+                placements: start..end,
+            });
+        }
         self.publish();
         Ok(seq)
     }
     fn retime(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_, S>) {
+        self.observation.lock().owner_inputs.push(LinkOwnerInput {
+            item: None,
+            at: Some(at),
+            trajectory: Some(trajectory.clone()),
+            kind: LinkOwnerInputKind::Retime,
+        });
         LinkedPlayer::retime(&mut self.inner, trajectory, at, out);
         self.publish();
     }
     fn grid(&mut self, answer: GridAnswer, out: &mut Outbox<'_, S>) {
+        self.observation.lock().owner_inputs.push(LinkOwnerInput {
+            item: Some(answer.item),
+            at: None,
+            trajectory: None,
+            kind: LinkOwnerInputKind::Grid {
+                answer: answer.clone(),
+            },
+        });
         LinkedPlayer::grid(&mut self.inner, answer, out);
         self.publish();
     }
@@ -714,6 +1057,12 @@ where
         LinkedPlayer::retime_applied(&mut self.inner, at)
     }
     fn realign(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_, S>) {
+        self.observation.lock().owner_inputs.push(LinkOwnerInput {
+            item: None,
+            at: Some(at),
+            trajectory: Some(trajectory.clone()),
+            kind: LinkOwnerInputKind::Realign,
+        });
         LinkedPlayer::realign(&mut self.inner, trajectory, at, out);
         self.publish();
     }

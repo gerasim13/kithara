@@ -1,29 +1,26 @@
 use kithara_beat::BeatGridModel;
 use kithara_platform::time::Duration;
-use kithara_signal::{ExponentialApproach, SessionFrame};
+use kithara_signal::SessionFrame;
 use kithara_warp::{MIN_SPEED, SessionBeat, SpeedCurve};
 use num_traits::ToPrimitive;
 
-use super::plan::{CorrectionPlan, CorrectionStep};
+use super::{
+    plan::{CorrectionPlan, CorrectionStep},
+    source::{self, Correction, SourceGrid},
+};
 use crate::{Bound, TempoTrajectory};
 
-/// Track-media seconds ahead of the Host phase, modulo `period` media seconds.
+/// Source beats ahead of the Host phase, modulo the stated beat period.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PhaseError {
-    pub seconds: f64,
+    pub beats: f64,
     pub period: f64,
-    /// One track beat in media seconds; correction ignores whole-beat offsets.
-    pub beat_seconds: f64,
 }
 
 impl PhaseError {
     pub(super) fn shortest(self) -> f64 {
-        let phase = self.seconds.rem_euclid(self.beat_seconds);
-        if phase > self.beat_seconds / 2.0 {
-            phase - self.beat_seconds
-        } else {
-            phase
-        }
+        let phase = self.beats.rem_euclid(1.0);
+        if phase > 0.5 { phase - 1.0 } else { phase }
     }
 }
 
@@ -45,81 +42,63 @@ pub fn covers(grid: &BeatGridModel, position: Duration) -> bool {
     }
 }
 
-/// The cue's beat phase, interpolated between observed beat ordinals.
-fn phase_at(grid: &BeatGridModel, position: Duration) -> Option<f64> {
-    if !covers(grid, position) {
+/// The cue's phase on the source grid, relative to its declared meter.
+fn phase_at(grid: &SourceGrid, position: Duration) -> Option<f64> {
+    if !grid.covers(position) {
         return None;
     }
-    let raw = grid.as_raw();
-    let index = raw.beats.partition_point(|beat| {
-        Duration::try_from_secs_f64(beat.at).is_ok_and(|at| at <= position)
-    });
-    let before = raw.beats.get(index.checked_sub(1)?)?;
-    let fraction = match raw.beats.get(index) {
-        Some(after) => {
-            let before_at = Duration::try_from_secs_f64(before.at).ok()?;
-            let after_at = Duration::try_from_secs_f64(after.at).ok()?;
-            let ordinals = (i128::from(after.ordinal) - i128::from(before.ordinal)).to_f64()?;
-            (position - before_at).as_secs_f64() / (after_at - before_at).as_secs_f64() * ordinals
-        }
-        None => 0.0,
-    };
-    let (origin, stride) = raw.meter.map_or((0, 1), |meter| {
-        (meter.origin_beat_ordinal, meter.beats_per_bar.get())
-    });
-    let whole = (i128::from(before.ordinal) - i128::from(origin))
-        .rem_euclid(i128::from(stride))
-        .to_f64()?;
-    Some((whole + fraction).rem_euclid(f64::from(stride)))
+    let beat = grid.beat_at(position.as_secs_f64())?;
+    let (origin, stride, _) = grid.phase_axes(position.as_secs_f64())?;
+    Some((beat - origin).rem_euclid(stride))
 }
 
-/// Track speed at a frame, as Host BPM divided by analyzed track BPM.
-///
-/// # Panics
-/// Panics if the numeric conversion cannot produce an output speed.
+/// Track speed from the reached Host tempo and the source's local beat interval.
 #[must_use]
-pub fn speed(host: &TempoTrajectory, grid: &BeatGridModel, at: SessionFrame) -> f32 {
-    (host.tempo_at(at).beats_per_minute() / grid.as_raw().bpm)
-        .to_f32()
-        .unwrap_or_else(|| unreachable!("f64 values can be converted to f32"))
+pub fn speed(
+    host: &TempoTrajectory,
+    grid: &SourceGrid,
+    position: Duration,
+    at: SessionFrame,
+) -> Option<f32> {
+    (host.anchor_at(at).tempo_at(at) * grid.slope_at(position.as_secs_f64())?).to_f32()
 }
 
-/// The Host's reached and target rates on the track's physical output axis.
+/// The Host law composed with the actual source anchor and an optional jump landing.
 #[must_use]
 pub fn speed_curve(
     host: &TempoTrajectory,
-    grid: &BeatGridModel,
+    grid: &SourceGrid,
+    position: Duration,
     at: SessionFrame,
+    landing: Option<(Duration, SessionFrame)>,
 ) -> Option<SpeedCurve> {
-    let scale = 60.0 / grid.as_raw().bpm;
-    let law_at = |frame| {
-        let anchor = host.anchor_at(frame);
-        let initial = anchor.tempo_at(frame) * scale;
-        let target = anchor.target_beats_per_second() * scale;
-        ExponentialApproach::new(
-            initial,
-            target,
-            if initial == target || anchor.approach().time_constant() == 0.0 {
-                0.0
-            } else {
-                anchor.approach().time_constant() * f64::from(host.sample_rate().get())
-            },
-        )
+    source::curve(host, grid, position, at, landing, &[(0, 0.0)], None).map(|(curve, _)| curve)
+}
+
+/// Replaces the remaining correction and closes source beat phase without a jump.
+#[must_use]
+pub fn corrected_speed_curve(
+    host: &TempoTrajectory,
+    grid: &SourceGrid,
+    position: Duration,
+    at: SessionFrame,
+    from: f64,
+    epsilon: f32,
+    commanded: bool,
+) -> Option<(SpeedCurve, u64)> {
+    let local = grid.slope_at(position.as_secs_f64())?;
+    let reference = host.anchor_at(at).tempo_at(at) * local;
+    let plan = checked_correction(if commanded { reference } else { from }, reference, epsilon)?;
+    let offsets = plan.media_offsets(host.sample_rate(), reference)?;
+    let starts = offsets.last()?.0;
+    let error = phase_error(host, grid, position, at)?;
+    let correction = Correction {
+        phase: error.shortest(),
+        starts: if commanded { starts.max(1) } else { starts },
+        scale: grid.maximum_slope()?,
+        epsilon,
     };
-    let first = law_at(at)?;
-    let mut steps = vec![(0, first)];
-    for frame in host.changes_after(at) {
-        steps.push((frame.frames_since(at)?, law_at(frame)?));
-    }
-    if steps.len() > 1 {
-        return Some(SpeedCurve::ApproachSteps(steps.into()));
-    }
-    let rounded = first.target().to_f32()?;
-    if first.time_constant() == 0.0 && f64::from(rounded) == first.target() {
-        Some(SpeedCurve::Constant(rounded))
-    } else {
-        Some(SpeedCurve::Approach(first))
-    }
+    source::curve(host, grid, position, at, None, &offsets, Some(&correction))
 }
 
 /// The nearest in-phase entry on the requested side of a frame.
@@ -130,12 +109,12 @@ pub fn speed_curve(
 #[must_use]
 pub fn entry(
     host: &TempoTrajectory,
-    grid: &BeatGridModel,
+    grid: &SourceGrid,
     position: Duration,
     bound: Bound,
 ) -> Option<SessionFrame> {
     let offset = phase_at(grid, position)?;
-    let stride = if grid.as_raw().meter.is_some() {
+    let stride = if grid.phase_axes(position.as_secs_f64())?.2 {
         host.beats_per_bar()
     } else {
         1.0
@@ -183,115 +162,66 @@ pub fn entry(
     Some(candidate)
 }
 
-/// Phase ahead of the Host, modulo a Host bar or one beat without track meter.
-///
-/// # Panics
-/// Panics unless the track grid covers the position; callers wait for analysis first.
+/// Source beat phase ahead of the Host, modulo a bar or one beat without meter.
 #[must_use]
 pub fn phase_error(
     host: &TempoTrajectory,
-    grid: &BeatGridModel,
+    grid: &SourceGrid,
     position: Duration,
     at: SessionFrame,
-) -> PhaseError {
-    let phase = phase_at(grid, position).expect("phase requires a covering track grid");
-    let stride = if grid.as_raw().meter.is_some() {
+) -> Option<PhaseError> {
+    let phase = phase_at(grid, position)?;
+    let stride = if grid.phase_axes(position.as_secs_f64())?.2 {
         host.beats_per_bar()
     } else {
         1.0
     };
-    let seconds_per_beat = 60.0 / grid.as_raw().bpm;
-    let period = stride * seconds_per_beat;
     let host_phase = f64::from(host.beat_at(at)).rem_euclid(stride);
-    PhaseError {
-        seconds: (phase - host_phase).rem_euclid(stride) * seconds_per_beat,
-        period,
-        beat_seconds: seconds_per_beat,
-    }
-}
-
-/// The nearer valid media position among the preceding and following phase matches.
-///
-/// # Panics
-/// Panics if the phase period is not finite and positive, or the target is unrepresentable.
-#[must_use]
-pub fn jump_target(position: Duration, error: PhaseError) -> Duration {
-    assert!(error.seconds.is_finite() && error.period.is_finite() && error.period > 0.0);
-    let phase = error.seconds.rem_euclid(error.period);
-    let backwards = Duration::from_secs_f64(phase);
-    if phase <= error.period / 2.0
-        && let Some(target) = position.checked_sub(backwards)
-    {
-        target
-    } else {
-        position + Duration::from_secs_f64(error.period - phase)
-    }
-}
-
-/// Bounded speed steps, ending at `to` with zero integrated phase error.
-///
-/// Slew steps reside for one output second each. A final bounded excursion
-/// cancels their integral and the shortest phase error before restoring `to`.
-///
-/// # Panics
-/// Panics for invalid speeds, phase or epsilon, or when no representable
-/// correcting speed exists within epsilon and the renderer's speed range.
-#[must_use]
-pub fn correction(from: f32, to: f32, error: PhaseError, epsilon: f32) -> CorrectionPlan {
-    checked_correction(from, to, error, epsilon).unwrap_or_else(|| {
-        panic!("correction requires finite inputs and representable bounded speed steps")
+    Some(PhaseError {
+        beats: (phase - host_phase).rem_euclid(stride),
+        period: stride,
     })
+}
+
+/// The nearer mapped source position with the requested future Host phase.
+#[must_use]
+pub fn jump_target(
+    host: &TempoTrajectory,
+    grid: &SourceGrid,
+    position: Duration,
+    at: SessionFrame,
+) -> Option<Duration> {
+    let beat = grid.beat_at(position.as_secs_f64())?;
+    let (origin, stride, metered) = grid.phase_axes(position.as_secs_f64())?;
+    let host_stride = if metered { host.beats_per_bar() } else { 1.0 };
+    let phase = f64::from(host.beat_at(at)).rem_euclid(host_stride);
+    if phase >= stride {
+        return None;
+    }
+    let phase = phase + origin;
+    let earlier = phase + ((beat - phase) / stride).floor() * stride;
+    grid.nearest_media([earlier, earlier + stride], position)
 }
 
 /// Returns bounded correction steps, or `None` for invalid or unrepresentable inputs.
 #[must_use]
-pub fn checked_correction(
-    from: f32,
-    to: f32,
-    error: PhaseError,
-    epsilon: f32,
-) -> Option<CorrectionPlan> {
+pub fn checked_correction(from: f64, to: f64, epsilon: f32) -> Option<CorrectionPlan> {
     if !from.is_finite()
-        || from < MIN_SPEED
+        || from < f64::from(MIN_SPEED)
         || !to.is_finite()
-        || to < MIN_SPEED
+        || to < f64::from(MIN_SPEED)
         || !epsilon.is_finite()
         || epsilon <= 0.0
-        || !error.seconds.is_finite()
-        || !error.period.is_finite()
-        || error.period <= 0.0
-        || !error.beat_seconds.is_finite()
-        || error.beat_seconds <= 0.0
     {
         return None;
     }
     let mut steps: Vec<CorrectionStep> = Vec::new();
     let mut current = from;
-    let mut remaining = error.shortest();
     while current != to {
         current = step_towards(current, to, epsilon)?;
         let seconds = if current == to { 0.0 } else { 1.0 };
-        remaining += (f64::from(current) - f64::from(to)) * seconds;
-        if !remaining.is_finite() {
-            return None;
-        }
         steps.push(CorrectionStep {
             speed: current,
-            seconds,
-        });
-    }
-    if remaining != 0.0 {
-        let target = to - remaining.signum().to_f32()? * epsilon;
-        if !target.is_finite() || target < MIN_SPEED {
-            return None;
-        }
-        let adjusted = step_towards(to, target, epsilon)?;
-        let seconds = -remaining / (f64::from(adjusted) - f64::from(to));
-        if !seconds.is_finite() || seconds < 0.0 {
-            return None;
-        }
-        steps.push(CorrectionStep {
-            speed: adjusted,
             seconds,
         });
     }
@@ -302,7 +232,8 @@ pub fn checked_correction(
     Some(CorrectionPlan { steps })
 }
 
-fn step_towards(from: f32, to: f32, epsilon: f32) -> Option<f32> {
+fn step_towards(from: f64, to: f64, epsilon: f32) -> Option<f64> {
+    let epsilon = f64::from(epsilon);
     let shift = (to - from).clamp(-epsilon, epsilon);
     let mut next = from + shift;
     if (next - from).abs() > epsilon {
@@ -312,6 +243,9 @@ fn step_towards(from: f32, to: f32, epsilon: f32) -> Option<f32> {
             next.next_up()
         };
     }
-    (next.is_finite() && next >= MIN_SPEED && next != from && (next - from).abs() <= epsilon)
+    (next.is_finite()
+        && next >= f64::from(MIN_SPEED)
+        && next != from
+        && (next - from).abs() <= epsilon)
         .then_some(next)
 }

@@ -21,9 +21,12 @@ trajectories. It owns no player, renderer, group topology, or receipt custody.
 ## Usage
 
 Construct a `TempoTrajectory` from a `TempoStep`, meter, and output sample rate.
+Materialize a `SourceGrid` from the served `BeatGridModel` and its media
+`AssetAxis`; a known media endpoint bounds the map.
 Use `entry(&trajectory, &grid, position, Bound::AtOrAfter(frame))` or
 `Bound::AtOrBefore(frame)` to find the nearest in-phase entry while preserving
-the media position, expressed as `kithara_platform::time::Duration`. Use `covers` before
-`phase_error`, and `speed` for the host-to-track tempo ratio.
+the media position, expressed as `kithara_platform::time::Duration`.
+`phase_error` reports beat phase, and `speed` uses the source's local beat
+interval at the requested media position and Host frame.
 
 See the [Sync contract](https://github.com/zvuk/kithara/wiki/kithara-sync).

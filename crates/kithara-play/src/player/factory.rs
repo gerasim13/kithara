@@ -50,7 +50,7 @@ pub trait Track<S>: Player<S, Command = TrackCommand<S>, Snapshot: AsRef<TrackSn
         &self,
         at: SessionFrame,
         sample_rate: NonZeroU32,
-    ) -> Result<(Position, f32), PlayError>;
+    ) -> Result<(Position, f64), PlayError>;
 
     /// Projects the first media end through accepted speed and jump history.
     ///

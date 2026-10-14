@@ -3,7 +3,7 @@ use kithara_signal::SessionFrame;
 use kithara_test_utils::kithara;
 use kithara_warp::SessionBeat;
 
-use super::fixtures::{boundary_at_or_before, grid, host, position};
+use super::fixtures::{boundary_at_or_before, grid, host, position, source_grid};
 use crate::{Bound, covers, entry, phase_error, speed};
 
 #[kithara::test]
@@ -13,7 +13,7 @@ fn entry_preserves_the_media_offset_between_source_and_host_beats() {
     let cue = position(10_000);
     let at = entry(
         &host,
-        &grid,
+        &source_grid(&grid),
         cue,
         Bound::AtOrAfter(SessionFrame::new(5_000)),
     )
@@ -28,8 +28,17 @@ fn entry_preserves_the_media_offset_between_source_and_host_beats() {
         host.frame_at(SessionBeat::new(1.0).expect("beat")),
         SessionFrame::new(24_000)
     );
-    assert_eq!(speed(&host, &grid, at), 1.0);
-    assert!(phase_error(&host, &grid, cue, at).shortest().abs() < 1e-9);
+    assert_eq!(
+        speed(&host, &source_grid(&grid), cue, at).expect("mapped source speed"),
+        1.0
+    );
+    assert!(
+        phase_error(&host, &source_grid(&grid), cue, at)
+            .expect("mapped source phase")
+            .shortest()
+            .abs()
+            < 1e-9
+    );
 }
 
 #[kithara::test]
@@ -43,7 +52,7 @@ fn entry_before_the_first_observed_beat_has_no_coverage() {
     assert_eq!(
         entry(
             &host,
-            &grid,
+            &source_grid(&grid),
             cue,
             Bound::AtOrAfter(SessionFrame::new(6_000))
         ),
@@ -53,7 +62,14 @@ fn entry_before_the_first_observed_beat_has_no_coverage() {
         boundary_at_or_before(&grid, position(30_000)),
         Some(position(30_000))
     );
-    assert!((f64::from(speed(&host, &grid, SessionFrame::new(6_000))) - 1.25).abs() < 1e-9);
+    assert!(
+        (f64::from(
+            speed(&host, &source_grid(&grid), cue, SessionFrame::new(6_000))
+                .expect("mapped source speed")
+        ) - 1.25)
+            .abs()
+            < 1e-9
+    );
 }
 
 #[kithara::test]
@@ -70,7 +86,7 @@ fn phase_error_keeps_both_half_beat_directions_and_entry_preserves_the_cue(
     let grid = grid(480_000, 480_000, 24_000, 0, None, BeatGridState::Final);
     let cue = position(source_frontier);
     let at = SessionFrame::new(output_frontier);
-    let error = phase_error(&host, &grid, cue, at);
+    let error = phase_error(&host, &source_grid(&grid), cue, at).expect("mapped source phase");
 
     assert_eq!(
         grid.as_raw().beats[1].at,
@@ -80,17 +96,22 @@ fn phase_error_keeps_both_half_beat_directions_and_entry_preserves_the_cue(
         i64::from(host.frame_at(SessionBeat::new(1.0).expect("beat"))) - output_frontier,
         expected_output_distance
     );
-    assert_eq!(error.seconds, 0.25);
-    assert_eq!(error.period, 0.5);
-    assert_eq!(error.beat_seconds, 0.5);
+    assert_eq!(error.beats, 0.5);
+    assert_eq!(error.period, 1.0);
     assert_eq!(
-        entry(&host, &grid, cue, Bound::AtOrAfter(at)),
+        entry(&host, &source_grid(&grid), cue, Bound::AtOrAfter(at)),
         Some(SessionFrame::new(expected_entry))
     );
     assert!(
-        phase_error(&host, &grid, cue, SessionFrame::new(expected_entry))
-            .shortest()
-            .abs()
+        phase_error(
+            &host,
+            &source_grid(&grid),
+            cue,
+            SessionFrame::new(expected_entry)
+        )
+        .expect("mapped source phase")
+        .shortest()
+        .abs()
             < 1e-9
     );
 }
@@ -102,12 +123,29 @@ fn different_bpms_share_one_phase_preserving_entry_and_speed() {
     let cue = position(6_000);
     let at = SessionFrame::new(6_000);
 
-    assert!((f64::from(speed(&host, &grid, at)) - 1.25).abs() < 1e-9);
-    assert_eq!(phase_error(&host, &grid, cue, at).seconds, 0.59375);
-    let activation = entry(&host, &grid, cue, Bound::AtOrAfter(at)).expect("covered cue");
+    assert!(
+        (f64::from(speed(&host, &source_grid(&grid), cue, at).expect("mapped source speed"))
+            - 1.25)
+            .abs()
+            < 1e-9
+    );
+    assert_eq!(
+        phase_error(&host, &source_grid(&grid), cue, at)
+            .expect("mapped source phase")
+            .beats,
+        0.95
+    );
+    let activation =
+        entry(&host, &source_grid(&grid), cue, Bound::AtOrAfter(at)).expect("covered cue");
     assert_eq!(activation, SessionFrame::new(28_800));
     assert_eq!(f64::from(host.beat_at(activation)), 1.2);
-    assert!(phase_error(&host, &grid, cue, activation).shortest().abs() < 1e-9);
+    assert!(
+        phase_error(&host, &source_grid(&grid), cue, activation)
+            .expect("mapped source phase")
+            .shortest()
+            .abs()
+            < 1e-9
+    );
     assert_eq!(
         boundary_at_or_before(&grid, position(30_000)),
         Some(position(30_000))
@@ -141,9 +179,21 @@ fn an_in_phase_metered_cue_is_an_inclusive_entry_on_both_sides() {
         host.frame_at(SessionBeat::new(8.0).expect("beat")),
         SessionFrame::new(192_000)
     );
-    assert!(phase_error(&host, &grid, cue, at).shortest().abs() < 1e-9);
-    assert_eq!(entry(&host, &grid, cue, Bound::AtOrBefore(at)), Some(at));
-    assert_eq!(entry(&host, &grid, cue, Bound::AtOrAfter(at)), Some(at));
+    assert!(
+        phase_error(&host, &source_grid(&grid), cue, at)
+            .expect("mapped source phase")
+            .shortest()
+            .abs()
+            < 1e-9
+    );
+    assert_eq!(
+        entry(&host, &source_grid(&grid), cue, Bound::AtOrBefore(at)),
+        Some(at)
+    );
+    assert_eq!(
+        entry(&host, &source_grid(&grid), cue, Bound::AtOrAfter(at)),
+        Some(at)
+    );
 }
 
 #[kithara::test]
@@ -170,13 +220,30 @@ fn three_four_entries_keep_the_offset_from_the_observed_downbeat() {
         SessionFrame::new(72_000)
     );
     assert_eq!(
-        entry(&host, &grid, position(96_000), Bound::AtOrAfter(at)),
+        entry(
+            &host,
+            &source_grid(&grid),
+            position(96_000),
+            Bound::AtOrAfter(at)
+        ),
         Some(SessionFrame::new(72_000))
     );
-    let activation = entry(&host, &grid, cue, Bound::AtOrAfter(at)).expect("covered cue");
+    let activation =
+        entry(&host, &source_grid(&grid), cue, Bound::AtOrAfter(at)).expect("covered cue");
     assert_eq!(activation, SessionFrame::new(98_000));
-    assert_eq!(phase_error(&host, &grid, cue, activation).period, 1.5);
-    assert!(phase_error(&host, &grid, cue, activation).shortest().abs() < 1e-9);
+    assert_eq!(
+        phase_error(&host, &source_grid(&grid), cue, activation)
+            .expect("mapped source phase")
+            .period,
+        3.0
+    );
+    assert!(
+        phase_error(&host, &source_grid(&grid), cue, activation)
+            .expect("mapped source phase")
+            .shortest()
+            .abs()
+            < 1e-9
+    );
 }
 
 #[kithara::test]
@@ -199,12 +266,23 @@ fn a_large_source_offset_selects_the_nearest_entry_without_moving_the_cue() {
         Some(position(288_000))
     );
     assert_eq!(
-        entry(&host, &grid, position(288_000), Bound::AtOrAfter(at)),
+        entry(
+            &host,
+            &source_grid(&grid),
+            position(288_000),
+            Bound::AtOrAfter(at)
+        ),
         Some(SessionFrame::new(192_000))
     );
-    let activation = entry(&host, &grid, cue, Bound::AtOrAfter(at)).expect("covered cue");
+    let activation =
+        entry(&host, &source_grid(&grid), cue, Bound::AtOrAfter(at)).expect("covered cue");
     assert_eq!(activation, SessionFrame::new(252_000));
-    assert_eq!(phase_error(&host, &grid, cue, activation).seconds, 0.0);
+    assert_eq!(
+        phase_error(&host, &source_grid(&grid), cue, activation)
+            .expect("mapped source phase")
+            .beats,
+        0.0
+    );
 }
 
 #[kithara::test]
@@ -214,11 +292,11 @@ fn entries_preserve_between_beat_cues_and_exact_beats() {
     let bound = Bound::AtOrAfter(SessionFrame::new(10_000));
 
     assert_eq!(
-        entry(&host, &grid, position(10_000), bound),
+        entry(&host, &source_grid(&grid), position(10_000), bound),
         Some(SessionFrame::new(10_000))
     );
     assert_eq!(
-        entry(&host, &grid, position(24_000), bound),
+        entry(&host, &source_grid(&grid), position(24_000), bound),
         Some(SessionFrame::new(24_000))
     );
     assert_eq!(
@@ -239,11 +317,21 @@ fn a_boundary_rounded_onto_the_requested_frame_is_an_inclusive_entry() {
 
     assert_eq!(host.frame_at(SessionBeat::new(1.0).expect("beat")), at);
     assert_eq!(
-        entry(&host, &grid, position(0), Bound::AtOrBefore(at)),
+        entry(
+            &host,
+            &source_grid(&grid),
+            position(0),
+            Bound::AtOrBefore(at)
+        ),
         Some(at)
     );
     assert_eq!(
-        entry(&host, &grid, position(0), Bound::AtOrAfter(at)),
+        entry(
+            &host,
+            &source_grid(&grid),
+            position(0),
+            Bound::AtOrAfter(at)
+        ),
         Some(at)
     );
 }
@@ -261,7 +349,7 @@ fn pickup_entries_keep_the_weak_beat_phase() {
     );
     let activation = entry(
         &host,
-        &grid,
+        &source_grid(&grid),
         position(0),
         Bound::AtOrAfter(SessionFrame::new(24_000)),
     )
@@ -284,7 +372,7 @@ fn pickup_entries_preserve_fractional_beat_phase() {
     );
     let activation = entry(
         &host,
-        &grid,
+        &source_grid(&grid),
         position(12_000),
         Bound::AtOrAfter(SessionFrame::new(24_000)),
     )
@@ -311,7 +399,7 @@ fn a_provisional_grid_with_a_proven_bar_covers_its_entry() {
     assert_eq!(
         entry(
             &host,
-            &grid,
+            &source_grid(&grid),
             position(0),
             Bound::AtOrAfter(SessionFrame::new(0))
         ),
@@ -336,15 +424,22 @@ fn a_provisional_grid_without_meter_uses_beat_phase() {
     assert_eq!(
         entry(
             &host,
-            &grid,
+            &source_grid(&grid),
             position(0),
             Bound::AtOrAfter(SessionFrame::new(0))
         ),
         Some(SessionFrame::new(0))
     );
     assert_eq!(
-        phase_error(&host, &grid, position(0), SessionFrame::new(0)).period,
-        0.5
+        phase_error(
+            &host,
+            &source_grid(&grid),
+            position(0),
+            SessionFrame::new(0)
+        )
+        .expect("mapped source phase")
+        .period,
+        1.0
     );
 }
 
@@ -364,15 +459,18 @@ fn provisional_coverage_stops_at_the_last_observed_frame() {
     assert!(covers(&provisional, position(48_000)));
     assert!(covers(&provisional, position(192_000)));
     assert_eq!(
-        entry(&host, &provisional, position(48_000), bound),
+        entry(&host, &source_grid(&provisional), position(48_000), bound),
         Some(SessionFrame::new(48_000))
     );
     assert_eq!(
-        entry(&host, &provisional, position(96_000), bound),
+        entry(&host, &source_grid(&provisional), position(96_000), bound),
         Some(SessionFrame::new(0))
     );
     assert!(!covers(&provisional, position(200_000)));
-    assert_eq!(entry(&host, &provisional, position(200_000), bound), None);
+    assert_eq!(
+        entry(&host, &source_grid(&provisional), position(200_000), bound),
+        None
+    );
     let complete = grid(
         480_000,
         480_000,
@@ -383,11 +481,11 @@ fn provisional_coverage_stops_at_the_last_observed_frame() {
     );
     assert!(covers(&complete, position(200_000)));
     assert_eq!(
-        entry(&host, &complete, position(200_000), bound),
+        entry(&host, &source_grid(&complete), position(200_000), bound),
         Some(SessionFrame::new(8_000))
     );
     assert_eq!(
-        entry(&host, &complete, position(288_000), bound),
+        entry(&host, &source_grid(&complete), position(288_000), bound),
         Some(SessionFrame::new(0))
     );
 }
@@ -413,7 +511,7 @@ fn a_grid_without_observed_geometry_has_no_entry() {
     assert_eq!(
         entry(
             &host,
-            &grid,
+            &source_grid(&grid),
             position(0),
             Bound::AtOrAfter(SessionFrame::new(0))
         ),

@@ -20,7 +20,7 @@ pub use factory::LinkedFactory;
 pub use grid::{GridAnswer, GridRefusal};
 pub use host::{LinkedHost, LinkedHostCommand, PendingTempo};
 pub use kithara_sync::{
-    CorrectionPlan, CorrectionStep, PhaseError, TempoStep, TempoTrajectory, correction, covers,
+    CorrectionPlan, CorrectionStep, PhaseError, SourceGrid, TempoStep, TempoTrajectory, covers,
     entry, jump_target, phase_error, speed,
 };
 pub use linked::{LinkConfig, Linked, LinkedPlayer, LinkedSnapshot, SyncMode, SyncStatus, Waiting};

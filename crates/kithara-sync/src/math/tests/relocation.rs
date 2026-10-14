@@ -2,7 +2,7 @@ use kithara_beat::BeatGridState;
 use kithara_signal::SessionFrame;
 use kithara_test_utils::kithara;
 
-use super::fixtures::{grid, host, position};
+use super::fixtures::{grid, host, position, source_grid};
 use crate::{Bound, covers, entry, phase_error};
 
 #[kithara::test]
@@ -11,11 +11,17 @@ fn relocation_entry_keeps_the_exact_cue_and_the_requested_lower_bound() {
     let grid = grid(960_000, 960_000, 24_000, 0, None, BeatGridState::Final);
     let cue = position(36_000);
     let lower = SessionFrame::new(96_000);
-    let activation = entry(&host, &grid, cue, Bound::AtOrAfter(lower)).expect("covered cue");
+    let activation =
+        entry(&host, &source_grid(&grid), cue, Bound::AtOrAfter(lower)).expect("covered cue");
 
     assert_eq!(activation, SessionFrame::new(108_000));
     assert!(activation >= lower);
-    assert_eq!(phase_error(&host, &grid, cue, activation).seconds, 0.0);
+    assert_eq!(
+        phase_error(&host, &source_grid(&grid), cue, activation)
+            .expect("mapped source phase")
+            .beats,
+        0.0
+    );
 }
 
 #[kithara::test]
@@ -24,8 +30,13 @@ fn relocation_entry_respects_the_frame_after_the_audible_frontier() {
     let grid = grid(960_000, 960_000, 24_000, 0, None, BeatGridState::Final);
     let frontier = SessionFrame::new(96_000);
     let lower = SessionFrame::new(96_001);
-    let activation = entry(&host, &grid, position(0), Bound::AtOrAfter(lower))
-        .expect("covered cue has a later phase match");
+    let activation = entry(
+        &host,
+        &source_grid(&grid),
+        position(0),
+        Bound::AtOrAfter(lower),
+    )
+    .expect("covered cue has a later phase match");
 
     assert!(activation > frontier);
     assert!(activation >= lower);
@@ -49,7 +60,7 @@ fn an_uncovered_relocation_cue_has_no_entry() {
     assert_eq!(
         entry(
             &host,
-            &grid,
+            &source_grid(&grid),
             cue,
             Bound::AtOrAfter(SessionFrame::new(96_000))
         ),

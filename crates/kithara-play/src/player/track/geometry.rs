@@ -71,23 +71,25 @@ pub(super) fn session_at(mark: SlotMark, lane: LaneFrame) -> Option<SessionFrame
     Some(SessionFrame::new(frame))
 }
 
-pub(super) fn curve_speed(curve: &SpeedCurve, origin: f32, frame: u64) -> Result<f32, PlayError> {
+pub(super) fn curve_speed(curve: &SpeedCurve, origin: f64, frame: u64) -> Result<f64, PlayError> {
     match curve {
-        SpeedCurve::Constant(speed) => Ok(*speed),
-        SpeedCurve::Ramp { to, frames } => (f64::from(origin)
-            + (f64::from(*to) - f64::from(origin))
+        SpeedCurve::Constant(speed) => Ok(f64::from(*speed)),
+        SpeedCurve::Ramp { to, frames } => (origin
+            + (f64::from(*to) - origin)
                 * (frame.min(frames.get()).to_f64().ok_or(PlayError::Untimed)?
                     / frames.get().to_f64().ok_or(PlayError::Untimed)?))
         .to_f32()
+        .map(f64::from)
         .ok_or(PlayError::Untimed),
-        SpeedCurve::Steps(steps) => Ok(steps
+        SpeedCurve::Steps(steps) => steps
             .iter()
             .rev()
             .find(|(at, _)| *at <= frame)
-            .map_or(origin, |(_, speed)| *speed)),
+            .map(|(_, speed)| f64::from(*speed))
+            .or_else(|| origin.to_f32().map(f64::from))
+            .ok_or(PlayError::Untimed),
         SpeedCurve::Approach(approach) => approach
             .rate_at(frame.to_f64().ok_or(PlayError::Untimed)?)
-            .and_then(|speed| speed.to_f32())
             .ok_or(PlayError::Untimed),
         SpeedCurve::ApproachSteps(steps) => {
             let &(start, approach) = steps
@@ -97,7 +99,6 @@ pub(super) fn curve_speed(curve: &SpeedCurve, origin: f32, frame: u64) -> Result
                 .ok_or(PlayError::Untimed)?;
             approach
                 .rate_at((frame - start).to_f64().ok_or(PlayError::Untimed)?)
-                .and_then(|speed| speed.to_f32())
                 .ok_or(PlayError::Untimed)
         }
         _ => Err(PlayError::Internal(
@@ -108,7 +109,7 @@ pub(super) fn curve_speed(curve: &SpeedCurve, origin: f32, frame: u64) -> Result
 
 pub(super) fn curve_area(
     curve: &SpeedCurve,
-    origin: f32,
+    origin: f64,
     start: u64,
     end: u64,
 ) -> Result<f64, PlayError> {
@@ -120,8 +121,8 @@ pub(super) fn curve_area(
             let duration = frames.get().to_f64().ok_or(PlayError::Untimed)?;
             let area = |frame: u64| -> Result<f64, PlayError> {
                 let ramp = frame.min(frames.get()).to_f64().ok_or(PlayError::Untimed)?;
-                Ok(f64::from(origin) * ramp
-                    + (f64::from(*to) - f64::from(origin)) * ramp * ramp / (2.0 * duration)
+                Ok(origin * ramp
+                    + (f64::from(*to) - origin) * ramp * ramp / (2.0 * duration)
                     + frame
                         .saturating_sub(frames.get())
                         .to_f64()
@@ -133,7 +134,7 @@ pub(super) fn curve_area(
         SpeedCurve::Steps(steps) => {
             let mut area = 0.0;
             let mut cursor = start;
-            let mut speed = f64::from(origin);
+            let mut speed = origin;
             for &(frame, next) in steps.iter() {
                 if frame > end {
                     break;
@@ -187,7 +188,7 @@ pub(super) fn curve_area(
 
 pub(super) fn curve_end(
     curve: &SpeedCurve,
-    origin: f32,
+    origin: f64,
     start: u64,
     mut remaining: f64,
     limit: Option<u64>,
@@ -204,7 +205,7 @@ pub(super) fn curve_end(
     let mut cursor = start;
     let end = limit.unwrap_or(u64::MAX);
     while cursor < end {
-        let speed = f64::from(curve_speed(curve, origin, cursor)?);
+        let speed = curve_speed(curve, origin, cursor)?;
         if !speed.is_finite() || speed <= 0.0 {
             return Err(PlayError::Internal(
                 "planned speed must be finite and positive".into(),
@@ -213,8 +214,7 @@ pub(super) fn curve_end(
         let (boundary, slope) = match curve {
             SpeedCurve::Ramp { to, frames } if cursor < frames.get() => (
                 end.min(frames.get()),
-                (f64::from(*to) - f64::from(origin))
-                    / frames.get().to_f64().ok_or(PlayError::Untimed)?,
+                (f64::from(*to) - origin) / frames.get().to_f64().ok_or(PlayError::Untimed)?,
             ),
             SpeedCurve::Constant(_) | SpeedCurve::Ramp { .. } => (end, 0.0),
             SpeedCurve::Steps(steps) => (
@@ -252,7 +252,7 @@ pub(super) fn curve_end(
 
 fn approach_end(
     curve: &SpeedCurve,
-    origin: f32,
+    origin: f64,
     start: u64,
     remaining: f64,
     limit: Option<u64>,
@@ -313,8 +313,14 @@ mod tests {
         assert_eq!(
             curve_speed(&curve, 0.125, 97)
                 .expect("observed speed")
+                .to_f32()
+                .expect("published speed")
                 .to_bits(),
             expected_bits
+        );
+        assert_eq!(
+            curve_speed(&curve, 0.125, 97).expect("analytic projection"),
+            approach.rate_at(97.0).expect("owned analytic rate")
         );
     }
 
@@ -420,7 +426,11 @@ mod tests {
             ExponentialApproach::new(rate, rate, 220.5).expect("constant approach"),
         );
         let area = frames.to_f64().expect("frame count") + 1.0;
-        assert_eq!(curve_speed(&curve, 0.125, frames).expect("snapshot"), 1.0);
+        assert_eq!(
+            curve_speed(&curve, 0.125, frames).expect("projection"),
+            rate
+        );
+        assert_eq!(rate.to_f32().expect("published target"), 1.0);
         assert_eq!(
             curve_area(&curve, 0.125, 0, frames).expect("f64 area"),
             area
@@ -538,21 +548,37 @@ mod tests {
         assert_eq!(
             curve_speed(&curve, 0.125, 96)
                 .expect("pre-boundary speed")
+                .to_f32()
+                .expect("published speed")
                 .to_bits(),
             1_068_314_206
         );
         assert_eq!(
             curve_speed(&curve, 0.125, 97)
                 .expect("boundary speed")
+                .to_f32()
+                .expect("published speed")
                 .to_bits(),
             1_068_338_765
         );
         assert_eq!(
             curve_speed(&curve, 0.125, 98)
                 .expect("local-law speed")
+                .to_f32()
+                .expect("published speed")
                 .to_bits(),
             1_068_321_460
         );
+        for (frame, expected) in [
+            (96, first.rate_at(96.0)),
+            (97, second.rate_at(0.0)),
+            (98, second.rate_at(1.0)),
+        ] {
+            assert_eq!(
+                curve_speed(&curve, 0.125, frame).expect("precise projected speed"),
+                expected.expect("owned rate")
+            );
+        }
         assert!(curve_area(&curve, 0.125, 0, 338).expect("prior area") < 400.0);
         assert!(curve_area(&curve, 0.125, 0, 339).expect("terminal area") >= 400.0);
         assert_eq!(

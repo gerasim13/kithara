@@ -1,111 +1,45 @@
 use std::num::NonZeroU32;
 
-use kithara_signal::ExponentialApproach;
-use kithara_warp::{MIN_SPEED, SpeedCurve};
+use kithara_warp::MIN_SPEED;
 use num_traits::ToPrimitive;
 /// One speed and its residence time in output seconds.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CorrectionStep {
-    pub speed: f32,
+    pub speed: f64,
     pub seconds: f64,
 }
 
-/// A staircase whose integrated speed difference cancels the phase error.
+/// Epsilon-bounded media-speed steps converging to a local reference speed.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CorrectionPlan {
     pub steps: Vec<CorrectionStep>,
 }
 
 impl CorrectionPlan {
-    /// The renderer curve that replaces the remaining correction in one command.
-    /// Residence times are rounded on the output rate; every adjacent step keeps
-    /// a distinct frame, including a zero-duration step between bounded speeds.
-    ///
-    /// # Panics
-    /// Panics for a non-finite or unplayable speed, a non-finite or negative
-    /// residence, or a cumulative duration or distinct frame offset that is
-    /// not representable.
-    #[must_use]
-    pub fn curve(&self, sample_rate: NonZeroU32) -> SpeedCurve {
-        match self.checked_curve(sample_rate) {
-            Some((curve, _frames)) => curve,
-            None => panic!("correction plan is not representable in output frames"),
-        }
-    }
-
-    /// Returns the curve and its last frame offset, or `None` if unrepresentable.
-    #[must_use]
-    pub fn checked_curve(&self, sample_rate: NonZeroU32) -> Option<(SpeedCurve, u64)> {
-        let steps = self.frame_steps(sample_rate).collect::<Option<Vec<_>>>()?;
-        let frames = steps.last().map_or(0, |(frame, _speed)| *frame);
-        Some((SpeedCurve::Steps(steps.into()), frames))
-    }
-
-    /// Applies the finite correction offsets to a continuing Host rate law.
-    #[must_use]
-    pub fn checked_curve_following(
+    pub(super) fn media_offsets(
         &self,
         sample_rate: NonZeroU32,
-        base: &SpeedCurve,
-        reference: f32,
-    ) -> Option<(SpeedCurve, u64)> {
+        reference: f64,
+    ) -> Option<Vec<(u64, f64)>> {
         let steps = self.frame_steps(sample_rate).collect::<Option<Vec<_>>>()?;
-        let frames = steps.last()?.0;
-        if steps.iter().all(|(_, speed)| *speed == reference) {
-            return Some((base.clone(), frames));
-        }
-        let mut boundaries: Vec<_> = steps.iter().map(|(frame, _)| *frame).collect();
-        if let SpeedCurve::ApproachSteps(laws) = base {
-            boundaries.extend(laws.iter().map(|(frame, _)| *frame));
-        }
-        boundaries.sort_unstable();
-        boundaries.dedup();
-        let curves = boundaries
-            .into_iter()
-            .map(|frame| {
-                let (start, law) = match base {
-                    SpeedCurve::Approach(law) => (0, *law),
-                    SpeedCurve::ApproachSteps(laws) => *laws.get(
-                        laws.partition_point(|(at, _)| *at <= frame)
-                            .checked_sub(1)?,
-                    )?,
-                    _ => return None,
-                };
-                let speed = steps
-                    .get(
-                        steps
-                            .partition_point(|(at, _)| *at <= frame)
-                            .checked_sub(1)?,
-                    )?
-                    .1;
-                let offset = f64::from(speed) - f64::from(reference);
-                let initial = law.rate_at(frame.checked_sub(start)?.to_f64()?)? + offset;
-                let target = law.target() + offset;
-                if initial < f64::from(MIN_SPEED)
-                    || target < f64::from(MIN_SPEED)
-                    || initial > 4.0
-                    || target > 4.0
-                {
-                    return None;
-                }
-                Some((
-                    frame,
-                    ExponentialApproach::new(initial, target, law.time_constant())?,
-                ))
-            })
-            .collect::<Option<Vec<_>>>()?;
-        Some((SpeedCurve::ApproachSteps(curves.into()), frames))
+        steps.last()?;
+        Some(
+            steps
+                .into_iter()
+                .map(|(frame, speed)| (frame, speed - reference))
+                .collect(),
+        )
     }
 
     fn frame_steps(
         &self,
         sample_rate: NonZeroU32,
-    ) -> impl Iterator<Item = Option<(u64, f32)>> + '_ {
+    ) -> impl Iterator<Item = Option<(u64, f64)>> + '_ {
         let mut seconds = 0.0;
         let mut previous: Option<u64> = None;
         self.steps.iter().map(move |step| {
             if !step.speed.is_finite()
-                || step.speed < MIN_SPEED
+                || step.speed < f64::from(MIN_SPEED)
                 || !step.seconds.is_finite()
                 || step.seconds < 0.0
             {

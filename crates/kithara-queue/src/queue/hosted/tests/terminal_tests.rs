@@ -130,7 +130,7 @@ impl Track<TestPools> for SnapshotTrack {
         &self,
         _at: SessionFrame,
         _sample_rate: NonZeroU32,
-    ) -> Result<(Duration, f32), PlayError> {
+    ) -> Result<(Duration, f64), PlayError> {
         panic!("terminal-event fixture does not project a render lane")
     }
 

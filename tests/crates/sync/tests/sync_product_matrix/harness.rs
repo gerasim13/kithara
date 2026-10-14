@@ -30,6 +30,12 @@ pub(crate) struct ProductHarness {
     worker: PlayWorker<TestPools>,
     trajectory: TempoTrajectory,
     operation_grid: Option<kithara::warp::BeatGridSnapshot>,
+    capture_marks: Vec<(
+        SessionFrame,
+        kithara::events::TrackId,
+        kithara_render::bridge::SlotSnapshot,
+    )>,
+    host_grids: Vec<(SessionFrame, kithara::warp::BeatGridSnapshot)>,
     /// The second each deck's start opens it at, before its stagger.
     cues: Vec<f64>,
     decoder_backends: Vec<EventDecoderBackend>,
@@ -331,6 +337,8 @@ impl ProductHarness {
             worker,
             trajectory,
             operation_grid: None,
+            capture_marks: Vec::new(),
+            host_grids: Vec::new(),
             decoder_backends: Vec::new(),
             decoder_rates: Vec::new(),
             cues: (0..case.decks)
@@ -511,21 +519,23 @@ impl ProductHarness {
 
     /// Ticks every deck from the host owner thread, as the app update loop
     /// would.
-    async fn tick_all(&self, case: SyncCase) {
+    async fn tick_all(&self, case: SyncCase) -> kithara::warp::BeatGridSnapshot {
+        use kithara::warp::BeatGrid;
         let controls: Vec<_> = self
             .decks
             .iter()
             .map(|deck| deck.control().clone())
             .collect();
         self.host
-            .run(move || {
+            .with(move |host| {
                 for (index, control) in controls.iter().enumerate() {
                     control
                         .tick()
                         .unwrap_or_else(|error| panic!("{}: tick deck {index}: {error}", case.id));
                 }
+                host.snapshot()
             })
-            .await;
+            .await
     }
 
     #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
@@ -535,7 +545,11 @@ impl ProductHarness {
             case.id, self.output_frames
         ));
         let started = Instant::now();
-        self.tick_all(case).await;
+        let grid = self.tick_all(case).await;
+        let start_frame = SessionFrame::new(
+            i64::try_from(self.output_frames).expect("observed Host frame fits its session axis"),
+        );
+        self.host_grids.push((start_frame, grid));
         let start = self.output_frames;
         let end = start
             .checked_add(u64::try_from(frames).expect("render frame count fits u64"))
@@ -543,7 +557,11 @@ impl ProductHarness {
         let samples = self.host.render(frames).await;
         assert_eq!(self.host.position(), end);
         hang_reset!();
-        self.tick_all(case).await;
+        let grid = self.tick_all(case).await;
+        let end_frame = SessionFrame::new(
+            i64::try_from(end).expect("observed Host frame fits its session axis"),
+        );
+        self.host_grids.push((end_frame, grid));
         self.output_frames = end;
         #[cfg(not(target_os = "android"))]
         self.tap.push(&samples);
@@ -734,10 +752,12 @@ impl ProductHarness {
                 snapshot.track.status,
                 OwnerTrackStatus::Playing { .. }
             ));
-            assert_eq!(
-                snapshot.sync,
-                kithara::link::SyncStatus::On,
-                "binding is claimed after the correction has applied"
+            assert!(
+                matches!(
+                    snapshot.sync,
+                    kithara::link::SyncStatus::On | kithara::link::SyncStatus::Correcting { .. }
+                ),
+                "a playing synchronized track must expose its steady binding or finite correction"
             );
             let (slot, evaluation_rate) = deck
                 .observe(|observation| {
@@ -760,12 +780,74 @@ impl ProductHarness {
             let ArtifactSource::Value(model) = self.provider.beat_grid(index) else {
                 panic!("materialized supplied source grid");
             };
+            let (capture_frame, initial) = self
+                .capture_marks
+                .iter()
+                .find_map(|(frame, owner, slot)| (*owner == item).then_some((*frame, *slot)))
+                .expect("unchanged capture's actual initial consumed mark");
+            let Some(capture_start) = self.capture_marks.iter().find_map(|(_, owner, slot)| {
+                (*owner == item && slot.state == kithara_render::bridge::SlotState::Playing)
+                    .then_some(*slot)
+            }) else {
+                failures.push(format!(
+                    "deck {index}: original capture has no actual consumed Playing slot"
+                ));
+                continue;
+            };
+            if initial.state != kithara_render::bridge::SlotState::Playing {
+                let first = capture_start
+                    .mark
+                    .expect("actual Playing capture has a consumed mark");
+                let started = deck.observe(|observation| observation.starts.iter().any(|(owner, seq)| *owner == item
+                    && observation.placement_receipts.iter().any(|(owner, origin, receipt)| *owner == item
+                        && *origin == kithara_integration_tests::offline::linked::LinkReceiptOrigin::Deck
+                        && matches!(receipt, kithara::play::Settled::Applied { seq: answered, at }
+                            if answered == seq && *at >= capture_frame && *at <= first.session))));
+                if !started
+                    || initial.media_origin != capture_start.media_origin
+                    || initial
+                        .mark
+                        .is_some_and(|mark| mark.lane.segment != first.lane.segment)
+                {
+                    failures.push(format!("deck {index}: initially stopped capture lacks real owned Start Applied custody or stable source origin/Segment"));
+                    continue;
+                }
+            }
+            let law = deck.observe(|observation| {
+                super::binding::executed_law(
+                    &model,
+                    &host_grid,
+                    &self.host_grids,
+                    observation,
+                    &snapshot,
+                    capture_start,
+                    slot,
+                )
+            });
+            let actual_speed = match law {
+                Ok((speed, law_failures, law_evidence)) => {
+                    failures.extend(
+                        law_failures
+                            .into_iter()
+                            .map(|failure| format!("deck {index}: {failure}")),
+                    );
+                    evidence.push(law_evidence);
+                    speed
+                }
+                Err(error) => {
+                    failures.push(format!("deck {index}: {error}"));
+                    continue;
+                }
+            };
+            if matches!(snapshot.sync, kithara::link::SyncStatus::Correcting { .. }) {
+                continue;
+            }
             let binding = super::binding::check(
                 &model,
                 evaluation_rate,
                 &host_grid,
                 slot,
-                snapshot.track.speed,
+                actual_speed.as_(),
                 4,
             );
             match binding {
@@ -802,13 +884,6 @@ impl ProductHarness {
         let mut failures = Vec::new();
         let mut evidence = Vec::new();
         let stagger_seconds = 3.0 / 8.0 * 60.0 / case.start_bpm();
-        let required_placements = required_placements.or_else(|| {
-            (!case.paused).then_some(if super::binding::sync_precedes_seek(case.order) {
-                2
-            } else {
-                1
-            })
-        });
         for (index, deck) in self.decks.iter().enumerate() {
             let item = deck.current().expect("selected anchor track").id;
             let ArtifactSource::Value(model) = self.provider.beat_grid(index) else {
@@ -824,6 +899,9 @@ impl ProductHarness {
                     .ok_or_else(|| "no actual consumed anchor slot".to_owned())?;
                 let placements = observation.placements.iter()
                     .filter(|placement| placement.item == item).collect::<Vec<_>>();
+                let required_placements = super::binding::relocation_count(
+                    observation, item, &model, case, required_placements,
+                )?;
                 if required_placements.is_some_and(|required| placements.len() != required) {
                     return Err(format!(
                         "expected {:?} admitted relocations, found {}",
@@ -873,9 +951,13 @@ impl ProductHarness {
                     let segment = placement.consumed.mark
                         .ok_or_else(|| "admitted relocation has no prior consumed segment".to_owned())?.lane.segment;
                     if ordinal + 1 == placements.len() {
-                        let errors = anchor.consumption_failures(
-                            &model, evaluation_rate, &host_grid, consumed, segment,
-                        )?;
+                        let status = observation.tracks.iter().find(|track| track.track.item == item)
+                            .ok_or_else(|| "selected relocation has no published Linked snapshot".to_owned())?.sync;
+                        let errors = if matches!(status, kithara::link::SyncStatus::Correcting { .. }) {
+                            anchor.corrected_consumption_failures(&model, &host_grid, consumed, segment, observation, item)?
+                        } else {
+                            anchor.consumption_failures(&model, evaluation_rate, &host_grid, consumed, segment)?
+                        };
                         if !errors.is_empty() {
                             return Err(errors.join("; "));
                         }
@@ -1025,6 +1107,15 @@ impl ProductHarness {
         paced: bool,
     ) -> Vec<f32> {
         let capture_kind = if paced { "paced" } else { "product" };
+        let observed_frame = SessionFrame::new(
+            i64::try_from(self.output_frames).expect("actual capture frame fits session axis"),
+        );
+        self.capture_marks = self
+            .decks
+            .iter()
+            .flat_map(|deck| deck.observe(|observation| observation.consumed.clone()))
+            .map(|(item, slot)| (observed_frame, item, slot))
+            .collect();
         #[cfg(not(target_os = "android"))]
         self.mark("capture start");
         let mut pcm = Vec::with_capacity(capture_frames * usize::from(CHANNELS));
@@ -1038,6 +1129,15 @@ impl ProductHarness {
             let frames = remaining_frames.min(block_frames);
             let started = paced.then(Instant::now);
             let block = self.render(case, frames).await;
+            let observed_frame = SessionFrame::new(
+                i64::try_from(self.output_frames).expect("actual capture frame fits session axis"),
+            );
+            self.capture_marks.extend(
+                self.decks
+                    .iter()
+                    .flat_map(|deck| deck.observe(|observation| observation.consumed.clone()))
+                    .map(|(item, slot)| (observed_frame, item, slot)),
+            );
             assert!(
                 !block.is_empty(),
                 "{}: {capture_kind} capture stopped making PCM progress",
@@ -1074,6 +1174,22 @@ impl ProductHarness {
                             "tracks": format!("{:?}", observation.tracks),
                             "settled": format!("{:?}", observation.settled),
                             "sync_requests": format!("{:?}", observation.sync_requests),
+                            "owner_inputs": observation.owner_inputs.iter().enumerate().map(|(index, input)| serde_json::json!({
+                                "index": index, "item": input.item.map(u64::from), "at": input.at.map(i64::from),
+                                "kind": format!("{:?}", input.kind), "trajectory": input.trajectory.as_ref().map(|host| format!("{host:?}")),
+                            })).collect::<Vec<_>>(),
+                            "speed_inputs": observation.speeds.iter().map(|speed| serde_json::json!({
+                                "item": u64::from(speed.item), "seq": speed.seq.get(), "at": format!("{:?}", speed.at),
+                                "input": speed.input, "host_input": speed.host_input, "planned": format!("{:?}", speed.planned),
+                                "landing": format!("{:?}", speed.landing), "consumed": format!("{:?}", speed.consumed),
+                            })).collect::<Vec<_>>(),
+                            "cue_inputs": observation.cue_curves.iter().map(|cue| serde_json::json!({
+                                "item": u64::from(cue.item), "seq": cue.seq.get(), "position_ns": cue.position.as_nanos().to_string(),
+                                "host_input": cue.host_input, "consumed": format!("{:?}", cue.consumed),
+                                "native_origin": cue.native.map(|origin| format!("{origin:?}")), "adopted_segment": cue.segment.map(kithara::signal::SegmentId::get),
+                            })).collect::<Vec<_>>(),
+                            "capture_facts": self.capture_marks.iter().filter(|(_, item, _)| observation.tracks.iter().any(|track| track.track.item == *item))
+                                .map(|(frame, item, slot)| serde_json::json!({"frame": i64::from(*frame), "item": u64::from(*item), "slot": format!("{slot:?}")})).collect::<Vec<_>>(),
                         })
                     })
                 })

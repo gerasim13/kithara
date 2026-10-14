@@ -6,8 +6,11 @@ use kithara_test_utils::kithara;
 use kithara_warp::{SessionBeat, SpeedCurve};
 use num_traits::ToPrimitive;
 
-use super::fixtures::{grid, host};
-use crate::{CorrectionPlan, CorrectionStep, Tempo, TempoStep, TempoTrajectory, speed_curve};
+use super::{
+    super::source::{self, SourceGrid},
+    fixtures::{grid, host, position, source_grid},
+};
+use crate::{Tempo, TempoStep, TempoTrajectory, corrected_speed_curve, speed_curve};
 
 fn approached(initial: f64, target: f64, frames: u64) -> f64 {
     target + (initial - target) * (-frames.to_f64().expect("fixture offset") / 240.0).exp()
@@ -15,6 +18,11 @@ fn approached(initial: f64, target: f64, frames: u64) -> f64 {
 
 fn analytic_laws(curve: &SpeedCurve) -> Vec<(u64, ExponentialApproach)> {
     match curve {
+        SpeedCurve::Constant(speed) => vec![(
+            0,
+            ExponentialApproach::new(f64::from(*speed), f64::from(*speed), 0.0)
+                .expect("constant law"),
+        )],
         SpeedCurve::Approach(law) => vec![(0, *law)],
         SpeedCurve::ApproachSteps(laws) => laws.to_vec(),
         other => panic!("expected an analytic law, received {other:?}"),
@@ -32,7 +40,7 @@ fn rate_at(curve: &SpeedCurve, frame: u64) -> f64 {
         .expect("valid law")
 }
 
-fn advance(curve: &SpeedCurve, start: u64, end: u64) -> f64 {
+pub(super) fn advance(curve: &SpeedCurve, start: u64, end: u64) -> f64 {
     assert!(start <= end);
     let laws = analytic_laws(curve);
     laws.iter()
@@ -67,8 +75,14 @@ fn pending_targets() -> TempoTrajectory {
 fn future_targets_are_projected_in_frame_order_after_out_of_order_acceptance() {
     let trajectory = pending_targets();
     let model = grid(480_000, 480_000, 24_000, 0, None, BeatGridState::Final);
-    let curve =
-        speed_curve(&trajectory, &model, SessionFrame::new(800)).expect("finite future trajectory");
+    let curve = speed_curve(
+        &trajectory,
+        &source_grid(&model),
+        position(0),
+        SessionFrame::new(800),
+        None,
+    )
+    .expect("finite future trajectory");
     let laws = analytic_laws(&curve);
 
     assert_eq!(
@@ -94,8 +108,14 @@ fn future_targets_are_projected_in_frame_order_after_out_of_order_acceptance() {
             "frame {frame}"
         );
     }
-    let at_target = speed_curve(&trajectory, &model, SessionFrame::new(1_000))
-        .expect("projection from a command boundary");
+    let at_target = speed_curve(
+        &trajectory,
+        &source_grid(&model),
+        position(0),
+        SessionFrame::new(1_000),
+        None,
+    )
+    .expect("projection from a command boundary");
     assert_eq!(
         analytic_laws(&at_target)
             .iter()
@@ -110,8 +130,14 @@ fn withdrawing_an_earlier_target_removes_it_from_the_future_projection() {
     let mut trajectory = pending_targets();
     trajectory.withdraw(SessionFrame::new(1_000));
     let model = grid(480_000, 480_000, 24_000, 0, None, BeatGridState::Final);
-    let curve = speed_curve(&trajectory, &model, SessionFrame::new(800))
-        .expect("withdrawn target is absent");
+    let curve = speed_curve(
+        &trajectory,
+        &source_grid(&model),
+        position(0),
+        SessionFrame::new(800),
+        None,
+    )
+    .expect("withdrawn target is absent");
     let laws = analytic_laws(&curve);
 
     assert_eq!(laws.iter().map(|(at, _)| *at).collect::<Vec<_>>(), [0, 328]);
@@ -148,8 +174,14 @@ fn projection_keeps_exact_frame_offsets_beyond_f64_integer_precision(#[case] ori
         )
         .expect("earlier target");
     let model = grid(480_000, 480_000, 24_000, 0, None, BeatGridState::Final);
-    let curve = speed_curve(&trajectory, &model, SessionFrame::new(origin + 7))
-        .expect("integer origin projection");
+    let curve = speed_curve(
+        &trajectory,
+        &source_grid(&model),
+        position(0),
+        SessionFrame::new(origin + 7),
+        None,
+    )
+    .expect("integer origin projection");
     let laws = analytic_laws(&curve);
 
     assert_eq!(
@@ -165,48 +197,68 @@ fn projection_keeps_exact_frame_offsets_beyond_f64_integer_precision(#[case] ori
 #[kithara::test]
 fn zero_correction_preserves_the_complete_future_law() {
     let model = grid(480_000, 480_000, 24_000, 0, None, BeatGridState::Final);
-    let base =
-        speed_curve(&pending_targets(), &model, SessionFrame::new(800)).expect("future trajectory");
-    let plan = CorrectionPlan {
-        steps: vec![
-            CorrectionStep {
-                speed: 1.0,
-                seconds: 0.005,
-            },
-            CorrectionStep {
-                speed: 1.0,
-                seconds: 0.0,
-            },
-        ],
-    };
-    let (actual, end) = plan
-        .checked_curve_following(NonZeroU32::new(48_000).expect("rate"), &base, 1.0)
-        .expect("zero offset");
+    let at = SessionFrame::new(480);
+    let base = speed_curve(
+        &pending_targets(),
+        &source_grid(&model),
+        position(480),
+        at,
+        None,
+    )
+    .expect("anchored future trajectory");
+    assert_eq!(
+        crate::phase_error(&pending_targets(), &source_grid(&model), position(480), at)
+            .expect("exactly representable source and Host anchor")
+            .beats,
+        0.0,
+    );
+    let (actual, end) = corrected_speed_curve(
+        &pending_targets(),
+        &source_grid(&model),
+        position(480),
+        at,
+        1.0,
+        0.001,
+        false,
+    )
+    .expect("zero source phase");
 
-    assert_eq!(end, 240);
+    assert_eq!(end, 0);
     assert_eq!(actual, base);
 }
 
 #[kithara::test]
 fn correction_restores_an_approach_between_two_host_commands() {
     let model = grid(480_000, 480_000, 24_000, 0, None, BeatGridState::Final);
-    let base =
-        speed_curve(&pending_targets(), &model, SessionFrame::new(800)).expect("future trajectory");
-    let plan = CorrectionPlan {
-        steps: vec![
-            CorrectionStep {
-                speed: 1.25,
-                seconds: 0.005,
-            },
-            CorrectionStep {
-                speed: 1.0,
-                seconds: 0.0,
-            },
-        ],
-    };
-    let (actual, end) = plan
-        .checked_curve_following(NonZeroU32::new(48_000).expect("rate"), &base, 1.0)
-        .expect("correction ends during the Host approach");
+    let base = speed_curve(
+        &pending_targets(),
+        &source_grid(&model),
+        position(0),
+        SessionFrame::new(800),
+        None,
+    )
+    .expect("future trajectory");
+    let at = SessionFrame::new(800);
+    let source = SourceGrid::new(
+        &model,
+        kithara_warp::AssetAxis::new(
+            NonZeroU32::new(48_000).expect("rate"),
+            kithara_warp::AssetExtent::Unknown,
+        ),
+    )
+    .expect("source geometry");
+    let end = 240;
+    let actual = source::curve(
+        &pending_targets(),
+        &source,
+        position(0),
+        at,
+        None,
+        &[(0, 0.25), (end, 0.0)],
+        None,
+    )
+    .expect("correction ends during the Host approach")
+    .0;
     let laws = analytic_laws(&actual);
 
     assert_eq!(end, 240);
@@ -223,6 +275,76 @@ fn correction_restores_an_approach_between_two_host_commands() {
     }
     assert!((advance(&actual, 0, 700) - advance(&base, 0, 700) - 60.0).abs() < 1e-9);
     assert!((advance(&actual, end, 700) - advance(&base, end, 700)).abs() < 1e-9);
+    let mut raw = model.as_raw().clone();
+    raw.duration = Some(40.0);
+    raw.beats.truncate(11);
+    for beat in &mut raw.beats {
+        beat.at = (beat.ordinal / 2).to_f64().expect("paired ordinal")
+            + if beat.ordinal % 2 == 0 { 0.0 } else { 0.4 };
+    }
+    let model = kithara_beat::BeatGridModel::try_from(raw).expect("nonuniform source");
+    let host = host(120.0, 4);
+    let cue = position(480);
+    let (base, _) = source::curve(
+        &host,
+        &SourceGrid::new(
+            &model,
+            kithara_warp::AssetAxis::new(host.sample_rate(), kithara_warp::AssetExtent::Unknown),
+        )
+        .expect("source"),
+        cue,
+        SessionFrame::new(0),
+        None,
+        &[(0, 0.0)],
+        None,
+    )
+    .expect("local source law");
+    let (corrected, end) = corrected_speed_curve(
+        &host,
+        &source_grid(&model),
+        cue,
+        SessionFrame::new(0),
+        0.8,
+        0.001,
+        false,
+    )
+    .expect("true source phase correction");
+    let base_boundary = analytic_laws(&base)
+        .into_iter()
+        .find(|(at, _)| *at > 0)
+        .expect("first observed slope change")
+        .0;
+    let corrected_boundary = analytic_laws(&corrected)
+        .into_iter()
+        .find(|(at, _)| *at > 0)
+        .expect("corrected slope change")
+        .0;
+    assert!(corrected_boundary > base_boundary);
+    let source = SourceGrid::new(
+        &model,
+        kithara_warp::AssetAxis::new(host.sample_rate(), kithara_warp::AssetExtent::Unknown),
+    )
+    .expect("source");
+    let actual = cue.as_secs_f64() + advance(&corrected, 0, end) / 48_000.0;
+    let expected = source
+        .media_at(f64::from(host.beat_at(SessionFrame::new(
+            i64::try_from(end).expect("deadline"),
+        ))))
+        .expect("source at Host phase closure");
+    assert!((actual - expected).abs() < 1e-9);
+    let landing = SessionFrame::new(221);
+    let aligned = speed_curve(
+        &host,
+        &source_grid(&model),
+        position(4_800),
+        SessionFrame::new(0),
+        Some((position(0), landing)),
+    )
+    .expect("real pre-jump source and physical-zero landing");
+    let from = u64::try_from(i64::from(landing)).expect("landing frame");
+    let consumed = advance(&aligned, from, from + 24_000) / 48_000.0;
+    let expected = source.media_at(1.0).expect("next observed beat");
+    assert!((consumed - expected).abs() < 1e-9);
 }
 
 #[kithara::test]
@@ -232,26 +354,35 @@ fn correction_collisions_preserve_host_targets_and_restore_the_remaining_law() {
         .push(SessionFrame::new(1_800), Tempo::new(150.0).expect("tempo"))
         .expect("target after correction ends");
     let model = grid(480_000, 480_000, 24_000, 0, None, BeatGridState::Final);
-    let base = speed_curve(&trajectory, &model, SessionFrame::new(800)).expect("future trajectory");
-    let plan = CorrectionPlan {
-        steps: vec![
-            CorrectionStep {
-                speed: 1.25,
-                seconds: 200.0 / 48_000.0,
-            },
-            CorrectionStep {
-                speed: 0.75,
-                seconds: 128.0 / 48_000.0,
-            },
-            CorrectionStep {
-                speed: 1.0,
-                seconds: 0.0,
-            },
-        ],
-    };
-    let (actual, end) = plan
-        .checked_curve_following(NonZeroU32::new(48_000).expect("rate"), &base, 1.0)
-        .expect("finite correction on future law");
+    let base = speed_curve(
+        &trajectory,
+        &source_grid(&model),
+        position(0),
+        SessionFrame::new(800),
+        None,
+    )
+    .expect("future trajectory");
+    let at = SessionFrame::new(800);
+    let source = SourceGrid::new(
+        &model,
+        kithara_warp::AssetAxis::new(
+            NonZeroU32::new(48_000).expect("rate"),
+            kithara_warp::AssetExtent::Unknown,
+        ),
+    )
+    .expect("source geometry");
+    let end = 328;
+    let actual = source::curve(
+        &trajectory,
+        &source,
+        position(0),
+        at,
+        None,
+        &[(0, 0.25), (200, -0.25), (end, 0.0)],
+        None,
+    )
+    .expect("finite correction on future law")
+    .0;
     let laws = analytic_laws(&actual);
 
     assert_eq!(end, 328);

@@ -410,6 +410,20 @@ async fn native_linked(
         native_settle(&mut deck, &mut rig, SegmentId::FIRST, receipt);
     }
     assert_eq!(deck.snapshot().as_ref().status, TrackStatus::Loaded);
+    let duration = deck
+        .snapshot()
+        .as_ref()
+        .duration
+        .expect("decoded WAV duration");
+    assert_eq!(duration, position(48_000));
+    let mut raw = grid(24_000, 0, None, 48_000).as_raw().clone();
+    raw.duration = Some(duration.as_secs_f64());
+    let model = kithara_beat::BeatGridModel::try_from(raw).expect("analysis of the decoded WAV");
+    assert_eq!(model.as_raw().duration, Some(duration.as_secs_f64()));
+    assert_eq!(
+        model.as_raw().beats.last().expect("EOF beat").at,
+        duration.as_secs_f64()
+    );
     let item = deck.snapshot().as_ref().item;
     native_marked(&mut rig, SegmentId::FIRST, |out| {
         LinkedPlayer::grid(
@@ -417,7 +431,7 @@ async fn native_linked(
             GridAnswer {
                 item,
                 load: loading,
-                model: Ok(grid(24_000, 0, None, 480_000)),
+                model: Ok(model),
             },
             out,
         );

@@ -137,7 +137,7 @@ impl<S> Track<S> for PlayerImpl<S> {
         &self,
         at: SessionFrame,
         sample_rate: NonZeroU32,
-    ) -> Result<(Position, f32), PlayError> {
+    ) -> Result<(Position, f64), PlayError> {
         let media_origin = self.media_origin.ok_or(PlayError::Untimed)?;
         let mark = self.mark.ok_or(PlayError::Untimed)?;
         if mark.lane.segment != self.segment || !matches!(self.status, TrackStatus::Playing { .. })
@@ -153,7 +153,7 @@ impl<S> Track<S> for PlayerImpl<S> {
         let commands = self.planned_changes(mark)?;
         let base = SpeedCurve::Constant(self.segment_speed);
         let mut curve = &base;
-        let mut origin = self.segment_speed;
+        let mut origin = f64::from(self.segment_speed);
         let mut start = 0;
         let mut cursor = mark.lane.frame;
         let mut position = mark.position.as_secs_f64();
@@ -215,7 +215,7 @@ impl<S> Track<S> for PlayerImpl<S> {
         let commands = self.planned_changes(mark)?;
         let base = SpeedCurve::Constant(self.segment_speed);
         let mut curve = &base;
-        let mut origin = self.segment_speed;
+        let mut origin = f64::from(self.segment_speed);
         let mut start = 0;
         let mut cursor = mark.lane.frame;
         let rate = f64::from(sample_rate.get());

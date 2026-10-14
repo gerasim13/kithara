@@ -6,7 +6,7 @@ use kithara_test_utils::kithara;
 use kithara_warp::SpeedCurve;
 use num_traits::ToPrimitive;
 
-use super::fixtures::{Command, Rig, answer, deck, grid, load, position, trajectory};
+use super::fixtures::{Command, Rig, answer, deck, grid, load, position, source_grid, trajectory};
 use crate::{LinkedPlayer, SyncStatus};
 
 #[kithara::test]
@@ -42,9 +42,16 @@ fn a_silent_curve_is_rebound_to_the_admitted_start(
         When::Next => rig.now,
         When::Deferred => unreachable!("test start has a frame"),
     };
-    let admitted =
-        crate::entry(&host, &model, position(0), Bound::AtOrAfter(bound)).expect("entry");
-    let expected = kithara_sync::speed_curve(&host, &model, admitted).expect("entry curve");
+    let admitted = crate::entry(
+        &host,
+        &source_grid(&model),
+        position(0),
+        Bound::AtOrAfter(bound),
+    )
+    .expect("entry");
+    let expected =
+        kithara_sync::speed_curve(&host, &source_grid(&model), position(0), admitted, None)
+            .expect("entry curve");
     control.clear();
     assert_eq!(
         rig.run(|out| deck.apply(TrackCommand::Play { at: requested }, out))
@@ -103,7 +110,7 @@ fn owner_entry_preparation_waits_for_the_replacement_without_starting() {
     control.clear();
     let admitted = crate::entry(
         &host,
-        &model,
+        &source_grid(&model),
         position(0),
         Bound::AtOrAfter(SessionFrame::new(50_000)),
     )
@@ -119,7 +126,8 @@ fn owner_entry_preparation_waits_for_the_replacement_without_starting() {
     assert_eq!(
         prepared[0].1,
         Command::Speed(
-            kithara_sync::speed_curve(&host, &model, admitted).expect("entry law"),
+            kithara_sync::speed_curve(&host, &source_grid(&model), position(0), admitted, None)
+                .expect("entry law"),
             When::Next
         )
     );
@@ -179,7 +187,14 @@ fn a_synchronized_replay_prepares_zero_with_the_actual_entry_law() {
     assert_eq!(
         commands[0].1,
         Command::Speed(
-            kithara_sync::speed_curve(&trajectory(120.0, 4), &model, at).expect("replay law"),
+            kithara_sync::speed_curve(
+                &trajectory(120.0, 4),
+                &source_grid(&model),
+                position(0),
+                at,
+                None
+            )
+            .expect("replay law"),
             When::Next
         )
     );
@@ -259,7 +274,8 @@ fn an_entry_replacement_transfers_all_retime_callers_to_its_current_receipt(
     control.clear();
     let at = SessionFrame::new(at);
     if explicit_cue {
-        let curve = kithara_sync::speed_curve(&host, &model, at).expect("entry law");
+        let curve = kithara_sync::speed_curve(&host, &source_grid(&model), position(0), at, None)
+            .expect("entry law");
         assert!(
             rig.run(|out| deck.cue(position(0), curve, out))
                 .expect("explicit replacement")

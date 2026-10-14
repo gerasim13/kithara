@@ -2,9 +2,9 @@ use kithara_beat::{BeatGridModel, BeatGridState};
 use kithara_events::TrackId;
 use kithara_play::{Bound, Player, TrackCommand};
 use kithara_signal::SessionFrame;
-use kithara_test_utils::kithara;
+use kithara_test_utils::{bufpool::TestPools, kithara};
 
-use super::fixtures::{answer, grid, load, loaded, position, sounding};
+use super::fixtures::{answer, grid, load, loaded, position, sounding, source_grid, trajectory};
 use crate::{GridAnswer, LinkedPlayer, SyncStatus};
 
 fn served_grid() -> BeatGridModel {
@@ -37,7 +37,7 @@ fn served_grid() -> BeatGridModel {
 
 #[kithara::test]
 fn a_player_publishes_no_geometry_before_it_loads_anything() {
-    let (mut deck, _) = super::fixtures::deck(super::fixtures::trajectory(120.0, 4));
+    let (mut deck, _) = super::fixtures::deck(trajectory(120.0, 4));
     let mut rig = super::fixtures::Rig::new(0);
     assert!(
         rig.run(|out| LinkedPlayer::sync(&mut deck, true, out))
@@ -127,7 +127,7 @@ fn a_rate_change_reprojects_the_model_it_already_holds() {
 
 #[kithara::test]
 fn a_source_that_answers_late_reaches_the_load_that_asked() {
-    let (mut deck, control) = super::fixtures::deck(super::fixtures::trajectory(120.0, 4));
+    let (mut deck, control) = super::fixtures::deck(trajectory(120.0, 4));
     let mut rig = super::fixtures::Rig::new(0);
     let loading = load(&mut deck, &mut rig, 0);
     rig.apply(&mut deck, loading, 0);
@@ -280,11 +280,43 @@ fn grid_admission_follows_the_current_load_not_an_old_answer() {
 #[kithara::test]
 fn repeating_the_same_grid_does_not_restart_a_correction() {
     let (mut deck, control, mut rig, load) = sounding();
-    let revised = grid(32_000, 0, Some((4, 0)), 960_000);
+    let host = trajectory(120.0, 4);
+    let at = rig.now + LinkedPlayer::<TestPools>::lead(&deck, rig.delivery).expect("lane lead");
+    let (media, from) = kithara_play::Track::<TestPools>::planned(&deck, at, host.sample_rate())
+        .expect("planned source");
+    let uncovered = grid(32_000, 0, Some((4, 0)), 960_000);
+    assert!(
+        kithara_sync::corrected_speed_curve(
+            &host,
+            &source_grid(&uncovered),
+            media,
+            at,
+            from,
+            0.001,
+            false,
+        )
+        .is_none(),
+        "the media slew cannot finish inside the served twenty seconds"
+    );
+    let unchanged = deck.snapshot();
+    answer(&mut deck, &mut rig, load, uncovered);
+    assert!(control.commands().is_empty());
+    let actual = deck.snapshot();
+    assert_eq!(actual.as_ref().item, unchanged.as_ref().item);
+    assert_eq!(actual.as_ref().position, unchanged.as_ref().position);
+    assert_eq!(actual.as_ref().status, unchanged.as_ref().status);
+    assert_eq!(actual.as_ref().speed, unchanged.as_ref().speed);
+    assert_eq!(actual.as_ref().mark, unchanged.as_ref().mark);
+    assert_eq!(
+        actual.as_ref().pending_lane,
+        unchanged.as_ref().pending_lane
+    );
+    assert_eq!(deck.snapshot().sync, unchanged.sync);
+    let revised = grid(23_999, 0, Some((4, 0)), 960_000);
     answer(&mut deck, &mut rig, load, revised.clone());
     assert!(!control.commands().is_empty());
     let before = deck.snapshot().sync;
-    assert!(matches!(before, SyncStatus::Correcting { .. }));
+    assert!(matches!(before, SyncStatus::Correcting { remaining } if remaining.get() > 0));
     control.clear();
     answer(&mut deck, &mut rig, load, revised);
     assert!(control.commands().is_empty());

@@ -1,11 +1,12 @@
 use kithara_command::{Outcome, Rejection, Seq, When};
 use kithara_play::{HostedDeck, Player, Settled, TrackCommand, TrackSnapshot, TrackStatus};
 use kithara_signal::{FrameCount, SessionFrame};
-use kithara_test_utils::kithara;
+use kithara_test_utils::{bufpool::TestPools, kithara};
 use kithara_warp::SpeedCurve;
 
 use super::fixtures::{
-    Command, Control, Deck, Rig, answer, grid, load, loaded, position, sounding, trajectory,
+    Command, Control, Deck, Rig, answer, grid, load, loaded, position, sounding, source_grid,
+    trajectory,
 };
 use crate::{LinkedPlayer, SyncStatus};
 
@@ -35,13 +36,17 @@ fn assert_track_unchanged(actual: &TrackSnapshot, expected: &TrackSnapshot) {
 #[kithara::test]
 fn a_parent_fact_commits_the_member_observation_it_was_staged_on() {
     let (mut deck, control, mut rig, _) = sounding();
+    let at = SessionFrame::new(36_000);
+    let mut host = trajectory(120.0, 4);
+    let beat = host.beat_at(at);
+    host.push(
+        at,
+        kithara_host::api::Tempo::new(150.0).expect("parent tempo"),
+    )
+    .expect("future parent tempo");
+    assert_eq!(host.beat_at(at), beat);
     rig.run(|out| {
-        LinkedPlayer::retime(
-            &mut deck,
-            &trajectory(150.0, 4),
-            SessionFrame::new(36_000),
-            out,
-        );
+        LinkedPlayer::retime(&mut deck, &host, at, out);
     });
     let staged = control.commands();
     assert_eq!(staged.len(), 1);
@@ -514,42 +519,93 @@ fn an_armed_member_keeps_its_arm_across_a_grid_replacement() {
     let (mut deck, control, mut rig, loading) = sounding();
     rig.now = SessionFrame::new(12_000);
     let applied = deck.snapshot();
+    let at = SessionFrame::new(96_000);
+    let mut host = trajectory(120.0, 4);
+    let beat = host.beat_at(at);
+    host.push(
+        at,
+        kithara_host::api::Tempo::new(130.0).expect("parent tempo"),
+    )
+    .expect("future parent tempo");
+    assert_eq!(host.beat_at(at), beat);
     rig.run(|out| {
-        LinkedPlayer::retime(
-            &mut deck,
-            &trajectory(130.0, 4),
-            SessionFrame::new(96_000),
-            out,
-        );
+        LinkedPlayer::retime(&mut deck, &host, at, out);
     });
     let armed = control.commands()[0].0;
     control.clear();
-    answer(
-        &mut deck,
-        &mut rig,
-        loading,
-        grid(24_000, 12_000, Some((4, 0)), 960_000),
+    let armed_snapshot = deck.snapshot();
+    let start = rig.now + LinkedPlayer::<TestPools>::lead(&deck, rig.delivery).expect("lane lead");
+    let (media, from) = kithara_play::Track::<TestPools>::planned(&deck, start, host.sample_rate())
+        .expect("planned source");
+    let uncovered = grid(24_000, 12_000, Some((4, 0)), 960_000);
+    assert!(
+        kithara_sync::corrected_speed_curve(
+            &host,
+            &source_grid(&uncovered),
+            media,
+            start,
+            from,
+            0.001,
+            false,
+        )
+        .is_none(),
+        "a half-beat correction cannot finish inside the served twenty seconds"
     );
+    answer(&mut deck, &mut rig, loading, uncovered);
+    assert!(control.commands().is_empty());
+    assert_track_unchanged(deck.snapshot().as_ref(), armed_snapshot.as_ref());
+    assert_eq!(deck.snapshot().sync, armed_snapshot.sync);
+    let revised = grid(24_000, 12, Some((4, 0)), 960_000);
+    answer(&mut deck, &mut rig, loading, revised.clone());
     let replacement = control.commands();
     assert_eq!(replacement.len(), 1);
     assert_ne!(replacement[0].0, armed);
-    let Command::Speed(SpeedCurve::ApproachSteps(steps), When::At(_)) = &replacement[0].1 else {
+    let Command::Speed(SpeedCurve::ApproachSteps(steps), When::At(command_start)) =
+        &replacement[0].1
+    else {
         panic!("grid refinement must preserve the analytic rate with finite correction segments");
     };
+    assert_eq!(*command_start, start);
     assert!(steps.len() > 1);
     assert_eq!(steps[0].0, 0);
     assert!(steps.windows(2).all(|pair| pair[0].0 < pair[1].0));
-    assert!(
-        steps.iter().all(|(_, curve)| {
-            curve.initial() == curve.target() && curve.time_constant() == 0.0
-        })
-    );
+    let transition = at.frames_since(start).expect("future Host target");
+    let (_, law) = steps
+        .iter()
+        .find(|(offset, _)| *offset == transition)
+        .expect("Host target keeps its physical frame");
+    assert_eq!(law.initial(), 1.0);
+    assert_eq!(law.target(), 130.0 / 120.0);
+    assert_eq!(law.time_constant(), 240.0);
+    let reached = 130.0 / 120.0 - (10.0 / 120.0) * (-1.0_f64).exp();
+    assert!((law.rate_at(240.0).expect("5ms rate") - reached).abs() < 1e-12);
     assert_eq!(steps.last().expect("final law").1.target(), 130.0 / 120.0);
     assert_track_unchanged(deck.snapshot().as_ref(), applied.as_ref());
-    assert!(matches!(
-        deck.snapshot().sync,
-        SyncStatus::Correcting { .. }
-    ));
+    let SyncStatus::Correcting { remaining } = deck.snapshot().sync else {
+        panic!("nonzero source refinement must retain finite correction");
+    };
+    assert!(remaining.get() > 0);
+    let end = start + remaining;
+    assert!(end < at);
+    let frames = u64::try_from(remaining.get()).expect("correction frame count");
+    let mut advance = 0.0;
+    for (index, (offset, law)) in steps.iter().enumerate() {
+        if *offset >= frames {
+            break;
+        }
+        let through = steps
+            .get(index + 1)
+            .map_or(frames, |(next, _)| (*next).min(frames));
+        advance += law
+            .advance(f64::from(
+                u32::try_from(through - offset).expect("bounded law span"),
+            ))
+            .expect("law area");
+    }
+    let markers = &revised.as_raw().beats;
+    let source_beat = (media.as_secs_f64() + advance / 48_000.0 - markers[0].at)
+        / (markers[1].at - markers[0].at);
+    assert!((source_beat - f64::from(host.beat_at(end))).abs() < 1e-12);
 }
 
 // Ruling: spec 4.5 removes Free's map handoff; off sends nothing and preserves the source at frame 96000.

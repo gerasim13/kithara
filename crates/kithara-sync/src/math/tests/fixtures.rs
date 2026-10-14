@@ -89,3 +89,14 @@ pub(crate) fn boundary_at_or_before(grid: &BeatGridModel, position: Duration) ->
         .last()
         .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
 }
+
+pub(crate) fn source_grid(model: &BeatGridModel) -> crate::SourceGrid {
+    crate::SourceGrid::new(
+        model,
+        kithara_warp::AssetAxis::new(
+            NonZeroU32::new(48_000).expect("fixture rate"),
+            kithara_warp::AssetExtent::Unknown,
+        ),
+    )
+    .expect("served source geometry")
+}
