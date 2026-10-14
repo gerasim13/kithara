@@ -82,8 +82,12 @@ pub(crate) fn run(args: &CiArgs, ctx: &Ctx) -> Result<()> {
         CiCommand::Lane(args) => super::lane::direct::run(args, ctx),
         CiCommand::Lanes(args) => super::lane::select::run(args, ctx),
         CiCommand::Touched(args) => {
-            let touched =
-                kithara_devtools::test::touches_lanes(&ctx.config.test, &ctx.root, &args.lane)?;
+            let touched = kithara_devtools::test::touches_lanes(
+                &ctx.config.test,
+                &ctx.root,
+                &kithara_devtools::test::touched_base(&|name| std::env::var_os(name)),
+                &args.lane,
+            )?;
             println!("{touched}");
             Ok(())
         }

@@ -5385,6 +5385,7 @@ name = "kithara-encode"
 version = "0.0.1-alpha5"
 dependencies = [
  "bon",
+ "delegate",
  "derive_more",
  "fdk-aac-sys",
  "ffmpeg-next",
@@ -6399,6 +6400,7 @@ dependencies = [
  "unicode-segmentation",
  "velato",
  "vello",
+ "wgpu 26.0.1",
  "window_clipboard",
  "winit",
  "yaml_serde",
@@ -6462,6 +6464,7 @@ dependencies = [
  "ron",
  "serde",
  "vello",
+ "wgpu 26.0.1",
 ]
 
 [[package]]
@@ -6484,6 +6487,7 @@ name = "kithara-ui-lottie"
 version = "0.0.1-alpha5"
 dependencies = [
  "fieldwork",
+ "kithara-platform",
  "kithara-test-utils",
  "kithara-ui-draw",
  "num-traits",
@@ -9560,9 +9564,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.45"
+version = "0.23.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
+checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
  "aws-lc-rs",
  "once_cell",

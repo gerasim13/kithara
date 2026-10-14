@@ -214,6 +214,32 @@ mod fdk {
     use crate::consts;
 
     #[kithara::test(native, flash(false))]
+    fn native_delay_explains_the_encoded_clock_origin(encode_saw: Vec<f32>) {
+        let mut encoder = super::StreamEncoder::builder()
+            .backend(consts::FDK_BACKEND)
+            .sample_rate(consts::STREAM_SAMPLE_RATE)
+            .channels(consts::STREAM_CHANNELS)
+            .bit_rate(consts::STREAM_BIT_RATE)
+            .timescale(consts::STREAM_SAMPLE_RATE)
+            .build()
+            .expect("native encoder");
+        let delay = encoder
+            .encoder_delay_frames()
+            .expect("FDK reports its delay");
+        let mut units = encoder.push(&encode_saw).expect("push");
+        units.extend(encoder.finish().expect("finish"));
+        assert_eq!(units.first().expect("encoded audio").pts, 0);
+        assert_eq!(
+            units
+                .iter()
+                .map(|unit| u64::from(unit.duration))
+                .sum::<u64>(),
+            (encode_saw.len() / usize::from(consts::STREAM_CHANNELS)) as u64 + u64::from(delay),
+            "AAC begins before source PCM by the native reported delay"
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
     fn chunking_does_not_change_the_encoded_stream(encode_saw: Vec<f32>) {
         super::chunking_does_not_change_the_encoded_stream(&encode_saw, consts::FDK_BACKEND);
     }

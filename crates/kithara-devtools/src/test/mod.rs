@@ -21,4 +21,4 @@ pub(crate) use inventory::{TestId, parse_inventory};
 pub(crate) use resolve::{LaneChoice, ResolvedLane, resolve};
 pub(crate) use selection::{LaneToggles, toggled};
 
-pub use crate::touched::touches as touches_lanes;
+pub use crate::touched::{base_branch as touched_base, touches as touches_lanes};

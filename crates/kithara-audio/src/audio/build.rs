@@ -458,14 +458,26 @@ where
     if let Some(gate) = &construction_gate {
         gate.arm();
     }
+    let open_span =
+        tracing::debug_span!("initial_decoder", byte_len, open_id = tracing::field::Empty,);
+    if let Some(id) = open_span.id() {
+        open_span.record("open_id", id.into_u64());
+    }
+    debug!(parent: &open_span, phase = "factory_queued");
+    let factory_span = open_span.clone();
     let built = spawn_blocking(move || {
-        if let Some(info) = &media_info {
+        let _entered = factory_span.enter();
+        debug!(phase = "factory_entered");
+        let result = if let Some(info) = &media_info {
             DecoderFactory::create_from_media_info(source, info, config)
         } else {
             DecoderFactory::create_with_probe(source, hint.as_deref(), config)
-        }
+        };
+        debug!(phase = "factory_returned", succeeded = result.is_ok());
+        result
     })
     .await;
+    debug!(parent: &open_span, phase = "factory_joined", succeeded = built.is_ok());
     if let Some(gate) = &construction_gate {
         gate.disarm();
     }

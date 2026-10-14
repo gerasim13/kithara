@@ -56,6 +56,7 @@ masonry = { workspace = true }
 # does when this is on. A dev-dependency so a shipped build keeps the fast path
 # rather than a readback on every frame.
 vello = { workspace = true, features = ["debug_layers"] }
+wgpu-vello = { workspace = true }
 
 [lints]
 workspace = true

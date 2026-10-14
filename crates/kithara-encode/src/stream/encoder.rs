@@ -40,6 +40,9 @@ pub(crate) struct StreamParams {
 }
 
 pub(crate) trait AacStream: Send {
+    fn encoder_delay_frames(&self) -> Option<u32> {
+        None
+    }
     fn finish(self: Box<Self>) -> EncodeResult<Vec<EncodedAccessUnit>>;
 
     fn push(&mut self, samples: &[f32]) -> EncodeResult<Vec<EncodedAccessUnit>>;
@@ -55,6 +58,25 @@ pub struct StreamEncoder {
 impl StreamEncoder {
     /// Samples per channel in one AAC-LC access unit.
     pub const FRAME_SAMPLES: usize = 1024;
+
+    delegate::delegate! {
+        to self.inner {
+            /// Leading decoded PCM frames before the first input frame, when known.
+            ///
+            /// Frames are per channel at the encoder's input sample rate, independently
+            /// of its access-unit timescale. `None` means the backend does not expose
+            /// a native delay; callers must not treat an unknown delay as zero.
+            #[must_use]
+            pub fn encoder_delay_frames(&self) -> Option<u32>;
+
+            /// Drain and return remaining access units.
+            ///
+            /// # Errors
+            ///
+            /// Returns an error when the backend cannot drain.
+            pub fn finish(self) -> EncodeResult<Vec<EncodedAccessUnit>>;
+        }
+    }
 
     /// Open a backend with explicit audio and timestamp parameters.
     ///
@@ -86,15 +108,6 @@ impl StreamEncoder {
         };
 
         Ok(Self { inner, channels })
-    }
-
-    /// Drain and return remaining access units.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the backend cannot drain.
-    pub fn finish(self) -> EncodeResult<Vec<EncodedAccessUnit>> {
-        self.inner.finish()
     }
 
     /// Encode whole interleaved frames and return completed access units.

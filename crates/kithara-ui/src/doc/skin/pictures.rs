@@ -50,18 +50,21 @@ pub struct PicturePatch {
 /// places, so a path is resolved while it is still next to the document that
 /// spelled it, and what is kept is a path from the root that any later reader
 /// can follow.
-fn rebase(sheets: &mut BTreeMap<String, SheetDoc>, origin: &SourceUri) -> Result<(), UiDocError> {
+pub(crate) fn rebase_sources<'a>(
+    sources: impl IntoIterator<Item = &'a mut String>,
+    origin: &SourceUri,
+) -> Result<(), UiDocError> {
     let dir = base_dir(Some(origin));
-    for sheet in sheets.values_mut() {
-        if sheet.source.starts_with('/') {
+    for source in sources {
+        if source.starts_with('/') {
             return Err(UiDocError::RootEscape {
                 origin: origin.clone(),
-                rel: sheet.source.clone(),
+                rel: source.clone(),
             });
         }
-        sheet.source = join_rel(dir, &sheet.source).ok_or_else(|| UiDocError::RootEscape {
+        *source = join_rel(dir, source).ok_or_else(|| UiDocError::RootEscape {
             origin: origin.clone(),
-            rel: sheet.source.clone(),
+            rel: source.clone(),
         })?;
     }
     Ok(())
@@ -82,7 +85,10 @@ impl PictureDoc {
     /// # Errors
     /// Returns [`UiDocError::RootEscape`] when a path leaves the source root.
     pub(crate) fn rebase(&mut self, origin: &SourceUri) -> Result<(), UiDocError> {
-        rebase(&mut self.sheets, origin)
+        rebase_sources(
+            self.sheets.values_mut().map(|sheet| &mut sheet.source),
+            origin,
+        )
     }
 }
 
@@ -92,6 +98,9 @@ impl PicturePatch {
     /// # Errors
     /// Returns [`UiDocError::RootEscape`] when a path leaves the source root.
     pub(crate) fn rebase(&mut self, origin: &SourceUri) -> Result<(), UiDocError> {
-        rebase(&mut self.sheets, origin)
+        rebase_sources(
+            self.sheets.values_mut().map(|sheet| &mut sheet.source),
+            origin,
+        )
     }
 }

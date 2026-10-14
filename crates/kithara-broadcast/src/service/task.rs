@@ -27,6 +27,7 @@ pub(super) struct BroadcastTask<S> {
     window: LiveWindow,
     completed: Option<Sender<()>>,
     encoder: Option<StreamEncoder>,
+    encoder_delay_frames: Option<u32>,
     next_format: Option<FormatChange>,
     scratch: Option<SampleBuffer>,
     segmenter: Segmenter,
@@ -49,6 +50,7 @@ where
     ) -> BroadcastResult<Self> {
         let window = LiveWindow::new(&config)?;
         let encoder = Self::open_encoder(&config)?;
+        let encoder_delay_frames = encoder.encoder_delay_frames();
         let segmenter = Segmenter::new(&config)?;
         let bit_rate = config.bit_rate;
         let generation_capacity = config.generation_capacity.get();
@@ -59,12 +61,17 @@ where
             counted_drops: 0,
             counters: Arc::new(Counters::default()),
             encoder: Some(encoder),
+            encoder_delay_frames,
             formats,
             frames: 0,
             generation_capacity,
             next_format: None,
             origin: Arc::new(Origin {
-                snapshot: ArcSwap::from_pointee(window.snapshot()),
+                snapshot: ArcSwap::from_pointee({
+                    let mut snapshot = window.snapshot();
+                    snapshot.encoder_delay_frames = encoder_delay_frames;
+                    snapshot
+                }),
                 master: Arc::from(server::master_playlist(bit_rate)),
             }),
             pcm,
@@ -203,7 +210,9 @@ where
     }
 
     fn publish_snapshot(&self) {
-        self.origin.snapshot.store(Arc::new(self.window.snapshot()));
+        let mut snapshot = self.window.snapshot();
+        snapshot.encoder_delay_frames = self.encoder_delay_frames;
+        self.origin.snapshot.store(Arc::new(snapshot));
     }
 
     fn reconfigure(&mut self, change: FormatChange) -> BroadcastResult<()> {
@@ -217,7 +226,10 @@ where
         if let Some(segment) = self.segmenter.reconfigure(&config)? {
             self.publish(segment);
         }
-        self.encoder = Some(Self::open_encoder(&config)?);
+        let encoder = Self::open_encoder(&config)?;
+        self.encoder_delay_frames = encoder.encoder_delay_frames();
+        self.encoder = Some(encoder);
+        self.publish_snapshot();
         self.config = config;
         self.next_format = None;
         Ok(())
