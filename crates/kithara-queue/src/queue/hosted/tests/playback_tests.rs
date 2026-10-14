@@ -201,7 +201,9 @@ async fn play_retries_the_current_track_after_its_prefetch_failed() {
     assert!(
         loaded
             .opened
-            .duration
+            .pcm
+            .next_chunk_info()
+            .and_then(|info| info.media_end)
             .is_some_and(|duration| !duration.is_zero())
     );
     answer_loaded(&mut queue, &mut rig, loaded);

@@ -27,6 +27,9 @@ impl<S> Track<S> for PlayerImpl<S> {
     ) -> Result<(), PlayError> {
         self.observe(out);
         self.settle_lane();
+        if let Some(failure) = self.preparation_failure() {
+            return Err(PlayError::Lane(failure));
+        }
         self.configuring(change, at, out).map(drop)
     }
 
@@ -41,7 +44,7 @@ impl<S> Track<S> for PlayerImpl<S> {
             .is_some_and(|mark| mark.lane.segment == self.segment && mark.lane.frame > 0);
         let mut prepared = None;
         for operation in self.lane_commands.iter().rev() {
-            if operation.applied == Some(false) {
+            if operation.applied() == Some(false) {
                 continue;
             }
             match &operation.command {
@@ -80,6 +83,9 @@ impl<S> Track<S> for PlayerImpl<S> {
     ) -> Result<bool, PlayError> {
         self.observe(out);
         self.settle_lane();
+        if let Some(failure) = self.preparation_failure() {
+            return Err(PlayError::Lane(failure));
+        }
         if matches!(self.status, TrackStatus::Ended { .. })
             && self
                 .adopting
@@ -201,7 +207,7 @@ impl<S> Track<S> for PlayerImpl<S> {
         }
         let Some(endpoint) = self
             .duration
-            .and_then(|duration| self.visible_origin?.checked_add(duration))
+            .and_then(|duration| self.media_origin?.checked_add(duration))
         else {
             return Ok(None);
         };
@@ -303,7 +309,7 @@ impl<S> Track<S> for PlayerImpl<S> {
         self.lane_commands
             .iter()
             .find(|operation| operation.seq == seq)
-            .and_then(|operation| operation.applied)
+            .and_then(LaneOperation::applied)
     }
 
     fn cue(

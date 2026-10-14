@@ -108,6 +108,8 @@ pub(crate) struct ActiveDecode {
 
 pub(crate) struct DecodeCtx<'a, T: StreamType> {
     pub(crate) cursor: &'a mut ResumeCursor,
+    pub(crate) physical_duration: Option<Duration>,
+    pub(crate) physical_reconciled: bool,
     pub(crate) stream: &'a SharedStream<T>,
     pub(crate) emit: Option<&'a DeferredBus<AudioLaneEvent>>,
 }
@@ -180,13 +182,17 @@ impl ActiveDecode {
     pub(crate) fn next_output(
         &mut self,
         cursor: &mut ResumeCursor,
+        physical_duration: Option<Duration>,
+        physical_reconciled: bool,
     ) -> DecodeResult<Option<AudioChunk>> {
-        self.next_output_inner(cursor, true)
+        self.next_output_inner(cursor, physical_duration, physical_reconciled, true)
     }
 
     fn next_output_inner(
         &mut self,
         cursor: &mut ResumeCursor,
+        physical_duration: Option<Duration>,
+        physical_reconciled: bool,
         allow_holdback: bool,
     ) -> DecodeResult<Option<AudioChunk>> {
         if allow_holdback && self.transition_holds_output() {
@@ -213,6 +219,12 @@ impl ActiveDecode {
         self.active.observe_visible_origin(&chunk);
         chunk.meta.visible_origin = self.active.visible_origin();
         chunk.meta.media_origin = self.active.media_origin();
+        chunk.meta.media_end = self.active.media_end(
+            self.gapless_mode,
+            physical_duration,
+            None,
+            physical_reconciled,
+        );
         chunk.meta.source_revision = self.discontinuity_revision;
         cursor.record(&chunk);
         if let Some(observer) = &mut self.observer {
@@ -224,8 +236,10 @@ impl ActiveDecode {
     pub(crate) fn next_output_unheld(
         &mut self,
         cursor: &mut ResumeCursor,
+        physical_duration: Option<Duration>,
+        physical_reconciled: bool,
     ) -> DecodeResult<Option<AudioChunk>> {
-        self.next_output_inner(cursor, false)
+        self.next_output_inner(cursor, physical_duration, physical_reconciled, false)
     }
 
     pub(crate) fn output_spec(&self) -> kithara_signal::AudioSpec {
@@ -456,7 +470,7 @@ mod tests {
         assert!(decode.active().staged_span().is_none());
         assert!(
             decode
-                .next_output(&mut cursor)
+                .next_output(&mut cursor, None, false)
                 .expect("steady output remains valid")
                 .is_some()
         );
@@ -503,7 +517,7 @@ mod tests {
         let mut cursor = ResumeCursor::default();
 
         let output = decode
-            .next_output(&mut cursor)
+            .next_output(&mut cursor, None, false)
             .expect("observer saturation does not fail playback")
             .expect("observer saturation does not consume playback PCM");
 
@@ -734,18 +748,18 @@ mod tests {
 
         assert!(
             decode
-                .next_output(&mut cursor)
+                .next_output(&mut cursor, None, false)
                 .expect("held output remains valid")
                 .is_none()
         );
         let output = decode
-            .next_output_unheld(&mut cursor)
+            .next_output_unheld(&mut cursor, None, false)
             .expect("unheld output remains valid")
             .expect("EOF drain must release the held outgoing tail");
         assert_eq!(output.meta.frames, 128);
         assert!(
             decode
-                .next_output_unheld(&mut cursor)
+                .next_output_unheld(&mut cursor, None, false)
                 .expect("drained output remains valid")
                 .is_none()
         );
@@ -997,7 +1011,7 @@ mod tests {
             "the follow-up transition must not freeze an active join"
         );
         let output = decode
-            .next_output(&mut cursor)
+            .next_output(&mut cursor, None, false)
             .expect("active join remains decodable");
 
         assert!(output.is_some(), "the prior join must keep consuming PCM");
@@ -1085,7 +1099,7 @@ mod tests {
 
         assert!(!decode.transition_holds_output());
         let output = decode
-            .next_output(&mut cursor)
+            .next_output(&mut cursor, None, false)
             .expect("preparing transition keeps active output valid");
 
         assert!(
@@ -1112,7 +1126,7 @@ mod tests {
     }
 
     impl Decoder for TerminalDecoder {
-        fn duration(&self) -> Option<Duration> {
+        fn duration(&self) -> Option<kithara_decode::DecoderDuration> {
             None
         }
 

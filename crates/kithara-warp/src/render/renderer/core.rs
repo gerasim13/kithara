@@ -736,6 +736,12 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         Ok(())
     }
 
+    /// Revision of the current speed law stamped on produced output.
+    #[must_use]
+    pub const fn render_revision(&self) -> u64 {
+        self.rate.revision()
+    }
+
     /// The engine `kind` and `keylock` ask for: keylock only where the backend
     /// has it.
     pub(super) fn stretch_for(kind: StretchKind, keylock: bool) -> (StretchKind, bool) {

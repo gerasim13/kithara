@@ -291,7 +291,6 @@ where
 /// The owner-facing receiver and source facts returned by a dispatcher load.
 pub struct OpenedTrack {
     pub pcm: Box<PlayerResource>,
-    pub duration: Option<Duration>,
     pub abr: Option<kithara_abr::AbrHandle>,
     pub metadata: TrackMetadata,
 }
@@ -301,7 +300,6 @@ impl Debug for OpenedTrack {
         formatter
             .debug_struct("OpenedTrack")
             .field("src", self.pcm.src())
-            .field("duration", &self.duration)
             .finish_non_exhaustive()
     }
 }
@@ -315,16 +313,10 @@ impl OpenedTrack {
     where
         S: HasPool<f32>,
     {
-        let duration = receiver.duration();
         let abr = receiver.abr_handle();
         let metadata = receiver.metadata().clone();
         let pcm = Box::new(PlayerResource::new(PcmConsumer::new(receiver), src, pools)?);
-        Ok(Self {
-            pcm,
-            duration,
-            abr,
-            metadata,
-        })
+        Ok(Self { pcm, abr, metadata })
     }
 }
 

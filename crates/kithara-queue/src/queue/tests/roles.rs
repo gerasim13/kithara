@@ -136,6 +136,7 @@ async fn open(
     rig: &mut mock::DeckRig<TestPools>,
     _dir: &TestTempDir,
     priorities: &mut Vec<(LaneId, ServiceClass)>,
+    sources: &mut Vec<kithara_render::mock::PacketRing>,
 ) -> LaneId {
     hang_tick!();
     let seq = queue
@@ -147,7 +148,20 @@ async fn open(
         .seq();
     let mut loaded = crate::mock::loaded_request(rig, seq).await;
     hang_reset!();
-    loaded.opened.duration = Some(Duration::from_secs(10));
+    let source = loaded
+        .opened
+        .pcm
+        .next_chunk_info()
+        .expect("prepared fixture source");
+    let (opened, packets) = crate::mock::opened_with_source(
+        loaded.opened,
+        kithara_signal::AudioChunkInfo {
+            media_end: Some(Duration::from_secs(10)),
+            ..source
+        },
+    );
+    loaded.opened = opened;
+    sources.push(packets);
     let lane = loaded.lane;
     dispatcher(queue, rig, Some(loaded), priorities);
     lane
@@ -181,7 +195,8 @@ async fn track_state_is_leading() {
     let (mut queue, first, second, mut rig, dir) = pending_selection();
     queue.config.action_at_item_end = ActionAtItemEnd::None;
     let mut priorities = Vec::new();
-    open(&mut queue, &mut rig, &dir, &mut priorities).await;
+    let mut sources = Vec::new();
+    open(&mut queue, &mut rig, &dir, &mut priorities, &mut sources).await;
     deck(&mut queue, &mut rig, &mut priorities);
     assert!(
         queue
@@ -190,7 +205,7 @@ async fn track_state_is_leading() {
     );
 
     select_successor(&mut queue, &mut rig, second);
-    open(&mut queue, &mut rig, &dir, &mut priorities).await;
+    open(&mut queue, &mut rig, &dir, &mut priorities, &mut sources).await;
     let fades = deck(&mut queue, &mut rig, &mut priorities);
     let incoming = queue
         .active
@@ -241,7 +256,7 @@ async fn track_state_is_leading() {
             )
             .expect("actual preload");
     });
-    open(&mut queue, &mut rig, &dir, &mut priorities).await;
+    open(&mut queue, &mut rig, &dir, &mut priorities, &mut sources).await;
     deck(&mut queue, &mut rig, &mut priorities);
     assert!(
         !queue
@@ -294,8 +309,9 @@ async fn track_state_maps_to_service_class(#[case] phase: &str, #[case] expected
     let (mut queue, first, second, mut rig, dir) = pending_selection();
     queue.config.action_at_item_end = ActionAtItemEnd::None;
     let mut priorities = Vec::new();
+    let mut sources = Vec::new();
     hang_tick!();
-    let first_lane = open(&mut queue, &mut rig, &dir, &mut priorities).await;
+    let first_lane = open(&mut queue, &mut rig, &dir, &mut priorities, &mut sources).await;
     hang_reset!();
     deck(&mut queue, &mut rig, &mut priorities);
     let lane = match phase {
@@ -312,7 +328,7 @@ async fn track_state_maps_to_service_class(#[case] phase: &str, #[case] expected
         }
         "fading_in" | "fading_out" => {
             select_successor(&mut queue, &mut rig, second);
-            let second_lane = open(&mut queue, &mut rig, &dir, &mut priorities).await;
+            let second_lane = open(&mut queue, &mut rig, &dir, &mut priorities, &mut sources).await;
             let fades = deck(&mut queue, &mut rig, &mut priorities);
             let (item, dir, lane) = if phase == "fading_in" {
                 (second, FadeDir::In, second_lane)
@@ -343,7 +359,7 @@ async fn track_state_maps_to_service_class(#[case] phase: &str, #[case] expected
             })
             .expect("actual preload");
             hang_tick!();
-            let lane = open(&mut queue, &mut rig, &dir, &mut priorities).await;
+            let lane = open(&mut queue, &mut rig, &dir, &mut priorities, &mut sources).await;
             hang_reset!();
             deck(&mut queue, &mut rig, &mut priorities);
             let active = queue

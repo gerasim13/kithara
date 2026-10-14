@@ -89,6 +89,9 @@ impl<S> Audio<S> {
             /// Original raw coordinate of track-media zero.
             #[must_use]
             pub fn media_origin(&self) -> Option<Duration>;
+            /// Logical media endpoint owned by the current source generation.
+            #[must_use]
+            pub fn media_end(&self) -> Option<Duration>;
             /// Original raw coordinate of the first visible PCM frame.
             #[must_use]
             pub fn visible_origin(&self) -> Option<Duration>;
@@ -509,6 +512,7 @@ impl<S: 'static> AudioSource for Audio<S> {
         to self {
             fn set_host_sample_rate(&mut self, rate: NonZeroU32);
             fn media_origin(&self) -> Option<Duration>;
+            fn media_end(&self) -> Option<Duration>;
             fn visible_origin(&self) -> Option<Duration>;
         }
         to self.source {

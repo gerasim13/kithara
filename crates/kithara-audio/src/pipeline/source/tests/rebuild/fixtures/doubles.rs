@@ -41,8 +41,10 @@ impl Drop for TestDecoder {
 }
 
 impl Decoder for TestDecoder {
-    fn duration(&self) -> Option<Duration> {
-        Some(Duration::from_secs(60))
+    fn duration(&self) -> Option<kithara_decode::DecoderDuration> {
+        Some(kithara_decode::DecoderDuration::RawLength(
+            Duration::from_secs(60),
+        ))
     }
 
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
@@ -75,8 +77,10 @@ impl Decoder for TestDecoder {
 pub(in crate::pipeline::source) struct FailingDecoder;
 
 impl Decoder for FailingDecoder {
-    fn duration(&self) -> Option<Duration> {
-        Some(Duration::from_secs(60))
+    fn duration(&self) -> Option<kithara_decode::DecoderDuration> {
+        Some(kithara_decode::DecoderDuration::RawLength(
+            Duration::from_secs(60),
+        ))
     }
 
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
@@ -106,8 +110,10 @@ pub(in crate::pipeline::source) struct ProfileCountingDecoder {
 }
 
 impl Decoder for ProfileCountingDecoder {
-    fn duration(&self) -> Option<Duration> {
-        Some(Duration::from_secs(60))
+    fn duration(&self) -> Option<kithara_decode::DecoderDuration> {
+        Some(kithara_decode::DecoderDuration::RawLength(
+            Duration::from_secs(60),
+        ))
     }
 
     fn gapless_profile(&self, _codec: Option<AudioCodec>) -> GaplessProfile {
@@ -192,8 +198,10 @@ impl Drop for RouteSignalDecoder {
 }
 
 impl Decoder for RouteSignalDecoder {
-    fn duration(&self) -> Option<Duration> {
-        Some(Duration::from_secs(60))
+    fn duration(&self) -> Option<kithara_decode::DecoderDuration> {
+        Some(kithara_decode::DecoderDuration::RawLength(
+            Duration::from_secs(60),
+        ))
     }
 
     fn gapless_profile(&self, _codec: Option<AudioCodec>) -> GaplessProfile {

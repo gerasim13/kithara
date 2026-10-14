@@ -118,12 +118,7 @@ impl<S> PlayerImpl<S> {
 
     #[must_use]
     pub fn attached(&self) -> bool {
-        self.attaching.is_some()
-            || self.loading.is_none()
-                && !matches!(
-                    self.status,
-                    TrackStatus::Idle | TrackStatus::Loading | TrackStatus::Released
-                )
+        self.attaching.is_some() || self.attach_at.is_some()
     }
 
     pub(super) fn raw_position(&self, position: Position) -> Result<Position, PlayError> {
@@ -141,14 +136,13 @@ impl<S> PlayerImpl<S> {
             && let Some(slot) = pass.deck.slots.get(seat.index())
         {
             self.mark = slot.mark;
-            if slot
-                .mark
-                .is_some_and(|mark| mark.lane.segment == self.segment)
+            if let Some(source) = slot.source.filter(|info| info.segment == self.segment)
                 && self.attach_at.is_some()
                 && !matches!(self.status, TrackStatus::Released)
             {
-                self.visible_origin = slot.visible_origin;
-                self.media_origin = slot.media_origin;
+                self.visible_origin = source.visible_origin;
+                self.media_origin = source.media_origin;
+                self.duration = source.media_end;
             }
             if slot
                 .mark
@@ -159,9 +153,6 @@ impl<S> PlayerImpl<S> {
             {
                 self.position = Position::from_secs_f64(slot.position).saturating_sub(origin);
             }
-            if slot.duration.is_finite() && slot.duration > 0.0 {
-                self.duration = Some(Duration::from_secs_f64(slot.duration));
-            }
         }
     }
 
@@ -171,7 +162,7 @@ impl<S> PlayerImpl<S> {
     ) -> Result<Vec<(u64, Seq, PlannedChange<'_>)>, PlayError> {
         let mut commands: Vec<(u64, Seq, PlannedChange<'_>)> = Vec::new();
         for operation in &self.lane_commands {
-            if operation.applied == Some(false) {
+            if operation.applied() == Some(false) {
                 continue;
             }
             let frame = match &operation.command {
@@ -198,7 +189,7 @@ impl<S> PlayerImpl<S> {
                     let landing = frame
                         .checked_add(self.declick.get() as u64)
                         .ok_or(PlayError::Untimed)?;
-                    let superseded = self.lane_commands.iter().any(|next| next.seq != operation.seq && next.applied != Some(false)
+                    let superseded = self.lane_commands.iter().any(|next| next.seq != operation.seq && next.applied() != Some(false)
                         && matches!(next.command, LaneCommand::Jump { .. })
                         && matches!(next.when, When::At(at) if at.segment == mark.lane.segment && (at.frame > frame || at.frame == frame && next.seq > operation.seq) && at.frame < landing));
                     if !superseded {
@@ -321,7 +312,7 @@ impl<S> PlayerImpl<S> {
                     segment: self.segment,
                     session,
                     command,
-                    applied: None,
+                    verdict: None,
                 }
             }));
         Ok(seq)

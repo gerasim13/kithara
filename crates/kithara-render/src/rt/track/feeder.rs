@@ -2,9 +2,8 @@ use std::ops::Range;
 
 use kithara_audio::FailureSource;
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
-use kithara_decode::TrackMetadata;
 use kithara_platform::{maybe_send::WasmSend, sync::Arc, time::Duration};
-use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, SegmentId, SessionFrame, SourceSpan};
+use kithara_signal::{AudioChunk, AudioChunkInfo, SegmentId, SessionFrame, SourceSpan};
 use kithara_test_macros as kithara;
 use kithara_warp::{PresentationFrontier, RenderContext, WarpMapRevision};
 
@@ -22,8 +21,8 @@ pub struct PlayerResource {
     pub(super) lane: LaneFrame,
     #[field(get, vis = "pub(super)", copy)]
     position: Option<SourceSpan>,
-    media_origin: Option<Duration>,
-    visible_origin: Option<Duration>,
+    /// Immutable source timing from the current segment's observed packet.
+    observed: Option<AudioChunkInfo>,
     mapped: bool,
     awaiting_segment: bool,
     pub(super) eof: bool,
@@ -61,8 +60,7 @@ impl PlayerResource {
                 frame: 0,
             },
             position: None,
-            media_origin: None,
-            visible_origin: None,
+            observed: None,
             mapped: false,
             awaiting_segment: false,
             eof: false,
@@ -75,78 +73,32 @@ impl PlayerResource {
         &self.src
     }
 
-    delegate::delegate! {
-        to self.consumer.get().receiver {
-            #[must_use]
-            pub fn spec(&self) -> AudioSpec;
-            #[must_use]
-            pub fn metadata(&self) -> &TrackMetadata;
-        }
-    }
-
-    #[must_use]
-    pub fn duration(&self) -> f64 {
-        self.consumer
-            .get()
-            .receiver
-            .duration()
-            .map_or(0.0, |duration| duration.as_secs_f64())
-    }
-
     /// Media zero from the same immutable PCM metadata as the current raw mark.
     #[must_use]
     pub const fn media_origin(&self) -> Option<Duration> {
-        self.media_origin
+        match self.observed {
+            Some(info) => info.media_origin,
+            None => None,
+        }
     }
 
     /// Source origin from the same immutable PCM metadata as the current raw mark.
     #[must_use]
     pub fn visible_origin(&self) -> Option<Duration> {
-        self.visible_origin
+        self.observed.and_then(|info| info.visible_origin)
     }
 
-    /// Immutable next-producer metadata, independent of the consumed raw mark.
+    /// Consumed geometry with any admitted endpoint from the same source revision.
     #[must_use]
-    pub fn next_chunk_info(&self) -> Option<AudioChunkInfo> {
-        self.consumer.get().receiver.next_chunk_info()
-    }
-
-    #[must_use]
-    pub fn decoded_frontier(&self) -> f64 {
-        self.consumer
-            .get()
-            .receiver
-            .decoded_frontier()
-            .as_secs_f64()
-    }
-
-    #[must_use]
-    pub fn cached_span(&self) -> f64 {
-        self.consumer.get().receiver.cached_span().as_secs_f64()
-    }
-
-    pub(super) fn segment(&self) -> SegmentId {
-        self.lane.segment
-    }
-
-    pub(super) fn frames_until_boundary(&self) -> Option<usize> {
-        let (packet, offset) = match self.packet.as_ref() {
-            Some(packet) => (packet, self.offset),
-            None => (self.consumer.get().receiver.peek()?, 0),
-        };
-        match packet {
-            PcmPacket::Chunk(chunk) if chunk.meta.segment == self.lane.segment => {
-                Some(chunk.frames().saturating_sub(offset))
-            }
-            PcmPacket::Chunk(_) | PcmPacket::Failed { .. } => None,
+    pub(crate) fn source_info(&self) -> Option<AudioChunkInfo> {
+        let mut observed = self.observed?;
+        if let Some(terminal) = self.consumer.get().receiver.terminal_info()
+            && terminal.segment == observed.segment
+            && terminal.source_revision == observed.source_revision
+        {
+            observed.media_end = terminal.media_end;
         }
-    }
-
-    pub(super) fn frames_until_eof(&self) -> Option<usize> {
-        if self.eof {
-            return Some(0);
-        }
-        self.consumer.get().receiver.frames_until_eof(self.lane)
+        Some(observed)
     }
 
     pub(super) fn set_playing(&mut self, playing: bool) {
@@ -167,6 +119,7 @@ impl PlayerResource {
                 publisher.clear();
             }
             self.lane = LaneFrame { segment, frame: 0 };
+            self.observed = None;
             self.mapped = false;
             self.eof = false;
             self.awaiting_segment = true;
@@ -254,10 +207,10 @@ impl PlayerResource {
                     && chunk.frames() == 0 =>
             {
                 self.lane.frame = chunk.meta.lane_frame;
+                self.observed = Some(chunk.meta);
+                self.mapped = false;
                 if let Some(position) = chunk_position(chunk, 0) {
                     self.position = Some(position);
-                    self.visible_origin = chunk.meta.visible_origin;
-                    self.media_origin = chunk.meta.media_origin;
                     self.mapped = true;
                 }
                 self.eof = true;
@@ -288,6 +241,7 @@ impl PlayerResource {
         if let Some(PcmPacket::Chunk(chunk)) = next
             && chunk.meta.segment == self.lane.segment
         {
+            self.observed = Some(chunk.meta);
             self.mapped = if let Some((frame, position)) = chunk
                 .meta
                 .lane_frame
@@ -296,8 +250,6 @@ impl PlayerResource {
             {
                 self.lane.frame = frame;
                 self.position = Some(position);
-                self.visible_origin = chunk.meta.visible_origin;
-                self.media_origin = chunk.meta.media_origin;
                 true
             } else {
                 false
@@ -408,6 +360,7 @@ impl PlayerResource {
                 );
             }
             hang_reset!();
+            self.observed = Some(chunk.meta);
             self.mapped = if let Some((frame, position)) = chunk
                 .meta
                 .lane_frame
@@ -416,8 +369,6 @@ impl PlayerResource {
             {
                 self.lane.frame = frame;
                 self.position = Some(position);
-                self.visible_origin = chunk.meta.visible_origin;
-                self.media_origin = chunk.meta.media_origin;
                 true
             } else {
                 false

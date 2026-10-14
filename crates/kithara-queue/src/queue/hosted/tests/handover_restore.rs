@@ -130,7 +130,15 @@ impl HandoverRig {
         crate::mock::finish(&mut rig.queue, &mut rig.deck);
         assert_eq!(rig.queue.current, Some(rig.ids[0]));
         let slot = rig.slot(0);
-        rig.queue.deck.mixer.slots[usize::from(slot.get())].visible_origin = Some(Duration::ZERO);
+        rig.queue.deck.mixer.slots[usize::from(slot.get())].source = Some(AudioChunkInfo {
+            spec: AudioSpec::new(2, mock::SAMPLE_RATE),
+            segment: LaneFrame::default().segment,
+            source_revision: 0,
+            visible_origin: Some(Duration::ZERO),
+            media_origin: Some(Duration::ZERO),
+            media_end: Some(Duration::from_secs_f64(64.295)),
+            ..AudioChunkInfo::default()
+        });
         rig.queue.deck.mixer.slots[usize::from(slot.get())].mark = Some(SlotMark {
             session: SessionFrame::new(128),
             lane: LaneFrame::default(),
@@ -217,13 +225,12 @@ impl HandoverRig {
                         due.defer();
                         continue;
                     }
-                    let mut loaded = self
+                    let loaded = self
                         .loader
                         .load_request_fixture(*request)
                         .await
                         .expect("actual queued source");
                     self.last_lane = Some(loaded.lane);
-                    loaded.opened.duration = Some(Duration::from_secs_f64(duration));
                     due.apply(Dispatched::Loaded(loaded));
                     true
                 }
@@ -253,8 +260,15 @@ impl HandoverRig {
         crate::mock::settle(&mut self.queue, &mut self.deck, SessionFrame::new(0));
         let slot = self.slot(index);
         let snapshot = &mut self.queue.deck.mixer.slots[usize::from(slot.get())];
-        snapshot.visible_origin = Some(Duration::ZERO);
-        snapshot.media_origin = Some(Duration::ZERO);
+        snapshot.source = Some(AudioChunkInfo {
+            spec: AudioSpec::new(2, mock::SAMPLE_RATE),
+            segment: LaneFrame::default().segment,
+            source_revision: 0,
+            visible_origin: Some(Duration::ZERO),
+            media_origin: Some(Duration::ZERO),
+            media_end: Some(Duration::from_secs_f64(duration)),
+            ..AudioChunkInfo::default()
+        });
         snapshot.mark = Some(SlotMark {
             session: SessionFrame::new(0),
             lane: LaneFrame::default(),
@@ -339,7 +353,11 @@ impl HandoverRig {
         let slot = self.slot(index);
         let snapshot = &mut self.queue.deck.mixer.slots[usize::from(slot.get())];
         snapshot.position = 62.3;
-        snapshot.duration = 64.295;
+        snapshot
+            .source
+            .as_mut()
+            .expect("declared fixture source")
+            .media_end = Some(Duration::from_secs_f64(64.295));
         snapshot.mark = Some(SlotMark {
             session: SessionFrame::new(256),
             lane: LaneFrame {
@@ -371,7 +389,7 @@ impl HandoverRig {
             self.queue.current_end(),
             snapshot.as_ref().status,
             snapshot.as_ref().duration,
-            observation.visible_origin,
+            observation.source.and_then(|info| info.visible_origin),
             observation.mark,
             self.queue.target,
             self.queue.pending_handover,

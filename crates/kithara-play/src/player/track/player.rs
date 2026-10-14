@@ -2,7 +2,7 @@ use kithara_command::{Outcome, Sender, Seq, Target, When};
 use kithara_config::ConfigOwner;
 use kithara_render::{
     LaneCommand,
-    bridge::{DeckEvent, DeckPart, Fade, FadeDir, Returned},
+    bridge::{DeckEvent, DeckPart, Fade, FadeDir, PlaybackFault, Returned},
 };
 use kithara_signal::SessionFrame;
 use kithara_warp::SpeedCurve;
@@ -20,6 +20,9 @@ impl<S> Player<S> for PlayerImpl<S> {
     type Snapshot = TrackSnapshot;
 
     fn entry(&self, bound: Bound) -> Option<SessionFrame> {
+        if self.preparation_closed() {
+            return None;
+        }
         if matches!(
             self.status,
             TrackStatus::Loading | TrackStatus::Loaded | TrackStatus::Paused { .. }
@@ -39,6 +42,11 @@ impl<S> Player<S> for PlayerImpl<S> {
     ) -> Result<Option<Seq>, PlayError> {
         self.observe(out);
         self.settle_lane();
+        if !matches!(command, TrackCommand::Release)
+            && let Some(failure) = self.preparation_failure()
+        {
+            return Err(PlayError::Lane(failure));
+        }
         match command {
             TrackCommand::Load { item, position } => self.load(item, position, out),
             TrackCommand::Play { at } => self.play(at, out),
@@ -193,7 +201,11 @@ impl<S> Player<S> for PlayerImpl<S> {
                                 if Some(*slot) == self.slot)
                         })
                     {
-                        self.status = TrackStatus::Released;
+                        if !self.preparation_closed() {
+                            self.status = TrackStatus::Released;
+                        }
+                        self.attach_at = None;
+                        self.releasing = false;
                         self.mark = None;
                         self.play = None;
                         self.ready = None;
@@ -232,6 +244,7 @@ impl<S> Player<S> for PlayerImpl<S> {
                     }
                 }
                 self.observe(out);
+                transport_current &= !self.preparation_closed();
                 self.applied(seq, outcome, batch, transport_current, out)
             }
             TrackReceipt::Deck { .. } => Settled::Pending,
@@ -273,9 +286,27 @@ impl<S> Player<S> for PlayerImpl<S> {
         }
     }
 
-    fn tick(&mut self, _now: SessionFrame, out: &mut Outbox<'_, S>) {
+    fn tick(&mut self, now: SessionFrame, out: &mut Outbox<'_, S>) {
         self.observe(out);
         self.settle_lane();
+        if self.status != TrackStatus::Released
+            && let Some(failure) = self.preparation_failure()
+        {
+            if !matches!(self.status, TrackStatus::Failed { .. }) {
+                self.status = TrackStatus::Failed {
+                    at: now,
+                    fault: PlaybackFault::Source(failure),
+                };
+            }
+            self.ready = None;
+            self.play = None;
+            self.newest_epoch_pending = None;
+            self.repeat = false;
+            if let Some(attaching) = self.attaching.as_mut() {
+                attaching.play = None;
+                attaching.obsolete = true;
+            }
+        }
         self.adopt_newest_epoch(out);
         self.promote(out);
         if self.status == TrackStatus::Released {
@@ -283,7 +314,9 @@ impl<S> Player<S> for PlayerImpl<S> {
                 warn!(%error, "lane release waits for room");
             }
         } else if self.releasing && self.attaching.is_none() && self.playback_commands.is_empty() {
-            self.deferred_detach(out);
+            if let Err(error) = self.release_track(out) {
+                warn!(%error, "released replacement waits to detach");
+            }
         } else if self.attached()
             && self.ready == Some(self.segment)
             && let Some(at) = self.play
@@ -303,11 +336,7 @@ impl<S> Player<S> for PlayerImpl<S> {
             status: self.status,
             speed: self.settings.config().speed(),
             position: self.position,
-            duration: self.duration.and_then(|duration| {
-                self.visible_origin?
-                    .checked_add(duration)?
-                    .checked_sub(self.media_origin?)
-            }),
+            duration: self.duration,
             abr: self.abr.clone(),
             metadata: self.metadata.clone(),
             mark: self.mark,
@@ -317,7 +346,7 @@ impl<S> Player<S> for PlayerImpl<S> {
             pending_lane: self
                 .lane_commands
                 .iter()
-                .any(|operation| operation.applied.is_none()),
+                .any(|operation| operation.applied().is_none()),
             attached: self.attached(),
             declick: self.declick,
         }

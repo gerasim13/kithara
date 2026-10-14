@@ -161,6 +161,7 @@ async fn same_coordinate_promotion_retains_the_final_admitted_frontier() {
 #[kithara::test(tokio)]
 async fn empty_promoted_tail_keeps_its_own_resume_endpoint_without_refining_duration() {
     let mut outgoing = extent(Some(Duration::from_secs(60)), 700, true);
+    outgoing.media_origin = Some(Duration::ZERO);
     outgoing.frames = 64;
     let mut incoming = outgoing;
     incoming.origin = 0;
@@ -200,6 +201,8 @@ async fn empty_promoted_tail_keeps_its_own_resume_endpoint_without_refining_dura
     assert_eq!(source.playhead.duration(), declared);
     assert!(drain(&mut source, incoming).is_empty());
     assert_eq!(source.playhead.duration(), declared);
+    assert_eq!(source.media_end(), Some(Duration::from_millis(59_969)));
+    assert_ne!(source.media_end(), Some(original.meta.end_timestamp));
 }
 
 #[kithara::test(tokio)]

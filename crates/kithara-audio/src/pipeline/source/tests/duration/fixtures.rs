@@ -29,7 +29,8 @@ pub(super) use crate::{
 pub(super) struct PcmExtent {
     pub(super) origin: u64,
     pub(super) frames: u64,
-    pub(super) declared: Option<Duration>,
+    pub(super) declared: Option<kithara_decode::DecoderDuration>,
+    pub(super) media_origin: Option<Duration>,
     pub(super) gapless: Option<GaplessInfo>,
     pub(super) reports_origin: bool,
 }
@@ -66,9 +67,16 @@ impl Decoder for PhysicalDecoder {
     fn initial_pcm_origin(&self) -> Option<kithara_decode::PcmOrigin> {
         self.original
     }
-    fn duration(&self) -> Option<Duration> {
-        self.extent.declared
+
+    delegate::delegate! {
+        to self.extent {
+            #[field(declared)]
+            fn duration(&self) -> Option<kithara_decode::DecoderDuration>;
+            #[field]
+            fn media_origin(&self) -> Option<Duration>;
+        }
     }
+
     fn track_info(&self) -> kithara_decode::DecoderTrackInfo {
         let mut info = kithara_decode::DecoderTrackInfo::default();
         info.gapless = self.extent.gapless.map(|info| {
@@ -161,7 +169,17 @@ pub(super) async fn physical_fixture(
     let fixture = test_source(0).await;
     let rate = NonZeroU32::new(1_000).expect("fixture sample rate");
     let decoder = PhysicalDecoder::new(extent, rate, fixture.pools.clone());
-    let duration = visible_duration(decoder.duration(), decoder.gapless_profile(None), mode);
+    let profile = decoder.gapless_profile(None);
+    let origin = decoder.initial_pcm_origin().and_then(|origin| {
+        crate::pipeline::gapless::visible_origin(origin.position(), profile, mode)
+    });
+    let duration = visible_duration(
+        decoder.duration(),
+        profile,
+        mode,
+        origin,
+        decoder.media_origin(),
+    );
     let decode = ActiveDecode::new(
         DecoderGeneration::new(Box::new(decoder), Some(media_info(0)), 0, None, None, mode),
         mode,
@@ -253,7 +271,8 @@ pub(super) fn extent(declared: Option<Duration>, origin: u64, reports_origin: bo
     PcmExtent {
         origin,
         frames: 1_000,
-        declared,
+        declared: declared.map(kithara_decode::DecoderDuration::RawLength),
+        media_origin: None,
         gapless: Some(GaplessInfo::new(17, 31)),
         reports_origin,
     }

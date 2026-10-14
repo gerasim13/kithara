@@ -1,8 +1,9 @@
-use kithara_command::{Outcome, Seq, When};
+use kithara_audio::TrackFailureKind;
+use kithara_command::{Outcome, Rejection, Seq, When};
 use kithara_config::{ConfigOwner, LiveConfig};
 use kithara_render::{
     LaneCommand,
-    bridge::{DeckPart, Fade, Slot},
+    bridge::{DeckPart, Fade, PlaybackFault, Slot},
 };
 use kithara_signal::SessionFrame;
 use kithara_warp::SpeedCurve;
@@ -51,16 +52,9 @@ impl<S> PlayerImpl<S> {
             );
         }
         self.status = TrackStatus::Released;
+        self.releasing = false;
         self.release_lane(out)?;
         Ok(None)
-    }
-
-    pub(super) fn deferred_detach(&mut self, out: &mut Outbox<'_, S>) {
-        if let Some(slot) = self.slot
-            && let Err(error) = self.send_playback(When::Next, vec![DeckPart::Detach { slot }], out)
-        {
-            warn!(%error, "released replacement waits to detach");
-        }
     }
 
     pub(super) fn align(
@@ -105,7 +99,7 @@ impl<S> PlayerImpl<S> {
             let pending = self
                 .lane_commands
                 .iter()
-                .filter(|operation| operation.applied != Some(false))
+                .filter(|operation| operation.applied() != Some(false))
                 .any(|operation| {
                     let pending = match operation.when {
                         When::At(frame) => {
@@ -118,7 +112,7 @@ impl<S> PlayerImpl<S> {
                             item = u64::from(self.item),
                             seq = operation.seq.get(),
                             current_segment = self.segment.get(),
-                            applied = ?operation.applied,
+                            applied = ?operation.applied(),
                             requested_when = ?operation.when,
                             paused_resume = ?resume,
                             command = ?operation.command,
@@ -263,7 +257,7 @@ impl<S> PlayerImpl<S> {
             && speed == self.settings.config().speed()
             && !self.lane_commands.iter().any(|operation| {
                 operation.segment == self.segment
-                    && operation.applied.is_none()
+                    && operation.applied().is_none()
                     && matches!(operation.command, LaneCommand::SetSpeed(_))
             })
             && self
@@ -271,7 +265,7 @@ impl<S> PlayerImpl<S> {
                 .iter()
                 .filter(|operation| {
                     operation.segment == self.segment
-                        && operation.applied == Some(true)
+                        && operation.applied() == Some(true)
                         && matches!(operation.command, LaneCommand::SetSpeed(_))
                 })
                 .max_by_key(|operation| (operation.when, operation.seq))
@@ -310,6 +304,32 @@ impl<S> PlayerImpl<S> {
         }
     }
 
+    pub(super) fn preparation_closed(&self) -> bool {
+        matches!(
+            self.status,
+            TrackStatus::Failed { .. } | TrackStatus::Released
+        ) || self.preparation_failure().is_some()
+    }
+
+    pub(super) fn preparation_failure(&self) -> Option<TrackFailureKind> {
+        if let TrackStatus::Failed {
+            fault: PlaybackFault::Source(failure),
+            ..
+        } = self.status
+        {
+            return Some(failure);
+        }
+        let operation = self.lane_commands.iter().rev().find(|operation| {
+            matches!(operation.command,
+                LaneCommand::Segment { id, .. } | LaneCommand::SetHostRate { id, .. }
+                if id == self.segment)
+        })?;
+        match operation.verdict {
+            Some(Err(Rejection::Refused(failure))) => Some(failure),
+            _ => None,
+        }
+    }
+
     pub(super) fn settle_lane(&mut self) {
         let Some(lane) = self.lane.as_mut() else {
             return;
@@ -341,7 +361,7 @@ impl<S> PlayerImpl<S> {
                         _ => self.mark.and_then(|mark| session_at(mark, *at)),
                     };
                     operation.when = When::At(*at);
-                    operation.applied = Some(true);
+                    operation.verdict = Some(Ok(()));
                     if matches!(&operation.command, LaneCommand::SetSpeed(_)) {
                         speed_session = Some(session);
                     }
@@ -362,19 +382,21 @@ impl<S> PlayerImpl<S> {
                         .push_back((receipt.seq(), Ok((*at, session))));
                 }
                 self.engine_latency = data.engine_latency;
-                if let Some(ready) = data.ready {
+                if let Some(ready) = data.ready
+                    && !matches!(self.status, TrackStatus::Failed { .. })
+                {
                     self.ready = Some(ready);
                 }
             } else if let Outcome::Rejected(reason) = receipt.outcome() {
                 let mut speed = false;
                 for operation in operations {
-                    operation.applied = Some(false);
+                    operation.verdict = Some(Err(*reason));
                     speed |= matches!(operation.command, LaneCommand::SetSpeed(_));
                 }
                 if speed {
                     self.speed_answers.push_back((
                         receipt.seq(),
-                        Err(rejection(reason, |never| match *never {})),
+                        Err(rejection(reason, |failure| PlayError::Lane(*failure))),
                     ));
                 }
                 warn!(?reason, "lane command was rejected");

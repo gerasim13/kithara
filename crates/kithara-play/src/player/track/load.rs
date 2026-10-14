@@ -78,8 +78,8 @@ impl<S> PlayerImpl<S> {
                 if self.segment == SegmentId::FIRST {
                     self.ready = Some(SegmentId::FIRST);
                 }
-                self.duration = loaded.opened.duration;
                 let prepared = loaded.opened.pcm.next_chunk_info();
+                self.duration = prepared.and_then(|meta| meta.media_end);
                 self.visible_origin = prepared.and_then(|meta| meta.visible_origin);
                 self.media_origin = prepared.and_then(|meta| meta.media_origin);
                 self.abr = loaded.opened.abr.clone();
@@ -87,7 +87,7 @@ impl<S> PlayerImpl<S> {
                 if let Some(loading) = self.loading.as_mut() {
                     loading.opened = Some(loaded.opened);
                 }
-                if self.status == TrackStatus::Released {
+                if self.status == TrackStatus::Released || self.preparation_failure().is_some() {
                     self.loading = None;
                     if let Err(error) = self.release_lane(out) {
                         warn!(%error, "released open waits for dispatcher room");
@@ -113,7 +113,9 @@ impl<S> PlayerImpl<S> {
             Outcome::Rejected(refused) => {
                 self.loading = None;
                 self.lane = None;
-                self.status = TrackStatus::Idle;
+                if !matches!(self.status, TrackStatus::Failed { .. }) {
+                    self.status = TrackStatus::Idle;
+                }
                 Settled::Rejected {
                     seq,
                     reason: rejection(&refused, |refusal| PlayError::ItemFailed {
@@ -219,7 +221,6 @@ impl<S> PlayerImpl<S> {
         };
         loading.opened = Some(OpenedTrack {
             pcm,
-            duration: self.duration,
             abr: self.abr.clone(),
             metadata: self.metadata.clone(),
         });
@@ -227,7 +228,8 @@ impl<S> PlayerImpl<S> {
     }
 
     pub(super) fn reserved_ready(&mut self) {
-        if self.slot.is_none()
+        if !self.preparation_closed()
+            && self.slot.is_none()
             && self.ready == Some(self.segment)
             && self
                 .loading
@@ -288,12 +290,7 @@ impl<S> PlayerImpl<S> {
         }
         let loading = self.loading.as_mut().ok_or(PlayError::NotReady)?;
         let opened = loading.opened.take().ok_or(PlayError::NotReady)?;
-        let OpenedTrack {
-            pcm,
-            duration,
-            abr,
-            metadata,
-        } = opened;
+        let OpenedTrack { pcm, abr, metadata } = opened;
         match out.deck_owned(
             at,
             vec![DeckPart::Replace {
@@ -323,12 +320,7 @@ impl<S> PlayerImpl<S> {
                     } if named == slot => Some(pcm),
                     _ => None,
                 }) {
-                    loading.opened = Some(OpenedTrack {
-                        pcm,
-                        duration,
-                        abr,
-                        metadata,
-                    });
+                    loading.opened = Some(OpenedTrack { pcm, abr, metadata });
                 } else {
                     return Err(PlayError::Internal(
                         "replacement refusal did not return its original PCM".into(),

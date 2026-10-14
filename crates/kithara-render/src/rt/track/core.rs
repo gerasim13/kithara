@@ -76,6 +76,8 @@ impl PlayerTrack {
             #[must_use]
             pub fn duration(&self) -> f64;
             #[must_use]
+            pub(crate) fn source_info(&self) -> Option<kithara_signal::AudioChunkInfo>;
+            #[must_use]
             pub fn visible_origin(&self) -> Option<Duration>;
             #[must_use]
             pub fn media_origin(&self) -> Option<Duration>;

@@ -804,7 +804,12 @@ impl ProductHarness {
                         && matches!(receipt, kithara::play::Settled::Applied { seq: answered, at }
                             if answered == seq && *at >= capture_frame && *at <= first.session))));
                 if !started
-                    || initial.media_origin != capture_start.media_origin
+                    || initial
+                        .source
+                        .map(|info| (info.segment, info.source_revision, info.media_origin))
+                        != capture_start
+                            .source
+                            .map(|info| (info.segment, info.source_revision, info.media_origin))
                     || initial
                         .mark
                         .is_some_and(|mark| mark.lane.segment != first.lane.segment)
@@ -978,7 +983,7 @@ impl ProductHarness {
                         "consumption_grid": format!("{:?}", host_grid.stamp()),
                         "decoder_rates": self.decoder_rates[index],
                         "consumed_mark": format!("{:?}", consumed.mark),
-                        "media_origin_ns": consumed.media_origin.map(|origin| origin.as_nanos().to_string()),
+                        "media_origin_ns": consumed.source.and_then(|info| info.media_origin).map(|origin| origin.as_nanos().to_string()),
                     }));
                 }
                 Ok(bindings)

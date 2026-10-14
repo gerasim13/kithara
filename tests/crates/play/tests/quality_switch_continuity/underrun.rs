@@ -1,9 +1,14 @@
+use std::ops::Range;
+
 use cochlea_features::{Audio as ProbeAudio, SegmentOpts, segment_timeline};
 use kithara::{
     assets::{AssetStore, StorageBackend},
+    platform::time::SystemTime,
     play::{PlayWorker, PlayWorkerConfig},
+    queue::ItemEvent,
 };
 use kithara_integration_tests::{CreatedHls, TestServerHelper, fixture_protocol::DelayRule};
+use kithara_render::bridge::DeckSnapshot;
 
 use super::*;
 use crate::bufpool_ext::pools;
@@ -23,6 +28,110 @@ const AAC_TO_FLAC: Transition = Transition::new("aac-to-flac", AAC_HIGH, FLAC);
 struct Render {
     capture_frame: i64,
     samples: Vec<f32>,
+    blocks: Vec<CaptureBlock>,
+}
+
+#[derive(Debug)]
+struct CaptureBlock {
+    capture: Range<usize>,
+    output: Range<u64>,
+    started_unix_micros: Option<u128>,
+    before: DeckSnapshot,
+    after: DeckSnapshot,
+    item_events: Vec<ItemEvent>,
+    event_error: Option<String>,
+}
+
+impl CaptureBlock {
+    fn diagnostic(&self) -> String {
+        let lane_frames = self
+            .before
+            .slots
+            .iter()
+            .zip(&self.after.slots)
+            .map(|(before, after)| {
+                let before = before.mark?;
+                let after = after.mark?;
+                if before.lane.segment != after.lane.segment {
+                    return None;
+                }
+                after.lane.frame.checked_sub(before.lane.frame)
+            })
+            .collect::<Vec<_>>();
+        format!(
+            "capture={:?} output={:?} started_unix_micros={:?} lane_frames={lane_frames:?} metrics_before={:?} metrics_after={:?} slots_before={:#?} slots_after={:#?} item_events={:?} event_error={:?}",
+            self.capture,
+            self.output,
+            self.started_unix_micros,
+            self.before.metrics,
+            self.after.metrics,
+            self.before.slots,
+            self.after.slots,
+            self.item_events,
+            self.event_error,
+        )
+    }
+}
+
+impl Render {
+    fn silence_diagnostic(&self) -> String {
+        let mut current = 0..0;
+        let mut longest = 0..0;
+        for (frame, samples) in self.samples.chunks_exact(usize::from(CHANNELS)).enumerate() {
+            if samples
+                .iter()
+                .all(|sample| sample.abs() <= ACTIVE_SAMPLE_THRESHOLD)
+            {
+                if current.is_empty() {
+                    current.start = frame;
+                }
+                current.end = frame + 1;
+                if current.len() > longest.len() {
+                    longest = current.clone();
+                }
+            } else {
+                current = 0..0;
+            }
+        }
+        let at = self.blocks.iter().position(|block| {
+            block.capture.start <= longest.start && longest.start < block.capture.end
+        });
+        let around = at.map_or(0..0, |index| {
+            index.saturating_sub(2)..(index + 3).min(self.blocks.len())
+        });
+        let nearby = self.blocks[around]
+            .iter()
+            .map(CaptureBlock::diagnostic)
+            .collect::<Vec<_>>();
+        let underruns = self
+            .blocks
+            .iter()
+            .filter(|block| {
+                block.after.metrics.underruns() > block.before.metrics.underruns()
+                    || !block.item_events.is_empty()
+                    || block.event_error.is_some()
+            })
+            .take(8)
+            .map(CaptureBlock::diagnostic)
+            .collect::<Vec<_>>();
+        let output_silence = self.blocks.first().and_then(|block| {
+            let start = block
+                .output
+                .start
+                .checked_add(u64::try_from(longest.start).ok()?)?;
+            let end = block
+                .output
+                .start
+                .checked_add(u64::try_from(longest.end).ok()?)?;
+            Some(start..end)
+        });
+        format!(
+            "capture_source_frame={} longest_silence={longest:?} output_silence={output_silence:?} nearby=[{}] underrun_blocks_first_8=[{}]",
+            self.capture_frame,
+            nearby.join("\n"),
+            underruns.join("\n"),
+        )
+    }
 }
 
 fn target_rebuild_fixture(delay_ms: u64) -> HlsFixtureBuilder {
@@ -179,14 +288,51 @@ async fn render_to_capture_frame(player: &mut OfflinePlayer, label: &str) {
 
 #[kithara::flash(io)]
 #[kithara_test_utils::kithara::hang_watchdog]
-async fn capture_tiny_ring(prepared: &mut PreparedPlayer) -> (Vec<f32>, Vec<DecoderObservation>) {
+async fn capture_tiny_ring(
+    prepared: &mut PreparedPlayer,
+) -> (Vec<f32>, Vec<DecoderObservation>, Vec<CaptureBlock>) {
+    let mut item_events = prepared.player.player().subscribe::<ItemEvent>();
+    let mut blocks = Vec::with_capacity(OBSERVATION_FRAMES.div_ceil(BLOCK_FRAMES));
     let mut samples = Vec::with_capacity(OBSERVATION_FRAMES * usize::from(CHANNELS));
     let mut decoder_events = Vec::new();
     while samples.len() / usize::from(CHANNELS) < OBSERVATION_FRAMES {
         hang_tick!();
         let before = prepared.player.position();
         let frames = (OBSERVATION_FRAMES - samples.len() / usize::from(CHANNELS)).min(BLOCK_FRAMES);
-        samples.extend_from_slice(&render_paced(&mut prepared.player, frames).await);
+        let capture_start = samples.len() / usize::from(CHANNELS);
+        let output_start = prepared.player.host().position();
+        let started_unix_micros = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .ok()
+            .map(|duration| duration.as_micros());
+        let snapshot_before = prepared.player.deck_snapshot();
+        let block = render_paced(&mut prepared.player, frames).await;
+        let snapshot_after = prepared.player.deck_snapshot();
+        let mut observed_events = Vec::new();
+        let mut event_error = None;
+        for _ in 0..32 {
+            match item_events.try_recv() {
+                Ok(envelope) => observed_events.push(envelope.event),
+                Err(kithara::platform::tokio::sync::broadcast::error::TryRecvError::Empty) => break,
+                Err(error) => {
+                    event_error = Some(error.to_string());
+                    break;
+                }
+            }
+        }
+        if observed_events.len() == 32 {
+            event_error = Some("per-block ItemEvent capture reached 32 events".into());
+        }
+        blocks.push(CaptureBlock {
+            capture: capture_start..capture_start + frames,
+            output: output_start..prepared.player.host().position(),
+            started_unix_micros,
+            before: snapshot_before,
+            after: snapshot_after,
+            item_events: observed_events,
+            event_error,
+        });
+        samples.extend_from_slice(&block);
         if prepared.player.position() > before {
             hang_reset!();
         }
@@ -195,7 +341,7 @@ async fn capture_tiny_ring(prepared: &mut PreparedPlayer) -> (Vec<f32>, Vec<Deco
             samples.len() / usize::from(CHANNELS),
         ));
     }
-    (samples, decoder_events)
+    (samples, decoder_events, blocks)
 }
 
 async fn render_tiny_ring_control(
@@ -205,7 +351,7 @@ async fn render_tiny_ring_control(
 ) -> Render {
     let label = format!("{}-tiny-ring-control", transition.label);
     let mut prepared = prepare_tiny_ring_player(master_url, transition.from, backend, &label).await;
-    let (samples, decoder_events) = capture_tiny_ring(&mut prepared).await;
+    let (samples, decoder_events, blocks) = capture_tiny_ring(&mut prepared).await;
     assert_eq!(
         prepared.abr.current_variant_index(),
         Some(transition.from),
@@ -218,6 +364,7 @@ async fn render_tiny_ring_control(
     let result = Render {
         capture_frame: prepared.capture_frame,
         samples,
+        blocks,
     };
     prepared.close().await;
     result
@@ -235,7 +382,7 @@ async fn render_tiny_ring_switch(
         .set_mode(AbrMode::manual(transition.to))
         .unwrap_or_else(|error| panic!("request {label}: {error}"));
 
-    let (samples, decoder_events) = capture_tiny_ring(&mut prepared).await;
+    let (samples, decoder_events, blocks) = capture_tiny_ring(&mut prepared).await;
     assert_eq!(
         prepared.abr.current_variant_index(),
         Some(transition.to),
@@ -261,6 +408,7 @@ async fn render_tiny_ring_switch(
     let result = Render {
         capture_frame: prepared.capture_frame,
         samples,
+        blocks,
     };
     prepared.close().await;
     result
@@ -363,7 +511,9 @@ async fn target_rebuild_keeps_player_output_continuous(
     serial,
     timeout(Duration::from_secs(600)),
     hang_timeout_secs(3),
-    tracing("kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_play=debug")
+    tracing(
+        "kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_play=debug,kithara_audio::pipeline::decode::transition=trace,kithara_audio::pipeline::source::variant=trace"
+    )
 )]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
@@ -391,16 +541,20 @@ async fn cold_target_variant_switch_keeps_playback_uninterrupted(
         let switched_silence = longest_silent_run(&switched.samples);
         if switched_silence > control_silence.saturating_add(MAX_EXTRA_SILENT_FRAMES) {
             failures.push(format!(
-                "{} inserted an audible silent gap: switched={switched_silence} frames, control={control_silence} frames",
+                "{} inserted an audible silent gap: switched={switched_silence} frames, control={control_silence} frames; switched {}; control {}",
                 transition.label,
+                switched.silence_diagnostic(),
+                control.silence_diagnostic(),
             ));
         }
         let control_buckets = cochlea_silent_buckets(&control.samples);
         let switched_buckets = cochlea_silent_buckets(&switched.samples);
         if switched_buckets > control_buckets {
             failures.push(format!(
-                "{} produced switch-only silent buckets: switched={switched_buckets}, control={control_buckets}",
+                "{} produced switch-only silent buckets: switched={switched_buckets}, control={control_buckets}; switched {}; control {}",
                 transition.label,
+                switched.silence_diagnostic(),
+                control.silence_diagnostic(),
             ));
         }
     }

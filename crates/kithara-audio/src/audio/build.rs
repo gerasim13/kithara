@@ -139,12 +139,18 @@ impl<T: StreamType<Events = EventBus>> Audio<Stream<T>> {
         let track_info = initial.track_info();
         let metadata = initial.metadata();
         let codec = info.as_ref().and_then(|info| info.codec);
+        let profile = initial.gapless_profile(codec);
+        let mode = deps.decoder.gapless_mode();
+        let visible_origin = initial.initial_pcm_origin().and_then(|origin| {
+            crate::pipeline::gapless::visible_origin(origin.position(), profile, mode)
+        });
         let duration = visible_duration(
             initial.duration(),
-            initial.gapless_profile(codec),
-            deps.decoder.gapless_mode(),
-        )
-        .or_else(|| playhead.duration());
+            profile,
+            mode,
+            visible_origin,
+            initial.media_origin(),
+        );
         playhead.set_duration(duration);
         deps.publish_initial_events(&bus, info.as_ref(), spec, &track_info, duration, rate);
         let generation =

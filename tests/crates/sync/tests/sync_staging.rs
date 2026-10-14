@@ -166,19 +166,26 @@ async fn prepare_cue(
     rate: f64,
     cue: Start,
 ) -> Operation {
-    // Ruling: spec 4.5 leaves a paused Sync cue unchanged; Prepare maps its source cue to the next downbeat before Seek, then awaits Ready and enables Sync.
+    // Paused Sync preserves its cue. Prepare on a supplied downbeat when metered,
+    // or a supplied beat otherwise, before enabling Sync.
     let seconds = harness.start_seconds(0, cue);
     assert!((seconds * rate).is_finite(), "fixture cue is finite");
     let ArtifactSource::Value(grid) = harness.provider_grid(0) else {
         panic!("fixture grid is materialized");
     };
-    let prepared = grid
-        .as_raw()
-        .downbeats
-        .iter()
-        .find(|beat| beat.at >= seconds)
-        .expect("fixture contains the prepared downbeat")
-        .at;
+    let raw = grid.as_raw();
+    let prepared = if raw.meter.is_some() {
+        raw.downbeats
+            .iter()
+            .find(|beat| beat.at >= seconds)
+            .map(|beat| beat.at)
+    } else {
+        raw.beats
+            .iter()
+            .find(|beat| beat.at >= seconds)
+            .map(|beat| beat.at)
+    }
+    .expect("fixture contains the next supplied phase anchor");
     let control = harness.decks[0].control().clone();
     harness
         .host
@@ -404,13 +411,19 @@ async fn a_cued_sync_installs_mapped_pcm_before_anything_sounds(
         panic!("fixture grid is materialized");
     };
     let required = harness.start_seconds(0, cue);
-    let prepared = grid
-        .as_raw()
-        .downbeats
-        .iter()
-        .find(|beat| beat.at >= required)
-        .expect("fixture contains the next downbeat")
-        .at;
+    let raw = grid.as_raw();
+    let prepared = if raw.meter.is_some() {
+        raw.downbeats
+            .iter()
+            .find(|beat| beat.at >= required)
+            .map(|beat| beat.at)
+    } else {
+        raw.beats
+            .iter()
+            .find(|beat| beat.at >= required)
+            .map(|beat| beat.at)
+    }
+    .expect("fixture contains the next supplied phase anchor");
     assert!(
         (snapshot.track.position.as_secs_f64() - prepared).abs() <= 1.0 / rate,
         "the Ready segment begins at the exact prepared source frame"

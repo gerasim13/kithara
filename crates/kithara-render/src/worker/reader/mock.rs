@@ -4,7 +4,7 @@ use kithara_platform::{
     time::Duration,
 };
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, SegmentId, SourceSpan};
-use kithara_stream::{PlayheadState, PlayheadWrite, WorkerWake};
+use kithara_stream::{PlayheadRead, PlayheadState, PlayheadWrite, WorkerWake};
 use kithara_test_utils::{
     bufpool::{pools, sample_buffer},
     kithara,
@@ -52,7 +52,7 @@ impl PacketRing {
     ) -> Self {
         Self::with_wake_and_origin(
             spec,
-            duration,
+            Some(duration),
             capacity,
             reverse_capacity,
             blocking,
@@ -70,7 +70,7 @@ impl PacketRing {
     ) -> Self {
         Self::with_wake_and_origin(
             spec,
-            duration,
+            Some(duration),
             capacity,
             capacity,
             false,
@@ -79,9 +79,23 @@ impl PacketRing {
         )
     }
 
+    /// Creates packets with an explicitly known or unknown source duration.
+    #[must_use]
+    pub fn with_duration(spec: AudioSpec, duration: Option<Duration>, capacity: usize) -> Self {
+        Self::with_wake_and_origin(
+            spec,
+            duration,
+            capacity,
+            capacity,
+            false,
+            StreamWake::new(Wake::default()),
+            Duration::ZERO,
+        )
+    }
+
     fn with_wake_and_origin(
         spec: AudioSpec,
-        duration: Duration,
+        duration: Option<Duration>,
         capacity: usize,
         reverse_capacity: usize,
         blocking: bool,
@@ -93,7 +107,7 @@ impl PacketRing {
         let (playing_tx, playing_rx) = triple_buffer(&false);
         let ready = blocking.then(|| Arc::new(ThreadGate::default()));
         let playhead = Arc::new(PlayheadState::new());
-        playhead.set_duration(Some(duration));
+        playhead.set_duration(duration);
 
         Self {
             receiver: Some(PcmReceiver {
@@ -160,6 +174,16 @@ impl PacketRing {
                     end.saturating_sub(chunk.meta.visible_origin.expect("fixture original origin")),
                 ));
             }
+        }
+        if let PcmPacket::Chunk(chunk) = &mut packet
+            && chunk.meta.media_end.is_none()
+        {
+            chunk.meta.media_end = chunk
+                .meta
+                .visible_origin
+                .zip(self.playhead.duration())
+                .and_then(|(origin, length)| origin.checked_add(length))
+                .and_then(|end| end.checked_sub(chunk.meta.media_origin?));
         }
         self.producer
             .forward

@@ -1,3 +1,4 @@
+use kithara_audio::TrackFailureKind;
 use kithara_bufpool::PoolError;
 use kithara_platform::time::Duration;
 use kithara_render::{
@@ -31,6 +32,9 @@ pub enum PlayError {
 
     #[error("the deck refused a batch: {0:?}")]
     Deck(DeckRefusal),
+
+    #[error("the lane refused a batch: {0}")]
+    Lane(TrackFailureKind),
 
     #[error("item {item:?} is not on the deck and came without a resource")]
     ItemConsumed { item: TrackId },

@@ -99,6 +99,9 @@ where
             /// Exact source position represented by the lane output cursor, when established.
             #[must_use]
             pub const fn position(&self) -> Option<Duration>;
+            /// Checks the first PCM against its pending lane entry before publication.
+            pub(crate) fn check_admission(&self, meta: &AudioChunkInfo) -> Result<(), TrackFailureKind>;
+            pub(crate) fn reject_preparation(&mut self, failure: TrackFailureKind);
             /// Records successful admission of the current segment's chunk.
             pub fn admitted(&mut self);
             pub(crate) fn upstream_parked(&mut self);
@@ -697,6 +700,7 @@ where
 
         match self.source.step_track() {
             TrackStep::Produced(Fetch::Data { data, .. }) => {
+                self.lane.observe_input(data.meta);
                 if data.spec() == self.spec
                     && self.prepared_frames.is_none()
                     && self
@@ -747,6 +751,7 @@ where
             fn host_sample_rate(&self) -> Option<NonZeroU32>;
             fn media_origin(&self) -> Option<Duration>;
             fn visible_origin(&self) -> Option<Duration>;
+            fn media_end(&self) -> Option<Duration>;
             fn retire_chunk(&self, chunk: AudioChunk);
             fn finish_deferred(&mut self);
             fn warm_up(&mut self);

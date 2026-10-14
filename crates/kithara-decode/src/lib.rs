@@ -48,7 +48,9 @@ pub use gapless::{
 pub use traits::{
     Decoder, DecoderChunkOutcome, DecoderInput, DecoderSeekOutcome, InputReadOutcome,
 };
-pub use types::{BlenderProfile, DecoderTrackInfo, GaplessProfile, PcmOrigin, TrackMetadata};
+pub use types::{
+    BlenderProfile, DecoderDuration, DecoderTrackInfo, GaplessProfile, PcmOrigin, TrackMetadata,
+};
 #[cfg(all(target_arch = "wasm32", feature = "webcodecs"))]
 pub use webcodecs::probe::spawn_webcodecs_probe;
 mod consts;

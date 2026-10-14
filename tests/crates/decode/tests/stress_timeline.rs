@@ -1,7 +1,7 @@
 use std::io::Cursor;
 
 use kithara::{
-    decode::{DecoderConfig, DecoderFactory},
+    decode::{DecoderConfig, DecoderDuration, DecoderFactory},
     platform::time::Duration,
 };
 use kithara_integration_tests::bufpool_ext::{TestPools, pools};
@@ -28,7 +28,9 @@ fn stress_seeks_preserve_timeline_integrity(stress_wav: &'static [u8]) {
     )
     .unwrap();
 
-    let total_duration = decoder.duration().unwrap_or(Duration::from_secs(10));
+    let Some(DecoderDuration::RawLength(total_duration)) = decoder.duration() else {
+        panic!("the stress WAV must declare its raw PCM span length");
+    };
     let total_secs = total_duration.as_secs_f64();
 
     let mut rng = Xorshift64::new(0xDEAD_BEEF_CAFE_1337);

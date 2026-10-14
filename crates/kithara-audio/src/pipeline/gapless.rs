@@ -1,5 +1,6 @@
 use kithara_decode::{
-    GaplessMode, GaplessOutput, GaplessProfile, GaplessTailCompensation, GaplessTrimmer,
+    DecoderDuration, GaplessMode, GaplessOutput, GaplessProfile, GaplessTailCompensation,
+    GaplessTrimmer,
 };
 use kithara_platform::time::Duration;
 use kithara_signal::AudioChunk;
@@ -166,11 +167,20 @@ pub(crate) fn visible_origin(
 /// Heuristic trim keeps the raw duration until EOF reconciles the timeline.
 #[must_use]
 pub(crate) fn visible_duration(
-    raw: Option<Duration>,
+    declared: Option<DecoderDuration>,
     profile: GaplessProfile,
     mode: GaplessMode,
+    visible_origin: Option<Duration>,
+    media_origin: Option<Duration>,
 ) -> Option<Duration> {
-    let raw = raw?;
+    let raw = match declared? {
+        DecoderDuration::RawLength(raw) => raw,
+        DecoderDuration::MediaEnd(end) => {
+            return media_origin?
+                .checked_add(trimmed_media_end(end, profile, mode)?)?
+                .checked_sub(visible_origin?);
+        }
+    };
     if matches!(mode, GaplessMode::Disabled) {
         return Some(raw);
     }
@@ -188,6 +198,40 @@ pub(crate) fn visible_duration(
         .duration_for(trim_frames)
         .unwrap_or(Duration::from_nanos(u64::MAX));
     Some(raw.saturating_sub(trim))
+}
+
+fn trimmed_media_end(
+    end: Duration,
+    profile: GaplessProfile,
+    mode: GaplessMode,
+) -> Option<Duration> {
+    let trailing = if matches!(mode, GaplessMode::Disabled) {
+        0
+    } else {
+        profile.gapless().map_or(0, |info| info.trailing_frames)
+    };
+    end.checked_sub(profile.spec().duration_for(trailing).ok()?)
+}
+
+/// Projects declared or measured source geometry into the logical media endpoint.
+pub(crate) fn media_end(
+    declared: Option<DecoderDuration>,
+    profile: GaplessProfile,
+    mode: GaplessMode,
+    physical: Option<Duration>,
+    physical_origin: Option<Duration>,
+    media_origin: Option<Duration>,
+    decoded_end: Option<Duration>,
+) -> Option<Duration> {
+    if let Some((end, origin)) = decoded_end.zip(media_origin) {
+        return end.checked_sub(origin);
+    }
+    match declared {
+        Some(DecoderDuration::RawLength(_)) | None => physical_origin?
+            .checked_add(physical?)?
+            .checked_sub(media_origin?),
+        Some(DecoderDuration::MediaEnd(end)) => trimmed_media_end(end, profile, mode),
+    }
 }
 
 #[cfg(test)]
@@ -221,6 +265,38 @@ mod tests {
             ),
             Some(Duration::from_nanos(expected_ns)),
         );
+        assert_eq!(
+            media_end(
+                Some(DecoderDuration::MediaEnd(Duration::from_secs(2))),
+                profile,
+                GaplessMode::CodecPriming,
+                None,
+                None,
+                None,
+                None,
+            ),
+            Some(Duration::from_secs(2)),
+            "default leading priming cannot shorten a logical endpoint",
+        );
+        let leading_only = GaplessProfile::new(
+            spec,
+            Some(kithara_decode::GaplessInfo::new(leading, 0)),
+            None,
+            0,
+        );
+        assert_eq!(
+            media_end(
+                Some(DecoderDuration::MediaEnd(Duration::from_secs(2))),
+                leading_only,
+                GaplessMode::MediaOnly,
+                None,
+                None,
+                None,
+                Some(Duration::from_secs(1)),
+            ),
+            Some(Duration::from_secs(2)),
+            "unrepresentable raw media zero does not erase a logical declaration",
+        );
     }
 
     #[kithara::test]
@@ -234,6 +310,32 @@ mod tests {
         assert_eq!(
             visible_origin(Duration::MAX, profile, GaplessMode::CodecPriming),
             None
+        );
+        assert_eq!(
+            media_end(
+                Some(DecoderDuration::MediaEnd(Duration::ZERO)),
+                profile,
+                GaplessMode::Disabled,
+                None,
+                None,
+                None,
+                None,
+            ),
+            Some(Duration::ZERO),
+        );
+        let padded =
+            GaplessProfile::new(spec, Some(kithara_decode::GaplessInfo::new(0, 1)), None, 0);
+        assert_eq!(
+            media_end(
+                Some(DecoderDuration::MediaEnd(Duration::ZERO)),
+                padded,
+                GaplessMode::MediaOnly,
+                None,
+                None,
+                None,
+                None,
+            ),
+            None,
         );
     }
 

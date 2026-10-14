@@ -40,7 +40,7 @@ struct PrefillDecoder {
 impl Decoder for PrefillDecoder {
     delegate::delegate! {
         to self.inner {
-            fn duration(&self) -> Option<Duration>;
+            fn duration(&self) -> Option<kithara_decode::DecoderDuration>;
             fn spec(&self) -> AudioSpec;
             fn update_byte_len(&self, len: u64);
         }

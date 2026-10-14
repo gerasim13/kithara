@@ -142,9 +142,12 @@ mod tests {
                 .build();
         let decoder = DecoderFactory::create_with_probe(Cursor::new(bytes), Some("mp3"), config)
             .expect("headerless MP3 opens through the software factory");
-        let duration = decoder
+        let crate::DecoderDuration::RawLength(duration) = decoder
             .duration()
-            .expect("headerless MP3 needs bitrate estimation during reader construction");
+            .expect("headerless MP3 needs bitrate estimation during reader construction")
+        else {
+            panic!("standalone MP3 duration must describe a raw span");
+        };
         assert!((180.0..190.0).contains(&duration.as_secs_f64()));
     }
 }

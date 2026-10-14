@@ -131,8 +131,8 @@ where
         Some(crate::PcmOrigin::new(Duration::ZERO, Duration::ZERO))
     }
 
-    fn duration(&self) -> Option<Duration> {
-        Some(self.duration)
+    fn duration(&self) -> Option<crate::DecoderDuration> {
+        Some(crate::DecoderDuration::RawLength(self.duration))
     }
     fn update_byte_len(&self, _len: u64) {}
 

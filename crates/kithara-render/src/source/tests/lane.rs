@@ -638,8 +638,7 @@ fn scheduled_identity_native_changes_preserve_the_decoded_suffix(
 ) {
     const ENGAGE: u64 = 1_000;
     const RETURN: u64 = 2_000;
-    // A scheduled 2x landing rounds 1,999 source frames to 1,000 output frames.
-    const RATE_SOURCE_FRAMES: u64 = 1_999;
+    const RATE_SOURCE_FRAMES: u64 = (RETURN - ENGAGE) * 2;
     let pools = pools();
     let (mut source, mut lane) =
         lane_over(&pools, 3, |_| &quarter, 2.0, (StretchKind::Identity, false));
@@ -680,16 +679,11 @@ fn scheduled_identity_native_changes_preserve_the_decoded_suffix(
         } else {
             chunk.lane_start + RATE_SOURCE_FRAMES - (RETURN - ENGAGE)
         };
-        if (ENGAGE..RETURN).contains(&chunk.lane_start) {
-            assert!(
-                chunk.source_start.abs_diff(expected_source) <= 1,
-                "backend changes preserve source position at lane frame {}: {} vs {expected_source}",
-                chunk.lane_start,
-                chunk.source_start
-            );
-        } else {
-            assert_eq!(chunk.source_start, expected_source);
-        }
+        assert_eq!(
+            chunk.source_start, expected_source,
+            "backend changes preserve the exact source position at lane frame {}",
+            chunk.lane_start
+        );
         if chunk.lane_start >= RETURN {
             assert!(
                 chunk.samples.iter().all(|sample| *sample == quarter[0]),

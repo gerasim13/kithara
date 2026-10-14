@@ -2,7 +2,7 @@
 use std::{
     cmp::Ordering,
     convert::Infallible,
-    num::{NonZeroU32, NonZeroUsize},
+    num::{NonZeroU32, NonZeroU128, NonZeroUsize},
     task::{Context, Poll},
 };
 
@@ -11,7 +11,7 @@ use kithara_bufpool::HasPool;
 use kithara_command::{Inbox, Protocol, Seq};
 use kithara_dsp::param::SmootherConfig;
 use kithara_platform::time::Duration;
-use kithara_signal::{AudioChunk, AudioSpec, FrameCount, SegmentId};
+use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, SegmentId};
 use kithara_warp::{SpeedCurve, StretchKind, WarpRenderer};
 use num_traits::ToPrimitive;
 
@@ -58,7 +58,7 @@ impl Protocol for LaneProtocol {
     type Applied = LaneApplied;
     type Clock = LaneFrame;
     type Command = LaneCommand;
-    type Refusal = Infallible;
+    type Refusal = TrackFailureKind;
     type Target = Infallible;
 
     fn frames_since(at: LaneFrame, start: LaneFrame) -> Option<u64> {
@@ -120,7 +120,31 @@ pub struct LaneSetup {
 struct Preparation {
     seq: Seq,
     at: LaneFrame,
+    entry: LaneFrame,
+    source: Option<AudioChunkInfo>,
+    render_revision: u64,
     latency: FrameCount,
+}
+
+impl Preparation {
+    fn accepts(&self, meta: &AudioChunkInfo) -> bool {
+        let Some(span) = meta.source_span else {
+            return false;
+        };
+        if meta.segment != self.entry.segment
+            || meta.lane_frame != self.entry.frame
+            || meta.render_revision != self.render_revision
+            || span.render_revision() != self.render_revision
+            || span.output_frames() != u64::from(meta.frames)
+        {
+            return false;
+        }
+        self.source.is_some_and(|source| {
+            span.sample_rate() == source.spec.sample_rate
+                && span.source_ratio_at(0)
+                    == Some((u128::from(source.frame_offset), NonZeroU128::MIN))
+        })
+    }
 }
 
 pub(crate) struct Lane {
@@ -196,6 +220,36 @@ impl Lane {
                 engine_latency: pending.latency,
                 ready,
             });
+        }
+    }
+
+    pub(crate) fn observe_input(&mut self, meta: AudioChunkInfo) {
+        if meta.frames > 0
+            && matches!(self.preload, Preload::Filling(0))
+            && let Some(pending) = &mut self.pending
+            && pending.source.is_none()
+        {
+            pending.source = Some(meta);
+        }
+    }
+
+    pub(crate) fn check_admission(&self, meta: &AudioChunkInfo) -> Result<(), TrackFailureKind> {
+        if matches!(self.preload, Preload::Filling(0))
+            && self
+                .pending
+                .as_ref()
+                .is_some_and(|pending| !pending.accepts(meta))
+        {
+            return Err(TrackFailureKind::Render);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn reject_preparation(&mut self, failure: TrackFailureKind) {
+        if let Some(pending) = self.pending.take()
+            && let Some(due) = self.inbox.resume(pending.seq, pending.at, pending.at)
+        {
+            due.refuse(failure);
         }
     }
 
@@ -352,8 +406,22 @@ impl Lane {
                 let seq = due.defer();
                 self.finish_pending(None);
                 self.preload = Preload::Filling(0);
-                self.pending = Some(Preparation { seq, at, latency });
+                self.pending = Some(Preparation {
+                    seq,
+                    at,
+                    entry: self.cursor,
+                    source: None,
+                    render_revision: warp.render_revision(),
+                    latency,
+                });
             } else {
+                if matches!(self.preload, Preload::Filling(0))
+                    && let Some(pending) = &mut self.pending
+                    && pending.entry == self.cursor
+                {
+                    pending.render_revision = warp.render_revision();
+                    pending.latency = latency;
+                }
                 due.apply(LaneApplied {
                     engine_latency: latency,
                     ready: restored_same.then_some(self.cursor.segment),

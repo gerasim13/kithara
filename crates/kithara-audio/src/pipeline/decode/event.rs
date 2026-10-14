@@ -1,4 +1,4 @@
-use kithara_decode::DecoderBackend;
+use kithara_decode::{DecoderBackend, GaplessMode};
 use kithara_events::DeferredBus;
 use kithara_signal::AudioSpec;
 use kithara_stream::MediaInfo;
@@ -14,6 +14,7 @@ use crate::{
 
 pub(crate) struct GenerationInstalled<'a> {
     pub(crate) generation: &'a DecoderGeneration,
+    pub(crate) gapless_mode: GaplessMode,
     pub(crate) playback_resampler_backend: &'static str,
     pub(crate) backend: DecoderBackend,
     pub(crate) cause: DecoderChangeCause,
@@ -29,12 +30,13 @@ pub(crate) fn enqueue_generation_installed(
         backend,
         cause,
         generation,
+        gapless_mode,
         host_sample_rate,
         playback_resampler_backend,
         recreates_on_route,
     } = installed;
     let decoder = generation.decoder();
-    let duration = decoder.duration();
+    let duration = generation.visible_duration(gapless_mode);
     let media_info = generation.media_info();
     let spec = decoder.spec();
     let track_info = decoder.track_info();

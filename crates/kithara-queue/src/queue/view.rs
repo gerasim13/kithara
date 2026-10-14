@@ -471,7 +471,6 @@ mod tests {
         track.duration = Some(Duration::from_secs(200));
         snapshot.track = Some(track);
         snapshot.slot = Some(SlotSnapshot {
-            duration: 200.0,
             frontier,
             cached,
             ..SlotSnapshot::default()
@@ -482,7 +481,9 @@ mod tests {
 
     #[kithara::test]
     fn buffered_covers_the_cached_span() {
-        assert_eq!(view_of(4.0, 120.0).buffered, Some(120.0));
+        let view = view_of(4.0, 120.0);
+        assert_eq!(view.buffered, Some(120.0));
+        assert_eq!(view.duration, Some(200.0));
     }
 
     #[kithara::test]
@@ -543,7 +544,6 @@ mod tests {
         published.slot = Some(SlotSnapshot {
             position: 12.0,
             frontier: 20.0,
-            duration: 180.0,
             ..SlotSnapshot::default()
         });
         published.sample_rate = 48_000;

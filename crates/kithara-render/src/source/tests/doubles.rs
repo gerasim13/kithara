@@ -633,7 +633,20 @@ pub(in crate::source) fn emit(
                 }
             }
             TrackStep::StateChanged | TrackStep::Blocked(_) => {}
-            TrackStep::Eof => panic!("the lane ended at frame {cursor} before {until}"),
+            TrackStep::Eof => panic!(
+                "the lane ended at frame {cursor} before {until}; mappings={:?}; raw_head={}; rendered_end={:?}; pending_input={}",
+                emitted
+                    .iter()
+                    .map(|chunk| (
+                        chunk.lane_start,
+                        chunk.source_start,
+                        chunk.samples.len() / 2
+                    ))
+                    .collect::<Vec<_>>(),
+                source.source.head.load(Ordering::Acquire),
+                source.warp.rendered_source_end(),
+                source.pending_input.is_some(),
+            ),
             _ => panic!("the lane failed at frame {cursor} before {until}"),
         }
         flush_deferred(source);

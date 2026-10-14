@@ -145,6 +145,13 @@ impl PcmReceiver {
         }
     }
 
+    pub(crate) fn terminal_info(&self) -> Option<kithara_signal::AudioChunkInfo> {
+        let PcmPacket::Chunk(chunk) = self.forward.last()? else {
+            return None;
+        };
+        chunk.meta.end_of_track.then_some(chunk.meta)
+    }
+
     #[must_use]
     pub const fn position(&self) -> Duration {
         self.position

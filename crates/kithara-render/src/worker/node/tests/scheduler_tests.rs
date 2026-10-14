@@ -33,6 +33,7 @@ struct MockSource {
     should_panic: bool,
     chunks_to_produce: usize,
     cursor: usize,
+    origin: u64,
 }
 
 impl MockSource {
@@ -41,6 +42,7 @@ impl MockSource {
             pools,
             chunks_to_produce: chunks,
             cursor: 0,
+            origin: 0,
             ready: true,
             should_panic: false,
         }
@@ -51,6 +53,9 @@ impl AudioSource for MockSource {
     type Chunk = AudioChunk;
     fn seek(&mut self, target: Duration) -> Result<SeekOutcome, kithara_audio::AudioReadError> {
         self.cursor = 0;
+        self.origin = AudioSpec::new(2, NonZeroU32::new(44_100).expect("fixture rate"))
+            .frame_at(target)
+            .expect("fixture seek coordinate");
         Ok(SeekOutcome::Landed {
             target,
             landed_at: target,
@@ -71,7 +76,7 @@ impl AudioSource for MockSource {
         if self.cursor >= self.chunks_to_produce {
             return TrackStep::Eof;
         }
-        let frame = u64::try_from(self.cursor).expect("source cursor fits");
+        let frame = self.origin + u64::try_from(self.cursor).expect("source cursor fits");
         self.cursor += 1;
         TrackStep::Produced(Fetch::data(empty_chunk(&self.pools, frame)))
     }

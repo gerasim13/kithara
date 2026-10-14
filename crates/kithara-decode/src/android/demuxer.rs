@@ -50,7 +50,10 @@ impl AndroidMediaExtractorDemuxer {
             channels,
             sample_rate,
             duration: if duration_us > 0 {
-                u64::try_from(duration_us).ok().map(Duration::from_micros)
+                u64::try_from(duration_us)
+                    .ok()
+                    .map(Duration::from_micros)
+                    .map(crate::DecoderDuration::RawLength)
             } else {
                 None
             },
@@ -72,7 +75,7 @@ impl AndroidMediaExtractorDemuxer {
 }
 
 impl Demuxer for AndroidMediaExtractorDemuxer {
-    fn duration(&self) -> Option<Duration> {
+    fn duration(&self) -> Option<crate::DecoderDuration> {
         self.track_info.duration
     }
 
@@ -111,7 +114,12 @@ impl Demuxer for AndroidMediaExtractorDemuxer {
             return self
                 .track_info
                 .duration
-                .map(|duration| DemuxSeekOutcome::PastEof { duration })
+                .and_then(|duration| match duration {
+                    crate::DecoderDuration::RawLength(duration) => {
+                        Some(DemuxSeekOutcome::PastEof { duration })
+                    }
+                    crate::DecoderDuration::MediaEnd(_) => None,
+                })
                 .ok_or(DecodeError::SeekFailed {
                     detail: "extractor seek reached EOF without a duration",
                 });
