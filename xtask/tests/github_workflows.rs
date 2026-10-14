@@ -1031,9 +1031,10 @@ fn stress_authorization_admits_only_the_owner_on_a_fork() {
         "10#$COUNT <= 10#$MAX_COUNT",
         "\"self-hosted\", \"linux\", \"x64\", \"kithara-stress\"",
         "<<< \"$RUNNER_LABELS\"",
-        "[[ \"$SHARDS\" =~ ^[1-9][0-9]*$ ]]",
+        "[[ \"$SHARDS\" =~ ^[1-3]$ ]]",
         "SHARDS=\"${SHARDS:-1}\"",
-        "jq -nc --argjson n \"$SHARDS\" '[range($n)]'",
+        "for ((shard = 0; shard < SHARDS; shard++))",
+        "echo \"shards=$shards\"",
         ">> \"$GITHUB_OUTPUT\"",
     ] {
         assert!(
@@ -1055,6 +1056,44 @@ fn stress_authorization_admits_only_the_owner_on_a_fork() {
         mapping_field(outputs, "shard-count").as_str(),
         Some("${{ steps.shards.outputs.shard-count }}")
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn stress_shard_plan_preserves_the_fleet_ceiling() -> anyhow::Result<()> {
+    let workflow = github_workflow("stress.yml");
+    let authorization = first_step(workflow_job(workflow_jobs(&workflow), "authorize"));
+    let script = mapping_field(authorization, "run")
+        .as_str()
+        .expect("authorization is a script");
+    let shard_start = script
+        .find("if [[ -n \"$SHARDS\" ]]; then")
+        .expect("authorization contains the shard plan");
+    let script = &script[shard_start..];
+    let temp = tempfile::tempdir()?;
+    let outputs = temp.path().join("outputs");
+    for (shards, expected) in [
+        ("", Some("shards=[0]\nshard-count=1\n")),
+        ("1", Some("shards=[0]\nshard-count=1\n")),
+        ("3", Some("shards=[0,1,2]\nshard-count=3\n")),
+        ("4", None),
+        ("0", None),
+    ] {
+        fs::write(&outputs, "")?;
+        let output = Command::new("bash")
+            .args(["-euo", "pipefail", "-c", script])
+            .env("SHARDS", shards)
+            .env("GITHUB_OUTPUT", &outputs)
+            .output()?;
+        if let Some(expected) = expected {
+            assert!(output.status.success(), "{shards:?}: {output:?}");
+            assert_eq!(fs::read_to_string(&outputs)?, expected);
+        } else {
+            assert_eq!(output.status.code(), Some(1), "{shards:?}: {output:?}");
+            assert_eq!(fs::read_to_string(&outputs)?, "");
+        }
+    }
+    Ok(())
 }
 
 #[test]

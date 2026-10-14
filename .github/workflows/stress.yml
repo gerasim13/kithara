@@ -127,11 +127,18 @@ jobs:
             exit 1
           }
           if [[ -n "$SHARDS" ]]; then
-            [[ "$SHARDS" =~ ^[1-9][0-9]*$ ]] || { echo "invalid shard count"; exit 1; }
+            [[ "$SHARDS" =~ ^[1-3]$ ]] || { echo "shard count must be between 1 and 3"; exit 1; }
           fi
           SHARDS="${SHARDS:-1}"
+          shards='['
+          separator=''
+          for ((shard = 0; shard < SHARDS; shard++)); do
+            shards+="$separator$shard"
+            separator=','
+          done
+          shards+=']'
           {
-            echo "shards=$(jq -nc --argjson n "$SHARDS" '[range($n)]')"
+            echo "shards=$shards"
             echo "shard-count=$SHARDS"
           } >> "$GITHUB_OUTPUT"
 
