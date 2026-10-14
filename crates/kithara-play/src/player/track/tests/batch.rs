@@ -1,6 +1,7 @@
 use std::num::NonZeroUsize;
 
 use super::*;
+use crate::Bound;
 
 #[kithara::test]
 #[case::ready(true)]
@@ -17,6 +18,11 @@ fn a_segment_entry_keeps_its_native_curve_and_waits_for_native_readiness(#[case]
     })
     .expect("cue");
     let segment = track.segment;
+    let bound = Bound::AtOrAfter(frame(128));
+    assert_eq!(track.ready, None);
+    assert_eq!(track.entry(bound), None);
+    track.status = TrackStatus::Loading;
+    assert_eq!(track.entry(bound), None);
     assert_ne!(
         track.lane_commands.last().expect("segment command").segment,
         segment
@@ -49,6 +55,10 @@ fn a_segment_entry_keeps_its_native_curve_and_waits_for_native_readiness(#[case]
         applied
     );
     assert_eq!(track.prepared_speed(), applied.then_some(&curve));
+    assert_eq!(track.ready, applied.then_some(segment));
+    assert_eq!(track.entry(bound), applied.then_some(frame(128)));
+    track.status = TrackStatus::Loaded;
+    assert_eq!(track.entry(bound), applied.then_some(frame(128)));
 }
 
 #[kithara::test]
@@ -172,6 +182,11 @@ fn an_older_native_ready_receipt_cannot_admit_the_replacement_segment() {
     })
     .expect("replacement cue");
     let current = track.segment;
+    let bound = Bound::AtOrAfter(frame(128));
+    assert_eq!(track.ready, None);
+    assert_eq!(track.entry(bound), None);
+    track.status = TrackStatus::Loading;
+    assert_eq!(track.entry(bound), None);
     assert_ne!(old, current);
     inbox.drain();
     inbox
@@ -192,6 +207,11 @@ fn an_older_native_ready_receipt_cannot_admit_the_replacement_segment() {
             .prepare_entry(frame(128), out))
         .expect("old receipt intake")
     );
+    assert_eq!(track.ready, Some(old));
+    assert_eq!(track.entry(bound), None);
+    track.status = TrackStatus::Loaded;
+    assert_eq!(track.entry(bound), None);
+    track.status = TrackStatus::Loading;
     assert!(track.snapshot().pending_lane);
     assert_eq!(track.prepared_speed(), Some(&curve));
     inbox
@@ -212,6 +232,10 @@ fn an_older_native_ready_receipt_cannot_admit_the_replacement_segment() {
             .prepare_entry(frame(128), out))
         .expect("current receipt intake")
     );
+    assert_eq!(track.ready, Some(current));
+    assert_eq!(track.entry(bound), Some(frame(128)));
+    track.status = TrackStatus::Loaded;
+    assert_eq!(track.entry(bound), Some(frame(128)));
     assert!(!track.snapshot().pending_lane);
 }
 

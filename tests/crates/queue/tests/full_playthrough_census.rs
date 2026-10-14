@@ -26,10 +26,10 @@ use ::kithara::{
     decode::DecoderBackend,
     events::TrackId,
     platform::{
-        sync::Arc,
+        sync::{Arc, Mutex},
         time::{self, Duration},
     },
-    play::{ResourceConfig, ResourceSrc},
+    play::{PlayerFactory, ResourceConfig, ResourceSrc, TrackFactory},
     queue::{AdvanceReason, Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, Transition},
     stream::AudioCodec,
 };
@@ -38,7 +38,10 @@ use kithara_integration_tests::{
     cochlea::CochleaReport,
     event::TestEvent,
     fixture_protocol::PcmPattern,
-    offline::{LOCAL_LOAD_DEADLINE, OfflinePlayer, OfflinePlayerOptions},
+    offline::{
+        LOCAL_LOAD_DEADLINE, OfflinePlayer, OfflinePlayerOptions,
+        linked::{LinkObservation, ObservedFactory},
+    },
     test_defaults::packaged_content_frames,
     usdt_trace::{self, ProbeEvent},
     waits::wait_for_loader_done_event,
@@ -279,6 +282,7 @@ struct Census {
     harness: OfflinePlayer,
     queue: QueueControl<TestPools>,
     tracks: Vec<TrackId>,
+    startup: Option<Arc<Mutex<LinkObservation>>>,
 }
 
 impl Census {
@@ -287,11 +291,33 @@ impl Census {
             harness,
             queue,
             tracks,
+            startup,
         } = self;
         drop(queue);
         drop(tracks);
+        drop(startup);
         harness.close().await;
     }
+}
+
+fn census_queue<F: TrackFactory<TestPools>>(
+    harness: &OfflinePlayer,
+    seam: Seam,
+    factory: F,
+) -> Queue<TestPools, F> {
+    Queue::new(
+        QueueConfig::with_factory(factory)
+            .prep(harness.resource_prep().clone())
+            .settings(
+                ::kithara::queue::QueueSettings::builder()
+                    .crossfade(::kithara::play::CrossfadeSettings {
+                        duration: seam.crossfade_seconds(),
+                        ..::kithara::play::CrossfadeSettings::default()
+                    })
+                    .build(),
+            )
+            .build(),
+    )
 }
 
 #[kithara::hang_watchdog(ctx = String)]
@@ -313,18 +339,21 @@ async fn build_queue(
         ::kithara::assets::AssetStore::builder(harness.resource_prep().worker.pools().clone())
             .build()
     });
-    let config = QueueConfig::builder()
-        .prep(harness.resource_prep().clone())
-        .settings(
-            ::kithara::queue::QueueSettings::builder()
-                .crossfade(::kithara::play::CrossfadeSettings {
-                    duration: seam.crossfade_seconds(),
-                    ..::kithara::play::CrossfadeSettings::default()
-                })
-                .build(),
-        )
-        .build();
-    let queue: QueueControl<TestPools> = harness.insert_control(Queue::new(config)).await;
+    let startup = (origins == LOCAL_QUEUE && backend.is_none())
+        .then(|| Arc::new(Mutex::new(LinkObservation::default())));
+    let queue: QueueControl<TestPools> = if let Some(observation) = &startup {
+        harness
+            .insert_control(census_queue(
+                &harness,
+                seam,
+                ObservedFactory::new(observation.clone()),
+            ))
+            .await
+    } else {
+        harness
+            .insert_control(census_queue(&harness, seam, PlayerFactory))
+            .await
+    };
     harness
         .run(&queue, |control| control.set_level(CENSUS_LEVEL))
         .await
@@ -417,6 +446,7 @@ async fn build_queue(
         harness,
         queue,
         tracks,
+        startup,
     })
 }
 
@@ -756,6 +786,45 @@ fn trace_census(log: &QueueLog, firings: &[Firing], ordered: &[(u64, Active)], s
     }
 }
 
+fn trace_startup(census: &Census, firings: &[Firing], rendered: &[f32]) {
+    let Some(observation) = &census.startup else {
+        return;
+    };
+    let item = census.tracks[0].as_u64();
+    let observed = observation.lock();
+    tracing::info!(
+        target: "kithara_tests::census",
+        loads = ?observed.loads,
+        starts = ?observed.starts,
+        receipts = ?observed.placement_receipts,
+        first_audible_frame = rendered
+            .chunks_exact(usize::from(CHANNELS))
+            .position(|frame| frame[0].abs() >= SILENCE_THRESHOLD),
+        "queue census startup receipts"
+    );
+    for record in observed
+        .timeline
+        .iter()
+        .filter(|record| record.get("item").and_then(|item| item.as_u64()) == Some(item))
+        .take(24)
+    {
+        tracing::info!(
+            target: "kithara_tests::census",
+            ?record,
+            "queue census startup timeline"
+        );
+    }
+    for firing in firings.iter().filter(|firing| firing.track == item).take(6) {
+        tracing::info!(
+            target: "kithara_tests::census",
+            item,
+            output = firing.block,
+            served = firing.served,
+            "queue census startup render"
+        );
+    }
+}
+
 async fn census_provenance(
     prepared: PreparedTracks,
     seam: Seam,
@@ -878,6 +947,7 @@ async fn census_provenance(
         "a crossfade must be announced exactly at the configured boundaries"
     );
 
+    trace_startup(&census, &firings, &rendered);
     census.close().await;
     drop(trace);
     Some(Take { rendered, ordered })

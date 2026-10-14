@@ -189,7 +189,28 @@ where
         }
     }
 
-    /// Step 2: an attached or prepared replacement can enter; an open in flight waits.
+    pub(super) fn initial_attachment(&self, index: usize) -> Result<bool, PlayError> {
+        let prepared = self.current.is_none()
+            && self
+                .active
+                .iter()
+                .all(|active| matches!(active.role, Role::Incoming | Role::Preloaded))
+            && !self.active.is_replacement(index)
+            && self.active.get(index).is_some_and(|active| {
+                let snapshot = active.track.snapshot();
+                matches!(active.load, Some(LoadState::Attaching(_)))
+                    && snapshot.as_ref().status == PlayingStatus::Loading
+                    && snapshot.as_ref().attached
+            });
+        if !prepared {
+            return Ok(false);
+        }
+        let earliest = self.earliest()?;
+        Ok(self.target.is_some_and(
+            |target| matches!(target.bound, Some(Bound::AtOrAfter(frame)) if frame <= earliest),
+        ))
+    }
+
     pub(in crate::queue) fn transition_loaded(
         &mut self,
         out: &mut Outbox<'_, S>,
@@ -241,16 +262,19 @@ where
         {
             return Ok(None);
         }
-        if !matches!(
-            active.track.snapshot().as_ref().status,
-            PlayingStatus::Loaded
-                | PlayingStatus::Paused { .. }
-                | PlayingStatus::Playing { .. }
-                | PlayingStatus::Faded { .. }
-        ) {
+        let initial_attachment = target.playing && self.initial_attachment(index)?;
+        if !initial_attachment
+            && !matches!(
+                active.track.snapshot().as_ref().status,
+                PlayingStatus::Loaded
+                    | PlayingStatus::Paused { .. }
+                    | PlayingStatus::Playing { .. }
+                    | PlayingStatus::Faded { .. }
+            )
+        {
             return Ok(None);
         }
-        if let Some(load) = active.load {
+        if let Some(load) = active.load.filter(|_| !initial_attachment) {
             if !self.finish_load(index)? {
                 self.cancel_target(out).map_err(play_error)?;
                 return Ok(None);

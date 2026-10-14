@@ -795,8 +795,27 @@ async fn play_with_a_pending_selection_enters_that_selection() {
 #[case::stale_first(true)]
 async fn a_pause_over_a_scheduled_entry_settles_current_paused(#[case] reverse: bool) {
     let (mut queue, first, _, mut rig, dir) = pending_selection();
+    let scheduled = SessionFrame::new(256);
+    queue.target.as_mut().expect("selected target").bound =
+        Some(kithara_play::Bound::AtOrAfter(scheduled));
     answer_load(&mut queue, &mut rig, &dir).await;
+    assert!(
+        queue.pending_handover.is_none(),
+        "the future entry waits for native attachment"
+    );
     answer_deck(&mut queue, &mut rig, SessionFrame::new(0));
+    assert_eq!(queue.current, None);
+    assert!(queue.pending_handover.is_some());
+    rig.ring.publish().expect("publish future entry");
+    rig.inbox.drain();
+    assert!(
+        rig.inbox
+            .scope(rig.scope)
+            .expect("deck scope")
+            .next_due(SessionFrame::new(0), 1)
+            .is_none(),
+        "the scheduled entry cannot start on Next"
+    );
     with_outbox(&mut queue, &mut rig, |queue, out| {
         Player::apply(queue, QueueCommand::Pause { at: When::Next }, out)
     })
@@ -872,7 +891,7 @@ async fn a_pause_over_a_scheduled_entry_settles_current_paused(#[case] reverse: 
         rig.inbox
             .scope(rig.scope)
             .expect("deck scope")
-            .next_due(SessionFrame::new(128), 1)
+            .next_due(scheduled, 1)
             .is_none()
     );
 }

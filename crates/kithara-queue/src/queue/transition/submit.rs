@@ -60,7 +60,11 @@ where
             && (self.config.settings.gapless() || target.settings.duration == 0.0)
             && predecessor.is_some()
             && !replacement;
-        let at = When::At(frame);
+        let at = if self.initial_attachment(incoming)? && frame == self.earliest()? {
+            When::Next
+        } else {
+            When::At(frame)
+        };
         let sent = if chain {
             self.active
                 .get_mut(incoming)

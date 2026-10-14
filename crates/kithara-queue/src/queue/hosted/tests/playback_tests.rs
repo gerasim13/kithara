@@ -124,12 +124,13 @@ async fn play_retries_the_current_track_after_its_prefetch_failed() {
         let receipt = std::future::poll_fn(|context| {
             hang_tick!();
             let _ = dispatcher.as_mut().poll(context);
-            if let Some(receipt) = sender.receipts().next() {
-                hang_reset!();
-                Poll::Ready(receipt)
-            } else {
-                Poll::Pending
-            }
+            sender.receipts().next().map_or_else(
+                || Poll::Pending,
+                |receipt| {
+                    hang_reset!();
+                    Poll::Ready(receipt)
+                },
+            )
         })
         .await;
         let (outcome, _) = receipt.into();

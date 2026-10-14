@@ -22,7 +22,7 @@ impl<S> Player<S> for PlayerImpl<S> {
     fn entry(&self, bound: Bound) -> Option<SessionFrame> {
         if matches!(
             self.status,
-            TrackStatus::Loaded | TrackStatus::Paused { .. }
+            TrackStatus::Loading | TrackStatus::Loaded | TrackStatus::Paused { .. }
         ) && self.ready != Some(self.segment)
         {
             return None;

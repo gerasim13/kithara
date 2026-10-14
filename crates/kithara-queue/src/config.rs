@@ -233,16 +233,20 @@ mod document_tests {
     #[kithara::test(native)]
     #[kithara::hang_watchdog(timeout = kithara_platform::time::Duration::from_secs(1))]
     fn zero_event_bus_capacity_is_rejected() {
-        hang_tick!();
-        let error = serde_yaml_ng::from_str::<QueueConfigPatch>("event_bus_capacity: 0\n")
-            .expect_err("a document cannot construct a zero-capacity event bus");
-        hang_reset!();
+        for capacity in [0, 1] {
+            hang_tick!();
+            let error = serde_yaml_ng::from_str::<QueueConfigPatch>(&format!(
+                "event_bus_capacity: {capacity}\n"
+            ))
+            .expect_err("a queue document cannot configure the event bus");
+            hang_reset!();
 
-        assert!(error.to_string().contains("event_bus_capacity"), "{error}");
-        assert!(
-            !error.to_string().contains("unknown field"),
-            "zero capacity must fail validation, not disappear from the document schema: {error}"
-        );
+            assert!(error.to_string().contains("event_bus_capacity"), "{error}");
+            assert!(
+                error.to_string().contains("unknown field"),
+                "the retired event bus field must be rejected at every capacity: {error}"
+            );
+        }
     }
 
     #[kithara::test(native)]
