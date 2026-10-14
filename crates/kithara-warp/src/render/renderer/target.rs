@@ -9,15 +9,15 @@ use kithara_stretch::{
 use num_traits::ToPrimitive;
 use tracing::warn;
 
-use super::{renderer::WarpRenderer, renderer_residency::SourceResidency};
+use super::{core::WarpRenderer, residency::SourceResidency};
 
 #[derive(Default)]
-pub(super) struct PreparedTarget {
-    pub(super) activation_scratch: Option<SampleBuffer>,
-    pub(super) engine: Option<Box<dyn ElasticEngine>>,
-    pub(super) pending_source: Option<SampleBuffer>,
-    pub(super) residency: Option<SourceResidency>,
-    pub(super) scratch: Option<SampleBuffer>,
+pub(in crate::render) struct PreparedTarget {
+    pub(in crate::render) activation_scratch: Option<SampleBuffer>,
+    pub(in crate::render) engine: Option<Box<dyn ElasticEngine>>,
+    pub(in crate::render) pending_source: Option<SampleBuffer>,
+    pub(in crate::render) residency: Option<SourceResidency>,
+    pub(in crate::render) scratch: Option<SampleBuffer>,
 }
 
 impl<S> WarpRenderer<S>
@@ -42,7 +42,7 @@ where
             .build()
     }
 
-    pub(super) fn prepare_target(
+    pub(in crate::render) fn prepare_target(
         (kind, keylock): (StretchKind, bool),
         backends: ElasticBackendConfig,
         source_block_frames: NonZeroUsize,
@@ -232,7 +232,7 @@ where
 
     /// Service backend/spec changes and deferred destruction from the
     /// scheduler shell, never from the checked render core.
-    pub(super) fn service_target(&mut self, spec: AudioSpec) {
+    pub(in crate::render) fn service_target(&mut self, spec: AudioSpec) {
         drop(self.retired_engine.take());
         drop(self.projection.retired.take());
         if self.prepared_quantum.is_none()

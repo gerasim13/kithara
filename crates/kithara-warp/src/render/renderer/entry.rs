@@ -5,14 +5,14 @@ use kithara_signal::AudioChunkInfo;
 use kithara_stretch::ElasticError;
 use num_traits::ToPrimitive;
 
-use super::{renderer::WarpRenderer, renderer_projection::ProjectionPreparation};
+use super::{core::WarpRenderer, projection::ProjectionPreparation};
 
 impl<S: HasPool<f32>> WarpRenderer<S> {
     /// Places a decoded span against an entered activation before anything
     /// is rendered: audio before the activation source is history, and audio
     /// that lands after it, with no history admitted, can never present the
     /// activation's first frame.
-    pub(super) fn entry_boundary(
+    pub(in crate::render) fn entry_boundary(
         &self,
         activation: crate::WarpCursor,
         meta: AudioChunkInfo,

@@ -5,13 +5,13 @@ use kithara_stretch::{ElasticCapabilities, ElasticError, ElasticRequest};
 use kithara_test_macros as kithara;
 use num_traits::ToPrimitive;
 
-use super::renderer::{PreparedQuantum, WarpRenderer};
+use super::core::{PreparedQuantum, WarpRenderer};
 
 impl<S> WarpRenderer<S>
 where
     S: HasPool<f32>,
 {
-    pub(super) fn advance_speed(
+    pub(in crate::render) fn advance_speed(
         &mut self,
         target: f32,
         output_frames: usize,
@@ -33,7 +33,7 @@ where
         Ok(())
     }
 
-    pub(super) fn preview_speed(
+    pub(in crate::render) fn preview_speed(
         &self,
         target: f32,
         output_frames: usize,
@@ -128,14 +128,14 @@ where
         Ok(())
     }
 
-    pub(super) fn balanced_source_block(remaining: usize, limit: usize) -> usize {
+    pub(in crate::render) fn balanced_source_block(remaining: usize, limit: usize) -> usize {
         let partitions = remaining.div_ceil(limit);
         remaining.div_ceil(partitions)
     }
 
     /// Backends require a non-empty output, so a sub-frame source span stays pending until its
     /// cumulative exact output reaches one full frame; EOF rounds the final residual once.
-    pub(super) fn output_frames(
+    pub(in crate::render) fn output_frames(
         source_frames: usize,
         stretch: f64,
         remainder: f64,
@@ -235,7 +235,7 @@ where
         Ok(None)
     }
 
-    pub(super) fn source_block_limit(
+    pub(in crate::render) fn source_block_limit(
         stretch: f64,
         capabilities: ElasticCapabilities,
         output_limit: usize,
@@ -273,7 +273,7 @@ where
 
     /// Source frames for the next quantum and, when `output_limit` ends it on a
     /// scheduled frame, the exact output it renders there.
-    pub(super) fn source_frames_for_quantum(
+    pub(in crate::render) fn source_frames_for_quantum(
         &mut self,
         meta: AudioChunkInfo,
         remaining: usize,
@@ -382,7 +382,7 @@ where
 {
     /// Render `frames` source frames; with `landing`, the last engine request
     /// emits exactly what is left of that many output frames.
-    pub(super) fn render_active(
+    pub(in crate::render) fn render_active(
         &mut self,
         meta: AudioChunkInfo,
         samples: &[f32],
@@ -551,7 +551,10 @@ where
         )
     }
 
-    pub(super) fn render_terminal_pending(&mut self, channels: usize) -> Result<(), ElasticError> {
+    pub(in crate::render) fn render_terminal_pending(
+        &mut self,
+        channels: usize,
+    ) -> Result<(), ElasticError> {
         let source_frames = self.pending_frames(channels);
         if source_frames == 0 {
             self.output_remainder = 0.0;
@@ -622,7 +625,7 @@ where
 impl<S: HasPool<f32>> WarpRenderer<S> {
     fn prime_resident_request(
         &mut self,
-        request: super::renderer_residency::ResidentRequest,
+        request: super::residency::ResidentRequest,
         channels: usize,
     ) -> Result<(), ElasticError> {
         let resident = self.residency.as_mut().ok_or(ElasticError::PoolCapacity)?;
@@ -675,7 +678,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         Ok(())
     }
 
-    pub(super) fn process_resident_projection(
+    pub(in crate::render) fn process_resident_projection(
         &mut self,
         meta: AudioChunkInfo,
         channels: usize,
@@ -775,7 +778,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         let output = self.scratch.take().ok_or(ElasticError::PoolCapacity)?;
         Ok(Some(AudioChunk::new(meta, output)))
     }
-    pub(super) fn render_resident_projection(
+    pub(in crate::render) fn render_resident_projection(
         &mut self,
         chunk: AudioChunk,
         prepared: PreparedQuantum,

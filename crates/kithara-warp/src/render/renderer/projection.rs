@@ -6,32 +6,32 @@ use kithara_signal::AudioChunkInfo;
 use kithara_stretch::ElasticError;
 use num_traits::ToPrimitive;
 
-use super::renderer::{PreparedQuantum, WarpRenderer};
+use super::core::{PreparedQuantum, WarpRenderer};
 use crate::{AssetFrame, BeatGridQuery, MapAxis, SessionAxis, SessionFrame, WarpPlan};
 
 #[derive(Clone, Copy)]
-pub(super) struct ProjectedQuantum {
-    pub(super) output_start: SessionFrame,
-    pub(super) end: crate::WarpCursor,
-    pub(super) output_frames: usize,
-    pub(super) output_offset: usize,
+pub(in crate::render) struct ProjectedQuantum {
+    pub(in crate::render) output_start: SessionFrame,
+    pub(in crate::render) end: crate::WarpCursor,
+    pub(in crate::render) output_frames: usize,
+    pub(in crate::render) output_offset: usize,
 }
 
 #[derive(Default)]
-pub(super) struct ProjectionState {
-    pub(super) active: Option<Arc<WarpPlan>>,
-    pub(super) cursor: Option<crate::WarpCursor>,
-    pub(super) prepared: Option<Arc<WarpPlan>>,
-    pub(super) retired: Option<Arc<WarpPlan>>,
-    pub(super) selected: Option<Arc<WarpPlan>>,
-    pub(super) output_frames: usize,
+pub(in crate::render) struct ProjectionState {
+    pub(in crate::render) active: Option<Arc<WarpPlan>>,
+    pub(in crate::render) cursor: Option<crate::WarpCursor>,
+    pub(in crate::render) prepared: Option<Arc<WarpPlan>>,
+    pub(in crate::render) retired: Option<Arc<WarpPlan>>,
+    pub(in crate::render) selected: Option<Arc<WarpPlan>>,
+    pub(in crate::render) output_frames: usize,
     /// The plan was entered at its activation before any output reached it,
     /// so decoded audio before the activation source is history, not output.
-    pub(super) entering: bool,
+    pub(in crate::render) entering: bool,
 }
 
 impl ProjectionState {
-    pub(super) fn new(config: &crate::WarpConfig) -> Self {
+    pub(in crate::render) fn new(config: &crate::WarpConfig) -> Self {
         let selected = config.plan().load();
         let entering = config.enters_plan();
         Self {
@@ -45,7 +45,7 @@ impl ProjectionState {
     }
 }
 
-pub(super) enum ProjectionPreparation {
+pub(in crate::render) enum ProjectionPreparation {
     Pending,
     Service,
     Manual(usize),
@@ -56,7 +56,7 @@ pub(super) enum ProjectionPreparation {
 }
 
 impl<S: HasPool<f32>> WarpRenderer<S> {
-    pub(super) fn prepare_projection(
+    pub(in crate::render) fn prepare_projection(
         &mut self,
         meta: AudioChunkInfo,
         remaining: usize,
@@ -214,7 +214,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     /// A finite source endpoint can map between session frames. Invert that
     /// covered endpoint before rounding to the engine lattice; do not extend
     /// geometry or manufacture a rate beyond it.
-    pub(super) fn projected_endpoint(
+    pub(in crate::render) fn projected_endpoint(
         plan: &WarpPlan,
         output: SessionFrame,
         source_limit: u64,
@@ -239,7 +239,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         }
     }
 
-    pub(super) fn projected_output_offset(
+    pub(in crate::render) fn projected_output_offset(
         &self,
         plan: &WarpPlan,
         output: SessionFrame,
@@ -257,7 +257,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .ok_or(ElasticError::SampleCountOverflow)
     }
 
-    pub(super) fn projected_source(
+    pub(in crate::render) fn projected_source(
         plan: &WarpPlan,
         output: SessionFrame,
     ) -> Result<u64, ElasticError> {
@@ -271,7 +271,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
 
     /// A decoder suffix may be shorter than one mapped output frame; the worker retains it and
     /// assembles the exact request across chunks.
-    pub(super) fn projected_span(
+    pub(in crate::render) fn projected_span(
         &self,
         plan: &WarpPlan,
         start: SessionFrame,
@@ -426,7 +426,10 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         })
     }
 
-    pub(super) fn projected_tail_cursor(&self, output_frames: usize) -> Option<ProjectedQuantum> {
+    pub(in crate::render) fn projected_tail_cursor(
+        &self,
+        output_frames: usize,
+    ) -> Option<ProjectedQuantum> {
         let plan = self.projection.active.as_ref()?;
         let previous = self.projection.cursor?.output();
         let sample_rate = plan.output_axis()?.sample_rate();
@@ -445,7 +448,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         })
     }
 
-    pub(super) fn resize_projected_quantum(
+    pub(in crate::render) fn resize_projected_quantum(
         &self,
         mut prepared: PreparedQuantum,
         meta: AudioChunkInfo,

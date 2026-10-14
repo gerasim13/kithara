@@ -4,40 +4,40 @@ use kithara_stretch::{ElasticError, ElasticLatency, ElasticRequest};
 use num_traits::ToPrimitive;
 
 use super::{
-    renderer::{PreparedQuantum, RateTarget, WarpRenderer},
-    renderer_projection::ProjectedQuantum,
+    core::{PreparedQuantum, RateTarget, WarpRenderer},
+    projection::ProjectedQuantum,
 };
 use crate::WarpPlan;
 
 #[derive(Clone, Copy)]
-pub(super) struct ResidentRequest {
-    pub(super) prime: Option<(u64, usize, ElasticRequest)>,
-    pub(super) projection: ProjectedQuantum,
-    pub(super) rate: RateTarget,
-    pub(super) source_end: u64,
-    pub(super) source_start: u64,
+pub(in crate::render) struct ResidentRequest {
+    pub(in crate::render) prime: Option<(u64, usize, ElasticRequest)>,
+    pub(in crate::render) projection: ProjectedQuantum,
+    pub(in crate::render) rate: RateTarget,
+    pub(in crate::render) source_end: u64,
+    pub(in crate::render) source_start: u64,
 }
 
 /// A bounded decoded-source window, shared by activation and backend replacement.
 /// It contains history and lookahead, never independently scheduled output.
-pub(super) struct SourceResidency {
-    pub(super) end: Option<u64>,
-    pub(super) prepared: Option<ResidentRequest>,
-    pub(super) replacement: SampleBuffer,
+pub(in crate::render) struct SourceResidency {
+    pub(in crate::render) end: Option<u64>,
+    pub(in crate::render) prepared: Option<ResidentRequest>,
+    pub(in crate::render) replacement: SampleBuffer,
     /// The tail a retiring engine drains into, with what still fades out of
     /// `replacement` blended in; it becomes `replacement` once complete.
-    pub(super) next_replacement: SampleBuffer,
-    pub(super) samples: SampleBuffer,
-    pub(super) primed: bool,
-    pub(super) start: i64,
-    pub(super) history_frames: usize,
-    pub(super) offset: usize,
-    pub(super) replacement_offset: usize,
+    pub(in crate::render) next_replacement: SampleBuffer,
+    pub(in crate::render) samples: SampleBuffer,
+    pub(in crate::render) primed: bool,
+    pub(in crate::render) start: i64,
+    pub(in crate::render) history_frames: usize,
+    pub(in crate::render) offset: usize,
+    pub(in crate::render) replacement_offset: usize,
 }
 
 impl SourceResidency {
     /// Only the portion before the physical recording is known silence.
-    pub(super) fn append(
+    pub(in crate::render) fn append(
         &mut self,
         meta: AudioChunkInfo,
         input: &[f32],
@@ -92,7 +92,7 @@ impl SourceResidency {
 
     /// Fade `output` in from the retired engine's tail, continuing where the
     /// previous output left the fade.
-    pub(super) fn blend_replacement(
+    pub(in crate::render) fn blend_replacement(
         &mut self,
         output: &mut [f32],
         channels: usize,
@@ -122,7 +122,7 @@ impl SourceResidency {
         Ok(())
     }
 
-    pub(super) fn clear(&mut self) {
+    pub(in crate::render) fn clear(&mut self) {
         self.samples.clear();
         self.replacement.clear();
         self.next_replacement.clear();
@@ -146,7 +146,11 @@ impl SourceResidency {
         Ok(())
     }
 
-    pub(super) fn pad_to(&mut self, end: u64, channels: usize) -> Result<(), ElasticError> {
+    pub(in crate::render) fn pad_to(
+        &mut self,
+        end: u64,
+        channels: usize,
+    ) -> Result<(), ElasticError> {
         let stored_frames = self.samples.len().saturating_sub(self.offset) / channels;
         let stored_end = self
             .start
@@ -168,7 +172,7 @@ impl SourceResidency {
         Ok(())
     }
 
-    pub(super) fn prepare<S: HasPool<f32>>(
+    pub(in crate::render) fn prepare<S: HasPool<f32>>(
         pools: &PoolRegion<S>,
         reusable: Option<Self>,
         history_frames: usize,
@@ -207,7 +211,7 @@ impl SourceResidency {
         Ok(residency)
     }
 
-    pub(super) fn range(
+    pub(in crate::render) fn range(
         &self,
         start: i64,
         end: u64,
@@ -240,7 +244,7 @@ impl SourceResidency {
         Ok(first..last)
     }
 
-    pub(super) fn retain_from(&mut self, source: u64, channels: usize) {
+    pub(in crate::render) fn retain_from(&mut self, source: u64, channels: usize) {
         let first = i64::try_from(source)
             .unwrap_or(i64::MAX)
             .saturating_sub(i64::try_from(self.history_frames).unwrap_or(i64::MAX));
@@ -254,7 +258,7 @@ impl SourceResidency {
             .saturating_add(i64::try_from(remove / channels).unwrap_or(i64::MAX));
     }
 
-    pub(super) fn retain_manual(
+    pub(in crate::render) fn retain_manual(
         &mut self,
         mut meta: AudioChunkInfo,
         input: &[f32],
@@ -281,7 +285,7 @@ impl SourceResidency {
 }
 
 impl<S: HasPool<f32>> WarpRenderer<S> {
-    pub(super) fn continue_resident_projection(
+    pub(in crate::render) fn continue_resident_projection(
         &self,
         meta: AudioChunkInfo,
         remaining: usize,
@@ -428,7 +432,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     /// frames per session output frame.
     /// Short chunks whose whole-frame endpoints advance no audible source are
     /// retained; the next chunk projects the output span afresh.
-    pub(super) fn prepare_resident_projection(
+    pub(in crate::render) fn prepare_resident_projection(
         &mut self,
         plan: &WarpPlan,
         start: SessionFrame,

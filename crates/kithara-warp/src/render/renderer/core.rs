@@ -13,8 +13,8 @@ use num_traits::cast::AsPrimitive;
 use tracing::warn;
 
 use super::{
-    renderer_projection::{ProjectedQuantum, ProjectionState},
-    renderer_target::PreparedTarget,
+    projection::{ProjectedQuantum, ProjectionState},
+    target::PreparedTarget,
 };
 use crate::{
     ActiveRegion, RegionPlan, RenderReader, RenderSnapshot, SpeedCurve, WarpConfig, WarpCursor,
@@ -23,7 +23,7 @@ use crate::{
 
 /// The speed a renderer renders at and the revision that set it.
 #[derive(Clone, Copy, Debug)]
-pub(super) struct RateTarget {
+pub(in crate::render) struct RateTarget {
     speed: f32,
     revision: u64,
 }
@@ -36,36 +36,36 @@ impl RateTarget {
         }
     }
 
-    pub(super) const fn revision(self) -> u64 {
+    pub(in crate::render) const fn revision(self) -> u64 {
         self.revision
     }
 
-    pub(super) const fn speed(self) -> f32 {
+    pub(in crate::render) const fn speed(self) -> f32 {
         self.speed
     }
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct PreparedQuantum {
-    pub(super) activation: Option<PreparedActivation>,
-    pub(super) projection: Option<ProjectedQuantum>,
-    pub(super) rate: RateTarget,
-    pub(super) speed: f32,
-    pub(super) source_start: u64,
-    pub(super) active_frames: usize,
-    pub(super) frames: usize,
+pub(in crate::render) struct PreparedQuantum {
+    pub(in crate::render) activation: Option<PreparedActivation>,
+    pub(in crate::render) projection: Option<ProjectedQuantum>,
+    pub(in crate::render) rate: RateTarget,
+    pub(in crate::render) speed: f32,
+    pub(in crate::render) source_start: u64,
+    pub(in crate::render) active_frames: usize,
+    pub(in crate::render) frames: usize,
     /// Output frames a quantum that ends on a scheduled frame renders exactly.
-    pub(super) landing_frames: Option<usize>,
+    pub(in crate::render) landing_frames: Option<usize>,
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct PreparedActivation {
-    pub(super) warm: ElasticRequest,
-    pub(super) history_frames: usize,
+pub(in crate::render) struct PreparedActivation {
+    pub(in crate::render) warm: ElasticRequest,
+    pub(in crate::render) history_frames: usize,
 }
 
 impl PreparedActivation {
-    pub(super) fn prefix_frames(self) -> Result<usize, ElasticError> {
+    pub(in crate::render) fn prefix_frames(self) -> Result<usize, ElasticError> {
         self.history_frames
             .checked_add(self.warm.source_frames())
             .ok_or(ElasticError::SampleCountOverflow)
@@ -76,97 +76,97 @@ impl PreparedActivation {
 /// Unity speed without a region plan is a byte-identical passthrough.
 #[non_exhaustive]
 pub struct WarpRenderer<S> {
-    pub(super) plan_slot: Arc<WarpPlanSlot>,
-    pub(super) spec: AudioSpec,
-    pub(super) backends: ElasticBackendConfig,
+    pub(in crate::render) plan_slot: Arc<WarpPlanSlot>,
+    pub(in crate::render) spec: AudioSpec,
+    pub(in crate::render) backends: ElasticBackendConfig,
     /// Maximum source frames admitted to one elastic render operation.
-    pub(super) source_block_frames: NonZeroUsize,
+    pub(in crate::render) source_block_frames: NonZeroUsize,
     /// Latency-sized pooled output discarded while priming an inactive engine.
-    pub(super) activation_scratch: Option<SampleBuffer>,
+    pub(in crate::render) activation_scratch: Option<SampleBuffer>,
     /// Renderer-owned applied speed, smoothed toward [`Self::rate`].
-    pub(super) applied_speed: Option<SmoothedParam>,
+    pub(in crate::render) applied_speed: Option<SmoothedParam>,
     /// Speed the last [`Self::set_speed`] set, with the revision stamped on
     /// every chunk rendered toward it.
-    pub(super) rate: RateTarget,
-    pub(super) committed: Option<RenderSnapshot>,
+    pub(in crate::render) rate: RateTarget,
+    pub(in crate::render) committed: Option<RenderSnapshot>,
     /// Consumed input retained until the scheduler shell can resize or recycle
     /// it outside the checked render core.
-    pub(super) deferred_scratch: Option<SampleBuffer>,
-    pub(super) engine: Option<Box<dyn ElasticEngine>>,
+    pub(in crate::render) deferred_scratch: Option<SampleBuffer>,
+    pub(in crate::render) engine: Option<Box<dyn ElasticEngine>>,
     /// Most recent input meta, carried onto each output chunk.
-    pub(super) last_input_meta: Option<AudioChunkInfo>,
+    pub(in crate::render) last_input_meta: Option<AudioChunkInfo>,
     /// Exact source coordinate at which the current output scratch begins.
-    pub(super) output_start_meta: Option<AudioChunkInfo>,
+    pub(in crate::render) output_start_meta: Option<AudioChunkInfo>,
     /// Earliest metadata represented by `pending_source`.
-    pub(super) pending_meta: Option<AudioChunkInfo>,
+    pub(in crate::render) pending_meta: Option<AudioChunkInfo>,
     /// Source whose cumulative output is still below one representable frame.
     /// Capacity is reserved from the injected pool before the render loop.
-    pub(super) pending_source: Option<SampleBuffer>,
+    pub(in crate::render) pending_source: Option<SampleBuffer>,
     /// Unity chunk retained while the active backend drains its tail.
     /// Its samples occupy `pending_source` without a copy.
-    pub(super) pending_unity_meta: Option<AudioChunkInfo>,
+    pub(in crate::render) pending_unity_meta: Option<AudioChunkInfo>,
     /// Region plan the renderer was built with.
-    pub(super) plan: Option<Arc<RegionPlan>>,
+    pub(in crate::render) plan: Option<Arc<RegionPlan>>,
     /// Source span and live speed selected by the scheduler for the next render.
-    pub(super) prepared_quantum: Option<PreparedQuantum>,
+    pub(in crate::render) prepared_quantum: Option<PreparedQuantum>,
     /// Region covering the playhead - the lookup cursor. `None` forces a
     /// fresh binary search (first chunk, region exit, seek).
-    pub(super) region: Option<ActiveRegion>,
+    pub(in crate::render) region: Option<ActiveRegion>,
     /// Maximum output frames between samples of live temporal controls.
-    pub(super) render_quantum_frames: Option<NonZeroUsize>,
+    pub(in crate::render) render_quantum_frames: Option<NonZeroUsize>,
     /// Exact decoded-source boundary represented by the latest emitted chunk.
-    pub(super) rendered_source_end: Option<(u64, NonZeroU32)>,
-    pub(super) residency: Option<super::renderer_residency::SourceResidency>,
+    pub(in crate::render) rendered_source_end: Option<(u64, NonZeroU32)>,
+    pub(in crate::render) residency: Option<super::residency::SourceResidency>,
     /// Engine displaced by a checked render failure. The scheduler shell
     /// drops it from `prepare`, outside `produce_tick_rt`.
-    pub(super) retired_engine: Option<Box<dyn ElasticEngine>>,
+    pub(in crate::render) retired_engine: Option<Box<dyn ElasticEngine>>,
     /// Interleaved output scratch prepared by the scheduler shell. A produced
     /// chunk takes this buffer; the consumed input becomes its replacement.
-    pub(super) scratch: Option<SampleBuffer>,
-    pub(super) pools: PoolRegion<S>,
-    pub(super) projection: ProjectionState,
-    pub(super) context: RenderReader,
+    pub(in crate::render) scratch: Option<SampleBuffer>,
+    pub(in crate::render) pools: PoolRegion<S>,
+    pub(in crate::render) projection: ProjectionState,
+    pub(in crate::render) context: RenderReader,
     /// Engine kind currently prepared by the scheduler shell.
-    pub(super) current_kind: StretchKind,
+    pub(in crate::render) current_kind: StretchKind,
     /// Backend the lane last asked for; the scheduler shell prepares its engine.
-    pub(super) requested_kind: StretchKind,
+    pub(in crate::render) requested_kind: StretchKind,
     /// Whether the lane last asked for a keylock engine.
-    pub(super) requested_keylock: bool,
+    pub(in crate::render) requested_keylock: bool,
     /// Whether previous input ran through the backend. Drives a clean backend
     /// reset when the renderer returns to unity passthrough.
-    pub(super) active: bool,
-    pub(super) backend_transition_pending: bool,
+    pub(in crate::render) active: bool,
+    pub(in crate::render) backend_transition_pending: bool,
     /// A speed set while the engine runs: its tail retires into the
     /// residency's replacement and the engine re-primes on the speed's frame.
-    pub(super) reprime_pending: bool,
+    pub(in crate::render) reprime_pending: bool,
     /// Source frame the engine reads next while it trails the decoded frontier
     /// after a prime; the residency holds every frame from it on.
-    pub(super) resident_feed: Option<u64>,
-    pub(super) current_keylock: bool,
+    pub(in crate::render) resident_feed: Option<u64>,
+    pub(in crate::render) current_keylock: bool,
     /// One scheduler-shell rebuild requested after a checked engine failure.
     /// The intent is consumed even when preparation fails.
-    pub(super) rebuild_pending: bool,
+    pub(in crate::render) rebuild_pending: bool,
     /// Reset requested by seek or a return to unity passthrough. The scheduler
     /// shell performs it outside the checked render core.
-    pub(super) reset_pending: bool,
+    pub(in crate::render) reset_pending: bool,
     /// Last pitch factor pushed to the backend; avoids redundant updates.
-    pub(super) applied_pitch: f64,
+    pub(in crate::render) applied_pitch: f64,
     /// Fractional output frames retained across exact-span requests.
-    pub(super) output_remainder: f64,
+    pub(in crate::render) output_remainder: f64,
     /// Warm source consumed while priming but not yet represented by output.
-    pub(super) primed_source_debt: u64,
+    pub(in crate::render) primed_source_debt: u64,
     /// Source frames admitted since the last renderer reset.
-    pub(super) source_frames_admitted: u64,
+    pub(in crate::render) source_frames_admitted: u64,
 }
 
 impl<S> WarpRenderer<S>
 where
     S: HasPool<f32>,
 {
-    pub(super) const MAX_OUTPUT_FRAMES: usize = 163_840;
-    pub(super) const OUTPUT_ROUNDING_MARGIN: f64 = 0.5;
+    pub(in crate::render) const MAX_OUTPUT_FRAMES: usize = 163_840;
+    pub(in crate::render) const OUTPUT_ROUNDING_MARGIN: f64 = 0.5;
     /// Re-apply pitch to the backend only when it moves this much.
-    pub(super) const RATIO_EPS: f64 = 1e-4;
+    pub(in crate::render) const RATIO_EPS: f64 = 1e-4;
 
     /// Build the slot at the source `spec` from the construction values of `config`.
     pub(crate) fn new(
@@ -262,7 +262,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     }
 
     /// Push `pitch` to the backend when it moved beyond `RATIO_EPS`.
-    pub(super) fn apply_pitch(&mut self, pitch: f64) -> Result<(), ElasticError> {
+    pub(in crate::render) fn apply_pitch(&mut self, pitch: f64) -> Result<(), ElasticError> {
         if !self.applied_pitch.is_nan() && (pitch - self.applied_pitch).abs() <= Self::RATIO_EPS {
             return Ok(());
         }
@@ -275,7 +275,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         Ok(())
     }
 
-    pub(super) fn clear_pending_source(&mut self) {
+    pub(in crate::render) fn clear_pending_source(&mut self) {
         if let Some(source) = self.pending_source.as_mut() {
             source.clear();
         }
@@ -283,7 +283,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         self.pending_unity_meta = None;
     }
 
-    pub(super) fn clear_render_state(&mut self) {
+    pub(in crate::render) fn clear_render_state(&mut self) {
         if let Some(residency) = self.residency.as_mut() {
             residency.clear();
         }
@@ -311,7 +311,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     /// The single place a render becomes the committed one, so every committed
     /// render publishes the session axis it fixed regardless of the path that
     /// produced it.
-    pub(super) fn commit(
+    pub(in crate::render) fn commit(
         &mut self,
         committed: RenderSnapshot,
         output_start: i64,
@@ -332,7 +332,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         self.committed = Some(committed);
     }
 
-    pub(super) fn commit_rate_render(
+    pub(in crate::render) fn commit_rate_render(
         &mut self,
         snapshot: Option<RenderSnapshot>,
         output: &AudioChunk,
@@ -372,7 +372,11 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         self.commit(committed, session_frame, source_start);
     }
 
-    pub(super) fn commit_render(&mut self, snapshot: Option<RenderSnapshot>, output: &AudioChunk) {
+    pub(in crate::render) fn commit_render(
+        &mut self,
+        snapshot: Option<RenderSnapshot>,
+        output: &AudioChunk,
+    ) {
         let output_frames = output.frames();
         let projection = self.projected_tail_cursor(output_frames);
         if let Some(projection) = projection {
@@ -397,7 +401,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         self.commit(committed, output_start, source_start);
     }
 
-    pub(super) fn defer_scratch(&mut self, replacement: Option<SampleBuffer>) {
+    pub(in crate::render) fn defer_scratch(&mut self, replacement: Option<SampleBuffer>) {
         if let Some(replacement) = replacement {
             debug_assert!(self.deferred_scratch.is_none());
             self.deferred_scratch = Some(replacement);
@@ -406,13 +410,13 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
 
     /// Whether the next quantum would engage an engine other than the one
     /// the lane asks for, so the scheduler shell must prepare that one first.
-    pub(super) fn engine_outdated(&self) -> bool {
+    pub(in crate::render) fn engine_outdated(&self) -> bool {
         !self.active
             && (!self.requires_staging() || !self.unity_passthrough(self.rate.speed()))
             && self.stretch_target() != (self.current_kind, self.current_keylock)
     }
 
-    pub(super) fn held_source_frames(&self) -> u64 {
+    pub(in crate::render) fn held_source_frames(&self) -> u64 {
         if !self.active {
             return 0;
         }
@@ -431,7 +435,10 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .saturating_add(self.primed_source_debt)
     }
 
-    pub(super) fn meta_at_frame(meta: AudioChunkInfo, frame_offset: u64) -> AudioChunkInfo {
+    pub(in crate::render) fn meta_at_frame(
+        meta: AudioChunkInfo,
+        frame_offset: u64,
+    ) -> AudioChunkInfo {
         let mut start = meta;
         let delta = frame_offset.abs_diff(meta.frame_offset);
         let span = meta
@@ -490,7 +497,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         Some((committed, output_start, source_start, source_end))
     }
 
-    pub(super) fn pending_frames(&self, channels: usize) -> usize {
+    pub(in crate::render) fn pending_frames(&self, channels: usize) -> usize {
         if self.pending_unity_meta.is_some() {
             return 0;
         }
@@ -499,7 +506,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .map_or(0, |source| source.len() / channels)
     }
 
-    pub(super) fn record_rendered_source_end(
+    pub(in crate::render) fn record_rendered_source_end(
         &mut self,
         meta: AudioChunkInfo,
         held_source_frames: u64,
@@ -513,7 +520,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
 
     /// Region covering `frame`, plus whether the playhead just crossed out
     /// of a previously resolved region (a plan boundary or a seek).
-    pub(super) fn region_for(&mut self, frame: u64) -> ActiveRegion {
+    pub(in crate::render) fn region_for(&mut self, frame: u64) -> ActiveRegion {
         if let Some(r) = self.region
             && r.contains(frame)
         {
@@ -555,7 +562,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         self.prepared_quantum = None;
     }
 
-    pub(super) fn retire_engine(&mut self) {
+    pub(in crate::render) fn retire_engine(&mut self) {
         debug_assert!(self.retired_engine.is_none());
         self.retired_engine = self.engine.take();
         self.rebuild_pending = true;
@@ -600,7 +607,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         self.prepared_quantum = None;
     }
 
-    pub(super) fn snap_speed(&mut self) {
+    pub(in crate::render) fn snap_speed(&mut self) {
         if let Some(applied) = self.applied_speed.as_mut() {
             applied.set_value(self.rate.speed());
             applied.reset_to_target();
@@ -618,7 +625,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     }
 
     /// The engine the lane last asked for.
-    pub(super) fn stretch_target(&self) -> (StretchKind, bool) {
+    pub(in crate::render) fn stretch_target(&self) -> (StretchKind, bool) {
         Self::stretch_for(self.requested_kind, self.requested_keylock)
     }
 
@@ -628,7 +635,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         self.pending_unity_meta.is_some() || self.backend_transition_pending || self.reprime_pending
     }
 
-    pub(super) fn unity_passthrough(&self, speed: f32) -> bool {
+    pub(in crate::render) fn unity_passthrough(&self, speed: f32) -> bool {
         !self.requires_staging()
             || (self.projection.active.is_none()
                 && self.plan.is_none()

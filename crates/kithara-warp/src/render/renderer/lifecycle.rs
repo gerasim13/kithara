@@ -7,7 +7,7 @@ use kithara_stretch::ElasticError;
 use num_traits::ToPrimitive;
 use tracing::warn;
 
-use super::renderer::{PreparedQuantum, WarpRenderer};
+use super::core::{PreparedQuantum, WarpRenderer};
 
 impl<S> WarpRenderer<S>
 where
@@ -361,9 +361,9 @@ impl<S> WarpRenderer<S>
 where
     S: HasPool<f32>,
 {
-    pub(super) fn accept_projected_output(
+    pub(in crate::render) fn accept_projected_output(
         &mut self,
-        projection: super::renderer_projection::ProjectedQuantum,
+        projection: super::projection::ProjectedQuantum,
     ) {
         if let Some(plan) = self.projection.prepared.take() {
             let same = self
@@ -766,8 +766,8 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     fn trim_projected_eof(
         &mut self,
         output: &mut AudioChunk,
-        mut projection: super::renderer_projection::ProjectedQuantum,
-    ) -> Result<super::renderer_projection::ProjectedQuantum, ElasticError> {
+        mut projection: super::projection::ProjectedQuantum,
+    ) -> Result<super::projection::ProjectedQuantum, ElasticError> {
         let plan = self
             .projection
             .prepared

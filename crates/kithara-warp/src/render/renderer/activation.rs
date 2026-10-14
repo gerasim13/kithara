@@ -8,8 +8,8 @@ use num_traits::ToPrimitive;
 use tracing::warn;
 
 use super::{
-    renderer::{PreparedActivation, PreparedQuantum, WarpRenderer},
-    renderer_projection::ProjectionPreparation,
+    core::{PreparedActivation, PreparedQuantum, WarpRenderer},
+    projection::ProjectionPreparation,
 };
 
 impl<S> WarpRenderer<S>
@@ -18,7 +18,7 @@ where
 {
     /// Prime the engine from the residency so its first output is the source
     /// frame presented last; the engine then reads on from the residency.
-    pub(super) fn activate_prepared_quantum(
+    pub(in crate::render) fn activate_prepared_quantum(
         &mut self,
         chunk: &AudioChunk,
         prepared: PreparedQuantum,
@@ -321,7 +321,7 @@ where
         Some(FrameCount::new(frames))
     }
 
-    pub(super) fn prepared_activation(
+    pub(in crate::render) fn prepared_activation(
         &self,
         speed: f32,
     ) -> Result<Option<PreparedActivation>, ElasticError> {
