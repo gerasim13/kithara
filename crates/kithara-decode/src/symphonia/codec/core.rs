@@ -61,6 +61,15 @@ pub(crate) struct SymphoniaCodec {
     /// rate-doubling (HE-AAC v2: container declares core rate, decoder
     /// outputs upsampled rate) without flooding the log.
     logged_first_frame: bool,
+    /// AAC output clock anchor: the time of the first packet fed after open,
+    /// flush or reset. The fdk-aac adapter drops its `outputDelay` lookahead
+    /// before it emits PCM, so its first PCM frame is that packet's first
+    /// frame, not the packet time plus the dropped frames.
+    output_origin: Option<Duration>,
+    /// PCM frames emitted since [`Self::output_origin`].
+    output_frames: u64,
+    /// Time of the most recent non-empty AAC output.
+    decoded_pts: Option<Duration>,
 }
 
 impl SymphoniaCodec {
@@ -95,6 +104,9 @@ impl SymphoniaCodec {
             codec: None,
             track_info: DecoderTrackInfo::default(),
             logged_first_frame: false,
+            output_origin: None,
+            output_frames: 0,
+            decoded_pts: None,
         })
     }
 
@@ -156,6 +168,9 @@ impl SymphoniaCodec {
                 ..DecoderTrackInfo::default()
             },
             logged_first_frame: false,
+            output_origin: None,
+            output_frames: 0,
+            decoded_pts: None,
         })
     }
 
@@ -168,6 +183,13 @@ impl SymphoniaCodec {
     pub(crate) const fn supports(codec: AudioCodec) -> bool {
         !matches!(codec, AudioCodec::Pcm | AudioCodec::Adpcm)
     }
+
+    /// Clears the AAC output clock after the decoder lost its state.
+    const fn reset_clock(&mut self) {
+        self.output_origin = None;
+        self.output_frames = 0;
+        self.decoded_pts = None;
+    }
 }
 
 impl FrameCodec for SymphoniaCodec {
@@ -179,6 +201,15 @@ impl FrameCodec for SymphoniaCodec {
         _packet_desc: &[u8],
         out: &mut SampleBuffer,
     ) -> DecodeResult<u32> {
+        if self.output_origin.is_none()
+            && matches!(
+                self.codec,
+                Some(AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2)
+            )
+        {
+            self.output_origin = Some(pts);
+            self.decoded_pts = Some(pts);
+        }
         let pts_ticks = duration_to_ticks(pts, self.spec.sample_rate.get());
         let packet_pts = Timestamp::new(i64::try_from(pts_ticks).unwrap_or(i64::MAX));
         let packet_ref = PacketRef::new(
@@ -213,6 +244,7 @@ impl FrameCodec for SymphoniaCodec {
             }
             Err(SymphoniaError::ResetRequired) => {
                 self.decoder.reset();
+                self.reset_clock();
                 out.clear();
                 return Ok(0);
             }
@@ -261,7 +293,27 @@ impl FrameCodec for SymphoniaCodec {
             decoded.copy_to_slice_interleaved(&mut out[..num_samples]);
         });
         out.truncate(num_samples);
-        Ok(u32::try_from(decoded.frames()).unwrap_or(u32::MAX))
+        let frames = u32::try_from(decoded.frames()).unwrap_or(u32::MAX);
+        if let Some(origin) = self.output_origin {
+            let start = self.spec.frame_at(origin)?;
+            let end = start
+                .checked_add(self.output_frames)
+                .ok_or(DecodeError::InvalidData {
+                    detail: "symphonia AAC output frame offset overflows",
+                })?;
+            let elapsed = self.spec.duration_for(end)? - self.spec.duration_for(start)?;
+            self.decoded_pts = Some(origin.checked_add(elapsed).ok_or(
+                DecodeError::InvalidData {
+                    detail: "symphonia AAC output timestamp overflows",
+                },
+            )?);
+            self.output_frames = self.output_frames.saturating_add(u64::from(frames));
+        }
+        Ok(frames)
+    }
+
+    fn decoded_pts(&self) -> Option<Duration> {
+        self.decoded_pts
     }
 
     fn decoder_algo_delay(&self, codec: AudioCodec) -> u64 {
@@ -270,6 +322,7 @@ impl FrameCodec for SymphoniaCodec {
 
     fn flush(&mut self) -> DecodeResult<()> {
         self.decoder.reset();
+        self.reset_clock();
         Ok(())
     }
 
@@ -306,14 +359,6 @@ impl FrameCodec for SymphoniaCodec {
 
     fn spec(&self) -> AudioSpec {
         self.spec
-    }
-
-    fn timestamp_bias_frames(&self) -> u64 {
-        if cfg!(feature = "fdk-aac") {
-            self.codec.map_or(0, access_unit_frames).into()
-        } else {
-            0
-        }
     }
 
     fn track_info(&self) -> DecoderTrackInfo {

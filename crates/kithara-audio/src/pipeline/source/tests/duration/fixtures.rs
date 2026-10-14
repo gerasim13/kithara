@@ -8,7 +8,8 @@ pub(super) use kithara_decode::{
 pub(super) use kithara_platform::{sync::Arc, time::Duration};
 pub(super) use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 pub(super) use kithara_stream::{
-    PrerollHint, VariantPromotion, VariantReaderPlan, VariantTransition, VariantTransitionId,
+    AudioCodec, PrerollHint, VariantPromotion, VariantReaderPlan, VariantTransition,
+    VariantTransitionId,
 };
 pub(super) use kithara_test_utils::kithara;
 
@@ -32,6 +33,9 @@ pub(super) struct PcmExtent {
     pub(super) declared: Option<kithara_decode::DecoderDuration>,
     pub(super) media_origin: Option<Duration>,
     pub(super) gapless: Option<GaplessInfo>,
+    /// Encoder priming assumed without gapless metadata, in milliseconds;
+    /// `None` keeps the codec's own default.
+    pub(super) priming: Option<u64>,
     pub(super) reports_origin: bool,
 }
 
@@ -77,6 +81,12 @@ impl Decoder for PhysicalDecoder {
         }
     }
 
+    fn default_priming_frames(&self, codec: AudioCodec) -> u64 {
+        self.extent.priming.map_or_else(
+            || AudioCodec::encoder_priming_frames(codec),
+            |priming| priming * u64::from(self.spec.sample_rate.get()) / 1_000,
+        )
+    }
     fn track_info(&self) -> kithara_decode::DecoderTrackInfo {
         let mut info = kithara_decode::DecoderTrackInfo::default();
         info.gapless = self.extent.gapless.map(|info| {
@@ -274,6 +284,7 @@ pub(super) fn extent(declared: Option<Duration>, origin: u64, reports_origin: bo
         declared: declared.map(kithara_decode::DecoderDuration::RawLength),
         media_origin: None,
         gapless: Some(GaplessInfo::new(17, 31)),
+        priming: None,
         reports_origin,
     }
 }

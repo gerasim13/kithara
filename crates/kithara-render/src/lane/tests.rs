@@ -1,9 +1,9 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use kithara_audio::{AudioReadError, AudioSource, SeekOutcome, TrackStep};
-use kithara_command::{Batch, ChannelConfig, Outcome, Sender, Seq, When, channel};
+use kithara_audio::{AudioReadError, AudioSource, SeekOutcome, TrackFailureKind, TrackStep};
+use kithara_command::{Batch, ChannelConfig, Outcome, Rejection, Sender, Seq, When, channel};
 use kithara_platform::time::Duration;
-use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, SegmentId};
+use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, SegmentId, SourceSpan};
 use kithara_test_utils::kithara;
 use kithara_warp::{SpeedCurve, Warp, WarpConfig, WarpRenderer};
 
@@ -45,6 +45,21 @@ struct LaneFixture {
     source: ReadySource,
     renderer: WarpRenderer<TestPools>,
     spec: AudioSpec,
+    entry: AudioChunkInfo,
+}
+
+/// A chunk that starts at `from` under the render revision of the segment command `seq`.
+fn entering(spec: AudioSpec, seq: Seq, from: Duration) -> AudioChunkInfo {
+    let start = spec.frame_at(from).expect("representable entry");
+    AudioChunkInfo {
+        spec,
+        frames: 16,
+        frame_offset: start,
+        render_revision: seq.get(),
+        source_span: SourceSpan::new(start, start + 16, spec.sample_rate, 16)
+            .map(|span| span.with_render_revision(seq.get())),
+        ..AudioChunkInfo::default()
+    }
 }
 
 impl LaneFixture {
@@ -64,6 +79,7 @@ impl LaneFixture {
             },
             renderer: warp.renderer(spec, pools()),
             spec,
+            entry: AudioChunkInfo::default(),
         }
     }
 
@@ -89,12 +105,62 @@ impl LaneFixture {
         self.lane
             .execute_due(&mut self.source, &mut self.renderer, self.spec)
             .expect("synchronous segment preparation");
+        self.entry = entering(self.spec, seq, from);
         seq
     }
 
+    fn admit(&mut self) {
+        let entry = AudioChunkInfo {
+            segment: self.lane.cursor().segment,
+            ..self.entry
+        };
+        self.lane.observe_input(entry);
+        if let Err(failure) = self.lane.check_admission(&entry) {
+            self.lane.reject_preparation(failure);
+            return;
+        }
+        self.lane.admitted();
+    }
+
     fn admit_preload(&mut self) {
-        self.lane.admitted();
-        self.lane.admitted();
+        self.admit();
+        self.admit();
+    }
+}
+
+/// Media has no PCM before its visible origin, so a segment positioned ahead of
+/// it enters at that origin. Inside the media a segment still enters exactly
+/// where it was positioned.
+#[kithara::test]
+#[case::ahead_of_the_media(Duration::ZERO, None)]
+#[case::inside_the_media(Duration::from_millis(500), Some(TrackFailureKind::Render))]
+fn a_segment_positioned_ahead_of_the_visible_origin_enters_there(
+    #[case] from: Duration,
+    #[case] refusal: Option<TrackFailureKind>,
+) {
+    let visible_origin = Duration::from_millis(13);
+    let mut fixture = LaneFixture::new();
+    let segment = SegmentId::FIRST.next();
+    let seq = fixture.begin_at(segment, from);
+    fixture.entry = AudioChunkInfo {
+        visible_origin: Some(visible_origin),
+        ..entering(fixture.spec, seq, visible_origin)
+    };
+    fixture.admit_preload();
+
+    let receipt = fixture.sender.receipts().next().expect("readiness verdict");
+    assert_eq!(receipt.seq(), seq);
+    let outcome = receipt.outcome();
+    match refusal {
+        None => assert!(
+            matches!(outcome, Outcome::Applied { data, .. } if data.ready == Some(segment)),
+            "first PCM at the visible origin enters a segment positioned ahead of it: {outcome:?}"
+        ),
+        Some(expected) => assert!(
+            matches!(outcome, Outcome::Rejected(Rejection::Refused(refused)) if *refused == expected),
+            "first PCM at the visible origin misses a segment positioned inside the media: \
+             {outcome:?}"
+        ),
     }
 }
 
@@ -135,6 +201,15 @@ fn a_prepared_segment_receipt_keeps_its_actual_apply_point(#[case] when: When<La
     assert_eq!(fixture.lane.cursor(), LaneFrame { segment, frame: 0 });
     assert!(!fixture.lane.is_preloaded());
     assert!(fixture.sender.receipts().next().is_none());
+    let entry = AudioChunkInfo {
+        segment,
+        ..entering(fixture.spec, seq, Duration::from_secs(1))
+    };
+    fixture.lane.observe_input(entry);
+    fixture
+        .lane
+        .check_admission(&entry)
+        .expect("the first native PCM and rendered span match the segment entry");
     fixture.lane.stamp(&mut chunk);
     fixture.lane.admitted();
     assert!(!fixture.lane.is_preloaded());
@@ -238,7 +313,7 @@ fn decoder_seek_latch_is_one_shot_per_begin() {
     fixture.begin(SegmentId::FIRST.next());
     fixture.admit_preload();
     assert!(fixture.sender.receipts().next().is_some());
-    fixture.lane.admitted();
+    fixture.admit();
     assert!(fixture.sender.receipts().next().is_none());
 }
 
@@ -255,7 +330,7 @@ fn latch_one_shot() {
         fixture.sender.receipts().next().is_none(),
         "second take must be empty"
     );
-    fixture.lane.admitted();
+    fixture.admit();
     assert!(
         fixture.sender.receipts().next().is_none(),
         "subsequent takes must be empty"
@@ -328,12 +403,12 @@ fn clear_seek_pending_only_clears_matching_epoch() {
     let mut fixture = LaneFixture::new();
     let segment = SegmentId::FIRST.next();
     fixture.begin(segment);
-    fixture.lane.admitted();
+    fixture.admit();
     fixture.begin(segment.next());
     assert!(!fixture.lane.is_preloaded());
-    fixture.lane.admitted();
+    fixture.admit();
     assert!(!fixture.lane.is_preloaded());
-    fixture.lane.admitted();
+    fixture.admit();
     assert!(fixture.lane.is_preloaded());
 }
 
@@ -398,7 +473,7 @@ fn complete_seek_double_check_re_raises_flushing_when_newer_seek_interleaves() {
     let mut fixture = LaneFixture::new();
     let segment = SegmentId::FIRST.next();
     fixture.begin(segment);
-    fixture.lane.admitted();
+    fixture.admit();
     fixture.begin(segment.next());
     assert!(
         !fixture.lane.is_preloaded(),
@@ -514,7 +589,7 @@ fn old_epoch_signal_does_not_open_new_epoch_wait() {
     let mut fixture = LaneFixture::new();
     let first = SegmentId::FIRST.next();
     let old_seq = fixture.begin(first);
-    fixture.lane.admitted();
+    fixture.admit();
     let second = first.next();
     let current_seq = fixture.begin(second);
 
@@ -587,9 +662,9 @@ fn an_adopted_realtime_mode_moves_the_reader_events_with_the_ring() {
     let mut fixture = LaneFixture::new();
     let segment = SegmentId::FIRST.next();
     let seq = fixture.begin(segment);
-    fixture.lane.admitted();
+    fixture.admit();
     assert!(fixture.sender.receipts().next().is_none());
-    fixture.lane.admitted();
+    fixture.admit();
     let receipt = fixture
         .sender
         .receipts()
@@ -606,10 +681,10 @@ fn realtime_read_leaves_its_seek_completion_for_the_shell() {
     let mut fixture = LaneFixture::new();
     let segment = SegmentId::FIRST.next();
     let seq = fixture.begin(segment);
-    fixture.lane.admitted();
+    fixture.admit();
     assert!(!fixture.lane.is_preloaded());
     assert!(fixture.sender.receipts().next().is_none());
-    fixture.lane.admitted();
+    fixture.admit();
     let receipt = fixture
         .sender
         .receipts()
@@ -627,9 +702,9 @@ fn post_seek_output_reaches_the_bus_once_the_shell_flushes() {
     let segment = SegmentId::FIRST.next();
     let target = Duration::from_secs(1);
     let seq = fixture.begin_at(segment, target);
-    fixture.lane.admitted();
+    fixture.admit();
     assert!(fixture.sender.receipts().next().is_none());
-    fixture.lane.admitted();
+    fixture.admit();
     let receipt = fixture
         .sender
         .receipts()

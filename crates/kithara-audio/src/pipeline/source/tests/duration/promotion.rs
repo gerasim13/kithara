@@ -84,44 +84,137 @@ async fn promoted_known_raw_clocks_keep_full_visible_length_and_seek_the_actual_
 #[kithara::test(tokio)]
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn promoted_unknown_original_geometry_never_adopts_a_sought_suffix() {
-    let outgoing = extent(Some(Duration::from_secs(1)), 700, true);
-    let mut incoming = extent(Some(Duration::from_secs(1)), 0, false);
-    incoming.gapless = outgoing.gapless;
+    for incoming_origin in [700, 0] {
+        let outgoing = extent(Some(Duration::from_secs(1)), 700, true);
+        let mut incoming = extent(Some(Duration::from_secs(1)), incoming_origin, false);
+        incoming.gapless = outgoing.gapless;
+        let (mut source, control) = physical_fixture(outgoing, GaplessMode::MediaOnly).await;
+        let original = first_chunk(&mut source);
+        let initial = source.playhead.duration();
+        start_physical_promotion(&mut source, &control, incoming, Duration::from_millis(200));
+        let mut incoming_chunks = Vec::new();
+        loop {
+            hang_tick!();
+            source.prepare_deferred();
+            match source.step_track() {
+                TrackStep::Produced(fetch) => {
+                    let chunk = produced_data(fetch);
+                    if control.promote_calls() > 0 {
+                        assert_eq!(chunk.meta.visible_origin, None);
+                        assert_ne!(chunk.meta.source_revision, original.meta.source_revision);
+                        assert!(chunk.samples.iter().all(|sample| sample.is_finite()));
+                        incoming_chunks.push(chunk.meta);
+                    }
+                    hang_reset!();
+                }
+                TrackStep::Eof => break,
+                TrackStep::StateChanged | TrackStep::Blocked(_) => source.finish_deferred(),
+                TrackStep::Failed(failure) => {
+                    panic!("unknown geometry does not veto transport: {failure:?}")
+                }
+            }
+        }
+        assert!(!incoming_chunks.is_empty());
+        assert_eq!(source.decode.active().visible_origin(), None);
+        assert_eq!(source.decode.active().comparison_base(), None);
+        assert_eq!(source.playhead.duration(), initial);
+        assert!(matches!(
+            source
+                .seek(Duration::from_millis(incoming_origin + 960))
+                .expect("valid raw seek remains allowed"),
+            crate::SeekOutcome::Landed { .. }
+        ));
+    }
+}
+
+#[kithara::test(tokio)]
+#[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+#[case::shifted_clock(700, 0)]
+#[case::shared_clock(0, 0)]
+async fn a_landed_incoming_without_its_own_start_carries_the_track_visible_origin(
+    #[case] outgoing_origin: u64,
+    #[case] incoming_origin: u64,
+) {
+    let outgoing = extent(Some(Duration::from_secs(1)), outgoing_origin, true);
+    let incoming = extent(Some(Duration::from_secs(1)), incoming_origin, true);
     let (mut source, control) = physical_fixture(outgoing, GaplessMode::MediaOnly).await;
     let original = first_chunk(&mut source);
-    let initial = source.playhead.duration();
+    let outgoing_visible = original
+        .meta
+        .visible_origin
+        .expect("observed outgoing origin");
+    let mut outgoing_end = original.meta.end_timestamp;
     start_physical_promotion(&mut source, &control, incoming, Duration::from_millis(200));
-    let mut incoming_chunks = Vec::new();
-    loop {
+    let first_incoming = loop {
         hang_tick!();
         source.prepare_deferred();
         match source.step_track() {
             TrackStep::Produced(fetch) => {
                 let chunk = produced_data(fetch);
                 if control.promote_calls() > 0 {
-                    assert_eq!(chunk.meta.visible_origin, None);
-                    assert_ne!(chunk.meta.source_revision, original.meta.source_revision);
-                    assert!(chunk.samples.iter().all(|sample| sample.is_finite()));
-                    incoming_chunks.push(chunk.meta);
+                    break chunk;
+                }
+                outgoing_end = chunk.meta.end_timestamp;
+                hang_reset!();
+            }
+            TrackStep::StateChanged | TrackStep::Blocked(_) => source.finish_deferred(),
+            TrackStep::Eof => panic!("promotion must expose the incoming tail"),
+            TrackStep::Failed(failure) => panic!("landed promotion failed: {failure:?}"),
+        }
+    };
+    let carried = Duration::from_millis(incoming_origin + 17);
+    assert_eq!(first_incoming.meta.visible_origin, Some(carried));
+    assert_eq!(source.decode.active().visible_origin(), Some(carried));
+    assert_eq!(
+        source.decode.active().comparison_base(),
+        Some(Duration::from_millis(incoming_origin))
+    );
+    assert_eq!(
+        first_incoming.meta.timestamp - carried,
+        outgoing_end - outgoing_visible,
+        "the visible timeline continues across the splice"
+    );
+}
+
+/// AAC without gapless metadata keeps its default priming visible while content
+/// alignment skips it; a variant without priming starts its content at its own zero.
+#[kithara::test(tokio)]
+#[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+#[case::landed(false)]
+#[case::observed(true)]
+async fn an_incoming_with_other_priming_reports_its_own_visible_origin(
+    #[case] incoming_reports_origin: bool,
+) {
+    let mut outgoing = extent(Some(Duration::from_secs(1)), 0, true);
+    outgoing.gapless = None;
+    outgoing.priming = Some(23);
+    let mut incoming = extent(Some(Duration::from_secs(1)), 0, incoming_reports_origin);
+    incoming.gapless = None;
+    incoming.priming = Some(0);
+    let (mut source, control) = physical_fixture(outgoing, GaplessMode::MediaOnly).await;
+    let original = first_chunk(&mut source);
+    assert_eq!(original.meta.visible_origin, Some(Duration::ZERO));
+    start_physical_promotion(&mut source, &control, incoming, Duration::from_millis(200));
+    let first_incoming = loop {
+        hang_tick!();
+        source.prepare_deferred();
+        match source.step_track() {
+            TrackStep::Produced(fetch) => {
+                let chunk = produced_data(fetch);
+                if control.promote_calls() > 0 {
+                    break chunk;
                 }
                 hang_reset!();
             }
-            TrackStep::Eof => break,
             TrackStep::StateChanged | TrackStep::Blocked(_) => source.finish_deferred(),
-            TrackStep::Failed(failure) => {
-                panic!("unknown geometry does not veto transport: {failure:?}")
-            }
+            TrackStep::Eof => panic!("promotion must expose the incoming tail"),
+            TrackStep::Failed(failure) => panic!("landed promotion failed: {failure:?}"),
         }
-    }
-    assert!(!incoming_chunks.is_empty());
-    assert_eq!(source.decode.active().visible_origin(), None);
-    assert_eq!(source.playhead.duration(), initial);
-    assert!(matches!(
-        source
-            .seek(Duration::from_millis(960))
-            .expect("valid raw seek remains allowed"),
-        crate::SeekOutcome::Landed { .. }
-    ));
+    };
+    let visible = incoming_reports_origin.then_some(Duration::ZERO);
+    assert_eq!(first_incoming.meta.visible_origin, visible);
+    assert_eq!(source.decode.active().visible_origin(), visible);
+    assert_eq!(source.decode.active().comparison_base(), visible);
 }
 
 #[kithara::test(tokio)]

@@ -655,6 +655,42 @@ fn seek_starts_just_ahead_of_the_target(aac_five: (Vec<u8>, FakeSegmented)) {
     );
 }
 
+/// EXTINF is rounded, so its running sum drifts from the segments' own decode
+/// times. The segment the playlist names for a target can start after it; a
+/// seek that landed there lost the audio between the target and that start.
+/// The first PCM after a seek is the target's, whatever the playlist rounded.
+#[kithara::test]
+#[case::inside_a_drifted_segment(Duration::from_millis(11_900))]
+#[case::at_a_drifted_segment_start(Duration::from_millis(11_800))]
+fn seek_into_a_segment_the_playlist_places_early_keeps_the_target(
+    flac_three: (Vec<u8>, FakeSegmented),
+    #[case] target: Duration,
+) {
+    let (blob, segmented) = flac_three;
+    // WHY: 5.9s EXTINF puts seg-2 at 11.8s while its own frames start near 12s.
+    let (mut decoder, _reads, _record) =
+        make_decoder(blob, segmented.with_extinf(Duration::from_millis(5_900)));
+
+    let outcome = decoder.seek(target).expect("BUG: seek");
+    assert!(
+        matches!(outcome, DecoderSeekOutcome::Landed { landed_at, .. } if landed_at <= target),
+        "seek must land at or before {target:?}, got {outcome:?}"
+    );
+    let first = (0..64)
+        .find_map(
+            |_| match decoder.next_chunk().expect("BUG: decode after seek") {
+                DecoderChunkOutcome::Chunk(chunk) => Some(chunk.meta.timestamp),
+                DecoderChunkOutcome::Pending(_) => None,
+                DecoderChunkOutcome::Eof => panic!("seek into seg-1/seg-2 must not report EOF"),
+            },
+        )
+        .expect("BUG: no PCM after seek");
+    assert_eq!(
+        first, target,
+        "the first PCM after a seek starts at the target"
+    );
+}
+
 #[cfg(feature = "symphonia")]
 type AacFrameHarness = (SymphoniaCodec, Vec<u8>, Vec<(usize, usize)>);
 
@@ -752,36 +788,56 @@ fn symphonia_aac_warm_decode_keeps_pool_bytes_stable(aac_init: Vec<u8>, aac_segm
     assert_eq!(pools.stats().allocated_bytes, warm_bytes);
 }
 
-/// A decoder instance strips its own algorithmic delay from the head of the
-/// PCM it emits. The observed strip is the difference between packet frames
-/// supplied and PCM frames emitted, and is not any declared constant: the
-/// fdk-aac adapter drops `stream_info.outputDelay`, 1685 frames on this fixture,
-/// while `timestamp_bias_frames` models one access unit, 1024.
+/// The fdk-aac adapter drops `stream_info.outputDelay`, 1685 frames on this
+/// fixture, from the head of the PCM it emits. That delay is lookahead latency,
+/// not stripped signal: the first emitted frame is the first packet's first
+/// frame. The codec clock therefore labels each chunk with the time of the
+/// first packet's frame plus the frames emitted before it, rounded once like
+/// every demuxer time, and models no timestamp bias.
 ///
-/// The 661-frame remainder decides where an exact variant splice cuts. A decode
-/// that started at the head sees it as a container timeline gap the moment the
-/// next packet's timestamp runs past what the decoder has emitted; a decode
-/// that started mid-stream records no such jump, because `seek` resyncs the
-/// frame offset onto the packet timestamp instead. Observing the strip in
-/// `ComposedDecoder` is what lets its live timeline-gap query hand both the
-/// same figure.
-#[cfg(feature = "symphonia")]
+/// A clock that put the dropped frames on top of the packet time placed this
+/// backend 1685 frames later than every other decoder of the same stream, and
+/// an exact variant splice cut where that offset said.
+#[cfg(feature = "fdk-aac")]
 #[kithara::test]
 fn aac_head_strip_exceeds_the_bias_the_timeline_models(aac_init: Vec<u8>, aac_segment: Vec<u8>) {
     let pools = pools();
     let (mut codec, seg, ranges) = aac_codec_and_frames(&aac_init, &aac_segment);
-    let supplied = ranges.len() as u64 * u64::from(access_unit_frames(AudioCodec::AacLc));
-    let pcm = decode_all_aac(&mut codec, &seg, &ranges, &pools);
+    let access_unit = u64::from(access_unit_frames(AudioCodec::AacLc));
+    let supplied = ranges.len() as u64 * access_unit;
+    // A first packet off the nanosecond grid: its time is already rounded.
+    let first_frame = u64::from(codec.spec().sample_rate.get()) / 4 + 1;
+    let mut emitted = 0_u64;
 
-    let channels = u64::from(codec.spec().channels.max(1));
-    let emitted = pcm.len() as u64 / channels;
+    for (index, &(offset, size)) in ranges.iter().enumerate() {
+        let pts = codec
+            .spec()
+            .duration_for(first_frame + index as u64 * access_unit)
+            .expect("packet time");
+        let mut buf = pools.get::<f32>();
+        let frames = codec
+            .decode_frame(&seg[offset..offset + size], pts, &[], &mut buf)
+            .expect("BUG: decode AAC frame");
+        if frames > 0 {
+            assert_eq!(
+                codec.decoded_pts(),
+                Some(
+                    codec
+                        .spec()
+                        .duration_for(first_frame + emitted)
+                        .expect("PCM time")
+                ),
+                "packet {index}: PCM is labelled by the frames emitted since the first packet"
+            );
+            emitted += u64::from(frames);
+        }
+    }
     let head_strip = supplied.saturating_sub(emitted);
 
     assert!(
         head_strip > codec.timestamp_bias_frames(),
-        "the declared bias is expected to fall short of the real strip on this \
-         fixture — that shortfall is the whole point of reporting the observed \
-         one: strip={head_strip}, bias={}",
+        "the adapter drops its output delay while the clock models no bias: \
+         strip={head_strip}, bias={}",
         codec.timestamp_bias_frames()
     );
 }

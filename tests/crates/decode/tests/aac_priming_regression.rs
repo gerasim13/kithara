@@ -79,6 +79,35 @@ async fn aac_decoder_strips_algorithmic_delay_on_first_chunk(
     );
 }
 
+/// fdk-aac's `outputDelay` is lookahead latency, not stripped signal: once
+/// it is dropped, the first PCM frame is the stream's first frame. That PCM
+/// keeps the first packet's time; labelling it later by the dropped count
+/// moves every position this backend reports against every other decoder
+/// of the same stream.
+#[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+async fn aac_output_delay_keeps_the_first_pcm_at_the_first_packet(
+    #[future(awt)] aac: (TestServerHelper, Vec<u8>),
+) {
+    let (_server, bytes) = aac;
+    let mut decoder = DecoderFactory::create_with_probe(
+        Cursor::new(bytes),
+        Some("aac"),
+        DecoderConfig::<kithara::resampler::NoResamplerBackend, TestPools>::builder()
+            .backend(DecoderBackend::Symphonia)
+            .pools(pools())
+            .build(),
+    )
+    .expect("probe AAC decoder");
+    let first =
+        AudioChunk::try_from(decoder.next_chunk().expect("first decode")).expect("first PCM chunk");
+    let origin = decoder.initial_pcm_origin().expect("first PCM origin");
+
+    assert_eq!(first.meta.timestamp, Duration::ZERO);
+    assert_eq!(first.meta.frame_offset, 0);
+    assert_eq!(origin.position(), origin.comparison_base());
+    assert_eq!(decoder.timeline_gap_frames(), 0);
+}
+
 #[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 async fn aac_seek_to_start_discards_previous_signal_history(
     #[future(awt)] aac: (TestServerHelper, Vec<u8>),

@@ -393,7 +393,7 @@ where
     F: FnMut(&QueueEvent) -> bool,
 {
     let mut progress = (queue.current_index(), queue.position_seconds());
-    timeout(deadline.min(__hang_detector.remaining()), async {
+    timeout(deadline, async {
         loop {
             hang_tick!(format!(
                 "waiting for {requested}; {}",

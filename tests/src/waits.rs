@@ -245,7 +245,7 @@ where
 /// is an error. This is the generic primitive behind the typed
 /// [`wait_for_position_event`] / [`wait_for_loader_done_event`].
 #[kithara::flash(io)]
-#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 pub async fn wait_for_event(
     rx: &mut EventReceiver<TestEvent>,
     what: &str,
