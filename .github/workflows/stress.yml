@@ -193,7 +193,7 @@ jobs:
         run: |
           args=(
             --subject-root "$GITHUB_WORKSPACE/subject"
-            --output "$RUNNER_TEMP/kithara-stress/raw"
+            --output "$RUNNER_TEMP/kithara-stress/raw/shard-$SHARD_INDEX"
             --expected-controller-sha "$CONTROLLER_SHA"
             --expected-subject-sha "$SUBJECT_SHA"
             --shard-index "$SHARD_INDEX"
@@ -240,6 +240,7 @@ jobs:
         with:
           pattern: stress-raw-${{ github.run_id }}-${{ github.run_attempt }}-shard-*
           path: raw
+          merge-multiple: true
 
       - name: Install just
         if: always()
@@ -273,8 +274,8 @@ jobs:
           TIER: ${{ inputs.tier }}
         run: |
           args=()
-          # One root per shard, each downloaded into a directory of its own.
-          for raw in "$GITHUB_WORKSPACE"/raw/stress-raw-*; do args+=(--raw "$raw"); done
+          # One root per shard: each artifact carries its evidence under `shard-<index>`.
+          for raw in "$GITHUB_WORKSPACE"/raw/shard-*; do args+=(--raw "$raw"); done
           args+=(
             --output "$GITHUB_WORKSPACE/target/stress-report.md"
             --expected-controller-sha "$CONTROLLER_SHA"

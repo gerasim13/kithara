@@ -15,7 +15,7 @@ const STRESS_RAW_DIR: &str = "${{ runner.temp }}/kithara-stress/raw";
 const HEAVY_LINUX_GROUP: &str = "heavy-linux-${{ github.repository }}";
 const STRESS_EXECUTE_COMMAND: &str = r#"args=(
   --subject-root "$GITHUB_WORKSPACE/subject"
-  --output "$RUNNER_TEMP/kithara-stress/raw"
+  --output "$RUNNER_TEMP/kithara-stress/raw/shard-$SHARD_INDEX"
   --expected-controller-sha "$CONTROLLER_SHA"
   --expected-subject-sha "$SUBJECT_SHA"
   --shard-index "$SHARD_INDEX"
@@ -31,8 +31,8 @@ for mode in $MODE; do args+=(--mode "$mode"); done
 for lane in $LANE; do args+=(--lane "$lane"); done
 just ci stress "${args[@]}""#;
 const STRESS_REPORT_COMMAND: &str = r#"args=()
-# One root per shard, each downloaded into a directory of its own.
-for raw in "$GITHUB_WORKSPACE"/raw/stress-raw-*; do args+=(--raw "$raw"); done
+# One root per shard: each artifact carries its evidence under `shard-<index>`.
+for raw in "$GITHUB_WORKSPACE"/raw/shard-*; do args+=(--raw "$raw"); done
 args+=(
   --output "$GITHUB_WORKSPACE/target/stress-report.md"
   --expected-controller-sha "$CONTROLLER_SHA"
@@ -1283,9 +1283,12 @@ fn stress_report_verifies_and_publishes_the_raw_evidence() {
         Some("stress-raw-${{ github.run_id }}-${{ github.run_attempt }}-shard-*")
     );
     assert_eq!(mapping_field(inputs, "path").as_str(), Some("raw"));
-    assert!(
-        inputs.get("merge-multiple").is_none(),
-        "artifact roots must remain separate so duplicate units cannot overwrite evidence"
+    // A single matching artifact is extracted straight into `path`, several
+    // into one directory each; merging keeps the layout the same for any
+    // shard count, and each shard's `shard-<index>` root keeps them apart.
+    assert_eq!(
+        mapping_field(inputs, "merge-multiple").as_bool(),
+        Some(true)
     );
 
     let report_install = named_step(report, "Install just");
