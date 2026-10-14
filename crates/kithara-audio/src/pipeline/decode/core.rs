@@ -902,6 +902,76 @@ mod tests {
         );
     }
 
+    /// An ABR switch claimed before the outgoing reports a frontier opens the
+    /// incoming at the track start, so its staged PCM begins inside its own
+    /// priming. That PCM still covers the outgoing frontier.
+    #[kithara::test]
+    fn incoming_staged_from_its_priming_promotes_at_the_outgoing_frontier() {
+        const FRONTIER: u64 = 4_096;
+        const FRAMES: u32 = 8_192;
+
+        let pools = pools();
+        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
+        let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+        abr.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
+        let claim = abr
+            .claim_pending_decision(VariantIndex::new(0))
+            .expect("test transition claim");
+        let transition = VariantTransition::new(
+            VariantTransitionId::new(claim.ticket()),
+            VariantIndex::new(0),
+            VariantIndex::new(1),
+        );
+        let aac_generation = || {
+            DecoderGeneration::new(
+                Box::new(TerminalDecoder::new(spec, TerminalOutcome::Eof)),
+                Some(
+                    MediaInfo::builder()
+                        .maybe_codec(Some(AudioCodec::AacLc))
+                        .build(),
+                ),
+                0,
+                None,
+                None,
+                GaplessMode::MediaOnly,
+            )
+        };
+        let head_chunk = || {
+            AudioChunk::new(
+                AudioChunkInfo {
+                    spec,
+                    frames: FRAMES,
+                    ..Default::default()
+                },
+                sample_buffer(
+                    &pools,
+                    &vec![
+                        0.25;
+                        usize::try_from(FRAMES)
+                            .expect("test frames fit usize")
+                            .saturating_mul(usize::from(spec.channels))
+                    ],
+                ),
+            )
+        };
+        let mut active = aac_generation();
+        active.stage(head_chunk());
+        let mut incoming = aac_generation();
+        incoming.stage(head_chunk());
+        let mut decode = active_decode(&pools, active, GaplessMode::MediaOnly);
+        let frontier = OutgoingFrontier::Exact {
+            frame: FRONTIER,
+            rate: spec.sample_rate.get(),
+        };
+        decode.incoming = Some(IncomingDecode::Priming {
+            transition,
+            generation: incoming,
+            frontier,
+        });
+
+        assert_eq!(decode.prime_incoming(frontier), IncomingPrime::Ready);
+    }
+
     #[kithara::test]
     fn incoming_variant_change_invalidates_the_stale_generation() {
         let pools = pools();

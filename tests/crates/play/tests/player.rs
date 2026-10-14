@@ -457,7 +457,15 @@ fn select_item_on_consumed_slot_errors_without_bookkeeping() {
     let mut events = player.subscribe::<QueueEvent>();
     let result = player.select(item, Transition::None);
     assert!(result.is_err(), "selecting an emptied slot must fail");
-    assert!(matches!(result, Err(QueueError::NotReady(id)) if id == item));
+    // Selecting a failed entry retries its load, so the refusal names the load's cause.
+    let cause = QueueError::NoRuntime.to_string();
+    assert!(
+        matches!(
+            &result,
+            Err(QueueError::Play(PlayError::ItemFailed { reason })) if *reason == cause
+        ),
+        "a retried select reports why its load cannot start: {result:?}"
+    );
     assert_eq!(
         player.current_index(),
         None,
