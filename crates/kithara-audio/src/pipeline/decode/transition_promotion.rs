@@ -1,3 +1,4 @@
+use kithara_platform::time::Duration;
 use kithara_stream::VariantTransition;
 
 use super::transition::{
@@ -29,11 +30,32 @@ impl ActiveDecode {
         {
             self.discontinuity_revision = self.discontinuity_revision.wrapping_add(1);
         }
+        if prepared.generation.visible_origin().is_none()
+            && self.active.visible_origin().is_some()
+            && let Some(origin) = self.landed_visible_origin(&prepared.generation)
+        {
+            let base = prepared.generation.comparison_base();
+            prepared
+                .generation
+                .retain_visible_origin(Some(origin), base);
+        }
         match prepared.join {
             PromotionJoin::HardCut => self.blender.replace_active(incoming_profile),
             PromotionJoin::Blend { .. } => self.blender.commit_join(),
         }
         std::mem::replace(&mut self.active, prepared.generation)
+    }
+
+    /// A landed incoming never observes its own start. Once the track's visible
+    /// geometry is known, the incoming reports the visible origin of the raw start
+    /// that the promotion's content alignment assumes for it.
+    fn landed_visible_origin(&self, incoming: &DecoderGeneration) -> Option<Duration> {
+        let mode = self.gapless_mode();
+        let raw_start = incoming_origin(&self.active, incoming, mode)?
+            .checked_sub(incoming.timeline_origin_with_gap(mode, 0))?;
+        let profile = incoming.gapless_profile();
+        let position = profile.spec().duration_for(raw_start).ok()?;
+        crate::pipeline::gapless::visible_origin(position, profile, mode)
     }
 
     pub(crate) fn outgoing_holdback_needs_pcm(&self) -> bool {

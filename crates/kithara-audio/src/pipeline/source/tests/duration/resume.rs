@@ -71,8 +71,8 @@ async fn host_rate_after_promotion_resumes_in_the_incoming_clock_before_output(
     );
     assert_eq!(source.resume.decoded_end(revision), None);
     assert_eq!(source.playhead.position(), last_outgoing.end_timestamp);
-    let expected_origin =
-        incoming_reports_origin.then(|| Duration::from_millis(incoming_origin + 17));
+    // A landed incoming carries the track's visible origin whether or not it reports its own.
+    let expected_origin = Some(Duration::from_millis(incoming_origin + 17));
     assert_eq!(source.decode.active().visible_origin(), expected_origin);
 
     source.commit_source_end(
