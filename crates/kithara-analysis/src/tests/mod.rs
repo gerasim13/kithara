@@ -6,7 +6,7 @@ mod ingest;
 mod node;
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 mod order;
-#[cfg(feature = "beat-backend")]
+#[cfg(all(feature = "beat-backend", feature = "analysis-waveform"))]
 mod probe;
 mod schedule;
 #[cfg(any(

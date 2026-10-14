@@ -6,9 +6,11 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use kithara_devtools_trace_format::{
+    TRACE_SCHEMA_VERSION, TraceRecord, TraceRecordKind, TraceSource,
+};
 use serde::Serialize;
 
-use super::{TRACE_SCHEMA_VERSION, TraceRecord, TraceRecordKind, TraceSource};
 use crate::viz::graph::{
     Edge, EdgeKind, Evidence, EvidenceGraph, Node, NodeId, NodeKind, SourceLocation,
 };
@@ -63,11 +65,11 @@ fn read(path: &Path) -> Result<Vec<TraceRecord>> {
         }
         let record: TraceRecord = serde_json::from_str(&line)
             .with_context(|| format!("parse trace line {}", index + 1))?;
-        if record.schema_version != TRACE_SCHEMA_VERSION {
+        if record.schema_version() != TRACE_SCHEMA_VERSION {
             bail!(
                 "trace line {} uses schema {}, expected {}",
                 index + 1,
-                record.schema_version,
+                record.schema_version(),
                 TRACE_SCHEMA_VERSION
             );
         }
@@ -147,12 +149,13 @@ impl<'a> ImportContext<'a> {
         evidence: &Evidence,
     ) {
         let (Some(resource_id), Some(resource_type)) = (
-            record.resource_id.as_deref(),
-            record.resource_type.as_deref(),
+            record.resource_id().as_deref(),
+            record.resource_type().as_deref(),
         ) else {
             self.diagnostics.push(format!(
                 "trace record {} `{}` has no resource identity",
-                record.sequence, record.name
+                record.sequence(),
+                record.name()
             ));
             return;
         };
@@ -172,7 +175,7 @@ impl<'a> ImportContext<'a> {
     }
 
     fn add_task(&mut self, record: &TraceRecord, current: &NodeId, evidence: &Evidence) {
-        let task_name = record.task_id.as_deref().unwrap_or(&record.name);
+        let task_name = record.task_id().as_deref().unwrap_or(record.name());
         let task = NodeId::site(
             "<runtime>",
             self.scenario,
@@ -195,7 +198,7 @@ impl<'a> ImportContext<'a> {
     }
 
     fn apply_kind(&mut self, record: &TraceRecord, current: &NodeId, evidence: &Evidence) {
-        match record.kind {
+        match record.kind() {
             TraceRecordKind::TaskSpawn => self.add_task(record, current, evidence),
             TraceRecordKind::ResourceCreate => {
                 self.add_resource(record, current, EdgeKind::Constructs, evidence);
@@ -210,7 +213,7 @@ impl<'a> ImportContext<'a> {
                 self.add_resource(record, current, EdgeKind::Drops, evidence);
             }
             TraceRecordKind::Send => {
-                if let Some(correlation) = &record.correlation_id {
+                if let Some(correlation) = record.correlation_id() {
                     self.sends.insert(correlation.clone(), current.clone());
                 }
                 self.add_resource(record, current, EdgeKind::Sends, evidence);
@@ -226,14 +229,14 @@ impl<'a> ImportContext<'a> {
             let mut node = Node::new(
                 current.clone(),
                 NodeKind::RuntimeEvent,
-                &record.name,
+                record.name(),
                 evidence.clone(),
             );
-            if let Some(source) = &record.source {
+            if let Some(source) = record.source() {
                 node.location = Some(SourceLocation {
-                    path: source.path.clone(),
-                    line: source.line,
-                    column: source.column,
+                    path: source.path().clone(),
+                    line: source.line(),
+                    column: source.column(),
                 });
             }
             self.graph.merge_node(node);
@@ -264,7 +267,7 @@ impl<'a> ImportContext<'a> {
                     "<runtime>",
                     self.scenario,
                     "<trace>",
-                    format!("{:020}:{}", record.sequence, record.name),
+                    format!("{:020}:{}", record.sequence(), record.name()),
                 )
             })
     }
@@ -295,7 +298,7 @@ impl<'a> ImportContext<'a> {
     }
 
     fn import_record(&mut self, record: &TraceRecord) {
-        let evidence = self.evidence(record.sequence);
+        let evidence = self.evidence(record.sequence());
         let current = self.current_id(record);
         self.attach_current(record, &current, &evidence);
         self.link_context(record, &current, &evidence);
@@ -305,7 +308,7 @@ impl<'a> ImportContext<'a> {
 
     fn link_context(&mut self, record: &TraceRecord, current: &NodeId, evidence: &Evidence) {
         if let Some(parent) = record
-            .parent_span_id
+            .parent_span_id()
             .as_ref()
             .and_then(|parent| self.spans.get(parent))
         {
@@ -316,9 +319,9 @@ impl<'a> ImportContext<'a> {
                 evidence.clone(),
             ));
         }
-        if record.kind != TraceRecordKind::TaskSpawn
+        if record.kind() != TraceRecordKind::TaskSpawn
             && let Some(task) = record
-                .task_id
+                .task_id()
                 .as_ref()
                 .and_then(|task| self.tasks.get(task))
         {
@@ -329,17 +332,17 @@ impl<'a> ImportContext<'a> {
                 evidence.clone(),
             ));
         }
-        if let Some(span) = &record.span_id {
+        if let Some(span) = record.span_id() {
             self.spans.insert(span.clone(), current.clone());
         }
     }
 
     fn link_receive(&mut self, record: &TraceRecord, current: &NodeId) {
-        if record.kind != TraceRecordKind::Receive {
+        if record.kind() != TraceRecordKind::Receive {
             return;
         }
         let Some(sender) = record
-            .correlation_id
+            .correlation_id()
             .as_ref()
             .and_then(|correlation| self.sends.get(correlation))
         else {
@@ -349,7 +352,7 @@ impl<'a> ImportContext<'a> {
             sender.clone(),
             current.clone(),
             EdgeKind::Sends,
-            self.evidence(record.sequence),
+            self.evidence(record.sequence()),
         ));
     }
 }
@@ -393,20 +396,20 @@ impl SourceIndex {
     }
 
     fn resolve(&self, record: &TraceRecord) -> Option<&NodeId> {
-        if let Some(source) = &record.source
-            && let Some(resolved) = self.resolve_source(source, &record.name)
+        if let Some(source) = record.source()
+            && let Some(resolved) = self.resolve_source(source, record.name())
         {
             return Some(resolved);
         }
-        let candidates = self.symbols.get(&record.name)?;
+        let candidates = self.symbols.get(record.name())?;
         (candidates.len() == 1).then(|| &candidates[0])
     }
 
     fn resolve_source(&self, source: &TraceSource, name: &str) -> Option<&NodeId> {
-        let exact = self.nodes.get(&(source.path.clone(), source.line));
+        let exact = self.nodes.get(&(source.path().clone(), source.line()));
         let candidates = exact.or_else(|| {
             self.nodes
-                .range((source.path.clone(), 0)..=(source.path.clone(), source.line))
+                .range((source.path().clone(), 0)..=(source.path().clone(), source.line()))
                 .next_back()
                 .map(|(_, candidates)| candidates)
         })?;
@@ -432,21 +435,24 @@ impl SourceIndex {
 
 #[cfg(test)]
 mod tests {
+    use kithara_devtools_trace_format::TraceWriter;
+    use serde_json::json;
     use tempfile::tempdir;
 
     use super::*;
-    use crate::viz::trace::TraceWriter;
 
     #[test]
     fn trace_round_trip_preserves_versioned_records() {
         let temp = tempdir().expect("tempdir");
         let path = temp.path().join("trace.jsonl");
-        let record = TraceRecord::new(1, TraceRecordKind::Send, "send")
-            .with_source(TraceSource::new("src/lib.rs", 4, 2))
-            .with_task("worker")
-            .with_thread("thread-1")
-            .with_correlation("message-1")
-            .with_resource("Buffer", "7");
+        let record: TraceRecord = serde_json::from_value(json!({
+            "schema_version": TRACE_SCHEMA_VERSION, "sequence": 1,
+            "kind": TraceRecordKind::Send, "name": "send",
+            "source": { "path": "src/lib.rs", "line": 4, "column": 2 },
+            "task_id": "worker", "thread_id": "thread-1", "correlation_id": "message-1",
+            "resource_type": "Buffer", "resource_id": "7"
+        }))
+        .expect("schema fixture");
         let mut writer = TraceWriter::create(&path).expect("writer");
         writer.write(&record).expect("record");
         writer.finish().expect("finish");
@@ -477,15 +483,22 @@ mod tests {
 
     #[test]
     fn cross_thread_receive_requires_explicit_correlation() {
-        let send = TraceRecord::new(1, TraceRecordKind::Send, "send")
-            .with_thread("one")
-            .with_resource("Message", "1");
-        let receive = TraceRecord::new(2, TraceRecordKind::Receive, "receive")
-            .with_thread("two")
-            .with_resource("Message", "1");
+        let records = serde_json::from_value(json!([
+            {
+                "schema_version": TRACE_SCHEMA_VERSION, "sequence": 1,
+                "kind": TraceRecordKind::Send, "name": "send", "thread_id": "one",
+                "resource_type": "Message", "resource_id": "1"
+            },
+            {
+                "schema_version": TRACE_SCHEMA_VERSION, "sequence": 2,
+                "kind": TraceRecordKind::Receive, "name": "receive", "thread_id": "two",
+                "resource_type": "Message", "resource_id": "1"
+            }
+        ]))
+        .expect("schema fixtures");
         let mut graph = EvidenceGraph::default();
 
-        let summary = import_records(vec![send, receive], "demo", &mut graph, false);
+        let summary = import_records(records, "demo", &mut graph, false);
 
         assert_eq!(summary.state, TraceState::Complete);
         assert!(!graph.edges().any(|edge| {
@@ -497,15 +510,22 @@ mod tests {
 
     #[test]
     fn correlated_send_and_receive_create_an_observed_edge() {
-        let send = TraceRecord::new(1, TraceRecordKind::Send, "send")
-            .with_correlation("message-1")
-            .with_resource("Message", "1");
-        let receive = TraceRecord::new(2, TraceRecordKind::Receive, "receive")
-            .with_correlation("message-1")
-            .with_resource("Message", "1");
+        let records = serde_json::from_value(json!([
+            {
+                "schema_version": TRACE_SCHEMA_VERSION, "sequence": 1,
+                "kind": TraceRecordKind::Send, "name": "send", "correlation_id": "message-1",
+                "resource_type": "Message", "resource_id": "1"
+            },
+            {
+                "schema_version": TRACE_SCHEMA_VERSION, "sequence": 2,
+                "kind": TraceRecordKind::Receive, "name": "receive", "correlation_id": "message-1",
+                "resource_type": "Message", "resource_id": "1"
+            }
+        ]))
+        .expect("schema fixtures");
         let mut graph = EvidenceGraph::default();
 
-        import_records(vec![send, receive], "demo", &mut graph, false);
+        import_records(records, "demo", &mut graph, false);
 
         assert!(graph.edges().any(|edge| {
             edge.kind == EdgeKind::Sends

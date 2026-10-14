@@ -1,7 +1,6 @@
-use std::{
-    num::{NonZeroU32, NonZeroUsize},
-    ops::Range,
-};
+use std::num::{NonZeroU32, NonZeroUsize};
+#[cfg(feature = "analysis-waveform")]
+use std::ops::Range;
 
 #[cfg(feature = "analysis-waveform")]
 use kithara_audio::AudioObserveError;

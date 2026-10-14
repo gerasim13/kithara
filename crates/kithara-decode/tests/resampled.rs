@@ -18,7 +18,7 @@ use kithara_resampler::{
     ResamplerProcess, ResamplerSettings,
 };
 use kithara_signal::{AudioChunk, AudioSpec};
-use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
+use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, PendingReason};
 #[cfg(all(test, target_os = "android"))]
 use kithara_test_dylib as _;
 use kithara_test_fixtures::unit_fixtures::{
@@ -410,6 +410,12 @@ fn standalone_decoder_adapter_flushes_backend_delay_at_eof(
         target_rate,
         DelayedProbeBackend(resampled_markers, trim_silence),
     );
+    decoder.prepare_next_chunk();
+    assert!(!decoder.has_prepared_result());
+    assert!(matches!(
+        decoder.next_chunk_prepared().expect("bounded delayed step"),
+        DecoderChunkOutcome::Pending(PendingReason::Retry)
+    ));
     let output: AudioChunk = decoder
         .next_chunk()
         .expect("next chunk")

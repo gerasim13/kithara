@@ -263,11 +263,18 @@ pub trait Decoder: Send + 'static {
         self.next_chunk()
     }
 
+    /// Whether prepared consumption can deliver PCM, EOF, or an error without more input.
+    ///
+    /// A provisional Pending outcome is not ready. This observation performs no work and
+    /// leaves the retained result owned by the decoder until consumption or a seek.
+    fn has_prepared_result(&self) -> bool {
+        false
+    }
+
     /// Prepare input and storage before entering a checked decode quantum.
     ///
-    /// Codec initialization may decode and retain the first outcome after
-    /// construction or seek. Repeated preparation must preserve that outcome
-    /// until the following decode call delivers it, including any failure.
+    /// Completed PCM, EOF, and errors remain unchanged until the following decode call
+    /// consumes them. Pending is provisional and may be refreshed by later preparation.
     fn prepare_next_chunk(&mut self) {}
 
     /// Seek to a time position.

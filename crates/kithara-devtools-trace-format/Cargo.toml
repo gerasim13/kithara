@@ -1,0 +1,22 @@
+[package]
+name = "kithara-devtools-trace-format"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Versioned architecture trace records and JSONL writing."
+
+[dependencies]
+anyhow = { workspace = true }
+fieldwork = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+kithara-test-utils = { workspace = true }
+
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

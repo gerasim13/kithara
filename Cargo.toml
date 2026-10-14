@@ -21,6 +21,7 @@ members = [
     "crates/kithara-decode",
     "crates/kithara-derive",
     "crates/kithara-devtools",
+    "crates/kithara-devtools-trace-format",
     "crates/kithara-download",
     "crates/kithara-drm",
     "crates/kithara-dsp",
@@ -302,6 +303,7 @@ kithara-core-test-fixtures = { path = "tests/crates/core" }
 kithara-decode = { path = "crates/kithara-decode", version = "0.0.1-alpha5", default-features = false }
 kithara-derive = { path = "crates/kithara-derive", version = "0.0.1-alpha5", default-features = false }
 kithara-devtools = { path = "crates/kithara-devtools", version = "0.0.1-alpha5" }
+kithara-devtools-trace-format = { path = "crates/kithara-devtools-trace-format", version = "0.0.1-alpha5" }
 kithara-download = { path = "crates/kithara-download", version = "0.0.1-alpha5", default-features = false }
 kithara-drm = { path = "crates/kithara-drm", version = "0.0.1-alpha5" }
 kithara-dsp = { path = "crates/kithara-dsp", version = "0.0.1-alpha5" }
@@ -474,6 +476,7 @@ objc2 = "0.6.4"
 objc2-foundation = { version = "0.3.2", default-features = false }
 opus = "0.4.0"
 ordered-float = { version = "5.5.0", default-features = false }
+ort = { version = "=2.0.0-rc.14", default-features = false, features = ["std", "load-dynamic", "api-18", "cuda", "tracing"] }
 parking_lot = "0.12"
 parking_lot_core = "0.9"
 parley = { version = "0.6", default-features = false, features = ["std", "system"] }

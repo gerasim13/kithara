@@ -119,7 +119,7 @@ where
 /// Reports build time before the verdict rather than after it: a red lane is exactly when the
 /// build's share of the wall clock needs explaining, and reporting after an early return would
 /// print the number only for lanes that passed.
-fn run_lane(
+pub(super) fn run_lane(
     test: &TestCommandConfig,
     root: &Path,
     lane_name: &str,
@@ -205,7 +205,3 @@ pub fn nextest_command_for_lane(
     let test = &project.test;
     resolve(test, &requested(test, lane_name, None)?)?.command(action, extra)
 }
-
-#[cfg(test)]
-#[path = "inventory_tests.rs"]
-mod inventory_tests;

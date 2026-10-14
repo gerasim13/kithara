@@ -84,7 +84,11 @@ crate's docs; `just tooling xtask --help` lists the current surface.
 ## Features
 
 - `lint` (default) — the syn-based `arch` / `style` / `idioms` lint family.
-- `viz` (default) — architecture visualization.
+- `viz` (default) - architecture visualization.
+
+Architecture runtime scenarios use `kithara-devtools-trace-format` for versioned records and
+JSONL writing. Importing, correlation, source matching, and graph rendering remain
+in devtools.
 
 `--no-default-features` drops those command families for a project that only
 wants format, test, health, and friends.

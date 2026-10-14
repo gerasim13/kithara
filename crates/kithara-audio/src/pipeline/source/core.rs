@@ -217,8 +217,7 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
     fn prepare_deferred(&mut self) -> Option<kithara_signal::AudioSpec> {
         self.progress_variant_transition();
         if matches!(self.phase, OwnerPhase::Decoding) {
-            self.decode
-                .prepare_deferred(self.source_wait_reason().is_none());
+            self.decode.prepare_deferred(true);
         }
         Some(self.decode.output_spec())
     }
@@ -365,7 +364,9 @@ impl<T: StreamType> StreamAudioSource<T> {
     fn source_wait_reason(&self) -> Option<crate::pipeline::track::WaitingReason> {
         use crate::pipeline::track::WaitingReason;
 
-        if !self.waiting_for_source {
+        let active = self.decode.active();
+        if !self.waiting_for_source || active.has_output() || active.decoder().has_prepared_result()
+        {
             return None;
         }
         match self.shared_stream.phase() {

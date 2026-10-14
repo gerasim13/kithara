@@ -1,24 +1,29 @@
+#[cfg(feature = "resample-rubato")]
+use std::num::NonZeroU32;
 use std::{
-    io::{Cursor, Seek, SeekFrom},
+    io::{self, Cursor, ErrorKind, Seek, SeekFrom},
     ops::Range,
     sync::{
         Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 
-#[cfg(feature = "symphonia")]
 use kithara_bufpool::PoolRegion;
 use kithara_platform::{sync::Arc, time::Duration};
+#[cfg(feature = "resample-rubato")]
+use kithara_resampler::{ResamplerOptions, rubato::RubatoBackend};
 use kithara_signal::AudioChunk;
 #[cfg(feature = "symphonia")]
 use kithara_stream::AudioCodec;
-use kithara_stream::{ByteMap, PendingReason, SegmentDescriptor};
+use kithara_stream::{ByteMap, NotReadyCause, PendingReason, SegmentDescriptor};
 #[cfg(feature = "symphonia")]
 use kithara_test_fixtures::unit_fixtures::{aac_init, aac_segment};
 use kithara_test_utils::kithara;
 
 use super::test_layout::{FakeSegmented, aac_five, aac_one, aac_three, flac_three};
+#[cfg(feature = "resample-rubato")]
+use crate::DecoderResamplerConfig;
 #[cfg(all(android_backend, not(feature = "symphonia")))]
 use crate::android::AndroidCodec as TestCodec;
 #[cfg(all(apple_backend, not(feature = "symphonia")))]
@@ -48,26 +53,40 @@ struct InstrumentedSource {
     reads: Arc<Mutex<Vec<Range<u64>>>>,
     record: Arc<AtomicBool>,
     inner: Cursor<Vec<u8>>,
+    available_end: Option<u64>,
 }
 
-impl std::io::Read for InstrumentedSource {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+impl io::Read for InstrumentedSource {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let pos = self.inner.position();
-        let n = self.inner.read(buf)?;
-        if self.record.load(Ordering::Acquire) && n > 0 {
+        let result = match self.available_end {
+            Some(end) if pos >= end && !buf.is_empty() => Err(io::Error::new(
+                ErrorKind::Interrupted,
+                PendingReason::NotReady(NotReadyCause::WaitBudgetExhausted),
+            )),
+            Some(end) => {
+                let available = usize::try_from(end.saturating_sub(pos))
+                    .expect("fixture extent fits usize")
+                    .min(buf.len());
+                self.inner.read(&mut buf[..available])
+            }
+            None => self.inner.read(buf),
+        };
+        let n = result.as_ref().copied().unwrap_or(0);
+        if self.record.load(Ordering::Acquire) && (n > 0 || result.is_err()) {
             self.reads
                 .lock()
                 .expect("BUG: reads lock")
                 .push(pos..pos + n as u64);
         }
-        Ok(n)
+        result
     }
 }
 
 impl Seek for InstrumentedSource {
     delegate::delegate! {
         to self.inner {
-            fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64>;
+            fn seek(&mut self, pos: SeekFrom) -> io::Result<u64>;
         }
     }
 }
@@ -108,9 +127,18 @@ fn make_decoder(blob: Vec<u8>, segmented: FakeSegmented) -> DecoderHarness {
         inner: Cursor::new(blob),
         reads: Arc::clone(&reads),
         record: Arc::clone(&record),
+        available_end: None,
     });
     let layout: Arc<dyn ByteMap> = Arc::new(segmented);
-    let pools = pools();
+    let decoder = make_decoder_from_source(source, layout, pools());
+    (decoder, reads, record)
+}
+
+fn make_decoder_from_source(
+    source: BoxedSource,
+    layout: Arc<dyn ByteMap>,
+    pools: PoolRegion<TestPools>,
+) -> ComposedDecoder<Fmp4SegmentDemuxer<TestPools>, TestCodec, TestPools> {
     let demuxer =
         Fmp4SegmentDemuxer::open(source, layout, pools.clone()).expect("BUG: build demuxer");
     #[cfg(feature = "symphonia")]
@@ -121,15 +149,163 @@ fn make_decoder(blob: Vec<u8>, segmented: FakeSegmented) -> DecoderHarness {
     #[cfg(all(apple_backend, not(feature = "symphonia")))]
     let codec =
         TestCodec::open_with_config(demuxer.track_info(), false, None).expect("open Apple codec");
-    let decoder = ComposedDecoder::new(
+    ComposedDecoder::new(
         demuxer,
         codec,
         DecoderRuntime {
             pools,
             ..DecoderRuntime::for_test()
         },
+    )
+}
+
+/// Segment zero is still reported at its padded size until its plaintext commits.
+struct EstimatedSegmentLayout {
+    inner: FakeSegmented,
+    committed: AtomicBool,
+}
+
+impl ByteMap for EstimatedSegmentLayout {
+    fn segment_at_index(&self, index: u32) -> Option<SegmentDescriptor> {
+        let mut segment = self.inner.segment_at_index(index)?;
+        if index == 0 && !self.committed.load(Ordering::Acquire) {
+            segment.byte_range.end += 16;
+        }
+        Some(segment)
+    }
+
+    delegate::delegate! {
+        to self.inner {
+            fn init_segment_range(&self) -> Range<u64>;
+            fn len(&self) -> Option<u64>;
+            fn segment_after_byte(&self, offset: u64) -> Option<SegmentDescriptor>;
+            fn segment_at_time(&self, time: Duration) -> Option<SegmentDescriptor>;
+            fn segment_count(&self) -> Option<u32>;
+        }
+    }
+}
+
+fn assert_pending_preparation_recovers_after_shrink(
+    (blob, segmented): (Vec<u8>, FakeSegmented),
+    consume_pending: bool,
+    wrap: impl FnOnce(Box<dyn Decoder>, &PoolRegion<TestPools>) -> Box<dyn Decoder>,
+) {
+    let current_end = segmented.segments[0].byte_range.end;
+    let reads = Arc::new(Mutex::new(Vec::new()));
+    let source: BoxedSource = Box::new(InstrumentedSource {
+        inner: Cursor::new(blob),
+        reads: Arc::clone(&reads),
+        record: Arc::new(AtomicBool::new(true)),
+        available_end: Some(current_end),
+    });
+    let layout = Arc::new(EstimatedSegmentLayout {
+        inner: segmented,
+        committed: AtomicBool::new(false),
+    });
+    let byte_map: Arc<dyn ByteMap> = layout.clone();
+    let pools = pools();
+    let decoder = make_decoder_from_source(source, byte_map, pools.clone());
+    let mut decoder = wrap(Box::new(decoder), &pools);
+    let reason = PendingReason::NotReady(NotReadyCause::WaitBudgetExhausted);
+
+    reads.lock().expect("read log").clear();
+    decoder.prepare_next_chunk();
+    assert_eq!(
+        reads.lock().expect("read log").last(),
+        Some(&(current_end..current_end))
     );
-    (decoder, reads, record)
+    reads.lock().expect("read log").clear();
+    assert!(matches!(
+        decoder.next_chunk_prepared().expect("prepared pending"),
+        DecoderChunkOutcome::Pending(actual) if actual == reason
+    ));
+    assert!(reads.lock().expect("read log").is_empty());
+
+    decoder.prepare_next_chunk();
+    assert_eq!(
+        reads.lock().expect("read log").as_slice(),
+        std::slice::from_ref(&(current_end..current_end))
+    );
+    reads.lock().expect("read log").clear();
+    if consume_pending {
+        assert!(matches!(
+            decoder.next_chunk_prepared().expect("consume pending"),
+            DecoderChunkOutcome::Pending(actual) if actual == reason
+        ));
+        assert!(reads.lock().expect("read log").is_empty());
+    }
+    layout.committed.store(true, Ordering::Release);
+
+    for _ in 0..16 {
+        decoder.prepare_next_chunk();
+        let outcome = decoder
+            .next_chunk_prepared()
+            .expect("decode committed segment");
+        assert!(
+            reads.lock().expect("read log").is_empty(),
+            "the current segment is buffered and the next remains gated"
+        );
+        match outcome {
+            DecoderChunkOutcome::Chunk(chunk) => {
+                assert!(chunk.frames() > 0);
+                assert_eq!(chunk.meta.segment_index, Some(0));
+                assert_eq!(chunk.spec(), decoder.spec());
+                return;
+            }
+            DecoderChunkOutcome::Pending(PendingReason::Retry) => {}
+            other => panic!("buffered current segment must yield PCM: {other:?}"),
+        }
+    }
+    panic!("committed segment must produce PCM within the preparation budget");
+}
+
+#[kithara::test]
+#[case::unconsumed(false)]
+#[case::consumed(true)]
+fn composed_pending_preparation_refreshes_after_live_segment_shrink(
+    aac_three: (Vec<u8>, FakeSegmented),
+    #[case] consume_pending: bool,
+) {
+    assert_pending_preparation_recovers_after_shrink(aac_three, consume_pending, |decoder, _| {
+        decoder
+    });
+}
+
+#[cfg(feature = "resample-rubato")]
+fn wrap_with_mismatched_resampler(
+    decoder: Box<dyn Decoder>,
+    pools: &PoolRegion<TestPools>,
+) -> Box<dyn Decoder> {
+    let target = NonZeroU32::new(48_000).expect("non-zero target rate");
+    assert_ne!(
+        decoder.spec().sample_rate,
+        target,
+        "fixture must exercise the wrapper"
+    );
+    let config = DecoderResamplerConfig::builder()
+        .backend(RubatoBackend::new())
+        .target_sample_rate(target)
+        .options(ResamplerOptions::builder().chunk_size(256).build())
+        .build();
+    let decoder =
+        crate::resampled::wrap(decoder, Some(config), pools).expect("real resampled wrapper");
+    assert_eq!(decoder.spec().sample_rate, target);
+    decoder
+}
+
+#[cfg(feature = "resample-rubato")]
+#[kithara::test]
+#[case::unconsumed(false)]
+#[case::consumed(true)]
+fn resampled_pending_preparation_refreshes_after_live_segment_shrink(
+    aac_three: (Vec<u8>, FakeSegmented),
+    #[case] consume_pending: bool,
+) {
+    assert_pending_preparation_recovers_after_shrink(
+        aac_three,
+        consume_pending,
+        wrap_with_mismatched_resampler,
+    );
 }
 
 #[kithara::test]
@@ -176,6 +352,7 @@ struct PublishedButUndescribed {
     init_range: Range<u64>,
     count: u32,
     total: u64,
+    lookups: AtomicUsize,
 }
 
 impl ByteMap for PublishedButUndescribed {
@@ -192,6 +369,10 @@ impl ByteMap for PublishedButUndescribed {
     }
 
     fn segment_at_index(&self, _segment_index: u32) -> Option<SegmentDescriptor> {
+        assert!(
+            self.lookups.fetch_add(1, Ordering::Relaxed) < 16,
+            "an undescribed segment must park preparation instead of retrying forever"
+        );
         None
     }
 
@@ -220,6 +401,7 @@ fn an_undescribed_segment_is_not_the_end_of_the_stream(aac_three: (Vec<u8>, Fake
         init_range,
         total,
         count: 3,
+        lookups: AtomicUsize::new(0),
     });
     let mut demuxer =
         Fmp4SegmentDemuxer::open(source, layout, pools()).expect("BUG: build demuxer");
@@ -230,6 +412,51 @@ fn an_undescribed_segment_is_not_the_end_of_the_stream(aac_three: (Vec<u8>, Fake
         matches!(outcome, DemuxOutcome::Pending(PendingReason::Retry)),
         "an undescribed segment must park the decode, not end it: {outcome:?}"
     );
+}
+
+fn assert_undescribed_segment_preparation_is_bounded(
+    (blob, segmented): (Vec<u8>, FakeSegmented),
+    wrap: impl FnOnce(Box<dyn Decoder>, &PoolRegion<TestPools>) -> Box<dyn Decoder>,
+) {
+    let layout = Arc::new(PublishedButUndescribed {
+        init_range: 0..segmented.segments[0].byte_range.start,
+        total: segmented.segments[2].byte_range.end,
+        count: 3,
+        lookups: AtomicUsize::new(0),
+    });
+    let byte_map: Arc<dyn ByteMap> = layout.clone();
+    let pools = pools();
+    let decoder = make_decoder_from_source(Box::new(Cursor::new(blob)), byte_map, pools.clone());
+    let mut decoder = wrap(Box::new(decoder), &pools);
+    for _ in 0..2 {
+        let before = layout.lookups.load(Ordering::Relaxed);
+        decoder.prepare_next_chunk();
+        let prepared = layout.lookups.load(Ordering::Relaxed);
+        assert!(
+            prepared > before,
+            "preparation must observe the segment still owed"
+        );
+        assert!(matches!(
+            decoder.next_chunk_prepared().expect("undescribed segment"),
+            DecoderChunkOutcome::Pending(PendingReason::Retry)
+        ));
+        assert_eq!(
+            layout.lookups.load(Ordering::Relaxed),
+            prepared,
+            "consuming Pending must not poll the layout"
+        );
+    }
+}
+
+#[kithara::test]
+fn composed_preparation_of_undescribed_segment_is_bounded(aac_three: (Vec<u8>, FakeSegmented)) {
+    assert_undescribed_segment_preparation_is_bounded(aac_three, |decoder, _| decoder);
+}
+
+#[cfg(feature = "resample-rubato")]
+#[kithara::test]
+fn resampled_preparation_of_undescribed_segment_is_bounded(aac_three: (Vec<u8>, FakeSegmented)) {
+    assert_undescribed_segment_preparation_is_bounded(aac_three, wrap_with_mismatched_resampler);
 }
 
 /// RED scaffold: a freshly opened `Fmp4SegmentDemuxer` always restarts at

@@ -5,37 +5,27 @@ use crate::{
     nn::{api::BeatError, config::BeatConfig, consts},
 };
 
-pub(crate) struct PeakPicker {
-    config: BeatConfig,
-}
-
-impl PeakPicker {
-    pub(crate) fn new(config: BeatConfig) -> Self {
-        Self { config }
+pub(crate) fn decode(
+    beat_logits: &[f32],
+    downbeat_logits: &[f32],
+    config: &BeatConfig,
+) -> Result<(Vec<BeatMark>, Vec<BeatMark>), BeatError> {
+    if beat_logits.len() != downbeat_logits.len() {
+        return Err(BeatError::Inference {
+            reason: format!(
+                "beat_logits length ({}) != downbeat_logits length ({})",
+                beat_logits.len(),
+                downbeat_logits.len()
+            ),
+        });
     }
 
-    pub(crate) fn decode(
-        &self,
-        beat_logits: &[f32],
-        downbeat_logits: &[f32],
-    ) -> Result<(Vec<BeatMark>, Vec<BeatMark>), BeatError> {
-        if beat_logits.len() != downbeat_logits.len() {
-            return Err(BeatError::Inference {
-                reason: format!(
-                    "beat_logits length ({}) != downbeat_logits length ({})",
-                    beat_logits.len(),
-                    downbeat_logits.len()
-                ),
-            });
-        }
+    let beats = find_marks(beat_logits, config);
+    let mut downbeats = find_marks(downbeat_logits, config);
 
-        let beats = find_marks(beat_logits, &self.config);
-        let mut downbeats = find_marks(downbeat_logits, &self.config);
+    snap_downbeats_to_beats(&beats, &mut downbeats);
 
-        snap_downbeats_to_beats(&beats, &mut downbeats);
-
-        Ok((beats, downbeats))
-    }
+    Ok((beats, downbeats))
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -194,9 +184,7 @@ mod tests {
         logits[50] = 0.5;
         logits[150] = 3.0;
 
-        let picker = PeakPicker::new(BeatConfig::default());
-        let (beats, _) = picker
-            .decode(&logits, &flat(200))
+        let (beats, _) = decode(&logits, &flat(200), &BeatConfig::default())
             .expect("equal-length logits decode");
 
         assert_eq!(beats.len(), 2, "both peaks clear the threshold");
@@ -389,8 +377,8 @@ mod tests {
         beat_logits[150] = 4.0;
         downbeat_logits[51] = 2.0;
 
-        let pp = PeakPicker::new(BeatConfig::default());
-        let (beats, downbeats) = pp.decode(&beat_logits, &downbeat_logits).unwrap();
+        let (beats, downbeats) =
+            decode(&beat_logits, &downbeat_logits, &BeatConfig::default()).unwrap();
 
         assert_eq!(seconds(&beats), vec![1.0, 2.0, 3.0]);
         assert_eq!(seconds(&downbeats), vec![1.0]);
@@ -398,16 +386,14 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn decode_empty_logits() {
-        let pp = PeakPicker::new(BeatConfig::default());
-        let (beats, downbeats) = pp.decode(&[], &[]).unwrap();
+        let (beats, downbeats) = decode(&[], &[], &BeatConfig::default()).unwrap();
         assert!(beats.is_empty());
         assert!(downbeats.is_empty());
     }
 
     #[kithara::test(native, flash(false))]
     fn decode_mismatched_lengths() {
-        let pp = PeakPicker::new(BeatConfig::default());
-        let err = pp.decode(&[1.0, 2.0], &[1.0]);
+        let err = decode(&[1.0, 2.0], &[1.0], &BeatConfig::default());
         assert!(err.is_err());
     }
 }
