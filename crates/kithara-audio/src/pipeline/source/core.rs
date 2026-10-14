@@ -114,12 +114,14 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
         }
         self.release_seek_abr();
     }
-    fn media_origin(&self) -> Option<Duration> {
-        self.decode.active().media_origin()
+
+    delegate::delegate! {
+        to self.decode.active() {
+            fn media_origin(&self) -> Option<Duration>;
+            fn visible_origin(&self) -> Option<Duration>;
+        }
     }
-    fn visible_origin(&self) -> Option<Duration> {
-        self.decode.active().visible_origin()
-    }
+
     fn discontinuity(&self) -> Option<crate::SourceDiscontinuity> {
         Some(self.decode.discontinuity())
     }
