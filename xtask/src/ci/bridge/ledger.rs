@@ -10,7 +10,7 @@ use anyhow::{Context, Result, bail};
 use kithara_devtools::lock::{FileLock, Wait};
 use serde::{Deserialize, Serialize};
 
-use super::model::VerificationState;
+use super::model::{Scope, VerificationState};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -20,6 +20,9 @@ pub(super) struct LedgerEntry {
     pub(super) pipeline_id: Option<u64>,
     pub(super) announced: bool,
     pub(super) detail: Option<String>,
+    /// Entries written before drafts were scoped were all full verifications.
+    #[serde(default)]
+    pub(super) scope: Scope,
     updated_at: u64,
 }
 
@@ -78,7 +81,6 @@ impl Ledger {
         })
     }
 
-    #[cfg(test)]
     pub(super) fn get(&self, head_sha: &str, base_sha: &str) -> Result<Option<LedgerEntry>> {
         self.with_locked_data(|data| {
             Ok(data
@@ -95,7 +97,9 @@ impl Ledger {
             Ok(data
                 .verifications
                 .iter()
-                .filter(|(_, entry)| entry.state == VerificationState::Verified)
+                .filter(|(_, entry)| {
+                    entry.state == VerificationState::Verified && entry.scope == Scope::Full
+                })
                 .filter_map(|(key, entry)| {
                     let (head, base) = key.split_once(':')?;
                     (head == head_sha && base != base_sha).then_some((entry.updated_at, key, base))
@@ -105,10 +109,41 @@ impl Ledger {
         })
     }
 
-    pub(super) fn reserve(&self, head_sha: &str, base_sha: &str) -> Result<LedgerEntry> {
+    /// The base of the verification of this head that changed last, whatever
+    /// its scope or state. Equal timestamps choose the later ledger key.
+    pub(super) fn latest_base(&self, head_sha: &str) -> Result<Option<String>> {
+        self.with_locked_data(|data| {
+            Ok(data
+                .verifications
+                .iter()
+                .filter_map(|(key, entry)| {
+                    let (head, base) = key.split_once(':')?;
+                    (head == head_sha).then_some((entry.updated_at, key, base))
+                })
+                .max_by_key(|(updated_at, key, _)| (*updated_at, *key))
+                .map(|(_, _, base)| base.to_owned()))
+        })
+    }
+
+    /// The verification of this head against this base, opened when there is
+    /// none. A full verification answers for a draft; a draft that turned
+    /// ready opens its next attempt as a full one.
+    pub(super) fn reserve(
+        &self,
+        head_sha: &str,
+        base_sha: &str,
+        scope: Scope,
+    ) -> Result<LedgerEntry> {
         self.with_locked_data(|data| {
             let key = ledger_key(head_sha, base_sha);
-            if let Some(entry) = data.verifications.get(&key) {
+            if let Some(entry) = data.verifications.get_mut(&key) {
+                if entry.scope == Scope::Draft && scope == Scope::Full {
+                    reopen(entry)?;
+                    entry.scope = Scope::Full;
+                    let entry = entry.clone();
+                    self.write(data)?;
+                    return Ok(entry);
+                }
                 return Ok(entry.clone());
             }
             let entry = LedgerEntry {
@@ -117,6 +152,7 @@ impl Ledger {
                 pipeline_id: None,
                 announced: false,
                 detail: None,
+                scope,
                 updated_at: unix_time()?,
             };
             data.verifications.insert(key, entry.clone());
@@ -413,6 +449,7 @@ fn unix_time() -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ci::bridge::model::Scope;
 
     #[test]
     fn default_branch_statuses_round_trip() {
@@ -466,11 +503,80 @@ mod tests {
     }
 
     fn finish_entry(ledger: &Ledger, head: &str, base: &str, state: VerificationState) {
-        let entry = ledger.reserve(head, base).unwrap();
+        let entry = ledger.reserve(head, base, Scope::Full).unwrap();
         ledger.attach(head, base, entry.attempt, 42).unwrap();
         ledger
             .finish(head, base, entry.attempt, 42, state, None)
             .unwrap();
+    }
+
+    #[test]
+    fn a_draft_that_turns_ready_is_reopened_as_a_full_verification() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = Ledger::new(directory.path()).unwrap();
+        let draft = ledger.reserve("head", "base", Scope::Draft).unwrap();
+        ledger.attach("head", "base", draft.attempt, 42).unwrap();
+        ledger
+            .finish(
+                "head",
+                "base",
+                draft.attempt,
+                42,
+                VerificationState::Verified,
+                None,
+            )
+            .unwrap();
+
+        let full = ledger.reserve("head", "base", Scope::Full).unwrap();
+
+        assert_eq!(full.scope, Scope::Full);
+        assert_eq!(full.state, VerificationState::Testing);
+        assert_eq!(full.attempt, draft.attempt + 1);
+        assert_eq!(full.pipeline_id, None);
+    }
+
+    #[test]
+    fn a_full_verification_answers_for_a_draft() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = Ledger::new(directory.path()).unwrap();
+        let full = ledger.reserve("head", "base", Scope::Full).unwrap();
+
+        let draft = ledger.reserve("head", "base", Scope::Draft).unwrap();
+
+        assert_eq!(draft, full);
+    }
+
+    #[test]
+    fn a_draft_pass_is_no_pass_of_the_merge() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = Ledger::new(directory.path()).unwrap();
+        let draft = ledger.reserve("head", "base-one", Scope::Draft).unwrap();
+        ledger
+            .attach("head", "base-one", draft.attempt, 42)
+            .unwrap();
+        ledger
+            .finish(
+                "head",
+                "base-one",
+                draft.attempt,
+                42,
+                VerificationState::Verified,
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(ledger.last_pass("head", "base-current").unwrap(), None);
+    }
+
+    #[test]
+    fn a_head_stands_on_the_base_it_was_last_verified_against() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = Ledger::new(directory.path()).unwrap();
+        assert_eq!(ledger.latest_base("head").unwrap(), None);
+        ledger.reserve("head", "base-one", Scope::Draft).unwrap();
+        ledger.reserve("other", "base-two", Scope::Draft).unwrap();
+
+        assert_eq!(ledger.latest_base("head").unwrap(), Some("base-one".into()));
     }
 
     #[test]
@@ -530,7 +636,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let ledger = Ledger::new(directory.path()).unwrap();
         finish_entry(&ledger, "head", "base-one", VerificationState::Verified);
-        ledger.reserve("head", "base-two").unwrap();
+        ledger.reserve("head", "base-two", Scope::Full).unwrap();
 
         assert_eq!(
             ledger.last_pass("head", "base-current").unwrap(),
@@ -543,8 +649,8 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let ledger = Ledger::new(directory.path()).unwrap();
 
-        let first = ledger.reserve("head", "base").unwrap();
-        let second = ledger.reserve("head", "base").unwrap();
+        let first = ledger.reserve("head", "base", Scope::Full).unwrap();
+        let second = ledger.reserve("head", "base", Scope::Full).unwrap();
 
         assert_eq!(first, second);
         assert_eq!(first.attempt, 1);
@@ -555,9 +661,9 @@ mod tests {
     fn changed_head_or_base_is_a_new_verification_key() {
         let directory = tempfile::tempdir().unwrap();
         let ledger = Ledger::new(directory.path()).unwrap();
-        ledger.reserve("head-one", "base-one").unwrap();
-        ledger.reserve("head-two", "base-one").unwrap();
-        ledger.reserve("head-one", "base-two").unwrap();
+        ledger.reserve("head-one", "base-one", Scope::Full).unwrap();
+        ledger.reserve("head-two", "base-one", Scope::Full).unwrap();
+        ledger.reserve("head-one", "base-two", Scope::Full).unwrap();
 
         assert_eq!(
             ledger.get("head-two", "base-one").unwrap().unwrap().attempt,
@@ -573,7 +679,7 @@ mod tests {
     fn terminal_entries_and_pipeline_ids_are_immutable() {
         let directory = tempfile::tempdir().unwrap();
         let ledger = Ledger::new(directory.path()).unwrap();
-        ledger.reserve("head", "base").unwrap();
+        ledger.reserve("head", "base", Scope::Full).unwrap();
         ledger.attach("head", "base", 1, 42).unwrap();
         ledger
             .finish(
@@ -607,7 +713,7 @@ mod tests {
     fn retry_requires_the_exact_terminal_key() {
         let directory = tempfile::tempdir().unwrap();
         let ledger = Ledger::new(directory.path()).unwrap();
-        ledger.reserve("head", "base").unwrap();
+        ledger.reserve("head", "base", Scope::Full).unwrap();
         ledger.attach("head", "base", 1, 42).unwrap();
         assert!(ledger.retry("head", "base").is_err());
         ledger
@@ -627,7 +733,7 @@ mod tests {
     fn releasing_a_stopped_pipeline_keeps_the_verification_open_on_a_fresh_attempt() {
         let directory = tempfile::tempdir().unwrap();
         let ledger = Ledger::new(directory.path()).unwrap();
-        ledger.reserve("head", "base").unwrap();
+        ledger.reserve("head", "base", Scope::Full).unwrap();
         ledger.attach("head", "base", 1, 42).unwrap();
         ledger.announce("head", "base", 1, 42).unwrap();
 
@@ -646,7 +752,7 @@ mod tests {
     fn policy_rejection_is_terminal_without_a_pipeline() {
         let directory = tempfile::tempdir().unwrap();
         let ledger = Ledger::new(directory.path()).unwrap();
-        let entry = ledger.reserve("head", "base").unwrap();
+        let entry = ledger.reserve("head", "base", Scope::Full).unwrap();
 
         ledger
             .reject("head", "base", entry.attempt, "control path changed".into())

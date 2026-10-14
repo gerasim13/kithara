@@ -2849,7 +2849,15 @@ steps = [
     "--no-block=on",
     "--profile",
     "ci",
-  ], label = "Apple flash and no-block gate" },
+  ], label = "Apple flash and no-block gate", args_by_kind = { branch = [
+    "test",
+    "run",
+    "--touched",
+    "--flash=on",
+    "--no-block=on",
+    "--profile",
+    "ci",
+  ] } },
 ]
 role = "platforms"
 kinds = [

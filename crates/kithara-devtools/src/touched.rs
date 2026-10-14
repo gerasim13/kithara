@@ -9,17 +9,24 @@ use anyhow::{Context, Result, bail};
 
 use crate::common::project::{TestCargoOptions, TestCommandConfig, TestLaneConfig};
 
-/// Brings `origin/main` up to date. The infinite depth also deepens a checkout
-/// of the tip alone down to where its branch left `main`; on a complete clone
-/// it is a plain fetch.
-pub(crate) const FETCH_MAIN: [&str; 6] = [
-    "fetch",
-    "--no-tags",
-    "--quiet",
-    "--depth=2147483647",
-    "origin",
-    "+refs/heads/main:refs/remotes/origin/main",
-];
+/// The default branch a touched selection measures from when the pipeline
+/// names none. `GitLab`'s is `develop`, and its pipelines set
+/// `KITHARA_TOUCHED_BASE` to it.
+const DEFAULT_BASE: &str = "main";
+
+/// The arguments that bring `origin/<branch>` up to date. The infinite depth
+/// also deepens a checkout of the tip alone down to where its branch left
+/// `branch`; on a complete clone it is a plain fetch.
+pub(crate) fn fetch_args(branch: &str) -> [String; 6] {
+    [
+        "fetch".to_owned(),
+        "--no-tags".to_owned(),
+        "--quiet".to_owned(),
+        "--depth=2147483647".to_owned(),
+        "origin".to_owned(),
+        format!("+refs/heads/{branch}:refs/remotes/origin/{branch}"),
+    ]
+}
 
 /// One run a touched selection asks for.
 #[derive(Debug, PartialEq, Eq)]
@@ -69,8 +76,18 @@ pub(crate) fn lanes(
     root: &Path,
     scope: &[String],
 ) -> Result<Vec<Touched>> {
+    lanes_against(test, root, &base_branch(), scope)
+}
+
+/// [`lanes`] measured from where the branch left `base`.
+fn lanes_against(
+    test: &TestCommandConfig,
+    root: &Path,
+    base: &str,
+    scope: &[String],
+) -> Result<Vec<Touched>> {
     let scope = &scoped(test, scope)?;
-    let Some(changed) = changed_paths(root)? else {
+    let Some(changed) = changed_paths(root, base)? else {
         return Ok(everything(scope));
     };
     let changed: Vec<&str> = changed.lines().collect();
@@ -93,20 +110,26 @@ pub(crate) fn lanes(
 /// Returns an error for an unknown scoped lane or unreadable Git history.
 pub fn touches(test: &TestCommandConfig, root: &Path, scope: &[String]) -> Result<bool> {
     let scope = &scoped(test, scope)?;
-    let Some(changed) = changed_paths(root)? else {
+    let Some(changed) = changed_paths(root, &base_branch())? else {
         return Ok(!scope.is_empty());
     };
     let changed: Vec<&str> = changed.lines().collect();
     Ok(!select(&test.lanes, &[], None, scope, &changed).is_empty())
 }
 
-/// The branch's committed paths, or no comparison on its base commit.
-fn changed_paths(root: &Path) -> Result<Option<String>> {
+/// The default branch this pipeline measures a branch from.
+fn base_branch() -> String {
+    std::env::var("KITHARA_TOUCHED_BASE").unwrap_or_else(|_| DEFAULT_BASE.to_owned())
+}
+
+/// The branch's committed paths since it left `base`, or no comparison on
+/// `base`'s own commit.
+fn changed_paths(root: &Path, base: &str) -> Result<Option<String>> {
     let _ = Command::new("git")
         .current_dir(root)
-        .args(FETCH_MAIN)
+        .args(fetch_args(base))
         .status();
-    let base = git(root, &["merge-base", "origin/main", "HEAD"])?;
+    let base = git(root, &["merge-base", &format!("origin/{base}"), "HEAD"])?;
     if base == git(root, &["rev-parse", "HEAD"])? {
         return Ok(None);
     }
@@ -545,6 +568,44 @@ mod tests {
         };
 
         let selected = lanes(&test, &checkout, &[])?;
+
+        assert_eq!(selected, vec![narrowed(&["play", "play-tests"])]);
+        Ok(())
+    }
+
+    /// `GitLab`'s default branch is `develop`, not `main`: what a branch there
+    /// touched is measured from where it left `develop`.
+    #[test]
+    fn a_branch_of_another_default_branch_finds_what_it_touched() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let work = dir.path().join("work");
+        let checkout = dir.path().join("checkout");
+        std::fs::create_dir_all(work.join("crates/host"))?;
+        std::fs::create_dir_all(work.join("crates/play"))?;
+        commit_file(&work, "crates/host/lib.rs", None)?;
+        run_git(&work, &["branch", "-q", "-m", "main", "develop"])?;
+        commit_file(&work, "crates/play/lib.rs", Some("feature"))?;
+        run_git(dir.path(), &["clone", "-q", "--bare", "work", "origin.git"])?;
+        let url = format!("file://{}", dir.path().join("origin.git").display());
+        run_git(
+            dir.path(),
+            &[
+                "clone",
+                "-q",
+                "--depth=1",
+                "--branch",
+                "feature",
+                &url,
+                "checkout",
+            ],
+        )?;
+        let test = TestCommandConfig {
+            lanes: product(),
+            default_lane: WORKSPACE.to_owned(),
+            ..TestCommandConfig::default()
+        };
+
+        let selected = lanes_against(&test, &checkout, "develop", &[])?;
 
         assert_eq!(selected, vec![narrowed(&["play", "play-tests"])]);
         Ok(())

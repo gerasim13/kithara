@@ -129,9 +129,15 @@ where
     fn update_byte_len(&self, _len: u64) {}
 
     fn prepare_next_chunk(&mut self) {
-        if self.prepared.is_none() {
+        if !self.has_prepared_result() {
             self.prepared = Some(self.prepare_chunk());
         }
+    }
+
+    fn has_prepared_result(&self) -> bool {
+        self.prepared
+            .as_ref()
+            .is_some_and(|result| !matches!(result, Ok(DecoderChunkOutcome::Pending(_))))
     }
 
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {

@@ -27,6 +27,10 @@ use crate::consts;
 pub struct BeatAnalysisConfig<B> {
     #[config(skip = "resampler backend strategy", patch(skip), get(ref))]
     resampler_backend: B,
+    /// Caller-owned native environment shared by CUDA detector sessions.
+    #[cfg(feature = "beat-cuda")]
+    #[config(skip = "native CUDA construction resource", patch(skip), get(ref))]
+    cuda_environment: Option<kithara_beat::ort::environment::Environment>,
     #[config(builder(default = consts::DEFAULT_BEAT_RESAMPLER_QUALITY))]
     pub resampler_quality: ResamplerQuality,
     #[config(builder(default = consts::DEFAULT_BEAT_DETECTOR_MIN_WINDOW_SECONDS))]
@@ -39,10 +43,10 @@ pub struct BeatAnalysisConfig<B> {
     pub target_rate: u32,
     #[config(builder(default = consts::DEFAULT_BEAT_BLOCK_FRAMES))]
     pub block_frames: usize,
-    /// Reaches the detector's peak-picking policy. Nested rather than
+    /// Reaches the detector's runtime and peak-picking policy. Nested rather than
     /// flattened so a document can patch `beat:` on its own.
     #[cfg(feature = "beat-nn")]
-    #[config(nested, builder(default), patch(nested))]
+    #[config(nested, builder(default), patch(nested), get(ref))]
     pub beat: BeatConfig,
     /// The tempo the signal detector searches. A document patches it key by
     /// key under `tempo:`, and [`Tempo`] judges the merged policy as a whole
@@ -103,23 +107,15 @@ where
     }
 }
 
-#[cfg(feature = "beat-dsp")]
 impl<B> fmt::Debug for BeatAnalysisConfig<B>
 where
     B: ResamplerBackend,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.debug_fields(f).field("tempo", &self.tempo).finish()
-    }
-}
-
-#[cfg(not(feature = "beat-dsp"))]
-impl<B> fmt::Debug for BeatAnalysisConfig<B>
-where
-    B: ResamplerBackend,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.debug_fields(f).finish()
+        let mut out = self.debug_fields(f);
+        #[cfg(feature = "beat-dsp")]
+        out.field("tempo", &self.tempo);
+        out.finish()
     }
 }
 
@@ -147,6 +143,40 @@ mod tests {
             BeatAnalysisConfig::<RubatoBackend>::default().resampler_backend_name(),
             "rubato"
         );
+    }
+
+    #[cfg(feature = "beat-cuda")]
+    #[kithara::test(native, flash(false))]
+    fn the_cuda_environment_is_a_construction_resource() {
+        let config = BeatAnalysisConfig::<RubatoBackend>::default();
+        assert!(config.cuda_environment().is_none());
+        assert!(
+            serde_json::from_str::<super::BeatAnalysisConfigPatch>(r#"{"cuda_environment":null}"#)
+                .is_err(),
+            "a document cannot create or replace a native runtime resource"
+        );
+    }
+
+    #[cfg(feature = "beat-cuda")]
+    #[kithara::test(native, flash(false))]
+    #[ignore = "requires native GPU ONNX Runtime"]
+    fn the_cuda_environment_does_not_change_analysis_identity() {
+        let config = BeatAnalysisConfig::<RubatoBackend>::default();
+        let identity = config.cache_tag();
+        let environment = kithara_beat::ort::init_from(config.beat().ort_library_path())
+            .expect("configured CUDA runtime library")
+            .build()
+            .expect("caller-owned CUDA environment");
+        let mut configured = BeatAnalysisConfig::builder()
+            .resampler_backend(RubatoBackend::default())
+            .cuda_environment(environment.clone())
+            .build();
+        assert_eq!(configured.cache_tag(), identity);
+        let patch: super::BeatAnalysisConfigPatch =
+            serde_json::from_str(r#"{"block_frames":2048}"#).expect("analysis setting patch");
+        configured.apply(patch).expect("valid analysis patch");
+        assert!(configured.cuda_environment().is_some());
+        assert_ne!(configured.cache_tag(), identity);
     }
 
     #[cfg(feature = "beat-dsp")]

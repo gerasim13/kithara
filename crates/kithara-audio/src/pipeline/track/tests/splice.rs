@@ -1,7 +1,7 @@
 use std::{
     num::NonZeroUsize,
     ops::Range,
-    sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering},
+    sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
 };
 
 use kithara_bufpool::PoolRegion;
@@ -15,11 +15,12 @@ use kithara_platform::{
 use kithara_signal::AudioChunk;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    Activity, AudioCodec, ByteMap, ContainerFormat, MediaInfo, PlayheadRead, PlayheadState,
-    PlayheadWrite, ReadOutcome, ReaderProfile, SeekControl, SeekObserve, SeekState,
-    SegmentDescriptor, Source, SourceError, SourcePhase, SourceProbe, SourceSeekAnchor, Stream,
-    StreamError, StreamResult, StreamType, VariantControl, VariantPromotion, VariantReaderPlan,
-    VariantReaderTake, VariantTransition, mock::NoopWorkerWake,
+    Activity, AudioCodec, ByteMap, ContainerFormat, DeferredWake, MediaInfo, NotReadyCause,
+    PendingReason, PlayheadRead, PlayheadState, PlayheadWrite, ReadOutcome, ReaderProfile,
+    SeekControl, SeekObserve, SeekState, SegmentDescriptor, Source, SourceError, SourcePhase,
+    SourceProbe, SourceSeekAnchor, Stream, StreamError, StreamResult, StreamType, VariantControl,
+    VariantPromotion, VariantReaderPlan, VariantReaderTake, VariantTransition,
+    mock::NoopWorkerWake,
 };
 use kithara_test_utils::kithara;
 use url::Url;
@@ -55,8 +56,13 @@ struct VariantLayout {
 
 struct SpliceState {
     active: AtomicUsize,
+    available: AtomicU64,
+    cancelled: AtomicBool,
+    estimated_extra: AtomicU64,
     media_info: Mutex<Option<MediaInfo>>,
+    peer_wake: Arc<DeferredWake>,
     warmup_landing: Mutex<Option<SegmentDescriptor>>,
+    waits: Mutex<Vec<Range<u64>>>,
     variants: Vec<VariantLayout>,
 }
 
@@ -65,8 +71,13 @@ impl SpliceState {
         Self {
             variants,
             active: AtomicUsize::new(consts::SLQ_VARIANT),
+            available: AtomicU64::new(u64::MAX),
+            cancelled: AtomicBool::new(false),
+            estimated_extra: AtomicU64::new(0),
             media_info: Mutex::new(Some(media_info(consts::SLQ_VARIANT))),
+            peer_wake: Arc::new(DeferredWake::default()),
             warmup_landing: Mutex::new(None),
+            waits: Mutex::new(Vec::new()),
         }
     }
 
@@ -87,6 +98,16 @@ impl SpliceState {
 
     fn warmup_landing(&self) -> Option<SegmentDescriptor> {
         self.warmup_landing.lock().clone()
+    }
+
+    fn phase_at(&self, range: Range<u64>) -> SourcePhase {
+        if self.cancelled.load(Ordering::Acquire) {
+            SourcePhase::Cancelled
+        } else if range.end <= self.available.load(Ordering::Acquire) {
+            SourcePhase::Ready
+        } else {
+            SourcePhase::WaitingDemand
+        }
     }
 }
 
@@ -161,10 +182,15 @@ impl ByteMap for SpliceState {
     }
 
     fn segment_at_index(&self, segment_index: u32) -> Option<SegmentDescriptor> {
-        self.active_layout()
+        let mut segment = self
+            .active_layout()
             .segments
             .get(usize::try_from(segment_index).ok()?)
-            .cloned()
+            .cloned()?;
+        if segment_index == 0 {
+            segment.byte_range.end += self.estimated_extra.load(Ordering::Acquire);
+        }
+        Some(segment)
     }
 
     fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
@@ -217,8 +243,6 @@ impl SpliceSource {
     }
 }
 
-/// Always-ready byte-space probe sharing `SpliceSource`'s cells — same
-/// phase, cursor, length, and byte map as the `Source` impl below.
 struct ReadyProbe {
     position: Arc<AtomicU64>,
     state: Arc<SpliceState>,
@@ -234,11 +258,12 @@ impl SourceProbe for ReadyProbe {
     }
 
     fn phase(&self) -> SourcePhase {
-        SourcePhase::Ready
+        let position = self.position.load(Ordering::Acquire);
+        self.state.phase_at(position..position.saturating_add(1))
     }
 
-    fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
-        SourcePhase::Ready
+    fn phase_at(&self, range: Range<u64>) -> SourcePhase {
+        self.state.phase_at(range)
     }
 
     fn position(&self) -> u64 {
@@ -271,8 +296,12 @@ impl Source for SpliceSource {
         self.state.media_info.lock().clone()
     }
 
-    fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
-        SourcePhase::Ready
+    fn phase_at(&self, range: Range<u64>) -> SourcePhase {
+        self.state.phase_at(range)
+    }
+
+    fn peer_wake(&self) -> Option<Arc<DeferredWake>> {
+        Some(Arc::clone(&self.state.peer_wake))
     }
 
     fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
@@ -300,7 +329,15 @@ impl Source for SpliceSource {
         if start >= blob.len() {
             return Ok(ReadOutcome::Eof);
         }
-        let n = (blob.len() - start).min(buf.len());
+        let available = usize::try_from(self.state.available.load(Ordering::Acquire))
+            .unwrap_or(usize::MAX)
+            .min(blob.len());
+        if start >= available {
+            return Ok(ReadOutcome::Pending(PendingReason::NotReady(
+                NotReadyCause::WaitBudgetExhausted,
+            )));
+        }
+        let n = (available - start).min(buf.len());
         buf[..n].copy_from_slice(&blob[start..start + n]);
         Ok(ReadOutcome::Bytes(
             NonZeroUsize::new(n).expect("non-empty read must produce nonzero bytes"),
@@ -325,10 +362,14 @@ impl Source for SpliceSource {
 
     fn wait_range(
         &mut self,
-        _range: Range<u64>,
+        range: Range<u64>,
         _timeout: Option<Duration>,
     ) -> StreamResult<WaitOutcome> {
-        Ok(WaitOutcome::Ready)
+        self.state.waits.lock().push(range.clone());
+        match self.state.phase_at(range) {
+            SourcePhase::Ready => Ok(WaitOutcome::Ready),
+            _ => Err(StreamError::Source(SourceError::WaitBudgetExceeded)),
+        }
     }
 }
 
@@ -538,6 +579,315 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
 fn run_pending_rebuild_inline(source: &mut StreamAudioSource<SpliceStream>) {
     source.rebuild.run_inline();
     source.flush_deferred();
+}
+
+#[cfg(all(feature = "resample-rubato", feature = "symphonia"))]
+mod buffered_readiness {
+    use std::num::NonZeroU32;
+
+    use kithara_decode::DecoderResamplerConfig;
+    use kithara_resampler::{ResamplerOptions, rubato::RubatoBackend};
+    use kithara_stream::{ReaderChunkSignal, ReaderEventSink, ReaderSeekSignal};
+
+    use super::*;
+    use crate::pipeline::{
+        decode::DecoderGeneration,
+        seek::{ResumeState, skip},
+        track::{AwaitingResume, CurrentFsm, Track, WaitContext, WaitingReason},
+    };
+
+    struct PendingSignals(Arc<AtomicUsize>);
+
+    impl ReaderEventSink for PendingSignals {
+        fn on_chunk(&mut self, signal: ReaderChunkSignal) {
+            if matches!(signal, ReaderChunkSignal::Pending(_)) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        fn on_seek(&mut self, _signal: ReaderSeekSignal) {}
+    }
+
+    async fn buffered_source(resampled: bool) -> SpliceFixture {
+        buffered_source_with_signals(resampled, Arc::new(AtomicUsize::new(0))).await
+    }
+
+    async fn buffered_source_with_signals(
+        resampled: bool,
+        signals: Arc<AtomicUsize>,
+    ) -> SpliceFixture {
+        let mut fixture = splice_source(vec![slq_layout()]).await;
+        let stream = &fixture.source.shared_stream;
+        let source_rate = fixture.source.decode.active().decoder().spec().sample_rate;
+        assert_ne!(
+            source_rate.get(),
+            48_000,
+            "fixture must require a real rate conversion"
+        );
+        stream.set_position(0);
+        let builder = DecoderConfig::builder()
+            .backend(kithara_decode::DecoderBackend::Symphonia)
+            .pools(pools())
+            .maybe_byte_map(stream.byte_map())
+            .hooks(Box::new(PendingSignals(signals)))
+            .gapless(false);
+        let decoder = if resampled {
+            let config = builder
+                .resampler(
+                    DecoderResamplerConfig::builder()
+                        .backend(RubatoBackend::default())
+                        .target_sample_rate(NonZeroU32::new(48_000).expect("target rate"))
+                        .options(ResamplerOptions::builder().chunk_size(256).build())
+                        .build(),
+                )
+                .build();
+            DecodeFactory::create_from_media_info(
+                stream.clone(),
+                &media_info(consts::SLQ_VARIANT),
+                config,
+            )
+            .expect("mismatch-rate fMP4 decoder")
+        } else {
+            DecodeFactory::create_from_media_info(
+                stream.clone(),
+                &media_info(consts::SLQ_VARIANT),
+                builder.build(),
+            )
+            .expect("source-rate fMP4 decoder")
+        };
+        assert_eq!(
+            decoder.spec().sample_rate.get(),
+            if resampled { 48_000 } else { source_rate.get() }
+        );
+        let previous = fixture.source.decode.replace_active(DecoderGeneration::new(
+            decoder,
+            Some(media_info(consts::SLQ_VARIANT)),
+            0,
+            0,
+            None,
+            GaplessMode::Disabled,
+        ));
+        fixture.source.retired.push(previous);
+        let boundary = fixture.state.active_layout().segments[0].byte_range.end;
+        fixture.state.available.store(boundary, Ordering::Release);
+        fixture.state.waits.lock().clear();
+        fixture
+    }
+
+    fn buffered_pcm(fixture: &mut SpliceFixture) -> AudioChunk {
+        for _ in 0..16 {
+            fixture.source.prepare_deferred();
+            match fixture.source.step_track() {
+                TrackStep::Produced(fetch) => {
+                    let chunk = produced_data(fetch);
+                    assert!(chunk.frames() > 0);
+                    assert!(chunk.samples.iter().any(|sample| sample.abs() > 0.001));
+                    return chunk;
+                }
+                TrackStep::StateChanged => {}
+                _ => panic!("retained current-segment PCM must be produced"),
+            }
+        }
+        panic!("prepared current-segment PCM was not delivered");
+    }
+
+    #[kithara::test(tokio)]
+    async fn a_transient_narrow_gate_resumes_current_pcm_without_following_input() {
+        let mut fixture = buffered_source(false).await;
+        fixture.source.prepare_deferred();
+        let boundary = fixture.state.active_layout().segments[0].byte_range.end;
+        assert_eq!(fixture.source.shared_stream.position(), boundary);
+        fixture
+            .state
+            .available
+            .store(boundary - 1, Ordering::Release);
+        assert!(
+            !fixture
+                .source
+                .readiness
+                .source_is_ready(&fixture.source.shared_stream)
+        );
+        let first = fixture.source.step_track();
+        fixture.state.available.store(boundary, Ordering::Release);
+        fixture.state.waits.lock().clear();
+
+        let chunk = match first {
+            TrackStep::Produced(fetch) => produced_data(fetch),
+            TrackStep::Blocked(WaitingReason::WaitingDemand) => {
+                assert!(matches!(
+                    fixture.source.state,
+                    CurrentFsm::WaitingForSource(_)
+                ));
+                buffered_pcm(&mut fixture)
+            }
+            _ => panic!("retained PCM must remain reachable after a narrow gate rejection"),
+        };
+
+        assert!(chunk.frames() > 0);
+        assert!(chunk.meta.timestamp < Duration::from_secs(6));
+        assert_eq!(fixture.state.available.load(Ordering::Acquire), boundary);
+        assert_eq!(fixture.source.shared_stream.position(), boundary);
+    }
+
+    #[kithara::test(tokio)]
+    #[case(false)]
+    #[case(true)]
+    async fn actual_input_wait_resumes_pcm_prepared_before_following_input(
+        #[case] resampled: bool,
+    ) {
+        let mut fixture = buffered_source(resampled).await;
+        let init_end = fixture.state.active_layout().init_range.end;
+        let boundary = fixture.state.active_layout().segments[0].byte_range.end;
+        fixture.state.available.store(init_end, Ordering::Release);
+        fixture.source.prepare_deferred();
+        assert!(matches!(fixture.source.step_track(), TrackStep::Blocked(_)));
+        assert!(matches!(
+            fixture.source.state,
+            CurrentFsm::WaitingForSource(_)
+        ));
+        fixture.state.available.store(boundary, Ordering::Release);
+        fixture.source.prepare_deferred();
+        assert_eq!(fixture.source.shared_stream.position(), boundary);
+
+        let chunk = buffered_pcm(&mut fixture);
+
+        assert!(chunk.meta.timestamp < Duration::from_secs(6));
+        assert_eq!(fixture.state.available.load(Ordering::Acquire), boundary);
+        assert_eq!(fixture.source.shared_stream.position(), boundary);
+    }
+
+    #[kithara::test(tokio)]
+    #[case(false)]
+    #[case(true)]
+    async fn pending_preparation_refreshes_after_live_shrink_without_following_input(
+        #[case] resampled: bool,
+    ) {
+        let mut fixture = buffered_source(resampled).await;
+        let boundary = fixture.state.active_layout().segments[0].byte_range.end;
+        fixture.state.estimated_extra.store(16, Ordering::Release);
+        fixture.source.prepare_deferred();
+        assert_eq!(fixture.source.shared_stream.position(), boundary);
+        assert!(matches!(
+            fixture.source.step_track(),
+            TrackStep::Blocked(WaitingReason::Waiting)
+        ));
+        fixture.source.prepare_deferred();
+        assert_eq!(fixture.source.shared_stream.position(), boundary);
+        assert!(matches!(fixture.source.step_track(), TrackStep::Blocked(_)));
+        fixture.source.prepare_deferred();
+        fixture.state.estimated_extra.store(0, Ordering::Release);
+
+        let chunk = buffered_pcm(&mut fixture);
+
+        assert!(chunk.meta.timestamp < Duration::from_secs(6));
+        assert_eq!(fixture.state.available.load(Ordering::Acquire), boundary);
+        assert_eq!(fixture.source.shared_stream.position(), boundary);
+    }
+
+    #[kithara::test(tokio)]
+    #[case(false)]
+    #[case(true)]
+    async fn persistent_decoder_pending_parks_with_demand_and_peer_wake(#[case] resampled: bool) {
+        let signals = Arc::new(AtomicUsize::new(0));
+        let mut fixture = buffered_source_with_signals(resampled, Arc::clone(&signals)).await;
+        let boundary = fixture.state.active_layout().segments[0].byte_range.end;
+        fixture.state.estimated_extra.store(16, Ordering::Release);
+        fixture.source.prepare_deferred();
+        assert!(matches!(fixture.source.step_track(), TrackStep::Blocked(_)));
+        for _ in 0..3 {
+            fixture.source.prepare_deferred();
+            fixture.state.waits.lock().clear();
+            let consumed = signals.load(Ordering::Relaxed);
+            assert!(matches!(fixture.source.step_track(), TrackStep::Blocked(_)));
+            assert!(matches!(fixture.source.step_track(), TrackStep::Blocked(_)));
+            assert_eq!(
+                signals.load(Ordering::Relaxed),
+                consumed,
+                "checked parked steps must not consume another Pending"
+            );
+            assert!(matches!(
+                fixture.source.state,
+                CurrentFsm::WaitingForSource(_)
+            ));
+            assert!(fixture.state.peer_wake.flush());
+            fixture.source.finish_deferred();
+            assert_eq!(
+                fixture.state.waits.lock().last(),
+                Some(&fixture.state.active_layout().segments[1].byte_range),
+            );
+            assert_eq!(fixture.source.shared_stream.position(), boundary);
+        }
+    }
+
+    #[kithara::test(tokio)]
+    #[case(false)]
+    #[case(true)]
+    async fn post_seek_pending_keeps_head_trim_until_buffered_pcm_resumes(#[case] resampled: bool) {
+        let mut reference = buffered_source(resampled).await;
+        let reference_chunk = buffered_pcm(&mut reference);
+        let target = reference_chunk.meta.timestamp
+            + skip::duration(reference_chunk.spec(), reference_chunk.frames() / 2);
+        let drop_frames = skip::frames(
+            reference_chunk.spec(),
+            target - reference_chunk.meta.timestamp,
+        );
+        assert!(drop_frames > 0 && drop_frames < reference_chunk.frames());
+        let mut fixture = buffered_source(resampled).await;
+        fixture.state.estimated_extra.store(16, Ordering::Release);
+        fixture.source.prepare_deferred();
+        let resume = ResumeState {
+            anchor_offset: Some(fixture.state.active_layout().segments[0].byte_range.start),
+            anchor_variant_index: Some(consts::SLQ_VARIANT),
+            seek: SeekContext { epoch: 0, target },
+            trim_head: true,
+        };
+        fixture
+            .source
+            .update_state(Track::<AwaitingResume>::new(resume).erase());
+        assert!(matches!(fixture.source.step_track(), TrackStep::Blocked(_)));
+        let CurrentFsm::WaitingForSource(wait) = &fixture.source.state else {
+            panic!("actual post-seek input Pending must park the scheduler");
+        };
+        assert!(matches!(wait.data().context, WaitContext::PostSeek(saved) if saved == resume));
+        fixture.source.prepare_deferred();
+        fixture.state.estimated_extra.store(0, Ordering::Release);
+
+        let chunk = buffered_pcm(&mut fixture);
+
+        assert_eq!(chunk.frames(), reference_chunk.frames() - drop_frames);
+        assert_eq!(
+            chunk.meta.frame_offset,
+            reference_chunk.meta.frame_offset + drop_frames as u64
+        );
+        assert_eq!(
+            chunk.meta.timestamp,
+            reference_chunk.meta.timestamp + skip::duration(chunk.spec(), drop_frames)
+        );
+        let drop_samples = drop_frames * usize::from(chunk.spec().channels);
+        assert_eq!(
+            chunk.samples.as_ref(),
+            &reference_chunk.samples[drop_samples..]
+        );
+        assert_eq!(
+            fixture.state.available.load(Ordering::Acquire),
+            fixture.source.shared_stream.position()
+        );
+    }
+
+    #[kithara::test(tokio)]
+    async fn cancellation_preempts_retained_current_pcm() {
+        let mut fixture = buffered_source(false).await;
+        fixture.source.prepare_deferred();
+        let boundary = fixture.state.active_layout().segments[0].byte_range.end;
+        assert_eq!(fixture.source.shared_stream.position(), boundary);
+        fixture.state.cancelled.store(true, Ordering::Release);
+
+        assert!(matches!(
+            fixture.source.step_track(),
+            TrackStep::Failed(crate::TrackFailureKind::SourceCancelled)
+        ));
+        assert!(matches!(fixture.source.state, CurrentFsm::Failed(_)));
+    }
 }
 
 fn append_left_channel(left: &mut Vec<f32>, chunk: &AudioChunk) {

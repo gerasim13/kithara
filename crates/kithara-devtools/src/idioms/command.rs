@@ -559,24 +559,116 @@ mod tests {
         assert_eq!(driver, after, "{}", check.id());
     }
 
-    /// An event is forwarded by an `EventSet` in another crate, so whether
-    /// it is reported depends on a file other than the one declaring it.
     #[test]
-    fn an_event_is_judged_with_the_sets_that_forward_it() {
-        use checks::derivable_event::{DerivableEvent, consts};
+    fn a_rust_only_event_needs_no_ffi_forwarding_and_manual_impls_stay_denied() {
+        use checks::derivable_event::DerivableEvent;
 
-        let forwarding = format!("{}/lib.rs", consts::FORWARDING_SOURCES);
-        the_driver_follows_a_neighbour(
-            &DerivableEvent,
-            &[(
-                "crates/one/src/lib.rs",
-                "#[derive(Debug, Event)] pub struct Played;\n",
-            )],
-            (
-                &forwarding,
-                "#[derive(EventSet)] pub enum All { Played(Played) }\n",
-            ),
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("crates/one/src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/one\"]\nresolver = \"2\"\n",
+        )
+        .unwrap();
+        fs::write(
+            src.parent().unwrap().join("Cargo.toml"),
+            "[package]\nname = \"one\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        fs::write(
+            src.join("lib.rs"),
+            "#[derive(Clone, Debug, Event)] pub struct Internal;\n",
+        )
+        .unwrap();
+        let cache = VerdictCache::open(
+            &dir.path().join("target"),
+            "idioms",
+            &std::env::current_exe().unwrap(),
+            dir.path(),
+            "",
+        )
+        .unwrap();
+
+        for run in ["cold", "warm"] {
+            let (driver, whole) = driver_and_whole(&DerivableEvent, dir.path(), &cache);
+            assert!(whole.is_empty(), "{run}: {whole:?}");
+            assert_eq!(driver, whole, "{run}");
+        }
+
+        let ffi = dir.path().join("crates/kithara-ffi/src");
+        fs::create_dir_all(&ffi).unwrap();
+        fs::write(
+            ffi.join("lib.rs"),
+            "#[derive(EventSet)] pub enum All { Internal(Internal) }\n",
+        )
+        .unwrap();
+        let (driver, whole) = driver_and_whole(&DerivableEvent, dir.path(), &cache);
+        assert!(whole.is_empty(), "{whole:?}");
+        assert_eq!(driver, whole);
+
+        fs::write(
+            src.join("lib.rs"),
+            "#[derive(Clone, Debug)] pub struct Internal;\nimpl Event for Internal {}\n",
+        )
+        .unwrap();
+        let (driver, whole) = driver_and_whole(&DerivableEvent, dir.path(), &cache);
+        assert_eq!(
+            whole,
+            vec![(
+                "crates/one/src/lib.rs::Internal".into(),
+                "Internal implements Event by hand outside kithara-events".into(),
+            )]
         );
+        assert_eq!(driver, whole);
+    }
+
+    #[test]
+    fn an_event_verdict_is_cached_for_the_source_snapshot_it_judged() {
+        use checks::derivable_event::DerivableEvent;
+
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("crates/one/src/lib.rs");
+        fs::create_dir_all(src.parent().unwrap()).unwrap();
+        let manual = "#[derive(Clone, Debug)] pub struct Internal;\nimpl Event for Internal {}\n";
+        fs::write(&src, manual).unwrap();
+        let metadata = MetadataCommand::new().exec().unwrap();
+        let config = IdiomsConfig::default();
+        let scope = Scope::default();
+        let scan = Scan::new(dir.path());
+        assert_eq!(scan.source(&src).unwrap().as_str(), manual);
+        let ctx = Context {
+            config: &config,
+            metadata: &metadata,
+            workspace_root: dir.path(),
+            scan: &scan,
+            scope: &scope,
+        };
+        let cache = VerdictCache::open(
+            &dir.path().join("target"),
+            "idioms",
+            &std::env::current_exe().unwrap(),
+            dir.path(),
+            "",
+        )
+        .unwrap();
+
+        fs::write(
+            &src,
+            "#[derive(Clone, Debug, Event)] pub struct Internal;\n",
+        )
+        .unwrap();
+        let snapshot = run_one_check(&DerivableEvent, &ctx, &cache).unwrap();
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].key, "crates/one/src/lib.rs::Internal");
+
+        fs::write(&src, manual).unwrap();
+        let scan = Scan::new(dir.path());
+        let restored =
+            run_one_check(&DerivableEvent, &Context { scan: &scan, ..ctx }, &cache).unwrap();
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].key, snapshot[0].key);
+        assert_eq!(restored[0].message, snapshot[0].message);
     }
 
     /// A getter is redundant when its declaration's public field already
