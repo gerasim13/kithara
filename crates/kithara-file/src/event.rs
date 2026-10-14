@@ -20,11 +20,10 @@ pub enum FileError {
     Other(String),
 }
 
-/// Events emitted by file streams.
+/// File lifecycle events and non-network errors.
 ///
-/// All variants describe **reader-side** facts. For HTTP request
-/// lifecycle (enqueue → started → completed/failed/cancelled),
-/// subscribe to `DownloaderEvent` on the same bus scope.
+/// Reader activity is published as [`FileReaderEvent`]. HTTP request
+/// lifecycle is published as `DownloaderEvent` on the same bus scope.
 #[derive(Debug, Clone, PartialEq, Eq, Event)]
 pub enum FileEvent {
     Opened {
@@ -40,25 +39,24 @@ pub enum FileEvent {
     CacheComplete {
         total_bytes: u64,
     },
-    /// Reader progressed through the stream — bytes consumed by the
-    /// reader, not bytes written to disk and not bytes played by the
-    /// sink. Sink-truth lives in `AudioEvent::PlaybackProgress`.
-    ReadProgress {
-        position: u64,
-        total: Option<u64>,
-    },
-    /// Reader byte cursor jumped (driven by the decoder calling
-    /// `Seek::seek` after a user-facing seek).
-    ReaderSeek {
-        from_offset: u64,
-        to_offset: u64,
-    },
     /// Non-network error specific to the file stream.
     Error {
         error: FileError,
     },
     /// Reader reached EOF.
     EndOfStream,
+}
+
+/// Reader activity emitted by file streams.
+#[derive(Debug, Clone, PartialEq, Eq, Event)]
+pub enum FileReaderEvent {
+    /// Reader progressed through the stream — bytes consumed by the
+    /// reader, not bytes written to disk and not bytes played by the
+    /// sink. Sink-truth lives in `AudioEvent::PlaybackProgress`.
+    ReadProgress { position: u64, total: Option<u64> },
+    /// Reader byte cursor jumped (driven by the decoder calling
+    /// `Seek::seek` after a user-facing seek).
+    ReaderSeek { from_offset: u64, to_offset: u64 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

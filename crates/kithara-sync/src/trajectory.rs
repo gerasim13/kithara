@@ -100,7 +100,7 @@ impl TempoTrajectory {
     #[must_use]
     pub fn frame_at(&self, beat: SessionBeat) -> SessionFrame {
         self.try_frame_at(beat)
-            .unwrap_or_else(|| panic!("session frame is not representable"))
+            .expect("session frame is not representable")
     }
 
     pub(crate) fn try_frame_at(&self, beat: SessionBeat) -> Option<SessionFrame> {

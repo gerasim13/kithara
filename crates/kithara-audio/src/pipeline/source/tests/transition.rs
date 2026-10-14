@@ -4,7 +4,7 @@ use kithara_events::{DeferredBus, EventBus};
 use kithara_platform::{sync::Arc, time::Duration, tokio::task::yield_now};
 use kithara_signal::AudioChunk;
 use kithara_stream::{
-    AudioCodec, ContainerFormat, MediaInfo, OutgoingDisposition, VariantPromotion,
+    AudioCodec, ContainerFormat, MediaInfo, OutgoingDisposition, SourcePhase, VariantPromotion,
     VariantReaderPlan, VariantTransition, VariantTransitionId,
 };
 use kithara_test_fixtures::unit_fixtures::{RoutePcm, route_pcm};
@@ -572,6 +572,62 @@ async fn exact_primed_generation_promotes_once_at_outgoing_frontier(route_pcm: R
         assert_eq!(fixture.control.promote_calls(), 1);
     }
     assert!(post_cut_frames >= 1_024);
+}
+
+#[kithara::test(tokio)]
+async fn incoming_promotion_discards_an_unavailable_outgoing_input_wait(route_pcm: RoutePcm) {
+    let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
+    let plan = incoming_plan();
+    let transition = plan.transition();
+    fixture.control.set_exact_plan(plan);
+    fixture.control.set_exact_reader_ready();
+    fixture.control.set_promotion(VariantPromotion::Promoted);
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
+    wait_for_incoming_priming(&mut fixture, transition).await;
+
+    for _ in 0..7 {
+        assert!(matches!(
+            fixture.source.step_track(),
+            TrackStep::StateChanged
+        ));
+        fixture.source.prepare_deferred();
+        fixture.source.finish_deferred();
+    }
+    let TrackStep::Produced(outgoing) = fixture.source.step_track() else {
+        panic!("outgoing must reach its promotion frontier");
+    };
+    assert_eq!(produced_data(outgoing).meta.frame_offset, 0);
+    assert_eq!(fixture.control.promote_calls(), 0);
+    *fixture.phase.lock() = SourcePhase::Waiting;
+    fixture.source.waiting_for_source = true;
+
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
+
+    assert_eq!(fixture.control.promote_calls(), 1);
+    assert!(
+        matches!(fixture.source.phase, OwnerPhase::Decoding) && !fixture.source.waiting_for_source,
+        "incoming promotion must retire outgoing wait authority"
+    );
+    fixture.control.set_media_info(media_info(1));
+    assert_eq!(
+        fixture
+            .source
+            .decode
+            .active()
+            .media_info()
+            .and_then(|info| info.variant_index),
+        Some(1)
+    );
+    assert_eq!(*fixture.phase.lock(), SourcePhase::Waiting);
+    let TrackStep::Produced(incoming) = fixture.source.step_track() else {
+        panic!("incoming retained PCM must be admitted with outgoing bytes unavailable");
+    };
+    let incoming = produced_data(incoming);
+    assert_route_signal(&incoming, consts::ROUTE_CHUNK_FRAMES as u64);
+    assert!(incoming.frames() > 0);
+    assert_eq!(fixture.control.promote_calls(), 1);
 }
 
 #[kithara::test(tokio)]

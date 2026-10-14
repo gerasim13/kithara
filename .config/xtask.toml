@@ -12,6 +12,7 @@ exclude = ["target/**", "**/target/**"]
 
 [architecture.filters]
 exclude_crates = [
+  "kithara-devtools-trace-format",
   "kithara-devtools",
   "kithara-fuzz",
   "kithara-*-tests",
@@ -603,6 +604,7 @@ cargo.exclude = [
   "kithara-ui-input",
   "kithara-ui-shaping",
   "kithara-devtools",
+  "kithara-devtools-trace-format",
   "xtask",
   "kithara-test-utils",
   "kithara-test-macros",
@@ -927,11 +929,15 @@ cargo.profile = "test-release"
 # and the generators that write the CI pipelines. None of it ships.
 [test.lanes.tooling]
 default_backend = "none"
-owns = ["xtask/", "crates/kithara-devtools/"]
-cargo.packages = ["kithara-devtools", "xtask"]
+owns = [
+  "xtask/",
+  "crates/kithara-devtools-trace-format/",
+  "crates/kithara-devtools/",
+]
+cargo.packages = ["kithara-devtools-trace-format", "kithara-devtools", "xtask"]
 cargo.profile = "test-release"
 runner.nextest.ignore_default_filter = true
-# Neither crate declares a `flash` feature — the virtual clock is a property of
+# These crates declare no `flash` feature — the virtual clock is a property of
 # the player, not of the tools that build it — so leaving flash on would fail the
 # lane on `none of the selected packages contains these features`. The
 # poll-blocking detector is the same kind of property, and the gate asks every
@@ -2857,7 +2863,15 @@ steps = [
     "--no-block=on",
     "--profile",
     "ci",
-  ], label = "Apple flash and no-block gate" },
+  ], label = "Apple flash and no-block gate", args_by_kind = { branch = [
+    "test",
+    "run",
+    "--touched",
+    "--flash=on",
+    "--no-block=on",
+    "--profile",
+    "ci",
+  ] } },
 ]
 role = "platforms"
 kinds = [

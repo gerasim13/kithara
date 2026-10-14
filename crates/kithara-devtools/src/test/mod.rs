@@ -5,6 +5,8 @@ mod resolve;
 mod selection;
 
 #[cfg(test)]
+mod inventory_tests;
+#[cfg(test)]
 mod leak_tests;
 #[cfg(test)]
 pub(crate) mod repository_tests;

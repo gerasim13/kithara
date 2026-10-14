@@ -26,7 +26,10 @@ pub(crate) enum Target {
     /// slot of its own behind the root's alias, held while this lives. The
     /// slots are in the root unless the executor says where its runners share
     /// them.
-    Alias { alias: PathBuf, build: BuildDir },
+    Alias {
+        alias: PathBuf,
+        build: Box<BuildDir>,
+    },
     /// Anywhere else: wherever Cargo was told to build, or the checkout.
     Named(Option<PathBuf>),
 }
@@ -53,7 +56,10 @@ impl Target {
                 // Artifact paths name the checkout's `target`; Cargo is told
                 // the alias, the one path every lane's compilations share.
                 expose_build_target(checkout, build.path())?;
-                Ok(Self::Alias { alias, build })
+                Ok(Self::Alias {
+                    alias,
+                    build: Box::new(build),
+                })
             }
             named => Ok(Self::Named(named.map(PathBuf::from))),
         }

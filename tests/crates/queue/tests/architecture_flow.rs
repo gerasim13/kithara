@@ -11,7 +11,7 @@ use kithara::{
     play::{ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
 };
-use kithara_devtools::viz::trace::{TraceRecord, TraceRecordKind};
+use kithara_devtools_trace_format::{TRACE_SCHEMA_VERSION, TraceRecordKind};
 use kithara_integration_tests::{
     TestServerHelper, architecture_trace, disk_asset_store,
     hls_fixture::create_test_downloader,
@@ -21,6 +21,7 @@ use kithara_integration_tests::{
     waits::wait_for_loader_done_event,
 };
 use kithara_test_utils::temp_dir;
+use serde_json::json;
 use serial_test::serial;
 use url::Url;
 
@@ -100,29 +101,50 @@ async fn queue_playback_architecture(#[future(awt)] served_mp3: (TestServerHelpe
 
     let resource_id = track_id.as_u64().to_string();
     let records = vec![
-        TraceRecord::new(1, TraceRecordKind::SpanEnter, "Queue::append")
-            .with_span("append")
-            .with_resource("Track", &resource_id),
-        TraceRecord::new(2, TraceRecordKind::TaskSpawn, "Queue::append")
-            .with_task(format!("loader-{resource_id}"))
-            .with_resource("Track", &resource_id),
-        TraceRecord::new(3, TraceRecordKind::ResourceCreate, "Resource::new")
-            .with_task(format!("loader-{resource_id}"))
-            .with_resource("Decoder", &resource_id),
-        TraceRecord::new(4, TraceRecordKind::Send, "Resource::new")
-            .with_correlation(format!("loaded-{resource_id}"))
-            .with_resource("Track", &resource_id),
-        TraceRecord::new(5, TraceRecordKind::Receive, "Queue::select")
-            .with_correlation(format!("loaded-{resource_id}"))
-            .with_resource("Track", &resource_id),
-        TraceRecord::new(6, TraceRecordKind::ResourceTransfer, "PlayerImpl::select")
-            .with_resource("Decoder", &resource_id),
-        TraceRecord::new(7, TraceRecordKind::SpanEnter, "PlayerImpl::play")
-            .with_span("playback")
-            .with_resource("Track", &resource_id),
-        TraceRecord::new(8, TraceRecordKind::ResourceTransfer, "Host::render")
-            .with_parent_span("playback")
-            .with_resource("PCM", &resource_id),
+        json!({
+            "schema_version": TRACE_SCHEMA_VERSION, "sequence": 1,
+            "kind": TraceRecordKind::SpanEnter, "name": "Queue::append",
+            "span_id": "append", "resource_type": "Track", "resource_id": resource_id
+        }),
+        json!({
+            "schema_version": TRACE_SCHEMA_VERSION, "sequence": 2,
+            "kind": TraceRecordKind::TaskSpawn, "name": "Queue::append",
+            "task_id": format!("loader-{resource_id}"),
+            "resource_type": "Track", "resource_id": resource_id
+        }),
+        json!({
+            "schema_version": TRACE_SCHEMA_VERSION, "sequence": 3,
+            "kind": TraceRecordKind::ResourceCreate, "name": "Resource::new",
+            "task_id": format!("loader-{resource_id}"),
+            "resource_type": "Decoder", "resource_id": resource_id
+        }),
+        json!({
+            "schema_version": TRACE_SCHEMA_VERSION, "sequence": 4,
+            "kind": TraceRecordKind::Send, "name": "Resource::new",
+            "correlation_id": format!("loaded-{resource_id}"),
+            "resource_type": "Track", "resource_id": resource_id
+        }),
+        json!({
+            "schema_version": TRACE_SCHEMA_VERSION, "sequence": 5,
+            "kind": TraceRecordKind::Receive, "name": "Queue::select",
+            "correlation_id": format!("loaded-{resource_id}"),
+            "resource_type": "Track", "resource_id": resource_id
+        }),
+        json!({
+            "schema_version": TRACE_SCHEMA_VERSION, "sequence": 6,
+            "kind": TraceRecordKind::ResourceTransfer, "name": "PlayerImpl::select",
+            "resource_type": "Decoder", "resource_id": resource_id
+        }),
+        json!({
+            "schema_version": TRACE_SCHEMA_VERSION, "sequence": 7,
+            "kind": TraceRecordKind::SpanEnter, "name": "PlayerImpl::play",
+            "span_id": "playback", "resource_type": "Track", "resource_id": resource_id
+        }),
+        json!({
+            "schema_version": TRACE_SCHEMA_VERSION, "sequence": 8,
+            "kind": TraceRecordKind::ResourceTransfer, "name": "Host::render",
+            "parent_span_id": "playback", "resource_type": "PCM", "resource_id": resource_id
+        }),
     ];
     architecture_trace::write(trace_path.as_ref(), records, &probes)
         .expect("write queue architecture trace");

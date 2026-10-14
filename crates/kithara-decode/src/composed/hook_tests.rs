@@ -165,6 +165,59 @@ fn next_chunk_emits_signal(
 }
 
 #[kithara::test]
+fn a_direct_pending_rearms_prefill_for_deferred_pcm(
+    trim_silence: Vec<f32>,
+    zero_packet: &'static [u8],
+) {
+    let log = Arc::new(Mutex::new(CallLog::default()));
+    let reason = PendingReason::NotReady(NotReadyCause::SourcePending);
+    let frame_duration = Duration::from_micros(23);
+    let demuxer = StubDemuxer::with_outcomes(
+        zero_packet,
+        vec![
+            StubOutcome::Frame {
+                pts: Duration::from_millis(20),
+                duration: frame_duration,
+            },
+            StubOutcome::Pending(reason),
+            StubOutcome::Frame {
+                pts: Duration::ZERO,
+                duration: frame_duration,
+            },
+        ],
+        Vec::new(),
+    );
+    let mut decoder = build(&trim_silence, demuxer, Arc::clone(&log));
+    assert!(matches!(
+        decoder.next_chunk().expect("initial chunk"),
+        DecoderChunkOutcome::Chunk(_)
+    ));
+    decoder.prepare_next_chunk();
+    assert!(matches!(
+        decoder.next_chunk_prepared().expect("direct pending"),
+        DecoderChunkOutcome::Pending(actual) if actual == reason
+    ));
+    assert_eq!(decoder.demuxer.next.len(), 1);
+    decoder.prepare_next_chunk();
+    assert!(decoder.has_prepared_result());
+    assert!(
+        decoder.demuxer.next.is_empty(),
+        "deferred preparation owns the next PCM"
+    );
+    decoder.prepare_next_chunk();
+    let DecoderChunkOutcome::Chunk(output) = decoder.next_chunk_prepared().expect("deferred PCM")
+    else {
+        panic!("deferred PCM must remain available");
+    };
+    assert_eq!(output.meta.timestamp, Duration::from_millis(20));
+    assert_eq!(output.frames(), 1);
+    assert_eq!(
+        log.lock().expect("hook log").chunks,
+        ["chunk", "pending", "chunk"]
+    );
+}
+
+#[kithara::test]
 fn zero_frame_codec_yields_pending_before_demux_eof(
     trim_silence: Vec<f32>,
     zero_packet: &'static [u8],

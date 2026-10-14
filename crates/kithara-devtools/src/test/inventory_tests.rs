@@ -6,9 +6,11 @@ use serde_json::json;
 #[cfg(unix)]
 use tempfile::TempDir;
 
-use super::*;
 #[cfg(unix)]
-use crate::test::tests::synthetic_project;
+use super::command::run_lane;
+use super::request::TestRequest;
+#[cfg(unix)]
+use crate::{common::project::TestCommandConfig, test::tests::synthetic_project};
 
 #[cfg(unix)]
 fn fixture(

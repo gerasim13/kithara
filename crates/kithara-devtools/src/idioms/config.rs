@@ -3,10 +3,7 @@ use std::path::Path;
 use anyhow::Result;
 use serde::Deserialize;
 
-use crate::common::{
-    project::load_optional_config,
-    toggle::{ToggleConfig, ToggleSchema},
-};
+use crate::common::project::load_optional_config;
 
 #[derive(Debug, Default, Clone, kithara_config::Config)]
 #[config(builder(none), fields(nested))]
@@ -45,7 +42,7 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) derivable_delegation: DerivableDelegationConfig,
     #[serde(default)]
-    pub(crate) derivable_event: DerivableEventConfig,
+    pub(crate) derivable_event: DerivableConfig,
     #[serde(default)]
     pub(crate) derivable_getter: DerivableGetterConfig,
     #[serde(default)]
@@ -123,15 +120,6 @@ impl Default for DerivableConfig {
         Self { enabled: true }
     }
 }
-
-pub(crate) enum DerivableEventSchema {}
-
-impl ToggleSchema for DerivableEventSchema {
-    const FIELDS: &'static [&'static str; 2] = &["unforwarded", "enabled"];
-    const DEFAULT: bool = true;
-}
-
-pub(crate) type DerivableEventConfig = ToggleConfig<DerivableEventSchema>;
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]

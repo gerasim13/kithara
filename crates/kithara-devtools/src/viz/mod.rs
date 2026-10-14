@@ -14,7 +14,7 @@ mod run;
 mod scenario;
 mod semantic;
 mod source;
-pub mod trace;
+mod trace;
 mod view;
 
 pub use cli::VizArgs;

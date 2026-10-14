@@ -131,8 +131,8 @@ impl SourceGrid {
     }
 
     pub(super) fn nearest_media(&self, beats: [f64; 2], requested: Duration) -> Option<Duration> {
-        let mut candidates = Vec::new();
-        for beat in beats {
+        let mut candidates = [None; 2];
+        for (candidate, beat) in candidates.iter_mut().zip(beats) {
             let point = MapPoint::new(self.grid.stamp(), Beat::new(beat).ok()?);
             let position = match self.grid.position_at(point) {
                 BeatGridQuery::Resolved(position) => *position.value().value(),
@@ -149,12 +149,13 @@ impl SourceGrid {
             let MapPosition::Asset(frame) = position else {
                 return None;
             };
-            candidates.push(
+            *candidate = Some(
                 Duration::try_from_secs_f64(f64::from(frame) / f64::from(self.rate.get())).ok()?,
             );
         }
         candidates
             .into_iter()
+            .flatten()
             .min_by_key(|candidate| requested.abs_diff(*candidate))
     }
 

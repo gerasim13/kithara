@@ -114,12 +114,14 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
         }
         self.release_seek_abr();
     }
-    fn media_origin(&self) -> Option<Duration> {
-        self.decode.active().media_origin()
+
+    delegate::delegate! {
+        to self.decode.active() {
+            fn media_origin(&self) -> Option<Duration>;
+            fn visible_origin(&self) -> Option<Duration>;
+        }
     }
-    fn visible_origin(&self) -> Option<Duration> {
-        self.decode.active().visible_origin()
-    }
+
     fn discontinuity(&self) -> Option<crate::SourceDiscontinuity> {
         Some(self.decode.discontinuity())
     }
@@ -215,8 +217,7 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
     fn prepare_deferred(&mut self) -> Option<kithara_signal::AudioSpec> {
         self.progress_variant_transition();
         if matches!(self.phase, OwnerPhase::Decoding) {
-            self.decode
-                .prepare_deferred(self.source_wait_reason().is_none());
+            self.decode.prepare_deferred(true);
         }
         Some(self.decode.output_spec())
     }
@@ -363,7 +364,9 @@ impl<T: StreamType> StreamAudioSource<T> {
     fn source_wait_reason(&self) -> Option<crate::pipeline::track::WaitingReason> {
         use crate::pipeline::track::WaitingReason;
 
-        if !self.waiting_for_source {
+        let active = self.decode.active();
+        if !self.waiting_for_source || active.has_output() || active.decoder().has_prepared_result()
+        {
             return None;
         }
         match self.shared_stream.phase() {

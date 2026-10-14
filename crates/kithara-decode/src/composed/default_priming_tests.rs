@@ -147,6 +147,7 @@ fn prepared_mp3_decode_preserves_pcm_and_seek(tone_mp3: &'static [u8]) {
     prepared.output = Some(Err(DecodeError::InvalidData {
         detail: "output preparation failed",
     }));
+    assert!(prepared.has_prepared_result());
     assert!(matches!(
         prepared.next_chunk_prepared(),
         Err(DecodeError::InvalidData {
@@ -165,6 +166,26 @@ fn prepared_mp3_decode_preserves_pcm_and_seek(tone_mp3: &'static [u8]) {
         let expected = pcm_prefix(|| regular.next_chunk().expect("regular decode"));
         assert_eq!(actual, expected);
     }
+}
+
+#[kithara::test]
+fn successful_seek_discards_a_deferred_output_error(tone_mp3: &'static [u8]) {
+    let mut decoder = build_mp3_decoder(tone_mp3);
+    let mut reference = build_mp3_decoder(tone_mp3);
+    decoder.output = Some(Err(DecodeError::InvalidData {
+        detail: "old output preparation failed",
+    }));
+    assert!(decoder.has_prepared_result());
+    let target = Duration::from_millis(250);
+    decoder.seek(target).expect("new seek");
+    reference.seek(target).expect("reference seek");
+    assert!(!decoder.has_prepared_result());
+    let actual = pcm_prefix(|| {
+        decoder.prepare_next_chunk();
+        decoder.next_chunk_prepared().expect("new seek PCM")
+    });
+    let expected = pcm_prefix(|| reference.next_chunk().expect("reference PCM"));
+    assert_eq!(actual, expected);
 }
 
 #[cfg(feature = "symphonia")]

@@ -122,18 +122,18 @@ impl PcmReceiver {
             #[call(cached)]
             pub fn cached_span(&self) -> Duration;
         }
-    }
-
-    /// Raw coordinate of track-media zero from the next immutable PCM packet.
-    #[must_use]
-    pub fn media_origin(&self) -> Option<Duration> {
-        self.next_chunk_info()?.media_origin
-    }
-
-    /// Original visible source position published by the decoded-source owner.
-    #[must_use]
-    pub fn visible_origin(&self) -> Option<Duration> {
-        self.next_chunk_info()?.visible_origin
+        to self {
+            /// Raw coordinate of track-media zero from the next immutable PCM packet.
+            #[must_use]
+            #[expr($?.media_origin)]
+            #[call(next_chunk_info)]
+            pub fn media_origin(&self) -> Option<Duration>;
+            /// Original visible source position published by the decoded-source owner.
+            #[must_use]
+            #[expr($?.visible_origin)]
+            #[call(next_chunk_info)]
+            pub fn visible_origin(&self) -> Option<Duration>;
+        }
     }
 
     /// Immutable metadata of the next admitted producer packet.

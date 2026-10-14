@@ -128,15 +128,16 @@ apple:ios:
 # group: a simulator sharing the host with a full build reports on the load
 # rather than on the commit.
 #
-# It blocks rather than reports, and it runs wherever a change is judged —
-# quarantine included. The simulator runs on one Mac mini and nowhere else, so
-# no other lane and no other host can answer for the iOS surface: a red here
-# that only reached the verdict as a report let a change reach the default
-# branch with the surface it breaks never having run green.
+# It blocks rather than reports, and it runs wherever a change is judged in
+# full, quarantine included; a branch or a draft pull request is not. The
+# simulator runs on one Mac mini and nowhere else, so no other lane and no
+# other host can answer for the iOS surface: a red here that only reached the
+# verdict as a report let a change reach the default branch with the surface
+# it breaks never having run green.
 apple:ios-test:
   extends:
     - .apple-device-job
-    - .rules-verify-and-branch
+    - .rules-verify
     - .measured
   stage: apple
   timeout: 60 minutes

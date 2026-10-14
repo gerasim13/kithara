@@ -2,11 +2,11 @@ use kithara_events::{DeferredBus, EventBus};
 use kithara_platform::sync::Arc;
 use kithara_stream::{ReaderChunkSignal, ReaderEventSink, ReaderSeekSignal};
 
-use crate::{FileEvent, coord::FileCoord};
+use crate::{FileReaderEvent, coord::FileCoord};
 
 pub(crate) struct FileReaderEventSink {
     coord: Arc<FileCoord>,
-    bus: DeferredBus<FileEvent>,
+    bus: DeferredBus<FileReaderEvent>,
     /// See `HlsReaderEventSink::initial_cursor` — same recreate-after-
     /// seek-failure scenario.
     last_cursor: u64,
@@ -34,7 +34,7 @@ impl ReaderEventSink for FileReaderEventSink {
         }
         let cursor = self.coord.position();
         self.last_cursor = cursor;
-        self.bus.enqueue(FileEvent::ReadProgress {
+        self.bus.enqueue(FileReaderEvent::ReadProgress {
             position: cursor,
             total: self.coord.total_bytes(),
         });
@@ -49,7 +49,7 @@ impl ReaderEventSink for FileReaderEventSink {
         };
         let from = self.last_cursor;
         self.last_cursor = to;
-        self.bus.enqueue(FileEvent::ReaderSeek {
+        self.bus.enqueue(FileReaderEvent::ReaderSeek {
             from_offset: from,
             to_offset: to,
         });
@@ -57,11 +57,12 @@ impl ReaderEventSink for FileReaderEventSink {
 }
 #[cfg(test)]
 mod tests {
-    use kithara_events::BusEvent;
+    use kithara_events::{BusEvent, DEFAULT_EVENT_BUS_CAPACITY, TryRecvError};
     use kithara_stream::PlayheadState;
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::{FileError, FileEvent};
 
     fn sink(bus: EventBus, event_capacity: usize) -> FileReaderEventSink {
         let coord = Arc::new(FileCoord::new(Arc::new(PlayheadState::new())));
@@ -99,5 +100,32 @@ mod tests {
     #[kithara::test]
     fn a_ring_deeper_than_the_burst_drops_nothing() {
         assert_eq!(dropped_in(&EventBus::new(16), 3, 4), 0);
+    }
+
+    #[kithara::test]
+    fn reader_activity_does_not_displace_file_errors() {
+        let bus = EventBus::default();
+        let mut file_events = bus.subscribe::<FileEvent>();
+        let mut reader_events = bus.subscribe::<FileReaderEvent>();
+        let mut reader = sink(bus.clone(), 1);
+        let before = FileEvent::Error {
+            error: FileError::Io("before reader burst".into()),
+        };
+        let after = FileEvent::Error {
+            error: FileError::Io("after reader burst".into()),
+        };
+        bus.publish(before.clone());
+        for _ in 0..=DEFAULT_EVENT_BUS_CAPACITY {
+            burst(&mut reader, 1);
+        }
+        bus.publish(after.clone());
+
+        assert!(matches!(
+            reader_events.try_recv(),
+            Err(TryRecvError::Lagged(1))
+        ));
+        assert_eq!(file_events.try_recv().expect("first error").event, before);
+        assert_eq!(file_events.try_recv().expect("second error").event, after);
+        assert!(matches!(file_events.try_recv(), Err(TryRecvError::Empty)));
     }
 }

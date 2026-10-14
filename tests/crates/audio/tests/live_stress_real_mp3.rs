@@ -1,15 +1,18 @@
-use std::{fs, num::NonZeroUsize, path::Path};
+use std::{fs, future::Future, num::NonZeroUsize, path::Path};
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome},
     download::DownloaderEvent,
-    events::{EventBus, RecvError},
+    events::{Event, EventBus, EventReceiver, RecvError},
     file::{File, FileConfig, FileEvent},
     platform::{
         thread,
         time::Duration,
-        tokio::task::{spawn, spawn_blocking},
+        tokio::{
+            join,
+            task::{spawn, spawn_blocking},
+        },
     },
     play::{PlayWorker, PlayWorkerConfig},
     signal::AudioChunk,
@@ -18,7 +21,6 @@ use kithara::{
 use kithara_integration_tests::{
     TestServerHelper,
     bufpool_ext::{TestPools, pools},
-    event::TestEvent,
     mock::LaneAudio,
     served_mp3,
 };
@@ -38,12 +40,164 @@ mod consts {
 
 type TestAudio = LaneAudio<Stream<File<TestPools>>, TestPools>;
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct LiveStats {
-    read_progress_events: usize,
     request_started_events: usize,
     request_completed_events: usize,
     errors: usize,
+}
+
+fn observe_transfers(bus: &EventBus) -> impl Future<Output = LiveStats> + Send + 'static {
+    let file_events = bus.subscribe::<FileEvent>();
+    let downloader_events = bus.subscribe::<DownloaderEvent>();
+    async move {
+        let (file, downloader) = join!(
+            collect_stats(file_events, "file", LiveStats::record_file),
+            collect_stats(downloader_events, "downloader", LiveStats::record_download),
+        );
+        LiveStats {
+            request_started_events: downloader.request_started_events,
+            request_completed_events: downloader.request_completed_events,
+            errors: file.errors.saturating_add(downloader.errors),
+        }
+    }
+}
+
+async fn collect_stats<E: Event>(
+    mut events: EventReceiver<E>,
+    topic: &'static str,
+    record: fn(&mut LiveStats, &E),
+) -> LiveStats {
+    let mut stats = LiveStats::default();
+    loop {
+        let event = match events.recv().await {
+            Ok(envelope) => envelope.event,
+            Err(RecvError::Closed) => break,
+            Err(error) => panic!("{topic} stats receiver lost events: {error}"),
+        };
+        record(&mut stats, &event);
+    }
+    stats
+}
+
+impl LiveStats {
+    fn record_file(&mut self, event: &FileEvent) {
+        if matches!(event, FileEvent::Error { .. }) {
+            self.errors = self.errors.saturating_add(1);
+        }
+    }
+
+    fn record_download(&mut self, event: &DownloaderEvent) {
+        match event {
+            DownloaderEvent::RequestStarted { .. } => {
+                self.request_started_events = self.request_started_events.saturating_add(1);
+            }
+            DownloaderEvent::RequestCompleted { .. } => {
+                self.request_completed_events = self.request_completed_events.saturating_add(1);
+            }
+            DownloaderEvent::RequestFailed { .. } => self.errors = self.errors.saturating_add(1),
+            _ => {}
+        }
+    }
+}
+
+#[kithara::test(tokio)]
+async fn transfer_stats_ignore_unobserved_topic_overflow() {
+    use std::num::NonZeroU64;
+
+    use kithara::{
+        audio::AudioEvent,
+        download::RequestId,
+        events::{DEFAULT_EVENT_BUS_CAPACITY, TryRecvError},
+        file::{FileError, FileReaderEvent},
+        net::NetError,
+    };
+
+    let bus = EventBus::default();
+    let mut audio_events = bus.subscribe::<AudioEvent>();
+    let stats_task = spawn(observe_transfers(&bus));
+    bus.publish(FileEvent::Error {
+        error: FileError::Io("before reader burst".into()),
+    });
+    let mut reader_events = bus.subscribe::<FileReaderEvent>();
+    for _ in 0..=DEFAULT_EVENT_BUS_CAPACITY {
+        bus.publish(AudioEvent::OutputAvailable);
+        bus.publish(FileReaderEvent::ReadProgress {
+            position: 64,
+            total: Some(128),
+        });
+    }
+    assert!(matches!(
+        audio_events.try_recv(),
+        Err(TryRecvError::Lagged(1))
+    ));
+    assert!(matches!(
+        reader_events.try_recv(),
+        Err(TryRecvError::Lagged(1))
+    ));
+    drop(audio_events);
+    drop(reader_events);
+    bus.publish(FileEvent::Error {
+        error: FileError::Io("after reader burst".into()),
+    });
+    let request_id = RequestId::new(NonZeroU64::MIN);
+    bus.publish(DownloaderEvent::RequestStarted {
+        request_id,
+        wait_in_queue: Duration::ZERO,
+    });
+    bus.publish(DownloaderEvent::RequestCompleted {
+        request_id,
+        bytes_transferred: 128,
+        duration: Duration::from_secs(1),
+        bandwidth_bps: 1024,
+    });
+    bus.publish(DownloaderEvent::RequestFailed {
+        request_id,
+        error: NetError::Network("observer fixture".into()),
+        retryable: true,
+    });
+    drop(bus);
+
+    let stats = stats_task.await.expect("transfer collection must complete");
+    assert_eq!(stats.request_started_events, 1);
+    assert_eq!(stats.request_completed_events, 1);
+    assert_eq!(stats.errors, 3);
+}
+
+#[kithara::test(tokio)]
+#[case::file(true)]
+#[case::downloader(false)]
+async fn transfer_stats_reject_observed_topic_overflow(#[case] file_topic: bool) {
+    use std::num::NonZeroU64;
+
+    use kithara::{download::RequestId, events::DEFAULT_EVENT_BUS_CAPACITY, file::FileError};
+
+    let bus = EventBus::default();
+    let stats_task = spawn(observe_transfers(&bus));
+    for _ in 0..=DEFAULT_EVENT_BUS_CAPACITY {
+        if file_topic {
+            bus.publish(FileEvent::Error {
+                error: FileError::Io("observer fixture".into()),
+            });
+        } else {
+            bus.publish(DownloaderEvent::RequestStarted {
+                request_id: RequestId::new(NonZeroU64::MIN),
+                wait_in_queue: Duration::ZERO,
+            });
+        }
+    }
+    drop(bus);
+
+    let error = stats_task
+        .await
+        .expect_err("transfer loss must fail collection");
+    let topic = if file_topic { "file" } else { "downloader" };
+    assert!(
+        error.to_string().contains(&format!(
+            "{topic} stats receiver lost events: channel lagged"
+        )),
+        "{error}"
+    );
 }
 
 fn file_count_and_size(path: &Path) -> (u64, u64) {
@@ -244,35 +398,7 @@ async fn live_stress_real_mp3_seek_read_cache(
     };
 
     let bus = EventBus::default();
-    let mut events = bus.subscribe::<TestEvent>();
-    let events_task = spawn(async move {
-        let mut stats = LiveStats::default();
-        loop {
-            let event = match events.recv().await {
-                Ok(envelope) => envelope.event,
-                Err(RecvError::Closed) => break,
-                Err(error) => panic!("stats receiver lost events: {error}"),
-            };
-            match event {
-                TestEvent::File(FileEvent::ReadProgress { .. }) => {
-                    stats.read_progress_events = stats.read_progress_events.saturating_add(1);
-                }
-                TestEvent::File(FileEvent::Error { .. })
-                | TestEvent::Downloader(DownloaderEvent::RequestFailed { .. }) => {
-                    stats.errors = stats.errors.saturating_add(1);
-                }
-                TestEvent::Downloader(DownloaderEvent::RequestStarted { .. }) => {
-                    stats.request_started_events = stats.request_started_events.saturating_add(1);
-                }
-                TestEvent::Downloader(DownloaderEvent::RequestCompleted { .. }) => {
-                    stats.request_completed_events =
-                        stats.request_completed_events.saturating_add(1);
-                }
-                _ => {}
-            }
-        }
-        stats
-    });
+    let events_task = spawn(observe_transfers(&bus));
     let file_config = FileConfig::for_src(url.into())
         .store(store)
         .pools(pools.clone())
@@ -337,8 +463,7 @@ async fn live_stress_real_mp3_seek_read_cache(
         "expected no file download/read errors during stress"
     );
     let transfer_events = final_stats
-        .read_progress_events
-        .saturating_add(final_stats.request_started_events)
+        .request_started_events
         .saturating_add(final_stats.request_completed_events);
     assert!(
         transfer_events > 0,

@@ -37,7 +37,6 @@ keep_manual_method_attrs = []
 
 [derivable_event]
 enabled = true
-unforwarded = ["BusEvent", "ItemEvent", "TransportEvent"]
 
 [derivable_from]
 enabled = true
