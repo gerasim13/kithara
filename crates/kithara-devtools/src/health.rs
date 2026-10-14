@@ -14,7 +14,7 @@ use clap::Args;
 use crate::{
     common::{project::ProjectConfig, timestamp::utc_timestamp},
     consts,
-    touched::FETCH_MAIN,
+    touched::fetch_args,
 };
 
 #[derive(Debug, Args)]
@@ -250,7 +250,11 @@ fn build_stages_with(resolved: &Resolved) -> Vec<Stage> {
         Stage::new("machete", "cargo", &["machete"]).paths(machete_paths),
         Stage::new("deny", "cargo", &["deny", "check"]),
         Stage::new("hack-feature-powerset", "cargo", &["xtask", "powerset"]),
-        Stage::new("semver-baseline", "git", &FETCH_MAIN),
+        Stage::new(
+            "semver-baseline",
+            "git",
+            &fetch_args("main").each_ref().map(String::as_str),
+        ),
         Stage::new(
             "semver-checks",
             "cargo",
