@@ -335,7 +335,10 @@ impl<T: StreamType> StreamAudioSource<T> {
         match &self.state {
             CurrentFsm::Decoding(_) => {}
             CurrentFsm::WaitingForSource(track) => {
-                if !matches!(track.data().context, WaitContext::Playback) {
+                if !matches!(
+                    track.data().context,
+                    WaitContext::ChunkGate(None) | WaitContext::Playback
+                ) {
                     return;
                 }
             }
@@ -404,6 +407,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         match control.promote_variant(transition) {
             VariantPromotion::Promoted => {
                 let outgoing = self.decode.commit_prepared_promotion(prepared);
+                self.update_state(Track::<Decoding>::new(()).erase());
                 if let Some(ref emit) = self.emit {
                     enqueue_generation_installed(
                         emit,
@@ -631,7 +635,7 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
             CurrentFsm::Decoding(_) | CurrentFsm::AwaitingResume(_) => true,
             CurrentFsm::WaitingForSource(track) => matches!(
                 track.data().context,
-                WaitContext::Playback | WaitContext::PostSeek(_)
+                WaitContext::ChunkGate(_) | WaitContext::Playback | WaitContext::PostSeek(_)
             ),
             _ => false,
         };

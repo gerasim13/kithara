@@ -82,6 +82,11 @@ without adding an unused programmatic constructor.
 Standalone builders use `bon` directly. `Config` generates the builder for
 configuration structs; a separate domain constructor annotated with `#[bon]`
 remains independent of that derive.
+`path_from_env(name)` supplies an OS-native path to a field's
+`builder(default = ...)` expression. Unset or empty variables return `None` so
+the domain configuration can choose its default. Explicit builder values take
+precedence, and the built configuration retains the resolved path without
+reading the environment again.
 `#[config(debug)]` derives `Debug` without the fields marked `debug(skip)`. For
 a projected field stored in a wrapper, `wrap(default = value, with = Wrapper::new)`
 derives the builder default and setter conversion. `Patch` reads the type's and

@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 use super::{
     command::BridgeConfig,
-    model::{PipelineObservation, PullRequest, pipeline_observation},
+    model::{PipelineObservation, PullRequest, Scope, pipeline_observation},
 };
 use crate::{ci::run::PipelineKind, consts};
 
@@ -208,17 +208,9 @@ impl Gitlab {
         reference: &str,
         head_sha: &str,
         base_sha: &str,
+        scope: Scope,
     ) -> Result<u64> {
-        let form = vec![
-            ("ref".into(), reference.into()),
-            ("variables[][key]".into(), "KITHARA_QUARANTINE_SHA".into()),
-            ("variables[][value]".into(), head_sha.into()),
-            (
-                "variables[][key]".into(),
-                "KITHARA_QUARANTINE_BASE_SHA".into(),
-            ),
-            ("variables[][value]".into(), base_sha.into()),
-        ];
+        let form = pipeline_form(reference, head_sha, base_sha, scope);
         let payload = Payload::Form(&form);
         let response = self.request(&Method::POST, "pipeline", Some(&payload))?;
         response["id"]
@@ -416,6 +408,31 @@ impl Gitlab {
     }
 }
 
+/// The form that starts a verification run. A draft says so, and the parent
+/// pipeline dispatches it as a branch.
+fn pipeline_form(
+    reference: &str,
+    head_sha: &str,
+    base_sha: &str,
+    scope: Scope,
+) -> Vec<(String, String)> {
+    let mut form = vec![
+        ("ref".into(), reference.into()),
+        ("variables[][key]".into(), "KITHARA_QUARANTINE_SHA".into()),
+        ("variables[][value]".into(), head_sha.into()),
+        (
+            "variables[][key]".into(),
+            "KITHARA_QUARANTINE_BASE_SHA".into(),
+        ),
+        ("variables[][value]".into(), base_sha.into()),
+    ];
+    if scope == Scope::Draft {
+        form.push(("variables[][key]".into(), "KITHARA_QUARANTINE_DRAFT".into()));
+        form.push(("variables[][value]".into(), "1".into()));
+    }
+    form
+}
+
 fn read_secret(path: &std::path::Path, label: &str) -> Result<String> {
     let secret = fs::read_to_string(path)
         .with_context(|| format!("reading {label} {}", path.display()))?
@@ -469,9 +486,13 @@ fn pull_request(value: &Value) -> Result<PullRequest> {
         .context("GitHub pull response has no numeric number")?;
     let head_sha = string_field(value, &["head", "sha"], "GitHub pull head SHA")?;
     let author = string_field(value, &["user", "login"], "GitHub pull author login")?;
+    let draft = value["draft"]
+        .as_bool()
+        .context("GitHub pull response has no draft flag")?;
     Ok(PullRequest {
         number,
         head_sha,
+        scope: if draft { Scope::Draft } else { Scope::Full },
         author,
     })
 }
@@ -590,15 +611,61 @@ mod tests {
     fn pull_head_is_taken_from_the_api_response_exactly() {
         let head = "0123456789abcdef0123456789abcdef01234567";
         assert_eq!(
-            pull_request(
-                &json!({"number": 427, "head": {"sha": head}, "user": {"login": "octocat"}})
-            )
+            pull_request(&json!({
+                "number": 427,
+                "draft": false,
+                "head": {"sha": head},
+                "user": {"login": "octocat"}
+            }))
             .unwrap(),
             PullRequest {
                 number: 427,
                 head_sha: head.into(),
+                scope: Scope::Full,
                 author: "octocat".into(),
             }
+        );
+    }
+
+    #[test]
+    fn a_draft_pull_request_is_verified_as_a_draft() {
+        let pull = pull_request(&json!({
+            "number": 427,
+            "draft": true,
+            "head": {"sha": "0123456789abcdef0123456789abcdef01234567"},
+            "user": {"login": "octocat"}
+        }))
+        .unwrap();
+
+        assert_eq!(pull.scope, Scope::Draft);
+        assert!(
+            pull_request(&json!({
+                "number": 427,
+                "head": {"sha": "0123456789abcdef0123456789abcdef01234567"},
+                "user": {"login": "octocat"}
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn a_draft_run_is_marked_for_the_dispatcher() {
+        assert_eq!(
+            pipeline_form("ref", "head", "base", Scope::Draft)
+                .iter()
+                .filter(|(key, _)| key == "variables[][key]")
+                .map(|(_, value)| value.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "KITHARA_QUARANTINE_SHA",
+                "KITHARA_QUARANTINE_BASE_SHA",
+                "KITHARA_QUARANTINE_DRAFT"
+            ]
+        );
+        assert!(
+            !pipeline_form("ref", "head", "base", Scope::Full)
+                .iter()
+                .any(|(_, value)| value == "KITHARA_QUARANTINE_DRAFT")
         );
     }
 

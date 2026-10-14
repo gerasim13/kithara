@@ -426,7 +426,7 @@
   <require os> macos
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
-  just test run --flash=on --no-block=on --profile ci
+  just test run --touched --flash=on --no-block=on --profile ci
 # apple-test / platforms
   <require os> macos
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen

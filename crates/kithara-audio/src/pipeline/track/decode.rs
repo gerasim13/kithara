@@ -13,6 +13,7 @@ use crate::{
         decode::{
             core::{DecodeAction as CoreDecodeAction, DecodeCtx},
             format::{FormatDecision, detect},
+            gate::source_phase_for_wait_context,
             step,
         },
         fetch::Fetch,
@@ -39,7 +40,12 @@ impl Track<Decoding> {
         src: &mut StreamAudioSource<T>,
     ) -> TrackStep<AudioChunk> {
         let () = self.into_inner();
-        if !src.readiness.source_is_ready(&src.shared_stream) {
+        let context = WaitContext::ChunkGate(None);
+        let phase = source_phase_for_wait_context(&src.shared_stream, &context);
+        if phase == SourcePhase::Cancelled {
+            return TrackStep::Failed(src.fail(TrackFailure::SourceCancelled));
+        }
+        if super::map_source_phase(phase).is_some() {
             if !src.seek_obs.is_pending()
                 && let FormatDecision::Recreate(recreate) = detect(
                     &src.shared_stream,
@@ -50,22 +56,14 @@ impl Track<Decoding> {
                 start_recreating_decoder(src, recreate);
                 return TrackStep::StateChanged;
             }
-            let phase = src.shared_stream.phase();
-            if let Some(reason) = src.readiness.source_park(&src.shared_stream, phase) {
+            if !has_available_output(src)
+                && let Some(reason) = src.readiness.source_park(&src.shared_stream, phase)
+            {
                 src.update_state(
-                    Track::<WaitingForSource>::new(WaitState {
-                        reason,
-                        context: WaitContext::Playback,
-                    })
-                    .erase(),
+                    Track::<WaitingForSource>::new(WaitState { context, reason }).erase(),
                 );
                 return TrackStep::Blocked(reason);
             }
-            if phase == SourcePhase::Cancelled {
-                return TrackStep::Failed(src.fail(TrackFailure::SourceCancelled));
-            }
-            super::waiting_branch!("decoding_not_ready_unparked");
-            return TrackStep::Blocked(WaitingReason::Waiting);
         }
 
         match decode_step(src) {
@@ -89,6 +87,11 @@ impl Track<Decoding> {
             DecodeStep::Failed(failure) => TrackStep::Failed(failure),
         }
     }
+}
+
+pub(super) fn has_available_output<T: StreamType>(src: &StreamAudioSource<T>) -> bool {
+    let active = src.decode.active();
+    active.has_output() || active.decoder().has_prepared_result()
 }
 
 pub(super) enum DecodeStep {

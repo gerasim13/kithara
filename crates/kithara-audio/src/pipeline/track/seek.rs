@@ -4,12 +4,12 @@ use tracing::trace;
 
 use super::{
     CurrentFsm, Decoding, RecreatingDecoder, TrackFailure, TrackStep,
-    decode::{DecodeStep, decode_step},
+    decode::{DecodeStep, decode_step, has_available_output},
     fsm::apply_seek_transition,
     phase::{Track, TrackPhase, sealed},
 };
 use crate::pipeline::{
-    decode::gate::{post_seek_anchor_offset, source_phase_for_wait_context},
+    decode::gate::source_phase_for_wait_context,
     rebuild::RecreateState,
     seek::{
         ApplySeekState, ResumeState, SeekMode, SeekRequest, anchor::stale, engine::SeekApplyCtx,
@@ -166,27 +166,16 @@ impl Track<AwaitingResume> {
         src: &mut StreamAudioSource<T>,
     ) -> TrackStep<AudioChunk> {
         let resume = self.into_inner();
-        let post_seek_offset = post_seek_anchor_offset(&src.shared_stream, &resume);
-        let ready = post_seek_offset.map_or_else(
-            || src.readiness.source_is_ready(&src.shared_stream),
-            |byte| {
-                src.readiness
-                    .source_is_ready_for_chunk(&src.shared_stream, byte)
-            },
-        );
-        if !ready {
-            let phase =
-                source_phase_for_wait_context(&src.shared_stream, &WaitContext::PostSeek(resume));
-            if let Some(reason) = src.readiness.source_park(&src.shared_stream, phase) {
-                src.update_state(
-                    Track::<WaitingForSource>::new(WaitState {
-                        reason,
-                        context: WaitContext::PostSeek(resume),
-                    })
-                    .erase(),
-                );
-                return TrackStep::Blocked(reason);
-            }
+        let context = WaitContext::ChunkGate(Some(resume));
+        let phase = source_phase_for_wait_context(&src.shared_stream, &context);
+        if phase == SourcePhase::Cancelled {
+            return TrackStep::Failed(src.fail(TrackFailure::SourceCancelled));
+        }
+        if !has_available_output(src)
+            && let Some(reason) = src.readiness.source_park(&src.shared_stream, phase)
+        {
+            src.update_state(Track::<WaitingForSource>::new(WaitState { context, reason }).erase());
+            return TrackStep::Blocked(reason);
         }
         src.update_state(Self::new(resume).erase());
         match decode_step(src) {
@@ -196,7 +185,20 @@ impl Track<AwaitingResume> {
                 super::waiting_branch!("awaiting_resume_transition_pending");
                 TrackStep::Blocked(WaitingReason::Waiting)
             }
-            DecodeStep::NotReady(reason) => TrackStep::Blocked(reason),
+            DecodeStep::NotReady(reason) => {
+                let resume = match &src.state {
+                    CurrentFsm::AwaitingResume(handle) => *handle.data(),
+                    _ => unreachable!("pending decode retains its resume state"),
+                };
+                src.update_state(
+                    Track::<WaitingForSource>::new(WaitState {
+                        reason,
+                        context: WaitContext::PostSeek(resume),
+                    })
+                    .erase(),
+                );
+                TrackStep::Blocked(reason)
+            }
             DecodeStep::Eof => TrackStep::Eof,
             DecodeStep::Failed(failure) => TrackStep::Failed(failure),
         }
@@ -212,6 +214,7 @@ pub(crate) struct WaitState {
 /// Operation to resume once the source becomes ready.
 #[derive(Debug)]
 pub(crate) enum WaitContext {
+    ChunkGate(Option<ResumeState>),
     Playback,
     Seek(SeekRequest),
     ApplySeek(ApplySeekState),
@@ -271,7 +274,16 @@ impl Track<WaitingForSource> {
         }
         let phase = source_phase_for_wait_context(&src.shared_stream, &context);
 
-        if let Some(reason) = src.readiness.source_park(&src.shared_stream, phase) {
+        if phase == SourcePhase::Cancelled {
+            return TrackStep::Failed(src.fail(TrackFailure::SourceCancelled));
+        }
+
+        let output_ready = matches!(
+            context,
+            WaitContext::ChunkGate(_) | WaitContext::Playback | WaitContext::PostSeek(_)
+        ) && has_available_output(src);
+        if !output_ready && let Some(reason) = src.readiness.source_park(&src.shared_stream, phase)
+        {
             src.update_state(
                 Self::new(WaitState {
                     context,
@@ -285,12 +297,10 @@ impl Track<WaitingForSource> {
             return TrackStep::Blocked(reason);
         }
 
-        if phase == SourcePhase::Cancelled {
-            return TrackStep::Failed(src.fail(TrackFailure::SourceCancelled));
-        }
-
         match context {
-            WaitContext::Playback => src.update_state(Track::<Decoding>::new(()).erase()),
+            WaitContext::ChunkGate(None) | WaitContext::Playback => {
+                src.update_state(Track::<Decoding>::new(()).erase());
+            }
             WaitContext::Seek(ctx) => src.update_state(Track::<SeekRequested>::new(ctx).erase()),
             WaitContext::ApplySeek(applying) => {
                 src.update_state(Track::<ApplyingSeek>::new(applying).erase());
@@ -298,7 +308,7 @@ impl Track<WaitingForSource> {
             WaitContext::Recreation(recreate) => {
                 src.update_state(Track::<RecreatingDecoder>::new(recreate).erase());
             }
-            WaitContext::PostSeek(resume) => {
+            WaitContext::ChunkGate(Some(resume)) | WaitContext::PostSeek(resume) => {
                 src.update_state(Track::<AwaitingResume>::new(resume).erase());
             }
         }
