@@ -89,7 +89,8 @@ fn run_in(args: &LaneArgs, ctx: &Ctx, var: &dyn Fn(&str) -> Option<OsString>) ->
     let lane = lookup(&ext.ci.lanes, &args.lane)?;
     let pins = CiPins::load(&ctx.root.join(&ext.ci.pins))?;
     let narrow = args.narrow.as_deref();
-    if !declared::runs_anything(lane, args.kind, narrow, &ctx.root, &ctx.config)? {
+    let base = kithara_devtools::test::touched_base(var);
+    if !declared::runs_anything(lane, args.kind, narrow, &ctx.root, &ctx.config, &base)? {
         info!(
             lane = %args.lane,
             "the lane's suite selects no test lane on this branch; nothing to build"
@@ -768,8 +769,9 @@ label = "run"
         run_in(&args, &ctx, &anywhere).expect("a suite the next job reuses whole passes");
     }
 
-    /// A checkout on branch `topic`, one commit past the pipeline's base, that
-    /// changed `changed`, declaring one lane whose step runs the touched suite
+    /// A checkout on branch `topic`, one commit past `origin/develop`, the
+    /// default branch its job names in `KITHARA_TOUCHED_BASE`, that changed
+    /// `changed`, declaring one lane whose step runs the touched suite
     /// through a `just` that records whether it ran. The `workspace` lane is
     /// the default and `tooling` owns `xtask/`.
     #[cfg(unix)]
@@ -797,8 +799,7 @@ label = "run"
                 ],
             );
         };
-        let base = env::var("KITHARA_TOUCHED_BASE").unwrap_or_else(|_| "main".to_owned());
-        git(root, &["checkout", "-qb", &base]);
+        git(root, &["checkout", "-qb", "develop"]);
         commit("base");
         git(
             root,
@@ -809,10 +810,7 @@ label = "run"
                 root.to_str().expect("a UTF-8 root"),
             ],
         );
-        git(
-            root,
-            &["update-ref", &format!("refs/remotes/origin/{base}"), "HEAD"],
-        );
+        git(root, &["update-ref", "refs/remotes/origin/develop", "HEAD"]);
         git(root, &["checkout", "-qb", "topic"]);
         let path = root.join(changed);
         fs::create_dir_all(path.parent().expect("a changed file has a directory")).unwrap();
@@ -875,6 +873,7 @@ cargo.packages = ["tools"]
                     "GITHUB_ENV",
                     github_env.to_str().expect("a UTF-8 GITHUB_ENV"),
                 ),
+                ("KITHARA_TOUCHED_BASE", "develop"),
             ]),
         );
         (result, fs::read_to_string(github_env).unwrap(), called)

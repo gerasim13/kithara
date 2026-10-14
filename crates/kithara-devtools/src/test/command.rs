@@ -38,7 +38,8 @@ pub(crate) fn run(args: &TestArgs) -> Result<()> {
     let project = ProjectConfig::load(root)?;
     let test = &project.test;
 
-    match plan(test, root, &request)? {
+    let base = touched::base_branch(&|name| std::env::var_os(name));
+    match plan(test, root, &request, &base)? {
         Plan::Touched(selected) if selected.is_empty() => {
             println!("no owned path touched; the nightly sweep covers these lanes");
             Ok(())
@@ -52,15 +53,20 @@ pub(crate) fn run(args: &TestArgs) -> Result<()> {
 }
 
 /// Whether the test command given `args` runs any lane: a `--touched` run
-/// whose branch touched none of its lanes runs nothing.
+/// whose branch touched none of its lanes since it left `base` runs nothing.
 ///
 /// # Errors
 ///
 /// Fails when `args` are not a valid request, the test configuration is
 /// invalid, or git cannot say what the branch touched.
-pub fn selects_any_lane(root: &Path, project: &ProjectConfig, args: &[String]) -> Result<bool> {
+pub fn selects_any_lane(
+    root: &Path,
+    project: &ProjectConfig,
+    args: &[String],
+    base: &str,
+) -> Result<bool> {
     let request = TestRequest::parse(args)?;
-    Ok(match plan(&project.test, root, &request)? {
+    Ok(match plan(&project.test, root, &request, base)? {
         Plan::Touched(selected) => !selected.is_empty(),
         Plan::Lane(_) => true,
     })
@@ -78,10 +84,16 @@ fn plan<'a>(
     test: &'a TestCommandConfig,
     root: &Path,
     request: &'a TestRequest,
+    base: &str,
 ) -> Result<Plan<'a>> {
     validate_config(test)?;
     if request.touched {
-        return Ok(Plan::Touched(touched::lanes(test, root, &request.lanes)?));
+        return Ok(Plan::Touched(touched::lanes(
+            test,
+            root,
+            base,
+            &request.lanes,
+        )?));
     }
     select_lane(test, request).map(Plan::Lane)
 }

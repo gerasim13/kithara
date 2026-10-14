@@ -127,6 +127,7 @@ pub(crate) fn runs_anything(
     narrow: Option<&str>,
     root: &Path,
     project: &ProjectConfig,
+    base: &str,
 ) -> Result<bool> {
     let kind = kind_name(kind);
     admit(lane, &kind, narrow)?;
@@ -134,7 +135,7 @@ pub(crate) fn runs_anything(
         let Some(request) = step.suite_request(lane, step.args_in(&kind)) else {
             return Ok(true);
         };
-        if selects_any_lane(root, project, request)? {
+        if selects_any_lane(root, project, request, base)? {
             return Ok(true);
         }
     }
