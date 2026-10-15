@@ -652,6 +652,9 @@ where
                     } => Some(
                         serde_json::json!({"Replace": {"slot": slot.get(), "item": item_id.as_u64(), "segment": segment.get()}}),
                     ),
+                    DeckPart::Adopt { slot, segment } => Some(
+                        serde_json::json!({"Adopt": {"slot": slot.get(), "segment": segment.get()}}),
+                    ),
                     DeckPart::Start { slot, fade } => Some(
                         serde_json::json!({"Start": {"slot": slot.get(), "fade": format!("{fade:?}")}}),
                     ),
@@ -680,7 +683,7 @@ where
 {
     delegate::delegate! {
         to self.inner {
-            fn admit(&mut self, change: TrackSettingsChange, at: When<SessionFrame>, out: &Outbox<'_, S>) -> Result<(), PlayError>;
+            fn admit(&mut self, change: TrackSettingsChange, at: When<SessionFrame>, out: &Outbox<'_, S>) -> Result<Option<usize>, PlayError>;
             fn projected(&self) -> TrackSettings;
             fn prepared_speed(&self) -> Option<&kithara::warp::SpeedCurve>;
             fn prepare_entry(&mut self, at: SessionFrame, out: &mut Outbox<'_, S>) -> Result<bool, PlayError>;
@@ -830,20 +833,26 @@ where
 
     fn publish_pass(&self, pass: DeckPass<'_>) {
         self.publish();
-        let mut observation = self.observation.lock();
-        observation.consumed_rate = NonZeroU32::new(pass.deck.sample_rate);
-        observation.consumed = observation
-            .tracks
-            .iter()
+        self.publish_consumed(pass);
+    }
+
+    fn publish_consumed(&self, pass: DeckPass<'_>) {
+        let consumed = self
+            .inner
+            .tracks_active()
             .filter_map(|track| {
-                let slot = track.track.slot?;
+                let track = track.snapshot().track;
+                let slot = track.slot?;
                 pass.deck
                     .slots
                     .get(usize::from(slot.get()))
                     .copied()
-                    .map(|slot| (track.track.item, slot))
+                    .map(|slot| (track.item, slot))
             })
             .collect();
+        let mut observation = self.observation.lock();
+        observation.consumed_rate = NonZeroU32::new(pass.deck.sample_rate);
+        observation.consumed = consumed;
     }
 }
 
@@ -867,6 +876,7 @@ where
     }
 
     fn drain(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, S>) {
+        self.publish_consumed(pass);
         self.inner.drain(pass, out);
         let commands = std::mem::take(&mut self.commands.lock().commands);
         for command in commands {
@@ -911,7 +921,7 @@ where
                 }
             }
         }
-        self.publish_pass(pass);
+        self.publish();
     }
     fn settle(
         &mut self,

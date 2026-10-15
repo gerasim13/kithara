@@ -326,15 +326,20 @@ where
 {
     fn decode_frame(
         &mut self,
-        frame_data: &[u8],
-        pts: Duration,
-        _packet_desc: &[u8],
+        frame: crate::demuxer::Frame<'_>,
+        metadata: crate::demuxer::PacketMetadata,
         out: &mut SampleBuffer,
-    ) -> DecodeResult<u32> {
+    ) -> DecodeResult<crate::codec::DecodedPacket> {
+        let crate::demuxer::Frame {
+            data: frame_data,
+            pts: pts,
+            packet_desc: _packet_desc,
+            ..
+        } = frame;
         if frame_data.is_empty() {
             if self.eof_flushed {
                 out.clear();
-                return Ok(0);
+                return Ok(crate::codec::DecodedPacket::new(0, metadata));
             }
             if !self.eof_draining {
                 self.send(HostCmd::Flush {
@@ -343,7 +348,9 @@ where
                 })?;
                 self.eof_draining = true;
             }
-            return self.drain_output(out);
+            return self
+                .drain_output(out)
+                .map(|frames| crate::codec::DecodedPacket::new(frames, metadata));
         }
 
         self.eof_draining = false;
@@ -359,6 +366,7 @@ where
             generation: self.generation,
         })?;
         self.poll_output(out)
+            .map(|frames| crate::codec::DecodedPacket::new(frames, metadata))
     }
 
     fn decoded_pts(&self) -> Option<Duration> {

@@ -1,5 +1,5 @@
 use kithara_audio::TrackFailureKind;
-use kithara_command::{Outcome, Rejection, Seq, When};
+use kithara_command::{Rejection, Seq, When};
 use kithara_config::{ConfigOwner, LiveConfig};
 use kithara_render::{
     LaneCommand,
@@ -7,11 +7,10 @@ use kithara_render::{
 };
 use kithara_signal::SessionFrame;
 use kithara_warp::SpeedCurve;
-use tracing::warn;
 
 use super::{
     super::{
-        outbox::{Outbox, rejection},
+        outbox::Outbox,
         settings::{TrackSettings, TrackSettingsChange, TrackSettingsExec},
     },
     core::PlayerImpl,
@@ -27,6 +26,9 @@ impl<S> PlayerImpl<S> {
     ) -> Result<Option<Seq>, PlayError> {
         self.play = None;
         self.playback_commands.clear();
+        if let Some(loading) = self.loading.as_mut() {
+            loading.speed = None;
+        }
         if let Some(attaching) = self.attaching.as_mut() {
             attaching.play = None;
         }
@@ -240,7 +242,7 @@ impl<S> PlayerImpl<S> {
         change: TrackSettingsChange,
         at: When<SessionFrame>,
         out: &Outbox<'_, S>,
-    ) -> Result<Configuring, PlayError> {
+    ) -> Result<(Configuring, Option<usize>), PlayError> {
         if self.adopting.iter().any(|adoption| adoption.cancelled) {
             return Err(PlayError::NotReady);
         }
@@ -248,40 +250,117 @@ impl<S> PlayerImpl<S> {
             if !matches!(at, When::Next) {
                 return Err(PlayError::Untimed);
             }
-            return Ok(Configuring::Apply(TrackSettings::check(change)?));
+            return Ok((Configuring::Apply(TrackSettings::check(change)?), None));
+        }
+        if !matches!(self.status, TrackStatus::Playing { .. }) && at != When::Next {
+            return Err(PlayError::Untimed);
         }
         let when = self.lane_when(at, out)?;
         let change = TrackSettings::check(change)?;
         if let TrackSettingsChange::Speed(speed) = change
             && matches!(when, When::Next)
             && speed == self.settings.config().speed()
+            && self
+                .loading
+                .as_ref()
+                .is_none_or(|loading| loading.speed.is_none())
             && !self.lane_commands.iter().any(|operation| {
-                operation.segment == self.segment
-                    && operation.applied().is_none()
-                    && matches!(operation.command, LaneCommand::SetSpeed(_))
+                operation.applied().is_none()
+                    && match operation.command {
+                        LaneCommand::SetSpeed(_) => operation.segment == self.segment,
+                        LaneCommand::Segment { id, .. } => id == self.segment,
+                        _ => false,
+                    }
             })
             && self
                 .lane_commands
                 .iter()
                 .filter(|operation| {
-                    operation.segment == self.segment
-                        && operation.applied() == Some(true)
-                        && matches!(operation.command, LaneCommand::SetSpeed(_))
+                    operation.applied() == Some(true)
+                        && match operation.command {
+                            LaneCommand::SetSpeed(_) => operation.segment == self.segment,
+                            LaneCommand::Segment { id, .. } => id == self.segment,
+                            _ => false,
+                        }
                 })
                 .max_by_key(|operation| (operation.when, operation.seq))
                 .is_none_or(|operation| {
                     matches!(
                         operation.command,
                         LaneCommand::SetSpeed(SpeedCurve::Constant(_))
+                            | LaneCommand::Segment {
+                                speed: SpeedCurve::Constant(_),
+                                ..
+                            }
                     )
                 })
         {
-            return Ok(Configuring::Unchanged);
+            return Ok((Configuring::Unchanged, None));
+        }
+        if matches!(change, TrackSettingsChange::Speed(_)) {
+            let cost = self.speed_admission(at, out)?;
+            return Ok((Configuring::Send(when, change), cost));
         }
         if self.lane.as_ref().is_none_or(|lane| lane.available() == 0) {
             return Err(PlayError::Full("lane"));
         }
-        Ok(Configuring::Send(when, change))
+        Ok((Configuring::Send(when, change), Some(0)))
+    }
+
+    pub(super) fn speed_admission(
+        &self,
+        at: When<SessionFrame>,
+        out: &Outbox<'_, S>,
+    ) -> Result<Option<usize>, PlayError> {
+        if self.lane.is_none() {
+            return Err(PlayError::NotReady);
+        }
+        if !matches!(self.status, TrackStatus::Playing { .. }) {
+            if at != When::Next {
+                return Err(PlayError::Untimed);
+            }
+            if !self.attached()
+                && self
+                    .loading
+                    .as_ref()
+                    .is_some_and(|loading| loading.opened.is_none())
+            {
+                return Ok(None);
+            }
+            self.speed_position()?;
+            self.check_segment(out)?;
+            return Ok(Some(usize::from(self.attached())));
+        }
+        self.lane_when(at, out)?;
+        if self.lane.as_ref().is_none_or(|lane| lane.available() == 0) {
+            return Err(PlayError::Full("lane"));
+        }
+        Ok(Some(0))
+    }
+
+    pub(super) fn execute_speed(
+        &mut self,
+        speed: SpeedCurve,
+        target: f32,
+        when: When<kithara_render::LaneFrame>,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<Option<Seq>, PlayError> {
+        if !matches!(self.status, TrackStatus::Playing { .. }) {
+            let unopened = !self.attached();
+            if let Some(loading) = self
+                .loading
+                .as_mut()
+                .filter(|loading| unopened && loading.opened.is_none())
+            {
+                loading.speed = Some((speed, target));
+                return Ok(None);
+            }
+            return self.segment_with(self.speed_position()?, None, speed, out);
+        }
+        let seq = self.send_lane(LaneCommand::SetSpeed(speed), when)?;
+        self.settings
+            .track(seq, when, TrackSettingsChange::Speed(target));
+        Ok(Some(seq))
     }
 
     pub(super) fn configure(
@@ -290,12 +369,15 @@ impl<S> PlayerImpl<S> {
         at: When<SessionFrame>,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
-        match self.configuring(change, at, out)? {
+        match self.configuring(change, at, out)?.0 {
             Configuring::Apply(change) => {
                 self.settings.apply(change)?;
                 Ok(None)
             }
             Configuring::Unchanged => Ok(None),
+            Configuring::Send(when, TrackSettingsChange::Speed(speed)) => {
+                self.execute_speed(SpeedCurve::Constant(speed), speed, when, out)
+            }
             Configuring::Send(when, change) => {
                 let seq = self.send_lane(LaneCommand::from(change), when)?;
                 self.settings.track(seq, when, change);
@@ -329,84 +411,9 @@ impl<S> PlayerImpl<S> {
             _ => None,
         }
     }
-
-    pub(super) fn settle_lane(&mut self) {
-        let Some(lane) = self.lane.as_mut() else {
-            return;
-        };
-        for receipt in lane.receipts() {
-            self.settings.settle(&receipt);
-            let operations = self
-                .lane_commands
-                .iter_mut()
-                .filter(|operation| operation.seq == receipt.seq());
-            if let Outcome::Applied { at, data } = receipt.outcome() {
-                let mut speed_session = None;
-                for operation in operations {
-                    tracing::debug!(
-                        item = u64::from(self.item),
-                        seq = receipt.seq().get(),
-                        actual_apply_segment = at.segment.get(),
-                        actual_apply_frame = at.frame,
-                        current_segment = self.segment.get(),
-                        requested_when = ?operation.when,
-                        paused_resume = ?self.resume,
-                        mark = ?self.mark,
-                        ready_segment = ?data.ready,
-                        command = ?operation.command,
-                        "lane command settled"
-                    );
-                    let session = match operation.when {
-                        When::At(requested) if requested == *at => operation.session,
-                        _ => self.mark.and_then(|mark| session_at(mark, *at)),
-                    };
-                    operation.when = When::At(*at);
-                    operation.verdict = Some(Ok(()));
-                    if matches!(&operation.command, LaneCommand::SetSpeed(_)) {
-                        speed_session = Some(session);
-                    }
-                    if let LaneCommand::Segment { id, from, .. } = operation.command
-                        && data.ready == Some(id)
-                        && id == self.segment
-                        && !matches!(self.status, TrackStatus::Playing { .. })
-                        && let Some(origin) = self.media_origin
-                    {
-                        self.position = from.saturating_sub(origin);
-                        if matches!(self.status, TrackStatus::Paused { .. }) {
-                            self.status = TrackStatus::Paused { at: self.position };
-                        }
-                    }
-                }
-                if let Some(session) = speed_session {
-                    self.speed_answers
-                        .push_back((receipt.seq(), Ok((*at, session))));
-                }
-                self.engine_latency = data.engine_latency;
-                if let Some(ready) = data.ready
-                    && !matches!(self.status, TrackStatus::Failed { .. })
-                {
-                    self.ready = Some(ready);
-                }
-            } else if let Outcome::Rejected(reason) = receipt.outcome() {
-                let mut speed = false;
-                for operation in operations {
-                    operation.verdict = Some(Err(*reason));
-                    speed |= matches!(operation.command, LaneCommand::SetSpeed(_));
-                }
-                if speed {
-                    self.speed_answers.push_back((
-                        receipt.seq(),
-                        Err(rejection(reason, |failure| PlayError::Lane(*failure))),
-                    ));
-                }
-                warn!(?reason, "lane command was rejected");
-            }
-        }
-        self.reserved_ready();
-    }
 }
 
-impl<S> TrackSettingsExec<()> for PlayerImpl<S> {
+impl<'a, S> TrackSettingsExec<Outbox<'a, S>> for PlayerImpl<S> {
     type At = When<SessionFrame>;
     type Output = Result<Option<Seq>, PlayError>;
 
@@ -414,23 +421,12 @@ impl<S> TrackSettingsExec<()> for PlayerImpl<S> {
         &mut self,
         change: TrackSettingsChange,
         at: Self::At,
-        _cx: &mut (),
+        out: &mut Outbox<'a, S>,
     ) -> Self::Output {
-        if !matches!(at, When::Next) {
-            return Err(PlayError::Untimed);
-        }
-        if self.lane.is_some() {
-            let change = TrackSettings::check(change)?;
-            let seq = self.send_lane(LaneCommand::from(change), When::Next)?;
-            self.settings.track(seq, When::Next, change);
-            Ok(Some(seq))
-        } else {
-            self.settings.apply(change)?;
-            Ok(None)
-        }
+        self.configure(change, at, out)
     }
 
-    fn exec_speed(&mut self, speed: f32, at: Self::At, cx: &mut ()) -> Self::Output {
-        self.exec_live(TrackSettingsChange::Speed(speed), at, cx)
+    fn exec_speed(&mut self, speed: f32, at: Self::At, out: &mut Outbox<'a, S>) -> Self::Output {
+        self.configure(TrackSettingsChange::Speed(speed), at, out)
     }
 }

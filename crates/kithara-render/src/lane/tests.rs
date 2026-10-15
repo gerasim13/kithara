@@ -114,7 +114,7 @@ impl LaneFixture {
             segment: self.lane.cursor().segment,
             ..self.entry
         };
-        self.lane.observe_input(entry);
+        self.lane.observe_input(entry, Some(entry));
         if let Err(failure) = self.lane.check_admission(&entry) {
             self.lane.reject_preparation(failure);
             return;
@@ -205,7 +205,7 @@ fn a_prepared_segment_receipt_keeps_its_actual_apply_point(#[case] when: When<La
         segment,
         ..entering(fixture.spec, seq, Duration::from_secs(1))
     };
-    fixture.lane.observe_input(entry);
+    fixture.lane.observe_input(entry, Some(entry));
     fixture
         .lane
         .check_admission(&entry)
@@ -221,7 +221,7 @@ fn a_prepared_segment_receipt_keeps_its_actual_apply_point(#[case] when: When<La
     let receipt = fixture.sender.receipts().next().expect("prepared receipt");
     assert_eq!(receipt.seq(), seq);
     assert!(matches!(receipt.outcome(), Outcome::Applied { at, data }
-        if *at == applied_at && data.ready == Some(segment)));
+        if *at == applied_at && data.ready == Some(segment) && data.native_pcm_basis == Some(entry)));
     assert_eq!(&chunk.samples[..], &[0.25; 32]);
     assert!(fixture.sender.receipts().next().is_none());
     fixture.lane.admitted();

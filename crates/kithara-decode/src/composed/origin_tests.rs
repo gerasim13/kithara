@@ -124,12 +124,18 @@ struct TimestampCodec {
 impl FrameCodec for TimestampCodec {
     fn decode_frame(
         &mut self,
-        _bytes: &[u8],
-        _pts: Duration,
-        _packet_desc: &[u8],
+        frame: crate::demuxer::Frame<'_>,
+        metadata: crate::demuxer::PacketMetadata,
         out: &mut SampleBuffer,
-    ) -> DecodeResult<u32> {
+    ) -> DecodeResult<crate::codec::DecodedPacket> {
+        let crate::demuxer::Frame {
+            data: _bytes,
+            pts: _pts,
+            packet_desc: _packet_desc,
+            ..
+        } = frame;
         super::write_silent_test_frame(&self.pcm, self.spec, 2, out)
+            .map(|frames| crate::codec::DecodedPacket::new(frames, metadata))
     }
 
     fn decoded_pts(&self) -> Option<Duration> {

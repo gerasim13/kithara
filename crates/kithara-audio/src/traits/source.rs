@@ -28,6 +28,10 @@ pub trait AudioSource: Send + 'static {
     fn set_host_sample_rate(&mut self, rate: NonZeroU32);
     /// Current host-rate value owned by the open source.
     fn host_sample_rate(&self) -> Option<NonZeroU32>;
+    /// Native PCM facts of the current decoder generation before resume translation.
+    fn native_pcm_basis(&self) -> Option<AudioChunkInfo> {
+        None
+    }
     /// Original raw coordinate of track-media zero.
     fn media_origin(&self) -> Option<Duration> {
         None

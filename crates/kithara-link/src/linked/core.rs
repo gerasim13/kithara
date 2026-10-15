@@ -598,7 +598,7 @@ impl<S, P: Track<S>> Track<S> for Linked<P> {
         change: TrackSettingsChange,
         at: When<SessionFrame>,
         out: &Outbox<'_, S>,
-    ) -> Result<(), PlayError> {
+    ) -> Result<Option<usize>, PlayError> {
         self.synced_speed(change)?;
         self.inner.admit(change, at, out)
     }

@@ -22,6 +22,7 @@ use crate::{
 struct SnapshotTrack(
     TrackSnapshot,
     Vec<(TrackSettingsChange, When<SessionFrame>)>,
+    Option<usize>,
 );
 struct SnapshotFactory;
 
@@ -47,6 +48,7 @@ impl TrackFactory<TestPools> for SnapshotFactory {
                 declick: FrameCount::new(0),
             },
             Vec::new(),
+            Some(0),
         ))
     }
 }
@@ -99,7 +101,7 @@ impl Track<TestPools> for SnapshotTrack {
         _change: TrackSettingsChange,
         at: When<SessionFrame>,
         _out: &Outbox<'_, TestPools>,
-    ) -> Result<(), PlayError> {
+    ) -> Result<Option<usize>, PlayError> {
         if self.0.lane_room == 0 {
             return Err(PlayError::Full("lane"));
         }
@@ -107,7 +109,7 @@ impl Track<TestPools> for SnapshotTrack {
         {
             return Err(PlayError::Untimed);
         }
-        Ok(())
+        Ok(self.2)
     }
 
     fn projected(&self) -> TrackSettings {
@@ -297,6 +299,42 @@ fn a_track_settings_change_with_one_full_lane_reaches_no_track() {
         [(TrackSettingsChange::Speed(1.5), When::Next)]
     ));
     assert_eq!(queue.config.track.speed(), 1.5);
+    drop(out);
+
+    let (mut queue, _, _) = selected_second();
+    for index in [outgoing, current] {
+        let track = &mut queue.active.get_mut(index).expect("receiver").track;
+        track.0.lane_room = 4;
+        track.0.status = PlayerTrackStatus::Loaded;
+        track.2 = Some(1);
+    }
+    let (mut deck, _deck_inbox) = channel(
+        ChannelConfig::builder()
+            .capacity(std::num::NonZeroUsize::MIN)
+            .build(),
+    );
+    let mut out = Outbox::new(&mut deck, &mut dispatcher);
+    let error = queue.apply_command(
+        QueueCommand::ConfigureTrack(TrackSettingsChange::Speed(2.0), When::Next),
+        None,
+        &mut out,
+    );
+    assert!(matches!(
+        error,
+        Err(QueueError::Play(PlayError::Full("deck")))
+    ));
+    for index in [outgoing, current] {
+        assert!(
+            queue
+                .active
+                .get(index)
+                .expect("unmodified receiver")
+                .track
+                .1
+                .is_empty()
+        );
+    }
+    assert_eq!(queue.config.track.speed(), 1.0);
 }
 
 #[kithara::test]
@@ -359,6 +397,47 @@ fn a_speed_change_on_the_current_track_withdraws_a_sent_automatic_transition(#[c
             .status,
         TrackStatus::Cancelled
     );
+    for index in [0, 1] {
+        queue
+            .active
+            .get_mut(index)
+            .expect("receiver")
+            .track
+            .1
+            .clear();
+    }
+    let quiet = &mut queue.active.get_mut(0).expect("quiet receiver").track;
+    quiet.0.status = PlayerTrackStatus::Loaded;
+    quiet.2 = Some(1);
+    let current = &mut queue.active.get_mut(1).expect("unchanged current").track;
+    current.0.speed = 2.0;
+    current.2 = None;
+    queue.target.as_mut().expect("pending target").stale = None;
+    let (mut deck, _deck_inbox) = channel(
+        ChannelConfig::builder()
+            .capacity(std::num::NonZeroUsize::MIN)
+            .build(),
+    );
+    queue
+        .apply_command(
+            QueueCommand::ConfigureTrack(TrackSettingsChange::Speed(2.0), When::Next),
+            None,
+            &mut Outbox::new(&mut deck, &mut dispatcher),
+        )
+        .expect("one quiet Adopt and no current withdrawal need one credit");
+    assert_eq!(queue.target.expect("target retained").stale, None);
+    for index in [0, 1] {
+        assert!(matches!(
+            queue
+                .active
+                .get(index)
+                .expect("receiver")
+                .track
+                .1
+                .as_slice(),
+            [(TrackSettingsChange::Speed(2.0), When::Next)]
+        ));
+    }
 }
 
 fn selected_second() -> (TestQueue, TrackId, TrackId) {

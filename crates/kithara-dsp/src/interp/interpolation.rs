@@ -58,3 +58,20 @@ pub fn quadratic(taps: [f32; 3], fraction: f64) -> f32 {
         .to_f32()
         .unwrap_or(f32::NAN)
 }
+
+/// Evaluates a sinc weight with cutoff `cutoff` and a Hann window.
+///
+/// `window_radius` is the positive distance from the window's center to its zero.
+/// Callers supply finite distances inside that radius and a cutoff in `(0, 1]`.
+#[must_use]
+#[inline]
+pub fn sinc_hann_weight(distance: f64, cutoff: f64, window_radius: f64) -> f64 {
+    let angle = std::f64::consts::PI * distance * cutoff;
+    let sinc = if angle == 0.0 {
+        cutoff
+    } else {
+        angle.sin() / (std::f64::consts::PI * distance)
+    };
+    let window = (1.0 + (std::f64::consts::PI * distance / window_radius).cos()) * 0.5;
+    sinc * window
+}

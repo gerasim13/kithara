@@ -1,9 +1,10 @@
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroU128};
 
 use kithara_command::{Seq, When};
+use kithara_config::LiveConfig;
 use kithara_render::{LaneCommand, LaneFrame, bridge::DeckPart};
-use kithara_signal::SessionFrame;
-use kithara_warp::SpeedCurve;
+use kithara_signal::{AudioChunkInfo, SessionFrame, SourceSpan};
+use kithara_warp::{SourceTrajectory, SpeedCurve};
 use tracing::warn;
 
 use super::{
@@ -24,17 +25,25 @@ impl<S> Track<S> for PlayerImpl<S> {
         change: TrackSettingsChange,
         at: When<SessionFrame>,
         out: &Outbox<'_, S>,
-    ) -> Result<(), PlayError> {
+    ) -> Result<Option<usize>, PlayError> {
         self.observe(out);
         self.settle_lane();
         if let Some(failure) = self.preparation_failure() {
             return Err(PlayError::Lane(failure));
         }
-        self.configuring(change, at, out).map(drop)
+        self.configuring(change, at, out).map(|(_, cost)| cost)
     }
 
     fn projected(&self) -> TrackSettings {
-        self.settings.projected()
+        let mut settings = self.settings.projected();
+        if let Some((_, target)) = self
+            .loading
+            .as_ref()
+            .and_then(|loading| loading.speed.as_ref())
+        {
+            settings.apply_change(TrackSettingsChange::Speed(*target));
+        }
+        settings
     }
 
     fn prepared_speed(&self) -> Option<&SpeedCurve> {
@@ -156,7 +165,7 @@ impl<S> Track<S> for PlayerImpl<S> {
             .frame
             .checked_add(elapsed)
             .ok_or(PlayError::Untimed)?;
-        let commands = self.planned_changes(mark)?;
+        let commands = self.planned_changes(mark.lane.segment, true)?;
         let base = SpeedCurve::Constant(self.segment_speed);
         let mut curve = &base;
         let mut origin = f64::from(self.segment_speed);
@@ -215,60 +224,70 @@ impl<S> Track<S> for PlayerImpl<S> {
             return Ok(None);
         }
         let mark = self.mark.ok_or(PlayError::Untimed)?;
-        if mark.lane.segment != self.segment {
+        let source = self.observed_source.ok_or(PlayError::Untimed)?;
+        if mark.lane.segment != self.segment || source.segment != self.segment {
             return Err(PlayError::Untimed);
         }
-        let commands = self.planned_changes(mark)?;
-        let base = SpeedCurve::Constant(self.segment_speed);
-        let mut curve = &base;
-        let mut origin = f64::from(self.segment_speed);
-        let mut start = 0;
-        let mut cursor = mark.lane.frame;
-        let rate = f64::from(sample_rate.get());
-        let mut position = mark.position.as_secs_f64();
-        for (frame, _, change) in commands {
-            if frame > cursor {
-                let remaining = (endpoint.as_secs_f64() - position).max(0.0) * rate;
-                if let Some(offset) = curve_end(
-                    curve,
-                    origin,
-                    cursor.saturating_sub(start),
-                    remaining,
-                    Some(frame.saturating_sub(start)),
-                )? {
-                    let end = start.checked_add(offset).ok_or(PlayError::Untimed)?;
-                    return session_at(
-                        mark,
-                        LaneFrame {
-                            segment: self.segment,
-                            frame: end,
-                        },
-                    )
-                    .map(Some)
-                    .ok_or(PlayError::Untimed);
-                }
-                position += curve_area(
-                    curve,
-                    origin,
-                    cursor.saturating_sub(start),
-                    frame.saturating_sub(start),
-                )? / rate;
-                cursor = frame;
-            }
-            match change {
-                PlannedChange::Speed(next) => {
-                    origin = curve_speed(curve, origin, frame.saturating_sub(start))?;
-                    start = frame;
-                    curve = next;
-                }
-                PlannedChange::Jump(to) if frame > mark.lane.frame => position = to.as_secs_f64(),
-                PlannedChange::Jump(_) => {}
-            }
-        }
-        let remaining = (endpoint.as_secs_f64() - position).max(0.0) * rate;
-        let offset = curve_end(curve, origin, cursor.saturating_sub(start), remaining, None)?
+        let span = kithara_audio::source_geometry(&source)
+            .map_err(|error| PlayError::Internal(error.to_string()))?;
+        let offset = mark
+            .lane
+            .frame
+            .checked_sub(source.lane_frame)
+            .filter(|offset| *offset <= span.output_frames())
             .ok_or(PlayError::Untimed)?;
-        let end = start.checked_add(offset).ok_or(PlayError::Untimed)?;
+        if span.position_at(offset) != Some(mark.position)
+            || span.render_revision() != source.render_revision
+            || span.mapping_revision() != source.mapping_revision
+        {
+            return Err(PlayError::Untimed);
+        }
+        let basis = self.source_basis.ok_or(PlayError::Untimed)?;
+        let endpoint = source_endpoint(basis, endpoint, sample_rate)?;
+        let commands = self.planned_changes(mark.lane.segment, true)?;
+        let mut trajectory = SourceTrajectory::new(self.segment_speed);
+        let mut cursor = 0;
+        for (at, _, change) in commands.iter().filter(|(at, _, _)| *at <= mark.lane.frame) {
+            trajectory
+                .advance_by(0, sample_rate, at - cursor)
+                .map_err(|error| PlayError::Internal(error.to_string()))?;
+            cursor = *at;
+            project_change(&mut trajectory, change, basis, sample_rate)?;
+        }
+        trajectory
+            .advance_by(0, sample_rate, mark.lane.frame - cursor)
+            .map_err(|error| PlayError::Internal(error.to_string()))?;
+        trajectory
+            .reanchor(0, sample_rate, source_ratio(span, offset, sample_rate)?)
+            .map_err(|error| PlayError::Internal(error.to_string()))?;
+        cursor = mark.lane.frame;
+        for (at, _, change) in commands.iter().filter(|(at, _, _)| *at > mark.lane.frame) {
+            if let Some(offset) = trajectory
+                .first_at_or_after(0, sample_rate, endpoint, Some(at - cursor))
+                .map_err(|error| PlayError::Internal(error.to_string()))?
+            {
+                let end = cursor.checked_add(offset).ok_or(PlayError::Untimed)?;
+                return session_at(
+                    mark,
+                    LaneFrame {
+                        segment: self.segment,
+                        frame: end,
+                    },
+                )
+                .map(Some)
+                .ok_or(PlayError::Untimed);
+            }
+            trajectory
+                .advance_by(0, sample_rate, at - cursor)
+                .map_err(|error| PlayError::Internal(error.to_string()))?;
+            cursor = *at;
+            project_change(&mut trajectory, change, basis, sample_rate)?;
+        }
+        let offset = trajectory
+            .first_at_or_after(0, sample_rate, endpoint, None)
+            .map_err(|error| PlayError::Internal(error.to_string()))?
+            .ok_or(PlayError::Untimed)?;
+        let end = cursor.checked_add(offset).ok_or(PlayError::Untimed)?;
         session_at(
             mark,
             LaneFrame {
@@ -324,4 +343,61 @@ impl<S> Track<S> for PlayerImpl<S> {
         self.segment_with(position, None, speed, out)?;
         Ok(self.lane_commands.last().map(|operation| operation.seq))
     }
+}
+
+fn source_ratio(
+    span: SourceSpan,
+    offset: u64,
+    rate: NonZeroU32,
+) -> Result<(u128, NonZeroU128), PlayError> {
+    span.scaled_from(
+        (0, NonZeroU128::MIN),
+        (0, NonZeroU128::MIN),
+        (
+            u128::from(rate.get()),
+            NonZeroU128::from(span.sample_rate()),
+        ),
+    )
+    .and_then(|span| span.source_ratio_at(offset))
+    .ok_or(PlayError::Untimed)
+}
+
+fn source_endpoint(
+    basis: AudioChunkInfo,
+    endpoint: Position,
+    rate: NonZeroU32,
+) -> Result<(u128, NonZeroU128), PlayError> {
+    let (numerator, denominator) = kithara_audio::source_lattice_position(&basis, endpoint)
+        .map_err(|error| PlayError::Internal(error.to_string()))?;
+    let point = SourceSpan::try_from((
+        numerator,
+        denominator.get(),
+        denominator,
+        basis.spec.sample_rate,
+        1,
+    ))
+    .map_err(|()| PlayError::Untimed)?;
+    source_ratio(point, 0, rate)
+}
+
+fn project_change(
+    trajectory: &mut SourceTrajectory,
+    change: &PlannedChange<'_>,
+    basis: AudioChunkInfo,
+    sample_rate: NonZeroU32,
+) -> Result<(), PlayError> {
+    match change {
+        PlannedChange::Speed(next) => {
+            trajectory
+                .replace((*next).clone())
+                .map_err(|error| PlayError::Internal(error.to_string()))?;
+        }
+        PlannedChange::Jump(to) => {
+            trajectory.reset();
+            trajectory
+                .reanchor(0, sample_rate, source_endpoint(basis, *to, sample_rate)?)
+                .map_err(|error| PlayError::Internal(error.to_string()))?;
+        }
+    }
+    Ok(())
 }

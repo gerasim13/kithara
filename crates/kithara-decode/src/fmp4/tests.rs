@@ -728,22 +728,41 @@ fn decode_all_aac(
     pools: &PoolRegion<TestPools>,
 ) -> Vec<f32> {
     let mut out_pcm = Vec::new();
-    for &(offset, size) in ranges {
+    for (index, &(offset, size)) in ranges.iter().enumerate() {
         let frame_data = &seg[offset..offset + size];
         let mut buf = pools.get::<f32>();
         codec
-            .decode_frame(frame_data, Duration::ZERO, &[], &mut buf)
+            .decode_frame(
+                crate::demuxer::Frame {
+                    data: frame_data,
+                    pts: codec
+                        .spec()
+                        .duration_for(index as u64 * 1_024)
+                        .expect("AAC packet position"),
+                    duration: codec
+                        .spec()
+                        .duration_for(1_024)
+                        .expect("AAC packet duration"),
+                    packet_desc: &[],
+                },
+                crate::demuxer::PacketMetadata::default(),
+                &mut buf,
+            )
             .expect("BUG: decode AAC frame");
+        if out_pcm.is_empty() && !buf.is_empty() {
+            assert_eq!(codec.decoded_pts(), Some(Duration::ZERO));
+        }
         out_pcm.extend_from_slice(&buf[..]);
+        while codec.has_output() {
+            codec
+                .take_output(&mut buf)
+                .expect("remaining AAC presentation interval");
+            out_pcm.extend_from_slice(&buf);
+        }
     }
     out_pcm
 }
 
-/// R-tovec: the zero-copy `PacketRef`/`decode_ref` entry must produce
-/// PCM bit-identical to the owning `Packet::new(.., to_vec())` path it
-/// replaces. Two independent decoder passes over the same real AAC
-/// access units must yield byte-for-byte equal interleaved f32 PCM —
-/// pro-DJ zero tolerance for sample drift.
 #[cfg(feature = "symphonia")]
 #[kithara::test]
 fn symphonia_aac_decode_is_bit_identical_across_passes(aac_init: Vec<u8>, aac_segment: Vec<u8>) {
@@ -752,7 +771,68 @@ fn symphonia_aac_decode_is_bit_identical_across_passes(aac_init: Vec<u8>, aac_se
     let pcm_a = decode_all_aac(&mut codec_a, &seg, &ranges, &pools);
 
     let (mut codec_b, _, _) = aac_codec_and_frames(&aac_init, &aac_segment);
-    let pcm_b = decode_all_aac(&mut codec_b, &seg, &ranges, &pools);
+    let mut pcm_b = Vec::new();
+    for (index, &(offset, size)) in ranges.iter().enumerate() {
+        let packet = index as u64 * 1_024;
+        let position = packet + if packet >= 10_240 { 4_096 } else { 0 };
+        let mut buf = pools.get::<f32>();
+        let mut output = codec_b
+            .decode_frame(
+                crate::demuxer::Frame {
+                    data: &seg[offset..offset + size],
+                    pts: codec_b
+                        .spec()
+                        .duration_for(position)
+                        .expect("gapped packet position"),
+                    duration: codec_b.spec().duration_for(1_024).expect("packet duration"),
+                    packet_desc: &[],
+                },
+                crate::demuxer::PacketMetadata {
+                    segment_index: Some(u32::try_from(index / 8).expect("fixture segment")),
+                    variant_index: Some(7),
+                    source_bytes: u64::try_from(size).expect("fixture packet bytes"),
+                },
+                &mut buf,
+            )
+            .expect("decode AAC with a presentation gap");
+        loop {
+            if output.frames > 0 {
+                let produced = pcm_b.len() as u64 / 2;
+                let packet_index = usize::try_from(produced / 1_024).expect("source packet index");
+                assert_eq!(
+                    output.metadata.segment_index,
+                    Some(u32::try_from(packet_index / 8).expect("source segment"))
+                );
+                assert_eq!(output.metadata.variant_index, Some(7));
+                let expected_bytes = if produced.is_multiple_of(1_024) {
+                    u64::try_from(ranges[packet_index].1).expect("source packet bytes")
+                } else {
+                    0
+                };
+                assert_eq!(
+                    output.metadata.source_bytes, expected_bytes,
+                    "encoded packet bytes are charged once to their source interval"
+                );
+                let expected = produced + if produced >= 10_240 { 4_096 } else { 0 };
+                assert_eq!(
+                    codec_b.decoded_pts(),
+                    Some(
+                        codec_b
+                            .spec()
+                            .duration_for(expected)
+                            .expect("gapped PCM position")
+                    )
+                );
+                pcm_b.extend_from_slice(&buf);
+            }
+            if !codec_b.has_output() {
+                break;
+            }
+            output = codec_b
+                .take_output(&mut buf)
+                .expect("drain gapped AAC buffer");
+        }
+    }
 
     assert!(!pcm_a.is_empty(), "decode produced no PCM");
     assert_eq!(
@@ -768,11 +848,33 @@ fn symphonia_aac_warm_decode_keeps_pool_bytes_stable(aac_init: Vec<u8>, aac_segm
     let (mut codec, seg, ranges) = aac_codec_and_frames(&aac_init, &aac_segment);
     assert!(!ranges.is_empty(), "segment yielded no AAC frames");
 
+    let mut packet_frame = 0;
     for &(offset, size) in ranges.iter().take(8) {
         let mut buf = pools.get::<f32>();
         codec
-            .decode_frame(&seg[offset..offset + size], Duration::ZERO, &[], &mut buf)
+            .decode_frame(
+                crate::demuxer::Frame {
+                    data: &seg[offset..offset + size],
+                    pts: codec
+                        .spec()
+                        .duration_for(packet_frame)
+                        .expect("AAC packet position"),
+                    duration: codec
+                        .spec()
+                        .duration_for(1_024)
+                        .expect("AAC packet duration"),
+                    packet_desc: &[],
+                },
+                crate::demuxer::PacketMetadata::default(),
+                &mut buf,
+            )
             .expect("BUG: warm-up decode");
+        while codec.has_output() {
+            codec
+                .take_output(&mut buf)
+                .expect("warm-up buffered AAC output");
+        }
+        packet_frame += 1_024;
     }
     let warm_bytes = pools.stats().allocated_bytes;
 
@@ -780,8 +882,29 @@ fn symphonia_aac_warm_decode_keeps_pool_bytes_stable(aac_init: Vec<u8>, aac_segm
         for &(offset, size) in &ranges {
             let mut buf = pools.get::<f32>();
             codec
-                .decode_frame(&seg[offset..offset + size], Duration::ZERO, &[], &mut buf)
+                .decode_frame(
+                    crate::demuxer::Frame {
+                        data: &seg[offset..offset + size],
+                        pts: codec
+                            .spec()
+                            .duration_for(packet_frame)
+                            .expect("AAC packet position"),
+                        duration: codec
+                            .spec()
+                            .duration_for(1_024)
+                            .expect("AAC packet duration"),
+                        packet_desc: &[],
+                    },
+                    crate::demuxer::PacketMetadata::default(),
+                    &mut buf,
+                )
                 .expect("BUG: warm decode");
+            while codec.has_output() {
+                codec
+                    .take_output(&mut buf)
+                    .expect("warm buffered AAC output");
+            }
+            packet_frame += 1_024;
         }
     }
 
@@ -815,21 +938,43 @@ fn aac_head_strip_exceeds_the_bias_the_timeline_models(aac_init: Vec<u8>, aac_se
             .duration_for(first_frame + index as u64 * access_unit)
             .expect("packet time");
         let mut buf = pools.get::<f32>();
-        let frames = codec
-            .decode_frame(&seg[offset..offset + size], pts, &[], &mut buf)
-            .expect("BUG: decode AAC frame");
-        if frames > 0 {
-            assert_eq!(
-                codec.decoded_pts(),
-                Some(
-                    codec
+        let mut frames = codec
+            .decode_frame(
+                crate::demuxer::Frame {
+                    data: &seg[offset..offset + size],
+                    pts,
+                    duration: codec
                         .spec()
-                        .duration_for(first_frame + emitted)
-                        .expect("PCM time")
-                ),
-                "packet {index}: PCM is labelled by the frames emitted since the first packet"
-            );
-            emitted += u64::from(frames);
+                        .duration_for(access_unit)
+                        .expect("AAC packet duration"),
+                    packet_desc: &[],
+                },
+                crate::demuxer::PacketMetadata::default(),
+                &mut buf,
+            )
+            .expect("BUG: decode AAC frame")
+            .frames;
+        loop {
+            if frames > 0 {
+                assert_eq!(
+                    codec.decoded_pts(),
+                    Some(
+                        codec
+                            .spec()
+                            .duration_for(first_frame + emitted)
+                            .expect("PCM time")
+                    ),
+                    "packet {index}: PCM is labelled by the frames emitted since the first packet"
+                );
+                emitted += u64::from(frames);
+            }
+            if !codec.has_output() {
+                break;
+            }
+            frames = codec
+                .take_output(&mut buf)
+                .expect("phase-preserving buffered AAC output")
+                .frames;
         }
     }
     let head_strip = supplied.saturating_sub(emitted);
@@ -840,4 +985,53 @@ fn aac_head_strip_exceeds_the_bias_the_timeline_models(aac_init: Vec<u8>, aac_se
          strip={head_strip}, bias={}",
         codec.timestamp_bias_frames()
     );
+    assert_eq!(codec.timestamp_bias_frames(), 0);
+    assert!(codec.needs_eof_drain(codec.spec().sample_rate.get()));
+    let channels = usize::from(codec.spec().channels.max(1));
+    let mut recovered = 0;
+    let mut calls = 0;
+    loop {
+        let mut buf = pools.get::<f32>();
+        let frames = if codec.has_output() {
+            codec.take_output(&mut buf)
+        } else {
+            codec.decode_frame(
+                crate::demuxer::Frame {
+                    data: &[],
+                    pts: Duration::ZERO,
+                    duration: Duration::ZERO,
+                    packet_desc: &[],
+                },
+                crate::demuxer::PacketMetadata::default(),
+                &mut buf,
+            )
+        }
+        .expect("drain delayed AAC PCM")
+        .frames;
+        if frames == 0 {
+            break;
+        }
+        calls += 1;
+        assert!(
+            calls <= 8,
+            "native drain must terminate from its delay budget"
+        );
+        assert_eq!(buf.len(), frames as usize * channels);
+        assert!(buf.iter().all(|sample| sample.is_finite()));
+        assert_eq!(
+            codec.decoded_pts(),
+            Some(
+                codec
+                    .spec()
+                    .duration_for(first_frame + emitted + recovered)
+                    .expect("delayed PCM position")
+            )
+        );
+        recovered += u64::from(frames);
+    }
+    assert_eq!(
+        recovered, head_strip,
+        "EOF must recover all delayed real PCM"
+    );
+    assert_eq!(emitted + recovered, supplied);
 }

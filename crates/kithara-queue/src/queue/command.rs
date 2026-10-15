@@ -407,21 +407,28 @@ where
         if matches!(at, When::At(_)) && !receivers.iter().any(|(_, when)| *when == at) {
             return Err(PlayError::Untimed.into());
         }
+        let current = self.active_current_index();
+        let mut deck_cost = 0;
+        let mut moves_current = false;
         for &(index, when) in &receivers {
-            self.active
+            let cost = self
+                .active
                 .get_mut(index)
                 .ok_or(PlayError::NoActiveSlot)?
                 .track
                 .admit(change, when, out)?;
+            deck_cost += cost.unwrap_or(0);
+            moves_current |= Some(index) == current && cost.is_some();
         }
         for parked in self
             .active
             .parked_iter_mut()
             .filter(|parked| parked.track.snapshot().as_ref().status != PlayingStatus::Released)
         {
-            parked.track.admit(change, When::Next, out)?;
+            deck_cost += parked.track.admit(change, When::Next, out)?.unwrap_or(0);
         }
         let withdraw = matches!(change, TrackSettingsChange::Speed(_))
+            && moves_current
             && self.target.is_some_and(|target| {
                 target.auto
                     && target.stale.is_none()
@@ -434,10 +441,9 @@ where
                         .and_then(|index| self.active.get(index))
                         .is_some_and(|active| matches!(active.role, Role::Incoming))
             });
-        if withdraw && out.deck_available() == 0 {
+        if deck_cost + usize::from(withdraw) > out.deck_available() {
             return Err(PlayError::Full("deck").into());
         }
-        let current = self.active_current_index();
         let mut moved = false;
         for (index, when) in receivers {
             let sent = self

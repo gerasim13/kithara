@@ -14,16 +14,18 @@ use crate::PlayError;
 /// A player of one track: what a queue drives and builds the next track from.
 pub trait Track<S>: Player<S, Command = TrackCommand<S>, Snapshot: AsRef<TrackSnapshot>> {
     /// Checks a configuration change without sending it. Receipt intake may
-    /// change admission before a subsequent apply.
+    /// change admission before a subsequent apply. Some contains the number of
+    /// deck credits its immediate batch needs; None means no immediate batch,
+    /// including unchanged settings and preparation deferred to a load receipt.
     ///
     /// # Errors
-    /// Returns a checked change's refusal, Untimed, Late or Full("lane").
+    /// Returns a checked change's refusal, Untimed, Late or a full lane or deck.
     fn admit(
         &mut self,
         change: TrackSettingsChange,
         at: When<SessionFrame>,
         out: &super::Outbox<'_, S>,
-    ) -> Result<(), PlayError>;
+    ) -> Result<Option<usize>, PlayError>;
 
     /// The settings a track built after this one starts with: the applied ones and the changes still in flight.
     fn projected(&self) -> TrackSettings;

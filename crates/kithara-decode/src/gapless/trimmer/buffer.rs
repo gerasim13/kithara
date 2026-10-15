@@ -98,10 +98,15 @@ fn trim_chunk_start(chunk: &mut AudioChunk, trim_frames: usize) {
     let len = chunk.samples.len();
     chunk.samples.copy_within(trim_samples..len, 0);
     chunk.samples.truncate(len.saturating_sub(trim_samples));
-    chunk.meta.frame_offset = chunk.meta.frame_offset.saturating_add(trim_frames as u64);
+    let original_offset = chunk.meta.frame_offset;
+    chunk.meta.frame_offset = original_offset.saturating_add(trim_frames as u64);
     chunk.meta.frames = u32::try_from(chunk.samples.len() / channels.max(1)).unwrap_or(u32::MAX);
     let trim_duration = spec
-        .duration_for(trim_frames as u64)
+        .duration_for(chunk.meta.frame_offset)
+        .and_then(|end| {
+            spec.duration_for(original_offset)
+                .map(|start| end.saturating_sub(start))
+        })
         .unwrap_or(Duration::from_nanos(u64::MAX));
     chunk.meta.timestamp = chunk.meta.timestamp.saturating_add(trim_duration);
 }

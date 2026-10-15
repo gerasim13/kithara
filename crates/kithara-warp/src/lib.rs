@@ -29,7 +29,7 @@ pub use coordinate::{
 };
 pub(crate) use kithara_signal::{SessionEpoch, SessionFrame};
 #[cfg(feature = "render")]
-pub use render::{WarpRenderError, WarpRenderer};
+pub use render::{SourceTrajectory, WarpRenderError, WarpRenderer};
 pub use segment::{
     BeatEvidence, BeatMarker, BeatsPerMinute, BeatsPerMinuteError, MapRegion, MapRegionError,
     MapSegment, Meter, MeterError, MeterFacts, SegmentEndpoint, SegmentError, SegmentFacts,

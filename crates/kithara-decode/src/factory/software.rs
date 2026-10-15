@@ -66,10 +66,15 @@ where
         "file-symphonia: dispatching to ComposedDecoder<SymphoniaDemuxer, SymphoniaCodec>"
     );
 
-    let probed_gapless = if config.gapless {
+    let probed_gapless = if config.gapless && container != Some(ContainerFormat::Mp4) {
         scoped_probe(&mut *source, codec, &config.pools)?
     } else {
         None
+    };
+    let presentations = if container == Some(ContainerFormat::Mp4) {
+        crate::mp4::probe_presentations(&mut *source, &config.pools)?
+    } else {
+        Vec::new()
     };
 
     let (mut demuxer, _byte_len) = SymphoniaDemuxer::open_file(
@@ -84,6 +89,7 @@ where
     if probed_gapless.is_some() {
         demuxer.set_gapless(probed_gapless);
     }
+    demuxer.set_mp4_presentations(presentations, config.gapless);
     let symphonia_config = SymphoniaConfig::builder().gapless(config.gapless).build();
     let codec_impl = if SymphoniaCodec::supports(codec) {
         SymphoniaCodec::open_with_config(demuxer.track_info(), &symphonia_config)?

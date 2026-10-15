@@ -1,6 +1,8 @@
 mod core;
 mod mapping;
+mod projection;
 mod state;
 
 use state::Phase;
-pub(super) use state::{Fraction, Trajectory};
+pub use state::SourceTrajectory;
+pub(super) use state::{Fraction, SourceTrajectory as Trajectory};

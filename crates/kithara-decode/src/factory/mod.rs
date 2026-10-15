@@ -19,3 +19,5 @@ pub use config::{DecoderConfig, DecoderResamplerConfig};
 pub use inner::{DecoderBackend, DecoderFactory};
 #[cfg(feature = "symphonia")]
 pub(crate) use probe::skip_id3_tags;
+#[cfg(apple_backend)]
+pub(crate) use probe::wav_data_range;

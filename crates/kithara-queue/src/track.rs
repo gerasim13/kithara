@@ -349,7 +349,8 @@ where
             .collect()
     }
 
-    /// Set `record.status` and record [`QueueEvent::TrackStatusChanged`].
+    /// Set `record.status` and record [`QueueEvent::TrackStatusChanged`] when
+    /// it differs from the status the track had.
     /// `Cancelled` also aborts the track's live load: a cancelled track never
     /// keeps loading.
     /// No-op when `id` is not present (caller raced `Queue::remove`).
@@ -357,13 +358,16 @@ where
         let Some(record) = self.record_mut(id) else {
             return;
         };
+        let changed = record.status != status;
         record.status = status.clone();
         let aborted = matches!(status, TrackStatus::Cancelled)
             .then(|| record.load.take())
             .flatten();
         drop(aborted);
-        self.events
-            .push(QueueEvent::TrackStatusChanged { id, status });
+        if changed {
+            self.events
+                .push(QueueEvent::TrackStatusChanged { id, status });
+        }
     }
 
     /// Cancel every live load: the queue closed, and nothing it loads is
@@ -717,6 +721,25 @@ mod tests {
         assert_eq!(
             status(&tracks),
             TrackStatus::Failed(refusal("boom").to_string())
+        );
+    }
+
+    #[kithara::test]
+    fn a_track_status_is_announced_only_when_it_changes() {
+        let mut tracks = tracks_with(TrackId(1));
+        tracks.fail(TrackId(1), &refusal("boom"));
+        tracks.fail(TrackId(1), &refusal("boom"));
+        tracks.fail(TrackId(1), &refusal("bust"));
+        let announced: Vec<_> = tracks.drain_events().collect();
+        assert!(
+            matches!(
+                announced.as_slice(),
+                [
+                    QueueEvent::TrackStatusChanged { status: TrackStatus::Failed(first), .. },
+                    QueueEvent::TrackStatusChanged { status: TrackStatus::Failed(second), .. },
+                ] if *first == refusal("boom").to_string() && *second == refusal("bust").to_string()
+            ),
+            "{announced:?}"
         );
     }
 

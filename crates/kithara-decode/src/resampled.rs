@@ -221,12 +221,11 @@ where
     }
 
     fn expected_output_frames(&self) -> u64 {
-        let source_rate = self.source_spec.sample_rate.get();
-        let expected = u128::from(self.source_frames_seen)
-            .saturating_mul(u128::from(self.config.target_sample_rate.get()))
-            .saturating_add(u128::from(source_rate / 2))
-            / u128::from(source_rate);
-        u64::try_from(expected).unwrap_or(u64::MAX)
+        round_scaled_frames_lossy(
+            self.source_frames_seen,
+            self.source_spec.sample_rate.get(),
+            self.config.target_sample_rate.get(),
+        )
     }
 
     fn finish_output(&mut self) -> DecodeResult<Option<AudioChunk>> {
@@ -401,6 +400,40 @@ where
         BlenderProfile::new(self.target_spec)
     }
 
+    fn duration(&self) -> Option<crate::DecoderDuration> {
+        let declared = self.decoder.duration()?;
+        let native_frames = match declared {
+            crate::DecoderDuration::RawLength(length) => self.source_spec.frame_at(length).ok()?,
+            crate::DecoderDuration::MediaEnd(end) => {
+                let raw_end = self.decoder.media_origin()?.checked_add(end)?;
+                let origin = self.decoder.initial_pcm_origin()?.position();
+                self.source_spec
+                    .frame_at(raw_end.checked_sub(origin)?)
+                    .ok()?
+            }
+        };
+        let output_frames = round_scaled_frames(
+            native_frames,
+            self.source_spec.sample_rate.get(),
+            self.target_spec.sample_rate.get(),
+        )
+        .ok()?;
+        Some(match declared {
+            crate::DecoderDuration::RawLength(_) => crate::DecoderDuration::RawLength(
+                self.target_spec.duration_for(output_frames).ok()?,
+            ),
+            crate::DecoderDuration::MediaEnd(_) => {
+                let origin = self.initial_pcm_origin?.position();
+                let first = self.target_spec.frame_at(origin).ok()?;
+                let end = self
+                    .target_spec
+                    .duration_for(first.checked_add(output_frames)?)
+                    .ok()?;
+                crate::DecoderDuration::MediaEnd(end.checked_sub(self.decoder.media_origin()?)?)
+            }
+        })
+    }
+
     fn default_priming_frames(&self, codec: AudioCodec) -> u64 {
         let source = self.decoder.default_priming_frames(codec);
         round_scaled_frames_lossy(
@@ -435,7 +468,6 @@ where
 
     delegate::delegate! {
         to self.decoder {
-            fn duration(&self) -> Option<crate::DecoderDuration>;
             fn flush_reader_signals(&mut self);
             fn metadata(&self) -> TrackMetadata;
             fn update_byte_len(&self, len: u64);
@@ -647,6 +679,10 @@ mod origin_tests {
     }
 
     struct OffsetDecoder {
+        rate: NonZeroU32,
+        length: u64,
+        declared: crate::DecoderDuration,
+        media_origin: Option<Duration>,
         origin: u64,
         next_frame: u64,
         original: Option<PcmOrigin>,
@@ -659,13 +695,16 @@ mod origin_tests {
             self.original
         }
         fn duration(&self) -> Option<crate::DecoderDuration> {
-            Some(crate::DecoderDuration::RawLength(Duration::from_secs(60)))
+            Some(self.declared)
+        }
+        fn media_origin(&self) -> Option<Duration> {
+            self.media_origin
         }
         fn spec(&self) -> AudioSpec {
-            AudioSpec::new(1, NonZeroU32::new(1_000).expect("source rate"))
+            AudioSpec::new(1, self.rate)
         }
         fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
-            let end = self.origin + 1_000;
+            let end = self.origin + self.length;
             if self.next_frame == end {
                 return Ok(DecoderChunkOutcome::Eof);
             }
@@ -700,7 +739,7 @@ mod origin_tests {
                 self.observing_original = false;
             }
             let frame = self.spec().frame_at(position)?.max(self.origin);
-            assert!((self.origin..self.origin + 1_000).contains(&frame));
+            assert!((self.origin..self.origin + self.length).contains(&frame));
             self.next_frame = frame;
             Ok(DecoderSeekOutcome::Landed {
                 landed_at: self.spec().duration_for(frame)?,
@@ -800,6 +839,10 @@ mod origin_tests {
     ) {
         let pools = pools();
         let source = OffsetDecoder {
+            rate: NonZeroU32::new(1_000).expect("source rate"),
+            length: 1_000,
+            declared: crate::DecoderDuration::RawLength(Duration::from_secs(60)),
+            media_origin: None,
             origin,
             next_frame: origin,
             original: reports_origin.then(|| {
@@ -872,10 +915,15 @@ mod origin_tests {
     }
     #[cfg(feature = "resample-rubato")]
     #[kithara::test]
+    #[kithara::hang_watchdog]
     fn original_resampled_basis_retains_exact_time_under_output_clock_rounding() {
         let pools = pools();
         let original = PcmOrigin::new(Duration::from_millis(701), Duration::from_millis(701));
         let source = OffsetDecoder {
+            rate: NonZeroU32::new(1_000).expect("source rate"),
+            length: 1_000,
+            declared: crate::DecoderDuration::RawLength(Duration::from_secs(60)),
+            media_origin: None,
             origin: 701,
             next_frame: 701,
             original: Some(original),
@@ -899,6 +947,77 @@ mod origin_tests {
         let chunk = first_pcm(&mut decoder);
         assert!(chunk.meta.timestamp >= Duration::from_millis(900));
         assert_eq!(decoder.initial_pcm_origin(), Some(before));
+        let native_rate = NonZeroU32::new(44_100).expect("native rate");
+        let native = AudioSpec::new(1, native_rate);
+        let origin = native.duration_for(1).expect("nonzero native origin");
+        let length = native.duration_for(44_105).expect("native length");
+        for declared in [
+            crate::DecoderDuration::RawLength(length),
+            crate::DecoderDuration::MediaEnd(length),
+        ] {
+            let source = OffsetDecoder {
+                rate: native_rate,
+                length: 44_105,
+                declared,
+                media_origin: Some(origin),
+                origin: 1,
+                next_frame: 1,
+                original: Some(PcmOrigin::new(origin, origin)),
+                observing_original: false,
+                pools: pools.clone(),
+            };
+            let config = DecoderResamplerConfig::builder()
+                .target_sample_rate(NonZeroU32::new(48_000).expect("actual output rate"))
+                .backend(RubatoBackend::new())
+                .build();
+            let mut decoder =
+                ResampledDecoder::new(Box::new(source), config, &pools).expect("actual resampler");
+            let first = first_pcm(&mut decoder);
+            assert_eq!(first.meta.frame_offset, 1);
+            assert!(
+                !decoder.eof_flushed,
+                "the declaration must be exact before natural EOF"
+            );
+            assert_eq!(decoder.media_origin(), Some(origin));
+            let physical_origin = decoder
+                .initial_pcm_origin()
+                .expect("actual output origin")
+                .position();
+            let declared_end = match decoder.duration().expect("mapped output declaration") {
+                crate::DecoderDuration::RawLength(length) => physical_origin + length,
+                crate::DecoderDuration::MediaEnd(end) => origin + end,
+            };
+            assert_eq!(
+                decoder
+                    .spec()
+                    .frame_at(declared_end)
+                    .expect("declared physical endpoint"),
+                48_006
+            );
+            let mut output_frames = u64::from(first.meta.frames);
+            let mut endpoint = first.meta.frame_range().end;
+            loop {
+                hang_tick!();
+                match decoder.next_chunk().expect("actual resampled output") {
+                    DecoderChunkOutcome::Chunk(chunk) => {
+                        output_frames += u64::from(chunk.meta.frames);
+                        endpoint = chunk.meta.frame_range().end;
+                        hang_reset!();
+                    }
+                    DecoderChunkOutcome::Pending(_) => {}
+                    DecoderChunkOutcome::Eof => break,
+                }
+            }
+            assert_eq!(output_frames, 48_005);
+            assert_eq!(endpoint, 48_006);
+            assert_eq!(
+                decoder
+                    .spec()
+                    .frame_at(declared_end)
+                    .expect("same early declaration"),
+                endpoint
+            );
+        }
     }
 
     #[cfg(feature = "resample-rubato")]
@@ -911,6 +1030,10 @@ mod origin_tests {
     ) {
         let pools = pools();
         let source = OffsetDecoder {
+            rate: NonZeroU32::new(1_000).expect("source rate"),
+            length: 1_000,
+            declared: crate::DecoderDuration::RawLength(Duration::from_secs(60)),
+            media_origin: None,
             origin: 701,
             next_frame: 701,
             original: Some(PcmOrigin::new(

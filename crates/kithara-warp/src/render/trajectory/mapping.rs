@@ -10,6 +10,7 @@ use crate::SpeedCurve;
 impl Phase {
     pub(super) fn ratio(self) -> Option<Fraction> {
         match self {
+            Self::Exact(position) => Some(position),
             Self::Origin { frames, fraction } => Fraction::new(
                 (u128::from(frames) << 32) + u128::from(fraction),
                 1u128 << 32,
@@ -35,7 +36,8 @@ impl Phase {
 }
 
 impl Trajectory {
-    pub(in crate::render) fn reset(&mut self) {
+    /// Discards source phase after a discontinuity while retaining the running law.
+    pub fn reset(&mut self) {
         self.position = None;
         self.curve_origin = None;
     }
@@ -96,6 +98,10 @@ impl Trajectory {
         .ok_or(ElasticError::SampleCountOverflow)
     }
 
+    /// Projects an output boundary through the renderer's exact source law.
+    ///
+    /// # Errors
+    /// Returns an error for unrepresentable source or output coordinates.
     pub(in crate::render) fn at_offset(
         &self,
         start: u64,
@@ -139,8 +145,12 @@ impl Trajectory {
         Ok((position.numerator, position.denominator))
     }
 
+    /// Advances the accepted law across its own segment boundaries.
+    ///
+    /// # Errors
+    /// Returns an error for unrepresentable source or output coordinates.
     #[kithara_test_macros::hang_watchdog]
-    pub(in crate::render) fn advance_by(
+    pub fn advance_by(
         &mut self,
         start: u64,
         rate: NonZeroU32,
@@ -149,10 +159,8 @@ impl Trajectory {
         let mut remaining = offset;
         while remaining > 0 {
             hang_tick!();
-            let frames = self.output_limit(
-                usize::try_from(remaining).map_err(|_| ElasticError::SampleCountOverflow)?,
-            );
-            let span = self.span(start, rate, frames)?;
+            let frames = self.output_limit(remaining);
+            let span = self.source_span(start, rate, frames)?;
             self.advance(span)?;
             remaining -= span.output_frames();
             hang_reset!();
@@ -165,6 +173,19 @@ impl Trajectory {
         start: u64,
         sample_rate: NonZeroU32,
         frames: usize,
+    ) -> Result<SourceSpan, ElasticError> {
+        self.source_span(
+            start,
+            sample_rate,
+            u64::try_from(frames).map_err(|_| ElasticError::SampleCountOverflow)?,
+        )
+    }
+
+    pub(super) fn source_span(
+        &self,
+        start: u64,
+        sample_rate: NonZeroU32,
+        frames: u64,
     ) -> Result<SourceSpan, ElasticError> {
         if self.approach_at(self.elapsed).is_some() {
             return self.approach_span(start, sample_rate, self.elapsed, self.output_limit(frames));
@@ -233,7 +254,7 @@ impl Trajectory {
             change,
             NonZeroU128::new(denominator).ok_or(ElasticError::SampleCountOverflow)?,
             sample_rate,
-            u64::try_from(frames).map_err(|_| ElasticError::SampleCountOverflow)?,
+            frames,
         ))
         .ok()
         .ok_or(ElasticError::SampleCountOverflow)
@@ -244,7 +265,7 @@ impl Trajectory {
         start: u64,
         sample_rate: NonZeroU32,
         elapsed: u64,
-        frames: usize,
+        frames: u64,
     ) -> Result<SourceSpan, ElasticError> {
         let (curve, segment) = self
             .approach_at(elapsed)
@@ -274,7 +295,7 @@ impl Trajectory {
                 .checked_sub(basis)
                 .ok_or(ElasticError::SampleCountOverflow)?,
             sample_rate,
-            u64::try_from(frames).map_err(|_| ElasticError::SampleCountOverflow)?,
+            frames,
         )
         .ok_or(ElasticError::SampleCountOverflow)
     }

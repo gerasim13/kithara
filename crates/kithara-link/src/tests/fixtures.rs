@@ -390,8 +390,8 @@ impl Track<TestPools> for ScriptedTrack {
         _change: TrackSettingsChange,
         _at: When<SessionFrame>,
         _out: &Outbox<'_, TestPools>,
-    ) -> Result<(), PlayError> {
-        Ok(())
+    ) -> Result<Option<usize>, PlayError> {
+        Ok(Some(0))
     }
 
     fn projected(&self) -> TrackSettings {

@@ -494,7 +494,9 @@ async fn target_rebuild_keeps_player_output_continuous(
     let switched_silence = longest_silent_run(&switched.samples);
     assert!(
         switched_silence <= control_silence.saturating_add(MAX_EXTRA_SILENT_FRAMES),
-        "{label} inserted an audible silent gap: switched={switched_silence} frames, control={control_silence} frames, target_delay_ms={delay_ms}",
+        "{label} inserted an audible silent gap: switched={switched_silence} frames, control={control_silence} frames, target_delay_ms={delay_ms}; switched: {}; control: {}",
+        switched.silence_diagnostic(),
+        control.silence_diagnostic(),
     );
     let control_buckets = cochlea_silent_buckets(&control.samples);
     let switched_buckets = cochlea_silent_buckets(&switched.samples);

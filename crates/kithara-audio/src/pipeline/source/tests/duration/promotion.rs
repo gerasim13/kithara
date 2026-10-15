@@ -339,7 +339,7 @@ async fn promotion_seals_a_retained_source_mapping_before_native_incoming_pcm(
                     offset: 0,
                     cause: RecreateCause::HostRateChange,
                 },
-                Some(landing),
+                Some(crate::pipeline::seek::ResumeTarget::Source(landing)),
             )
             .expect("same-rate retained identity mapping");
     } else {

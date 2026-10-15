@@ -153,6 +153,7 @@ impl AsRef<Self> for TrackSnapshot {
 pub(super) struct Loading {
     pub(super) seq: Seq,
     pub(super) opened: Option<OpenedTrack>,
+    pub(super) speed: Option<(SpeedCurve, f32)>,
 }
 
 pub(super) struct Adoption {

@@ -221,7 +221,13 @@ async fn decoded_only_resume_preserves_the_real_source_mapping() {
         .source_span
         .expect("real route-recreated mapping");
     let mut cursor = crate::pipeline::decode::resume::ResumeCursor::default();
-    cursor.record(&mapped);
+    cursor.record(
+        &mapped,
+        source
+            .native_pcm_basis()
+            .expect("actual pre-rebase PCM facts")
+            .end_timestamp,
+    );
     assert_eq!(
         cursor.decode_head(),
         Some((mapped.meta.frame_range().end, 2_000))

@@ -63,20 +63,13 @@ pub(super) fn source_sample(
     let mut weights = 0.0;
     for offset in -radius..=radius {
         let distance = offset.to_f64().ok_or(ElasticError::SampleCountOverflow)? - fraction;
-        let angle = std::f64::consts::PI * distance * cutoff;
-        let sinc = if angle == 0.0 {
-            cutoff
-        } else {
-            angle.sin() / (std::f64::consts::PI * distance)
-        };
-        let window = (1.0
-            + (std::f64::consts::PI * distance
-                / (radius + 1)
-                    .to_f64()
-                    .ok_or(ElasticError::SampleCountOverflow)?)
-            .cos())
-            * 0.5;
-        let weight = sinc * window;
+        let weight = kithara_dsp::interp::sinc_hann_weight(
+            distance,
+            cutoff,
+            (radius + 1)
+                .to_f64()
+                .ok_or(ElasticError::SampleCountOverflow)?,
+        );
         total += f64::from(sample(offset)?) * weight;
         weights += weight;
     }

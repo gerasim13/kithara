@@ -627,6 +627,22 @@ where
 {
     type Chunk = AudioChunk;
 
+    delegate::delegate! {
+        to self.source {
+            fn commit_source_end(&mut self, source_end: SourceEnd, meta: AudioChunkInfo);
+            fn seek(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError>;
+            fn set_host_sample_rate(&mut self, rate: NonZeroU32);
+            fn host_sample_rate(&self) -> Option<NonZeroU32>;
+            fn media_origin(&self) -> Option<Duration>;
+            fn visible_origin(&self) -> Option<Duration>;
+            fn media_end(&self) -> Option<Duration>;
+            fn retire_chunk(&self, chunk: AudioChunk);
+            fn finish_deferred(&mut self);
+            fn warm_up(&mut self);
+            fn native_pcm_basis(&self) -> Option<AudioChunkInfo>;
+        }
+    }
+
     fn discontinuity(&self) -> Option<SourceDiscontinuity> {
         self.discontinuity
     }
@@ -700,7 +716,8 @@ where
 
         match self.source.step_track() {
             TrackStep::Produced(Fetch::Data { data, .. }) => {
-                self.lane.observe_input(data.meta);
+                self.lane
+                    .observe_input(data.meta, self.source.native_pcm_basis());
                 if data.spec() == self.spec
                     && self.prepared_frames.is_none()
                     && self
@@ -740,21 +757,6 @@ where
                 TrackStep::StateChanged
             }
             TrackStep::Blocked(reason) => TrackStep::Blocked(reason),
-        }
-    }
-
-    delegate::delegate! {
-        to self.source {
-            fn commit_source_end(&mut self, source_end: SourceEnd, meta: AudioChunkInfo);
-            fn seek(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError>;
-            fn set_host_sample_rate(&mut self, rate: NonZeroU32);
-            fn host_sample_rate(&self) -> Option<NonZeroU32>;
-            fn media_origin(&self) -> Option<Duration>;
-            fn visible_origin(&self) -> Option<Duration>;
-            fn media_end(&self) -> Option<Duration>;
-            fn retire_chunk(&self, chunk: AudioChunk);
-            fn finish_deferred(&mut self);
-            fn warm_up(&mut self);
         }
     }
 }

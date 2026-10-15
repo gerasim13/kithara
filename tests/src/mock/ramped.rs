@@ -115,7 +115,7 @@ impl Player<TestPools> for RampedTrack {
 impl Track<TestPools> for RampedTrack {
     delegate::delegate! {
         to self.inner {
-            fn admit(&mut self, change: TrackSettingsChange, at: When<SessionFrame>, out: &Outbox<'_, TestPools>) -> Result<(), PlayError>;
+            fn admit(&mut self, change: TrackSettingsChange, at: When<SessionFrame>, out: &Outbox<'_, TestPools>) -> Result<Option<usize>, PlayError>;
             fn projected(&self) -> TrackSettings;
             fn prepared_speed(&self) -> Option<&SpeedCurve>;
             fn prepare_entry(&mut self, at: SessionFrame, out: &mut Outbox<'_, TestPools>) -> Result<bool, PlayError>;

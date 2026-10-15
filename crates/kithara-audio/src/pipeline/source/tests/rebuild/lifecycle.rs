@@ -376,7 +376,10 @@ async fn format_boundary_rebuild_rebases_decode_head_to_rendered_source(route_pc
     source
         .install_replacement(
             recreate_state(1),
-            Some(SourceEnd::new(rendered_frame, chunk.meta.spec.sample_rate)),
+            Some(crate::pipeline::seek::ResumeTarget::Source(SourceEnd::new(
+                rendered_frame,
+                chunk.meta.spec.sample_rate,
+            ))),
         )
         .expect("replacement at rendered frontier");
     assert!(matches!(

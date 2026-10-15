@@ -10,7 +10,7 @@ use kithara_decode::{
     GaplessMode, GaplessProfile, PcmOrigin,
 };
 use kithara_platform::time::Duration;
-use kithara_signal::{AudioChunk, AudioSpec};
+use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_stream::{ConstructionGate, MediaInfo};
 use kithara_test_utils::kithara;
 use tracing::warn;
@@ -78,6 +78,8 @@ pub(crate) struct DecoderGeneration {
     /// transition cannot reinterpret the new active generation on a smaller
     /// origin.
     timeline_gap_floor: u64,
+    #[field(get, vis = "pub(crate)", copy)]
+    native_pcm_basis: Option<AudioChunkInfo>,
     media_origin: Option<Duration>,
     visible_origin: Option<Duration>,
     comparison_base: Option<Duration>,
@@ -92,6 +94,14 @@ pub(crate) struct DecoderGeneration {
 }
 
 impl DecoderGeneration {
+    pub(crate) fn observe_native_pcm(&mut self, info: AudioChunkInfo) -> AudioChunkInfo {
+        let basis = self.native_pcm_basis.get_or_insert(info);
+        if basis.spec != info.spec || basis.source_revision != info.source_revision {
+            *basis = info;
+        }
+        *basis
+    }
+
     pub(crate) fn visible_duration(&self, mode: GaplessMode) -> Option<Duration> {
         crate::pipeline::gapless::visible_duration(
             self.decoder.duration(),
@@ -165,6 +175,7 @@ impl DecoderGeneration {
             exhaustion_observed: false,
             holdback: None,
             timeline_gap_floor: 0,
+            native_pcm_basis: None,
             media_origin,
             visible_origin,
             comparison_base,

@@ -85,7 +85,7 @@ fn read_wav_codec(source: &mut BoxedSource) -> DecodeResult<AudioCodec> {
     }
 }
 
-pub(super) fn wav_data_range(source: &mut BoxedSource) -> DecodeResult<std::ops::Range<u64>> {
+pub(crate) fn wav_data_range(source: &mut BoxedSource) -> DecodeResult<std::ops::Range<u64>> {
     wav_chunk_range(source, *b"data")
 }
 

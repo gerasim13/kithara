@@ -535,6 +535,7 @@ impl<S: 'static> AudioSource for Audio<S> {
             fn visible_origin(&self) -> Option<Duration>;
         }
         to self.source {
+            fn native_pcm_basis(&self) -> Option<AudioChunkInfo>;
             fn host_sample_rate(&self) -> Option<NonZeroU32>;
             fn discontinuity(&self) -> Option<crate::SourceDiscontinuity>;
             fn finish_deferred(&mut self);

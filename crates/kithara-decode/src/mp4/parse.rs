@@ -50,10 +50,13 @@ pub(super) fn parse_elst(
                     read_be_i32(slice(payload, offset + 4, 4, "elst v0 media time")?)
                         .ok_or_else(|| invalid("elst v0 media time is truncated"))?,
                 );
+                let media_rate = read_be_i32(slice(payload, offset + 8, 4, "elst v0 media rate")?)
+                    .ok_or_else(|| invalid("elst v0 media rate is truncated"))?;
                 offset += 12;
                 Mp4EditListEntry {
                     media_time,
                     segment_duration,
+                    media_rate,
                 }
             }
             1 => {
@@ -62,10 +65,13 @@ pub(super) fn parse_elst(
                         .ok_or_else(|| invalid("elst v1 segment duration is truncated"))?;
                 let media_time = read_be_i64(slice(payload, offset + 8, 8, "elst v1 media time")?)
                     .ok_or_else(|| invalid("elst v1 media time is truncated"))?;
+                let media_rate = read_be_i32(slice(payload, offset + 16, 4, "elst v1 media rate")?)
+                    .ok_or_else(|| invalid("elst v1 media rate is truncated"))?;
                 offset += 20;
                 Mp4EditListEntry {
                     media_time,
                     segment_duration,
+                    media_rate,
                 }
             }
             _ => return Err(invalid(format!("unsupported elst version {version}"))),
@@ -74,6 +80,15 @@ pub(super) fn parse_elst(
     }
 
     Ok(entries)
+}
+
+pub(super) fn parse_tkhd_track_id(payload: &[u8]) -> Option<u32> {
+    let offset = match payload.first()? {
+        0 => 12,
+        1 => 20,
+        _ => return None,
+    };
+    read_be_u32(payload.get(offset..offset + 4)?)
 }
 
 /// Parses an iTunes `data` sub-box. Returns the 24-bit type code (with the

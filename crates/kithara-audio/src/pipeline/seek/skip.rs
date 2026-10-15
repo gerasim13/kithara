@@ -1,16 +1,10 @@
 use std::num::NonZeroU128;
 
 use kithara_decode::{DecodeError, DecodeResult};
-use kithara_platform::time::Duration;
-use kithara_signal::{AudioChunk, AudioSpec, SourceSpan};
+use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, SourceSpan};
 use tracing::debug;
 
 use crate::pipeline::seek::{ResumeState, ResumeTarget};
-
-fn frames(spec: AudioSpec, duration: Duration) -> DecodeResult<usize> {
-    let frames = spec.frame_at(duration).map_err(|_| mapping_error())?;
-    usize::try_from(frames).map_err(|_| mapping_error())
-}
 
 pub(crate) fn apply(
     mut chunk: AudioChunk,
@@ -29,7 +23,12 @@ pub(crate) fn apply(
     }
     let drop_frames = match resume.target {
         ResumeTarget::Position(target) => {
-            frames(spec, target.saturating_sub(chunk.meta.timestamp))?
+            let (target, target_denominator) = crate::source_lattice_position(&chunk.meta, target)?;
+            let (start, start_denominator) =
+                crate::source_lattice_position(&chunk.meta, chunk.meta.timestamp)?;
+            let frames =
+                (target / target_denominator.get()).saturating_sub(start / start_denominator.get());
+            usize::try_from(frames).map_err(|_| mapping_error())?
         }
         ResumeTarget::Source(end) => {
             let target = output_frame(end, spec)?;
@@ -55,6 +54,7 @@ pub(crate) fn apply(
 pub(crate) fn rebase_source(
     chunk: &mut AudioChunk,
     resume: Option<&ResumeState>,
+    native_basis: AudioChunkInfo,
 ) -> DecodeResult<()> {
     if let Some(ResumeState {
         target: ResumeTarget::Source(end),
@@ -67,7 +67,7 @@ pub(crate) fn rebase_source(
         let offset = chunk
             .meta
             .frame_offset
-            .checked_sub(output_frame(*end, spec)?)
+            .checked_sub(native_basis.frame_offset)
             .ok_or_else(mapping_error)?;
         let start = u128::from(end.frame()) * output_rate + u128::from(offset) * source_rate;
         let span = SourceSpan::try_from((
@@ -168,6 +168,7 @@ fn trim_start(chunk: &mut AudioChunk, drop_frames: usize) -> DecodeResult<()> {
 mod tests {
     use std::num::NonZeroU32;
 
+    use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -180,12 +181,12 @@ mod tests {
         let span = SourceSpan::new(0, 4, rate, 4).expect("fixture source span");
         let pcm = [0.25, -0.25, 0.5, -0.5, 0.75, -0.75, 1.0, -1.0];
         let chunk = AudioChunk::new(
-            kithara_signal::AudioChunkInfo {
+            AudioChunkInfo {
                 spec: AudioSpec::new(2, rate),
                 frames: 4,
                 end_timestamp: Duration::from_nanos(90_702),
                 source_span: Some(span),
-                ..kithara_signal::AudioChunkInfo::default()
+                ..AudioChunkInfo::default()
             },
             sample_buffer(&pools, &pcm),
         );
@@ -230,14 +231,14 @@ mod tests {
         .expect("fractional native PCM basis");
         let pcm = [0.25, -0.25, 0.5, -0.5, 0.75, -0.75, 1.0, -1.0];
         let chunk = AudioChunk::new(
-            kithara_signal::AudioChunkInfo {
+            AudioChunkInfo {
                 spec: AudioSpec::new(2, rate),
                 frame_offset: 37,
                 timestamp: Duration::from_nanos(37_750_000),
                 end_timestamp: Duration::from_nanos(41_750_000),
                 frames: 4,
                 source_span: mapped.then_some(span),
-                ..kithara_signal::AudioChunkInfo::default()
+                ..AudioChunkInfo::default()
             },
             sample_buffer(&pools, &pcm),
         );
@@ -269,5 +270,52 @@ mod tests {
                 .expect("PCM suffix"))
         );
         assert!(!resume.trim_head);
+        for pcm_rate in [44_100, 48_000] {
+            let pcm_rate = NonZeroU32::new(pcm_rate).expect("physical PCM rate");
+            let spec = AudioSpec::new(2, pcm_rate);
+            let source_rate = NonZeroU32::new(44_100).expect("inherited source rate");
+            let half = 5_000_000_000_u64 / (2 * u64::from(pcm_rate.get()));
+            for (target_ns, expected) in [(half, 2_u64), (half + 1, 3)] {
+                for start in 0..=2_u64 {
+                    let mapped_span = SourceSpan::try_from((
+                        u128::from(start) * u128::from(source_rate.get()),
+                        u128::from(source_rate.get()),
+                        NonZeroU128::from(pcm_rate),
+                        source_rate,
+                        4,
+                    ))
+                    .expect("inherited PCM clock");
+                    let chunk = AudioChunk::new(
+                        AudioChunkInfo {
+                            spec,
+                            frame_offset: start,
+                            timestamp: spec.duration_for(start).expect("packet start"),
+                            end_timestamp: spec.duration_for(start + 4).expect("packet end"),
+                            frames: 4,
+                            source_span: mapped.then_some(mapped_span),
+                            ..AudioChunkInfo::default()
+                        },
+                        sample_buffer(&pools, &pcm),
+                    );
+                    let mut resume = ResumeState {
+                        target: ResumeTarget::Position(Duration::from_nanos(target_ns)),
+                        trim_head: true,
+                    };
+                    let retained = apply(chunk, Some(&mut resume))
+                        .expect("stable native lattice")
+                        .expect("the landed suffix remains");
+                    assert_eq!(
+                        retained.meta.frame_offset, expected,
+                        "PCM {pcm_rate}, packet {start}, target {target_ns}, inherited {mapped}"
+                    );
+                    assert_eq!(
+                        retained.meta.timestamp,
+                        spec.duration_for(expected).expect("physical landing")
+                    );
+                    let drop = usize::try_from(expected - start).expect("bounded head trim");
+                    assert_eq!(retained.samples.as_ref(), &pcm[drop * 2..]);
+                }
+            }
+        }
     }
 }

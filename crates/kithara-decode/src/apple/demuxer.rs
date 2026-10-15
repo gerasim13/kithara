@@ -139,7 +139,7 @@ impl AppleAudioFileDemuxer {
     /// Streaming FLAC and segmented PCM skip the eager packet-count query so an unavailable
     /// tail cannot freeze a partial packet table. FLAC retains STREAMINFO duration and bounds.
     fn open<S>(
-        source: BoxedSource,
+        mut source: BoxedSource,
         hint: Option<u32>,
         codec: AudioCodec,
         open_mode: SourceOpenMode,
@@ -148,6 +148,22 @@ impl AppleAudioFileDemuxer {
     where
         S: HasPool<u8>,
     {
+        let pcm_data_bytes = if codec == AudioCodec::Pcm
+            && hint == Some(consts::FILE_WAVE_TYPE)
+            && open_mode != SourceOpenMode::Complete
+        {
+            let data = crate::factory::wav_data_range(&mut source)?;
+            if let SourceOpenMode::Segmented(end) = open_mode
+                && data.end > end
+            {
+                return Err(DecodeError::InvalidData {
+                    detail: "apple.audio_file: WAV data exceeds the declared source extent",
+                });
+            }
+            Some(data.end - data.start)
+        } else {
+            None
+        };
         let file = match (open_mode, codec) {
             (SourceOpenMode::Segmented(end), _) => {
                 AppleAudioFile::open_segmented(source, hint, end, pools)?
@@ -173,7 +189,25 @@ impl AppleAudioFileDemuxer {
                 detail: "apple.audio_file: codec does not match supplied metadata",
             });
         }
-        let total_packets = file.packet_count;
+        let total_packets = match pcm_data_bytes {
+            Some(bytes) => {
+                let packet_bytes = u64::from(asbd.bytes_per_packet);
+                let packet_frames = u64::from(asbd.frames_per_packet);
+                let frame_bytes = u64::from(asbd.bytes_per_frame);
+                if packet_bytes == 0
+                    || packet_frames == 0
+                    || frame_bytes == 0
+                    || frame_bytes.checked_mul(packet_frames) != Some(packet_bytes)
+                    || !bytes.is_multiple_of(packet_bytes)
+                {
+                    return Err(DecodeError::InvalidData {
+                        detail: "apple.audio_file: WAV data does not match native PCM packet geometry",
+                    });
+                }
+                Some(bytes / packet_bytes)
+            }
+            None => file.packet_count,
+        };
         let extra_data = match codec {
             AudioCodec::Pcm => pod_to_vec(&asbd),
             _ => file.magic_cookie().unwrap_or_default(),
@@ -571,9 +605,8 @@ mod tests {
 
     #[kithara::test]
     fn open_wav_demuxer_track_info_and_first_frame(tone_wav: &'static [u8]) {
-        let bytes = tone_wav.to_vec();
         let mut dx = AppleAudioFileDemuxer::open_for_with_mode(
-            Box::new(Cursor::new(bytes)),
+            Box::new(Cursor::new(tone_wav.to_vec())),
             AudioCodec::Pcm,
             Some(ContainerFormat::Wav),
             SourceOpenMode::Complete,
@@ -585,10 +618,37 @@ mod tests {
         assert!(info.channels >= 1);
         assert!(info.sample_rate >= 8000);
         assert!(info.duration.is_some());
+        let duration = info.duration;
 
         match dx.next_frame().expect("next_frame ok") {
             DemuxOutcome::Frame(frame) => assert!(!frame.data.is_empty()),
             other => panic!("expected Frame, got {other:?}"),
+        }
+
+        let length = u64::try_from(tone_wav.len()).expect("fixture length");
+        for mode in [SourceOpenMode::Streaming, SourceOpenMode::Segmented(length)] {
+            let tail_read = Arc::new(AtomicBool::new(false));
+            let mut streamed = AppleAudioFileDemuxer::open_for_with_mode(
+                Box::new(NotReadySource::new(
+                    tone_wav.to_vec(),
+                    length / 2,
+                    Some(Arc::clone(&tail_read)),
+                )),
+                AudioCodec::Pcm,
+                Some(ContainerFormat::Wav),
+                mode,
+            )
+            .expect("WAV header prefix supplies its complete frame count");
+            assert_eq!(streamed.track_info().duration, duration, "{mode:?}");
+            assert!(
+                !tail_read.load(Ordering::Acquire),
+                "{mode:?} must resolve PCM extent without reading the unavailable tail"
+            );
+            assert!(matches!(
+                streamed.next_frame().expect("first streamed PCM packet"),
+                DemuxOutcome::Frame(frame) if !frame.data.is_empty()
+            ));
+            assert!(!tail_read.load(Ordering::Acquire));
         }
     }
 

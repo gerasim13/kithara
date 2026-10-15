@@ -465,6 +465,7 @@ fn native_ready(inbox: &mut Inbox<LaneProtocol>, clock: SegmentId) -> SegmentId 
     };
     let segment = *id;
     due.apply(LaneApplied {
+        native_pcm_basis: None,
         engine_latency: FrameCount::new(0),
         ready: Some(segment),
     });

@@ -115,6 +115,7 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
     }
     delegate::delegate! {
         to self.decode.active() {
+            fn native_pcm_basis(&self) -> Option<kithara_signal::AudioChunkInfo>;
             fn media_origin(&self) -> Option<Duration>;
             fn visible_origin(&self) -> Option<Duration>;
         }
@@ -179,19 +180,12 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
             return;
         }
         let landing = self.resume.source_end().map_or_else(
-            || {
-                let spec = self.decode.output_spec();
-                spec.frame_at(self.playhead.position())
-                    .map(|frame| crate::SourceEnd::new(frame, spec.sample_rate))
-                    .map_err(DecodeError::from)
-            },
-            Ok,
+            || ResumeTarget::Position(self.playhead.position()),
+            ResumeTarget::Source,
         );
-        let result = landing.and_then(|landing| {
+        let result = kithara_decode::DecodeResult::from(landing).and_then(|position| {
             self.shared_stream
-                .seek_time_anchor(kithara_decode::DecodeResult::from(ResumeTarget::Source(
-                    landing,
-                ))?)
+                .seek_time_anchor(position)
                 .map_err(|source| DecodeError::Io { source })
                 .and_then(|_| {
                     let media_info = self
@@ -277,7 +271,10 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
             DecodeAction::TransitionPending => TrackStep::Blocked(self.transition_wait_reason()),
             DecodeAction::StartRecreate(recreate) => {
                 let offset = recreate.offset;
-                match self.install_replacement(recreate, self.resume.source_end()) {
+                match self.install_replacement(
+                    recreate,
+                    self.resume.source_end().map(ResumeTarget::Source),
+                ) {
                     Ok(()) => {
                         self.wake.wake();
                         TrackStep::StateChanged
@@ -511,7 +508,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     pub(super) fn install_replacement(
         &mut self,
         recreate: RecreateState,
-        landing: Option<crate::SourceEnd>,
+        landing: Option<ResumeTarget>,
     ) -> Result<(), DecodeError> {
         let gapless_mode = self.decode.gapless_mode();
         self.decode.seal_visible_origin();
@@ -520,12 +517,8 @@ impl<T: StreamType> StreamAudioSource<T> {
             .probe_seek(SeekFrom::Start(recreate.offset))
             .map_err(|source| DecodeError::Io { source })?;
         let reader = self.shared_stream.open_rebuild_reader(recreate.offset);
-        let mut generation = self.build_generation(
-            reader,
-            recreate.media_info,
-            recreate.offset,
-            landing.map(ResumeTarget::Source),
-        )?;
+        let mut generation =
+            self.build_generation(reader, recreate.media_info, recreate.offset, landing)?;
         if landing.is_some() {
             generation.retain_media_origin(self.decode.active().media_origin());
             generation.retain_visible_origin(
@@ -545,7 +538,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.decode.reset();
         self.resume.clear();
         self.waiting_for_source = false;
-        if let Some(landing) = landing {
+        if let Some(ResumeTarget::Source(landing)) = landing {
             self.resume.rebase(landing);
         }
         if !matches!(self.phase, OwnerPhase::Failed { .. }) {

@@ -225,6 +225,39 @@ fn zero_correction_preserves_the_complete_future_law() {
 
     assert_eq!(end, 0);
     assert_eq!(actual, base);
+
+    let model = grid(576_000, 555_417, 20_571, 20_571, None, BeatGridState::Final);
+    let mut raw = model.as_raw().clone();
+    raw.bpm = 140.0;
+    let source = source_grid(&kithara_beat::BeatGridModel::try_from(raw).expect("pickup grid"));
+    let cue = position(4_096);
+    assert!(!source.covers(cue), "the pickup is no observed beat span");
+    assert!(source.beat_at(0.0).is_some());
+    let trajectory = host(124.0, 4);
+    let at = SessionFrame::new(42_514);
+    let landing = SessionFrame::new(42_754);
+    assert!(crate::phase_error(&trajectory, &source, cue, at).is_none());
+    assert!(source.covers(position(278_129)));
+    let aligned = speed_curve(
+        &trajectory,
+        &source,
+        cue,
+        at,
+        Some((position(278_129), landing)),
+    )
+    .expect("a seek composes the actual pickup with its observed landing");
+    let landing_offset = landing.frames_since(at).expect("future landing");
+    let initial_advance = advance(&aligned, 0, landing_offset);
+    assert!((initial_advance - 240.0 * 124.0 / 140.0).abs() < 1e-9);
+    let from = source
+        .beat_at(position(278_129).as_secs_f64())
+        .expect("covered landing beat");
+    let projected = advance(&aligned, landing_offset, landing_offset + 24_000) / 48_000.0;
+    let expected = source
+        .media_at(from + 124.0 / 120.0)
+        .expect("covered future beat")
+        - position(278_129).as_secs_f64();
+    assert!((projected - expected).abs() < 1e-9);
 }
 
 #[kithara::test]

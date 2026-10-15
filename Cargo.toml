@@ -28,6 +28,7 @@ members = [
     "crates/kithara-effects",
     "crates/kithara-encode",
     "crates/kithara-events",
+    "crates/kithara-fdk",
     "crates/kithara-ffi",
     "crates/kithara-file",
     "crates/kithara-fixture-gen",
@@ -107,6 +108,7 @@ default-members = [
     "crates/kithara-effects",
     "crates/kithara-encode",
     "crates/kithara-events",
+    "crates/kithara-fdk",
     "crates/kithara-file",
     "crates/kithara-fixture-gen",
     "crates/kithara-fixture-media",
@@ -310,6 +312,7 @@ kithara-dsp = { path = "crates/kithara-dsp", version = "0.0.1-alpha5" }
 kithara-effects = { path = "crates/kithara-effects", version = "0.0.1-alpha5", default-features = false }
 kithara-encode = { path = "crates/kithara-encode", version = "0.0.1-alpha5", default-features = false }
 kithara-events = { path = "crates/kithara-events", version = "0.0.1-alpha5", default-features = false }
+kithara-fdk = { path = "crates/kithara-fdk", version = "0.0.1-alpha5" }
 kithara-ffi = { path = "crates/kithara-ffi", default-features = false }
 kithara-file = { path = "crates/kithara-file", version = "0.0.1-alpha5", default-features = false }
 kithara-fixture-gen = { path = "crates/kithara-fixture-gen", version = "0.0.1-alpha5", default-features = false }
@@ -412,7 +415,6 @@ delegate = "0.13"
 derive-where = "1.7"
 derive_more = { version = "2.1", features = ["debug", "deref", "deref_mut", "display", "error", "from", "into"] }
 fast-interleave = "0.1"
-fdk-aac = "0.8.0"
 fdk-aac-sys = "0.5.0"
 fearless_simd = "1.0"
 ffmpeg-next = "8.1.0"

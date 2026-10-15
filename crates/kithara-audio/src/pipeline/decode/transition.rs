@@ -471,7 +471,7 @@ pub(super) fn promotion_readiness(
     let active_rate = active_spec.sample_rate.get();
     let Some(incoming_first_time) = content_time(
         incoming_rate,
-        incoming_first,
+        incoming_first.max(incoming_origin),
         incoming_rate,
         incoming_origin,
     ) else {

@@ -58,15 +58,14 @@ impl FrameCodec for RebasedCodec {
 
     delegate::delegate! {
         to self.inner {
-            fn decode_frame(
-                &mut self,
-                data: &[u8],
-                pts: Duration,
-                packet_desc: &[u8],
-                out: &mut SampleBuffer,
-            ) -> DecodeResult<u32>;
-            fn flush(&mut self) -> DecodeResult<()>;
-            fn spec(&self) -> AudioSpec;
+                fn decode_frame(
+                    &mut self,
+                    frame: crate::demuxer::Frame<'_>,
+            metadata: crate::demuxer::PacketMetadata,
+                    out: &mut SampleBuffer,
+                ) -> DecodeResult<crate::codec::DecodedPacket>;
+                fn flush(&mut self) -> DecodeResult<()>;
+                fn spec(&self) -> AudioSpec;
         }
     }
 }

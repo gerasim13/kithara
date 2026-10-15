@@ -45,7 +45,15 @@ impl<S> PlayerImpl<S> {
         self.ring_depth = ring_depth;
         self.declick = declick;
         self.position = position;
-        self.loading = Some(Loading { seq, opened: None });
+        self.segment_speed = self.settings.config().speed();
+        self.segment_origin = None;
+        self.source_basis = None;
+        self.observed_source = None;
+        self.loading = Some(Loading {
+            seq,
+            opened: None,
+            speed: None,
+        });
         self.status = TrackStatus::Loading;
         Ok(Some(seq))
     }
@@ -79,6 +87,11 @@ impl<S> PlayerImpl<S> {
                     self.ready = Some(SegmentId::FIRST);
                 }
                 let prepared = loaded.opened.pcm.next_chunk_info();
+                if let Some(meta) = prepared.filter(|meta| meta.segment == self.segment) {
+                    self.segment_origin = Some(meta.timestamp);
+                }
+                self.source_basis = prepared;
+                self.observed_source = prepared;
                 self.duration = prepared.and_then(|meta| meta.media_end);
                 self.visible_origin = prepared.and_then(|meta| meta.visible_origin);
                 self.media_origin = prepared.and_then(|meta| meta.media_origin);
@@ -95,7 +108,19 @@ impl<S> PlayerImpl<S> {
                     return Settled::Pending;
                 }
                 self.reserved_ready();
-                if let Err(error) = self.attach(out) {
+                let speed = self
+                    .loading
+                    .as_mut()
+                    .and_then(|loading| loading.speed.take());
+                let entry = match speed {
+                    Some((speed, _)) => prepared
+                        .map(|meta| meta.timestamp)
+                        .ok_or(PlayError::Untimed)
+                        .and_then(|from| self.segment_with(from, None, speed, out))
+                        .map(drop),
+                    None => Ok(()),
+                };
+                if let Err(error) = entry.and_then(|()| self.attach(out)) {
                     self.loading = None;
                     self.lane = None;
                     self.status = TrackStatus::Idle;

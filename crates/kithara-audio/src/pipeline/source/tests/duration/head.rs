@@ -190,9 +190,8 @@ async fn unknown_original_position_never_promotes_the_first_sought_suffix(
                     offset: 0,
                     cause: RecreateCause::HostRateChange,
                 },
-                Some(crate::SourceEnd::new(
-                    1_500,
-                    NonZeroU32::new(1_000).expect("source rate"),
+                Some(crate::pipeline::seek::ResumeTarget::Source(
+                    crate::SourceEnd::new(1_500, NonZeroU32::new(1_000).expect("source rate")),
                 )),
             )
             .expect("recreate before any original PCM");
@@ -226,9 +225,8 @@ async fn exact_origin_survives_decoder_recreation_before_any_output() {
                 offset: 0,
                 cause: RecreateCause::HostRateChange,
             },
-            Some(crate::SourceEnd::new(
-                900,
-                NonZeroU32::new(1_000).expect("source rate"),
+            Some(crate::pipeline::seek::ResumeTarget::Source(
+                crate::SourceEnd::new(900, NonZeroU32::new(1_000).expect("source rate")),
             )),
         )
         .expect("recreate near EOF");
@@ -250,6 +248,15 @@ async fn exact_origin_survives_decoder_recreation_before_any_output() {
         Some(Duration::from_millis(900))
     );
     assert_eq!(source.playhead.duration(), Some(Duration::from_millis(952)));
+    {
+        let mut unrendered = physical_source(extent).await;
+        assert_eq!(unrendered.resume.source_end(), None);
+        unrendered.set_host_sample_rate(NonZeroU32::new(2_000).expect("initial host binding"));
+        let first = first_chunk(&mut unrendered);
+        assert_eq!(first.meta.spec.sample_rate.get(), 2_000);
+        assert_eq!(first.meta.timestamp, Duration::from_millis(17));
+        assert_eq!(first.meta.visible_origin, Some(Duration::from_millis(17)));
+    }
 }
 
 #[kithara::test(tokio)]
@@ -279,6 +286,45 @@ async fn actual_origin_survives_a_host_rate_recreation() {
     assert_eq!(first.timestamp, Duration::from_millis(256));
     assert!(first.source_span.is_some());
     assert_eq!(source.playhead.duration(), Some(Duration::from_millis(952)));
+    {
+        let mut fractional = super::fixtures::extent(Some(Duration::from_secs(1)), 0, true);
+        fractional.gapless = None;
+        fractional.priming = Some(0);
+        fractional.media_origin = Some(Duration::ZERO);
+        let mut source = physical_source(fractional).await;
+        let old_rate = NonZeroU32::new(48_000).expect("old host rate");
+        let new_rate = NonZeroU32::new(44_100).expect("new host rate");
+        source.set_host_sample_rate(old_rate);
+        let old = first_chunk(&mut source);
+        assert_eq!(old.spec().sample_rate, old_rate);
+        source.commit_source_end(crate::SourceEnd::new(1, old_rate), old.meta);
+        source.set_host_sample_rate(new_rate);
+        let resumed = first_chunk(&mut source);
+        let native = source.native_pcm_basis().expect("actual native landing");
+        assert_eq!(native.frame_offset, 1);
+        assert_eq!(
+            native.timestamp,
+            AudioSpec::new(2, new_rate)
+                .duration_for(1)
+                .expect("native frame one")
+        );
+        let span = resumed
+            .meta
+            .source_span
+            .expect("retained source-clock relation");
+        assert_eq!(span.sample_rate(), old_rate);
+        assert_eq!(
+            span.source_ratio_at(0),
+            Some((1, std::num::NonZeroU128::MIN)),
+            "the first retained PCM must start at the rendered SourceEnd despite native seek quantization"
+        );
+        assert_eq!(
+            resumed.meta.timestamp,
+            AudioSpec::new(2, old_rate)
+                .duration_for(1)
+                .expect("retained old frame one")
+        );
+    }
 }
 
 #[kithara::test(tokio)]

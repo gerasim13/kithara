@@ -5,6 +5,18 @@ use kithara_stream::AudioCodec;
 
 use crate::error::DecodeResult;
 
+#[derive(Debug)]
+pub(crate) struct DecodedPacket {
+    pub(crate) frames: u32,
+    pub(crate) metadata: crate::demuxer::PacketMetadata,
+}
+
+impl DecodedPacket {
+    pub(crate) const fn new(frames: u32, metadata: crate::demuxer::PacketMetadata) -> Self {
+        Self { frames, metadata }
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct CodecPriming {
@@ -47,10 +59,9 @@ pub(crate) const fn seek_warmup_access_units(codec: AudioCodec) -> u32 {
 pub(crate) trait FrameCodec: Send + 'static {
     /// Decode one demuxed frame into `out` (interleaved f32, from the shared typed pool
     /// region); returns frames written, `0` for a consumed packet that produced no PCM
-    /// (warm-up / backpressure). `pts` is the demuxer presentation time; a codec that
-    /// owns its output clock anchors it there. `packet_desc` carries opaque per-packet
-    /// VBR metadata (Apple MP3/ALAC serialize an `AudioStreamPacketDescription`); empty
-    /// for CBR.
+    /// (warm-up / backpressure). The frame retains its actual encoded presentation
+    /// interval. `packet_desc` carries opaque per-packet VBR metadata (Apple MP3/ALAC
+    /// serialize an `AudioStreamPacketDescription`); empty for CBR.
     ///
     /// # Errors
     ///
@@ -59,11 +70,24 @@ pub(crate) trait FrameCodec: Send + 'static {
     /// exceed the pool's byte budget.
     fn decode_frame(
         &mut self,
-        frame_data: &[u8],
-        pts: Duration,
-        packet_desc: &[u8],
+        frame: crate::demuxer::Frame<'_>,
+        metadata: crate::demuxer::PacketMetadata,
         out: &mut SampleBuffer,
-    ) -> DecodeResult<u32>;
+    ) -> DecodeResult<DecodedPacket>;
+
+    /// Whether one decoded buffer still contains presentation intervals to emit.
+    fn has_output(&self) -> bool {
+        false
+    }
+
+    /// Emit the next buffered interval before another encoded frame is consumed.
+    fn take_output(&mut self, out: &mut SampleBuffer) -> DecodeResult<DecodedPacket> {
+        out.clear();
+        Ok(DecodedPacket::new(
+            0,
+            crate::demuxer::PacketMetadata::default(),
+        ))
+    }
 
     /// Codec-owned presentation time of the most recent non-empty PCM output.
     /// A buffering codec may expose its input anchor before producing PCM; callers

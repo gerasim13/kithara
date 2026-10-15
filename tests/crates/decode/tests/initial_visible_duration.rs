@@ -71,6 +71,11 @@ async fn initial_visible_duration_matches_the_built_ruler_before_eof(#[case] ass
         first_frames = first.frames(), first_samples = ?&first.samples[..first.samples.len().min(8)],
         "initial encoded duration owner receipt");
 
+    #[cfg(not(target_os = "android"))]
+    if asset == SignalAsset::PROFILE_M4A_AAC_44100_2CH {
+        assert_complete_aac_presentation(&body, url.clone()).await;
+    }
+
     let file = FileConfig::for_src(url.into())
         .store(
             AssetStore::builder(pools.clone())
@@ -145,6 +150,133 @@ async fn initial_visible_duration_matches_the_built_ruler_before_eof(#[case] ass
     tracing::info!(asset = asset.name(), visible_meta = ?visible.meta, sought_meta = ?sought.meta,
         visible_frames = visible.frames(), visible_samples = ?&visible.samples[..visible.samples.len().min(8)],
         "original visible PCM receipt");
+}
+
+#[cfg(not(target_os = "android"))]
+#[kithara::hang_watchdog]
+async fn assert_complete_aac_presentation(bytes: &[u8], url: url::Url) {
+    let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("AAC fixture rate"));
+    let origin = spec.duration_for(1_024).expect("MP4 edit origin");
+    let endpoint = Duration::from_secs(6);
+    let reference = kithara_integration_tests::pcm_oracle::decode_native(bytes)
+        .await
+        .expect("independent native FFmpeg AAC decode");
+    assert_eq!((reference.sample_rate, reference.channels), (44_100, 2));
+    assert_eq!(reference.samples.len(), 264_600 * 2);
+
+    let mut decoder = DecoderFactory::create_with_probe(
+        Cursor::new(bytes.to_vec()),
+        Some("m4a"),
+        DecoderConfig::<NoResamplerBackend, TestPools>::builder()
+            .backend(DecoderBackend::Symphonia)
+            .pools(pools())
+            .build(),
+    )
+    .expect("explicit software AAC owner");
+    assert_eq!(decoder.media_origin(), Some(origin));
+    assert_eq!(
+        decoder.duration(),
+        Some(::kithara::decode::DecoderDuration::MediaEnd(endpoint))
+    );
+    let mut native = Vec::new();
+    loop {
+        hang_tick!();
+        match decoder.next_chunk().expect("actual AAC native PCM") {
+            DecoderChunkOutcome::Chunk(chunk) => {
+                assert_eq!(
+                    spec.frame_at(chunk.meta.timestamp)
+                        .expect("native PCM coordinate"),
+                    (native.len() / 2) as u64
+                );
+                assert_eq!(chunk.meta.media_origin, Some(origin));
+                assert!(chunk.samples.iter().all(|sample| sample.is_finite()));
+                native.extend_from_slice(&chunk.samples);
+                hang_reset!();
+            }
+            DecoderChunkOutcome::Eof => break,
+            other @ DecoderChunkOutcome::Pending(_) => {
+                panic!("in-memory AAC cannot wait for source data: {other:?}")
+            }
+        }
+    }
+    assert_eq!(
+        native.len(),
+        265_624 * 2,
+        "actual packet duration must exclude block padding"
+    );
+    let expected = &native[1_024 * 2..];
+    for start in [0, 132_300 - 4_096, 264_600 - 8_192] {
+        let range = start * 2..(start + 8_192) * 2;
+        let (mut dot, mut actual_energy, mut reference_energy) = (0.0_f64, 0.0_f64, 0.0_f64);
+        for (actual, reference) in expected[range.clone()]
+            .iter()
+            .zip(&reference.samples[range])
+        {
+            let (actual, reference) = (f64::from(*actual), f64::from(*reference));
+            dot += actual * reference;
+            actual_energy += actual * actual;
+            reference_energy += reference * reference;
+        }
+        let correlation = dot / (actual_energy * reference_energy).sqrt();
+        assert!(
+            correlation >= 0.999,
+            "fixed source window at{start} lost AAC content: {correlation}"
+        );
+    }
+
+    let pool = pools();
+    let file = FileConfig::for_src(url.into())
+        .store(
+            AssetStore::builder(pool.clone())
+                .backend(StorageBackend::Memory)
+                .build(),
+        )
+        .pools(pool.clone())
+        .build();
+    let config = AudioConfig::<File<TestPools>, NoResamplerBackend>::for_stream(file)
+        .hint("m4a".to_owned())
+        .decoder(
+            AudioDecoderConfig::builder()
+                .backend(DecoderBackend::Symphonia)
+                .build(),
+        )
+        .build();
+    let mut audio = Audio::prepare(config, Arc::new(NoopWorkerWake), pool)
+        .await
+        .expect("visible AAC owner");
+    assert_eq!(audio.media_origin(), Some(origin));
+    assert_eq!(audio.media_end(), Some(endpoint));
+    assert_eq!(audio.duration(), Some(endpoint));
+    let mut visible = Vec::new();
+    loop {
+        hang_tick!();
+        match audio.next_chunk().expect("visible AAC PCM") {
+            ChunkOutcome::Chunk(chunk) => {
+                assert_eq!(
+                    spec.frame_at(chunk.meta.timestamp)
+                        .expect("visible native coordinate"),
+                    1_024 + (visible.len() / 2) as u64
+                );
+                assert_eq!(chunk.meta.media_origin, Some(origin));
+                assert_eq!(chunk.meta.media_end, Some(endpoint));
+                visible.extend_from_slice(&chunk.samples);
+                hang_reset!();
+            }
+            ChunkOutcome::Pending { .. } => yield_now().await,
+            ChunkOutcome::Eof { .. } => break,
+        }
+    }
+    assert_eq!(
+        visible.len(),
+        264_600 * 2,
+        "EOF must retain the complete visible AAC tail"
+    );
+    assert_eq!(
+        visible, expected,
+        "routing must preserve every independently decoded source frame"
+    );
+    assert_eq!(audio.media_end(), Some(endpoint));
+    assert_eq!(audio.duration(), Some(endpoint));
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]

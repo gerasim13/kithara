@@ -11,7 +11,8 @@ pub(in crate::render) struct Fraction {
 }
 
 #[derive(Clone)]
-pub(in crate::render) struct Trajectory {
+/// Canonical source-phase execution and projection for an accepted speed law.
+pub struct SourceTrajectory {
     pub(super) curve: SpeedCurve,
     pub(super) origin_speed: Fraction,
     pub(super) elapsed: u64,
@@ -26,4 +27,5 @@ pub(in crate::render) struct Trajectory {
 pub(super) enum Phase {
     Origin { frames: u64, fraction: u32 },
     Rendered(SourceSpan),
+    Exact(Fraction),
 }

@@ -1068,9 +1068,11 @@ async fn hls_aac_lc_same_variant_recreate_continuity_metric(slq_layout: VariantL
                                 media_info: Some(media_info(active)),
                                 offset: state.active_layout().init_range.start,
                             },
-                            Some(crate::SourceEnd::new(
-                                chunk.meta.frame_offset + u64::from(chunk.meta.frames),
-                                chunk.meta.spec.sample_rate,
+                            Some(crate::pipeline::seek::ResumeTarget::Source(
+                                crate::SourceEnd::new(
+                                    chunk.meta.frame_offset + u64::from(chunk.meta.frames),
+                                    chunk.meta.spec.sample_rate,
+                                ),
                             )),
                         )
                         .expect("same-variant replacement");

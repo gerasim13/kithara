@@ -135,6 +135,56 @@ fn an_approach_keeps_one_mapping_basis_across_quantum_partitions() {
         }
         assert_eq!(joined, Some(whole));
     }
+    let boundary = 1u64 << 63;
+    let fixed = ExponentialApproach::new(1.1, 1.1, 220.5).expect("fixed analytic law");
+    for (curve, speed) in [
+        (SpeedCurve::Constant(1.1), f64::from(1.1f32)),
+        (
+            SpeedCurve::Ramp {
+                to: 1.1,
+                frames: NonZeroU64::new(97).expect("ramp"),
+            },
+            f64::from(1.1f32),
+        ),
+        (SpeedCurve::Approach(fixed), 1.1),
+        (
+            SpeedCurve::ApproachSteps(vec![(0, fixed), (97, fixed)].into()),
+            1.1,
+        ),
+    ] {
+        let mut trajectory = Trajectory::new(1.0);
+        trajectory.replace(curve).expect("accepted wide source law");
+        trajectory
+            .advance_by(0, rate, 97)
+            .expect("established native law phase");
+        let origin = trajectory
+            .at_offset(0, rate, 0)
+            .expect("established source phase");
+        let reference = kithara_signal::SourceSpan::approaching(
+            origin.0,
+            origin.1,
+            ExponentialApproach::new(speed, speed, 220.5).expect("independent steady law"),
+            0,
+            rate,
+            boundary,
+        )
+        .expect("the physical endpoint fits the source clock");
+        let endpoint = reference
+            .source_ratio_at(boundary)
+            .expect("exact large endpoint");
+        assert_eq!(
+            trajectory
+                .first_at_or_after(0, rate, endpoint, None)
+                .expect("search brackets must not overshoot the representable source range"),
+            Some(boundary)
+        );
+        assert_eq!(
+            trajectory
+                .first_at_or_after(0, rate, endpoint, Some(boundary - 1))
+                .expect("the previous exact frame remains before EOF"),
+            None
+        );
+    }
 }
 
 #[kithara::test]
@@ -266,6 +316,30 @@ fn analytic_correction_segments_preserve_positions_and_forecast_each_boundary() 
                 .expect("forecast crosses real segment boundaries"),
             expected(700).expect("forecast reference")
         );
+        for boundary in [0, 1, 96, 97, 98, 300, 301, 302, 700, 1_024] {
+            let endpoint = expected(boundary).expect("independent span endpoint");
+            assert_eq!(
+                trajectory
+                    .first_at_or_after(500, rate, endpoint, None)
+                    .expect("projected EOF across analytic segments"),
+                Some(boundary),
+            );
+            assert_eq!(
+                trajectory
+                    .first_at_or_after(500, rate, endpoint, Some(boundary))
+                    .expect("inclusive exact segment endpoint"),
+                Some(boundary),
+            );
+            if boundary > 0 {
+                assert_eq!(
+                    trajectory
+                        .first_at_or_after(500, rate, endpoint, Some(boundary - 1))
+                        .expect("one frame before exact segment endpoint"),
+                    None,
+                );
+            }
+        }
+
         let mut cursor = 0;
         while cursor < 1024 {
             let span = trajectory

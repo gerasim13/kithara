@@ -1,6 +1,6 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use kithara_audio::{AudioSource, SeekOutcome, SourceEnd, TrackStep};
+use kithara_audio::{AudioSource, Fetch, SeekOutcome, SourceEnd, TrackStep};
 use kithara_command::{ChannelConfig, Sender, channel};
 use kithara_effects::EffectDrain;
 use kithara_platform::{
@@ -76,6 +76,7 @@ where
 }
 
 pub struct ScriptedSource {
+    native_pcm_basis: Option<AudioChunkInfo>,
     pub(crate) landing: Option<Duration>,
     pub(crate) steps: std::collections::VecDeque<TrackStep<AudioChunk>>,
     pub(crate) commits: Arc<Mutex<Vec<SourceEnd>>>,
@@ -88,6 +89,7 @@ impl ScriptedSource {
     {
         Self {
             landing: None,
+            native_pcm_basis: None,
             steps: steps.into_iter().collect(),
             commits: Arc::new(Mutex::new(Vec::new())),
         }
@@ -98,6 +100,9 @@ impl AudioSource for ScriptedSource {
     type Chunk = AudioChunk;
     fn commit_source_end(&mut self, end: SourceEnd, _meta: AudioChunkInfo) {
         self.commits.lock().push(end);
+    }
+    fn native_pcm_basis(&self) -> Option<AudioChunkInfo> {
+        self.native_pcm_basis
     }
     fn host_sample_rate(&self) -> Option<NonZeroU32> {
         None
@@ -110,6 +115,10 @@ impl AudioSource for ScriptedSource {
     }
     fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
     fn step_track(&mut self) -> TrackStep<AudioChunk> {
-        self.steps.pop_front().unwrap_or(TrackStep::Eof)
+        let step = self.steps.pop_front().unwrap_or(TrackStep::Eof);
+        if let TrackStep::Produced(Fetch::Data { data, .. }) = &step {
+            self.native_pcm_basis = Some(data.meta);
+        }
+        step
     }
 }

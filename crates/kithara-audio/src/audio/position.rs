@@ -6,7 +6,11 @@ use kithara_stream::ChunkPosition;
 
 use crate::consts;
 
-pub(crate) fn normalize_geometry(info: &mut AudioChunkInfo) -> DecodeResult<SourceSpan> {
+/// Returns the canonical exact source geometry without changing packet metadata.
+///
+/// # Errors
+/// Returns an error when native packet geometry is unrepresentable.
+pub fn source_geometry(info: &AudioChunkInfo) -> DecodeResult<SourceSpan> {
     if let Some(span) = info.source_span {
         return Ok(span);
     }
@@ -36,10 +40,71 @@ pub(crate) fn normalize_geometry(info: &mut AudioChunkInfo) -> DecodeResult<Sour
     .map_err(|()| geometry_error())?
     .with_render_revision(info.render_revision)
     .with_mapping_revision(info.mapping_revision);
-    let timestamp = span.position_at(0).ok_or_else(geometry_error)?;
-    let end_timestamp = span.position_at(frames).ok_or_else(geometry_error)?;
-    info.timestamp = timestamp;
-    info.end_timestamp = end_timestamp;
+    Ok(span)
+}
+
+/// Quantizes a raw position on the packet's stable physical PCM lattice.
+///
+/// The inherited source clock is scaled to the actual PCM rate before rounding.
+/// Exact half-frame ties choose the following native sample.
+///
+/// # Errors
+/// Returns an error if the source coordinate is unrepresentable.
+pub fn source_lattice_position(
+    info: &AudioChunkInfo,
+    position: kithara_platform::time::Duration,
+) -> DecodeResult<(u128, NonZeroU128)> {
+    let span = source_geometry(info)?;
+    let pcm = span
+        .scaled_from(
+            (0, NonZeroU128::MIN),
+            (0, NonZeroU128::MIN),
+            (
+                u128::from(info.spec.sample_rate.get()),
+                NonZeroU128::from(span.sample_rate()),
+            ),
+        )
+        .ok_or_else(geometry_error)?;
+    let (origin, denominator) = pcm.source_ratio_at(0).ok_or_else(geometry_error)?;
+    let phase = origin % denominator.get();
+    let mut first = denominator.get();
+    let mut second = consts::NANOS_PER_SEC;
+    while second != 0 {
+        (first, second) = (second, first % second);
+    }
+    let common = denominator
+        .get()
+        .checked_div(first)
+        .and_then(|value| value.checked_mul(consts::NANOS_PER_SEC))
+        .ok_or_else(geometry_error)?;
+    let target = position
+        .as_nanos()
+        .checked_mul(u128::from(info.spec.sample_rate.get()))
+        .and_then(|value| value.checked_mul(common / consts::NANOS_PER_SEC))
+        .ok_or_else(geometry_error)?;
+    let phase_at_common = phase
+        .checked_mul(common / denominator.get())
+        .ok_or_else(geometry_error)?;
+    let distance = target.saturating_sub(phase_at_common);
+    let remainder = distance % common;
+    let frame = (distance / common)
+        .checked_add(u128::from(remainder >= common - remainder))
+        .ok_or_else(geometry_error)?;
+    let numerator = frame
+        .checked_mul(denominator.get())
+        .and_then(|value| value.checked_add(phase))
+        .ok_or_else(geometry_error)?;
+    Ok((numerator, denominator))
+}
+
+pub(crate) fn normalize_geometry(info: &mut AudioChunkInfo) -> DecodeResult<SourceSpan> {
+    let span = source_geometry(info)?;
+    if info.source_span.is_none() {
+        info.timestamp = span.position_at(0).ok_or_else(geometry_error)?;
+        info.end_timestamp = span
+            .position_at(span.output_frames())
+            .ok_or_else(geometry_error)?;
+    }
     Ok(span)
 }
 
@@ -96,7 +161,19 @@ mod tests {
         let origin = Duration::from_nanos(42_250_000);
         let mut info = metadata(1_000, 42, 4, origin);
         info.visible_origin = Some(origin);
+        let original = info;
+        let projected = source_geometry(&info).expect("read-only native geometry");
+        assert_eq!(info, original);
         let span = normalize_geometry(&mut info).expect("native geometry");
+        assert_eq!(projected, span);
+        assert_eq!(
+            projected.source_ratio_at(0),
+            Some((169, NonZeroU128::new(4).expect("native quarter phase")))
+        );
+        assert_eq!(
+            projected.source_ratio_at(4),
+            Some((185, NonZeroU128::new(4).expect("native quarter phase")))
+        );
 
         assert_eq!(info.timestamp, origin);
         assert_eq!(info.end_timestamp, Duration::from_nanos(46_250_000));
@@ -128,7 +205,7 @@ mod tests {
         let pools = pools();
         let chunk = AudioChunk::new(first, sample_buffer(&pools, &[0.25; 2_048]));
         let mut cursor = ResumeCursor::default();
-        cursor.record(&chunk);
+        cursor.record(&chunk, chunk.meta.end_timestamp);
         assert_eq!(
             cursor.decoded_end(3),
             Some(Duration::from_nanos(1_044_897_959))
@@ -208,7 +285,7 @@ mod tests {
             trim_head: false,
         };
         let mut chunk = AudioChunk::new(info, sample_buffer(&pools, &pcm));
-        rebase_source(&mut chunk, Some(&resume)).expect("retained source translation");
+        rebase_source(&mut chunk, Some(&resume), info).expect("retained source translation");
         let mapped = chunk.meta.source_span.expect("retained source geometry");
         assert_eq!(chunk.meta.timestamp, Duration::from_millis(100));
         assert_eq!(chunk.meta.end_timestamp, Duration::from_millis(102));

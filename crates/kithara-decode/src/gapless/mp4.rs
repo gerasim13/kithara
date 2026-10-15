@@ -65,7 +65,7 @@ struct GaplessProbe {
 
 #[derive(Default)]
 struct TrackState {
-    first_edit: Option<Mp4EditListEntry>,
+    edit: Option<Mp4EditListEntry>,
     media: Option<Mp4MediaTiming>,
     sample_rate: Option<u32>,
 }
@@ -93,7 +93,10 @@ impl GaplessProbe {
             Mp4Event::TrackBegin => self.current = Some(TrackState::default()),
             Mp4Event::TrackEditList(entries) => {
                 if let Some(track) = &mut self.current {
-                    track.first_edit = entries.first().copied();
+                    track.edit = match entries {
+                        [edit] => Some(*edit),
+                        _ => None,
+                    };
                 }
             }
             Mp4Event::TrackEnd => {
@@ -114,23 +117,36 @@ impl GaplessProbe {
                     track.sample_rate = Some(sample_rate);
                 }
             }
-            Mp4Event::TrackCodec(_) => {}
+            Mp4Event::TrackCodec(_) | Mp4Event::TrackId(_) => {}
         }
         ControlFlow::Continue(())
     }
 }
 
 fn derive_from_track(track: &TrackState, movie_timescale: Option<u32>) -> Option<GaplessInfo> {
-    let movie_timescale = movie_timescale?;
-    let sample_rate = track.sample_rate?;
-    let media = track.media?;
-    let edit = track.first_edit?;
+    derive_from_edit(
+        track.edit?,
+        track.media?,
+        track.sample_rate?,
+        movie_timescale?,
+    )
+}
+
+pub(crate) fn derive_from_edit(
+    edit: Mp4EditListEntry,
+    media: Mp4MediaTiming,
+    sample_rate: u32,
+    movie_timescale: u32,
+) -> Option<GaplessInfo> {
+    if edit.media_rate != 1 << 16 {
+        return None;
+    }
     let media_time = u64::try_from(edit.media_time).ok()?;
 
     let leading = scale_frames(media_time, sample_rate, media.timescale)?;
     let valid = scale_frames(edit.segment_duration, sample_rate, movie_timescale)?;
     let total = scale_frames(media.duration, sample_rate, media.timescale)?;
-    let trailing = total.checked_sub(leading.saturating_add(valid))?;
+    let trailing = total.checked_sub(leading.checked_add(valid)?)?;
 
     if leading == 0 && trailing == 0 {
         return None;
@@ -293,6 +309,8 @@ mod tests {
             Mp4EditListEntry {
                 segment_duration: 1_916,
                 media_time: 2_112,
+
+                media_rate: 1 << 16,
             },
         ));
 
@@ -349,6 +367,8 @@ mod tests {
             Mp4EditListEntry {
                 segment_duration: 1_916,
                 media_time: 2_112,
+
+                media_rate: 1 << 16,
             },
         ));
         moov.extend_from_slice(&atom(*b"udta", &atom(*b"meta", &meta_payload)));

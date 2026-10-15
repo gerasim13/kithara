@@ -47,6 +47,7 @@ pub(crate) trait Demuxer: Send {
     }
 
     /// Prepare container storage and metadata outside the real-time decode core.
+    /// Segment and variant queries describe this prepared packet before it is borrowed.
     ///
     /// # Errors
     /// Returns source, parser, or pool-budget failures encountered during preparation.
@@ -117,6 +118,13 @@ pub(crate) struct Frame<'a> {
     pub(crate) duration: Duration,
     /// Presentation time of this frame.
     pub(crate) pts: Duration,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct PacketMetadata {
+    pub(crate) segment_index: Option<u32>,
+    pub(crate) variant_index: Option<usize>,
+    pub(crate) source_bytes: u64,
 }
 
 /// Result of a [`Demuxer::next_frame`] call.

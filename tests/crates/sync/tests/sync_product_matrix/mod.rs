@@ -1,5 +1,6 @@
 mod binding;
 mod cases;
+mod control;
 mod harness;
 mod imports;
 mod providers;

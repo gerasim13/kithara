@@ -5,6 +5,7 @@ mod trajectory;
 
 pub use error::WarpRenderError;
 pub use renderer::WarpRenderer;
+pub use trajectory::SourceTrajectory;
 
 #[cfg(test)]
 mod tests;

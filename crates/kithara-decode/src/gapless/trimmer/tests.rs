@@ -109,6 +109,40 @@ fn leading_trim_updates_offset_and_timestamp(trim_ramp: Vec<f32>) {
     assert_eq!(out.meta.frame_offset, 576);
     assert_eq!(out.meta.timestamp, Duration::from_millis(12));
     assert_eq!(out.samples[0], 576.0);
+
+    let spec = AudioSpec::new(1, NonZeroU32::new(44_100).expect("fractional frame rate"));
+    for phase in [Duration::ZERO, Duration::from_micros(250)] {
+        let mut whole = GaplessTrimmer::from(GaplessInfo {
+            leading_frames: 1_015,
+            trailing_frames: 0,
+        });
+        let mut input = chunk(spec, 0, 1_200, &trim_ramp);
+        input.meta.timestamp = phase;
+        let whole = whole.push(input).remove(0);
+
+        let mut split = GaplessTrimmer::from(GaplessInfo {
+            leading_frames: 1_015,
+            trailing_frames: 0,
+        });
+        let mut head = chunk(spec, 0, 941, &trim_ramp);
+        head.meta.timestamp = phase;
+        assert!(split.push(head).is_empty());
+        let mut tail = chunk(spec, 941, 259, &trim_ramp[941..]);
+        tail.meta.timestamp = phase + spec.duration_for(941).expect("partition timestamp");
+        let split = split.push(tail).remove(0);
+
+        assert_eq!(whole.meta.frame_offset, 1_015);
+        assert_eq!(split.meta.frame_offset, whole.meta.frame_offset);
+        assert_eq!(whole.frames(), 185);
+        assert_eq!(split.frames(), whole.frames());
+        assert_eq!(whole.samples.as_ref(), &trim_ramp[1_015..1_200]);
+        assert_eq!(split.samples.as_ref(), whole.samples.as_ref());
+        assert_eq!(
+            whole.meta.timestamp,
+            phase + Duration::from_nanos(23_015_873),
+        );
+        assert_eq!(split.meta.timestamp, whole.meta.timestamp);
+    }
 }
 
 #[kithara::test]

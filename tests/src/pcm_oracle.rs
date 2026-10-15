@@ -1,6 +1,7 @@
 //! Independent `FFmpeg` decoding of media assembled by a test.
 
 use anyhow::{Context, Result, ensure};
+pub use cochlea_features::Audio;
 use kithara::platform::time::Duration;
 
 /// Decode the supplied container bytes without using Kithara's decoder.
@@ -14,6 +15,86 @@ pub async fn decode(bytes: &[u8]) -> Result<Vec<f32>> {
         .chunks_exact(4)
         .map(|sample| f32::from_le_bytes([sample[0], sample[1], sample[2], sample[3]]))
         .collect())
+}
+
+/// Decode one audio stream at its independently probed native rate and channel count.
+///
+/// Container edits and codec priming do not establish a raw-to-media origin here.
+///
+/// # Errors
+/// Returns an error when probing or decoding fails, the stream is ambiguous,
+/// or the decoded samples do not form nonempty finite audio at the probed spec.
+#[cfg(not(target_os = "android"))]
+#[kithara::flash(io)]
+pub async fn decode_native(bytes: &[u8]) -> Result<Audio> {
+    let directory = tempfile::tempdir().context("creating FFprobe input directory")?;
+    let input = directory.path().join("fragment.m4a");
+    std::fs::write(&input, bytes).context("writing current media for FFprobe")?;
+    let output = kithara::platform::time::timeout(
+        Duration::from_secs(30),
+        tokio::process::Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "a",
+                "-show_entries",
+                "stream=sample_rate,channels",
+                "-of",
+                "json",
+            ])
+            .arg(&input)
+            .stdin(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .context("FFprobe exceeded 30 seconds")?
+    .context("launching FFprobe")?;
+    ensure!(
+        output.status.success(),
+        "FFprobe failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&output.stdout).context("parsing FFprobe audio metadata")?;
+    let streams = metadata
+        .get("streams")
+        .and_then(serde_json::Value::as_array)
+        .context("FFprobe omitted its audio streams")?;
+    let [stream] = streams.as_slice() else {
+        anyhow::bail!("expected one audio stream, FFprobe found {}", streams.len());
+    };
+    let sample_rate = stream
+        .get("sample_rate")
+        .and_then(serde_json::Value::as_str)
+        .context("FFprobe omitted the native sample rate")?
+        .parse::<u32>()
+        .context("FFprobe returned an invalid native sample rate")?;
+    let channels = stream
+        .get("channels")
+        .and_then(serde_json::Value::as_u64)
+        .context("FFprobe omitted the native channel count")?;
+    let channels = u16::try_from(channels).context("FFprobe channel count exceeds u16")?;
+    ensure!(
+        sample_rate > 0 && channels > 0,
+        "FFprobe returned an empty audio spec"
+    );
+    let samples = decode(bytes).await?;
+    ensure!(!samples.is_empty(), "FFmpeg returned no audio samples");
+    ensure!(
+        samples.len().is_multiple_of(usize::from(channels)),
+        "FFmpeg returned a partial audio frame"
+    );
+    ensure!(
+        samples.iter().all(|sample| sample.is_finite()),
+        "FFmpeg returned non-finite audio"
+    );
+    Ok(Audio {
+        samples,
+        channels,
+        sample_rate,
+    })
 }
 
 #[cfg(target_os = "android")]

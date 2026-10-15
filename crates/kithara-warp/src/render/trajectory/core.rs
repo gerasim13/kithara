@@ -14,6 +14,13 @@ pub(super) fn divisor(mut first: u128, mut second: u128) -> u128 {
     first
 }
 
+fn check_precise_speed(value: f64) -> Result<(), ElasticError> {
+    if !value.is_finite() || !(f64::from(consts::MIN_SPEED)..=4.0).contains(&value) {
+        return Err(ElasticError::InvalidRate(value));
+    }
+    Ok(())
+}
+
 impl Fraction {
     pub(in crate::render) fn on_lattice(self) -> Option<Self> {
         let scale = 1u128 << 32;
@@ -65,9 +72,7 @@ impl Fraction {
     }
 
     fn precise_speed(value: f64) -> Result<Self, ElasticError> {
-        if !value.is_finite() || !(f64::from(consts::MIN_SPEED)..=4.0).contains(&value) {
-            return Err(ElasticError::InvalidRate(value));
-        }
+        check_precise_speed(value)?;
         let bits = value.to_bits();
         let exponent = i32::try_from((bits >> 52) & 2047)
             .map_err(|_| ElasticError::SampleCountOverflow)?
@@ -161,7 +166,9 @@ impl Fraction {
 }
 
 impl Trajectory {
-    pub(in crate::render) fn new(speed: f32) -> Self {
+    /// Starts a speed law without an observed source phase.
+    #[must_use]
+    pub fn new(speed: f32) -> Self {
         Self {
             curve: SpeedCurve::Constant(speed),
             origin_speed: Fraction {
@@ -265,14 +272,18 @@ impl Trajectory {
         }
     }
 
-    pub(in crate::render) fn replace(&mut self, curve: SpeedCurve) -> Result<f32, ElasticError> {
+    /// Replaces the speed law with the renderer's inherited speed and Q32 phase policy.
+    ///
+    /// # Errors
+    /// Rejects an invalid law or an unrepresentable source coordinate.
+    pub fn replace(&mut self, curve: SpeedCurve) -> Result<f32, ElasticError> {
         match &curve {
             SpeedCurve::Constant(speed) | SpeedCurve::Ramp { to: speed, .. } => {
                 Fraction::speed(*speed)?;
             }
             SpeedCurve::Approach(curve) => {
-                Fraction::precise_speed(curve.initial())?;
-                Fraction::precise_speed(curve.target())?;
+                check_precise_speed(curve.initial())?;
+                check_precise_speed(curve.target())?;
             }
             SpeedCurve::ApproachSteps(steps) => {
                 if steps.first().is_none_or(|(frame, _)| *frame != 0)
@@ -283,8 +294,8 @@ impl Trajectory {
                     ));
                 }
                 for (_, curve) in steps.iter() {
-                    Fraction::precise_speed(curve.initial())?;
-                    Fraction::precise_speed(curve.target())?;
+                    check_precise_speed(curve.initial())?;
+                    check_precise_speed(curve.target())?;
                 }
             }
             SpeedCurve::Steps(steps) => {
@@ -326,11 +337,7 @@ impl Trajectory {
                 SpeedCurve::Ramp { frames, .. } => frames.get(),
                 _ => 1,
             };
-            self.span(
-                0,
-                NonZeroU32::MIN,
-                usize::try_from(frames).map_err(|_| ElasticError::SampleCountOverflow)?,
-            )?;
+            self.source_span(0, NonZeroU32::MIN, frames)?;
             Ok(speed)
         });
         if result.is_err() {
@@ -343,7 +350,7 @@ impl Trajectory {
         result
     }
 
-    pub(in crate::render) fn output_limit(&self, budget: usize) -> usize {
+    pub(in crate::render) fn output_limit<T: Ord + TryFrom<u64>>(&self, budget: T) -> T {
         let next = match &self.curve {
             SpeedCurve::Steps(steps) => steps
                 .get(steps.partition_point(|(frame, _)| *frame <= self.elapsed))
@@ -354,9 +361,10 @@ impl Trajectory {
             SpeedCurve::Ramp { frames, .. } if self.elapsed < frames.get() => Some(frames.get()),
             _ => None,
         };
-        next.map_or(budget, |next| {
-            budget.min(usize::try_from(next - self.elapsed).unwrap_or(usize::MAX))
-        })
+        match next.and_then(|next| T::try_from(next - self.elapsed).ok()) {
+            Some(next) => budget.min(next),
+            None => budget,
+        }
     }
 
     pub(in crate::render) fn speed(&self) -> Result<f32, ElasticError> {

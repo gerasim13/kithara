@@ -45,6 +45,7 @@ fn a_segment_entry_keeps_its_native_curve_and_waits_for_native_readiness(#[case]
     );
     if applied {
         due.apply(kithara_render::LaneApplied {
+            native_pcm_basis: None,
             engine_latency: FrameCount::new(0),
             ready: Some(segment),
         });
@@ -667,6 +668,7 @@ fn a_later_speed_does_not_replace_the_prepared_origin_law() {
         .next_due(LaneFrame { segment, frame: 0 }, 1)
         .expect("native segment")
         .apply(kithara_render::LaneApplied {
+            native_pcm_basis: None,
             engine_latency: FrameCount::new(0),
             ready: Some(segment),
         });
@@ -729,6 +731,7 @@ fn a_replay_entry_waits_for_native_adoption_after_lane_readiness() {
         .next_due(LaneFrame { segment, frame: 0 }, 1)
         .expect("replay segment")
         .apply(kithara_render::LaneApplied {
+            native_pcm_basis: None,
             engine_latency: FrameCount::new(0),
             ready: Some(segment),
         });
@@ -788,6 +791,7 @@ fn an_older_native_ready_receipt_cannot_admit_the_replacement_segment() {
         )
         .expect("older native segment")
         .apply(kithara_render::LaneApplied {
+            native_pcm_basis: None,
             engine_latency: FrameCount::new(0),
             ready: Some(old),
         });
@@ -813,6 +817,7 @@ fn an_older_native_ready_receipt_cannot_admit_the_replacement_segment() {
         )
         .expect("current native segment")
         .apply(kithara_render::LaneApplied {
+            native_pcm_basis: None,
             engine_latency: FrameCount::new(0),
             ready: Some(current),
         });
@@ -887,6 +892,7 @@ fn a_ready_paused_segment_keeps_its_cue_over_an_old_slot_snapshot() {
         .next_due(LaneFrame { segment, frame: 0 }, 1)
         .expect("cue segment")
         .apply(kithara_render::LaneApplied {
+            native_pcm_basis: None,
             engine_latency: FrameCount::new(0),
             ready: Some(segment),
         });
@@ -957,6 +963,7 @@ fn an_alignment_uses_one_credit_and_settles_every_part(#[case] applied: bool) {
     );
     if applied {
         due.apply(kithara_render::LaneApplied {
+            native_pcm_basis: None,
             engine_latency: FrameCount::new(0),
             ready: None,
         });

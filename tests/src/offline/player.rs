@@ -13,8 +13,9 @@ use kithara::{
         tokio::sync::broadcast::error::TryRecvError,
     },
     play::{
-        CrossfadeSettings, HostedDeck, PlayWorker, PlayWorkerConfig, PlayerEvent, PlayerFactory,
-        Resource, ResourcePrep, TrackFactory, TrackSettings,
+        CrossfadeSettings, DeckMixSettings, DeckMixerConfig, HostedDeck, PlayWorker,
+        PlayWorkerConfig, PlayerEvent, PlayerFactory, Resource, ResourcePrep, TrackFactory,
+        TrackSettings,
     },
     queue::{Queue, QueueConfig, QueueControl, QueueError, QueueSettings, TrackSource, Transition},
     warp::WarpConfig,
@@ -56,6 +57,8 @@ pub struct OfflinePlayerOptions {
     eq_layout: Option<Vec<EqBandConfig>>,
     #[builder(default)]
     gapless_mode: GaplessMode,
+    #[builder(default)]
+    mix: DeckMixSettings,
     /// Make audio-thread reads block on a producer-ring underrun instead of
     /// zero-filling. Suites that read the rendered PCM itself opt in, because
     /// a zero-filled range is indistinguishable from rendered silence:
@@ -160,6 +163,7 @@ where
             QueueConfig::with_factory(factory)
                 .prep(prep.clone())
                 .track(track)
+                .mixer(DeckMixerConfig::builder().mix(options.mix).build())
                 .settings(settings)
                 .store(memory_asset_store())
                 .build(),

@@ -1,6 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::path::Path;
+use std::{num::NonZeroU32, path::Path};
 
 use kithara::{
     abr::AbrEvent,
@@ -8,11 +8,13 @@ use kithara::{
     effects::eq::generate_log_spaced_bands,
     events::EventReceiver,
     hls::AbrMode,
+    host::{HostConfig, HostSettings},
     platform::{
+        sync::{Arc, Mutex},
         time::{self, Duration},
         tokio::sync::broadcast::error::TryRecvError,
     },
-    play::{ResourceConfig, ResourceSrc},
+    play::{DeckMixerConfig, ResourceConfig, ResourceSrc, Settled},
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     warp::WarpConfig,
 };
@@ -20,14 +22,19 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
     event::TestEvent,
     fixture_protocol::PcmPattern,
-    offline::{LOCAL_LOAD_DEADLINE, OfflinePlayer, OfflinePlayerOptions},
+    offline::{
+        LOCAL_LOAD_DEADLINE, OfflinePlayer, OfflinePlayerOptions, append_source_loaded,
+        linked::{LinkObservation, LinkReceiptOrigin, ObservedFactory},
+    },
     waits::wait_for_loader_done_event,
 };
+use kithara_render::bridge::{DeckSnapshot, SlotState};
 use kithara_test_fixtures::signal::{
     FrameClass, Replay, SAW_PERIOD, ascending_phase_replays, classify_windows, deinterleave_left,
     goertzel_magnitude, phase,
 };
 use kithara_test_utils::{TestTempDir, bufpool::TestPools, temp_dir};
+use serde_json::Value;
 use url::Url;
 
 const SAMPLE_RATE: u32 = 44_100;
@@ -56,9 +63,6 @@ const SEEK_OFFSET_SECS: f64 = 0.5;
 /// `SEEK_OFFSET_SECS` at `SAMPLE_RATE`: what a seek to `duration - 0.5s` leaves
 /// of track A.
 const EXPECTED_POST_SEEK_FRAMES: usize = 22_050;
-/// One phase unit is one frame, so this admits a landing anywhere inside the
-/// render block that carries it - the granularity post-seek audio starts at.
-const SEEK_PHASE_TOL_UNITS: usize = 512;
 const MIN_RENDER_PEAK: f32 = 1.0e-6;
 const TONE_A_FREQ_HZ: f64 = 440.0;
 const TONE_B_FREQ_HZ: f64 = 880.0;
@@ -811,51 +815,147 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(
     temp_dir: TestTempDir,
 ) {
     let (_server, sources) = flac_tracks;
-    let setup = setup_queue(&sources, &temp_dir).await;
-
-    let (rendered, seek_issue_frame, seek_complete_frame, duration) =
-        render_seek_near_end_until_b_with_postroll(&setup.queue, &setup.harness, SAMPLE_RATE).await;
-    assert_provenance_headroom(&rendered, "FLAC seek near EOF");
-    let left_raw = deinterleave_left(&rendered, usize::from(CHANNELS));
-    let left = normalized_left(&left_raw, setup.queue.current_index());
+    let observation = Arc::new(Mutex::new(LinkObservation::default()));
+    let sample_rate = NonZeroU32::new(SAMPLE_RATE).expect("fixture sample rate");
+    let harness = OfflinePlayer::with_factory(
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(0.0)
+            .build(),
+        HostConfig::offline(kithara_integration_tests::bufpool_ext::pools())
+            .settings(HostSettings::builder().sample_rate(sample_rate).build())
+            .build(),
+        ObservedFactory::new(observation.clone()),
+    )
+    .await;
+    let queue = harness.player().clone();
+    harness
+        .run(&queue, |control| control.set_level(PROVENANCE_LEVEL))
+        .await
+        .expect("set the mix level");
+    let first = append_source_loaded(
+        &harness,
+        &queue,
+        hls_source(&sources[0], &temp_dir.path().join("a")),
+    )
+    .await;
+    append_source_loaded(
+        &harness,
+        &queue,
+        hls_source(&sources[1], &temp_dir.path().join("b")),
+    )
+    .await;
+    harness
+        .run(&queue, move |control| {
+            control.select(first, Transition::None)
+        })
+        .await
+        .expect("select track A");
+    assert_eq!(
+        queue
+            .track_source(first)
+            .as_ref()
+            .and_then(TrackSource::uri),
+        Some(sources[0].as_str())
+    );
+    let seek_index = observation.lock().seeks.len();
+    let command_index = observation.lock().timeline.len();
+    let capture = render_seek_near_end_until_b_with_postroll(&queue, &harness, SAMPLE_RATE).await;
+    let rendered = &capture.rendered;
+    assert_provenance_headroom(rendered, "FLAC seek near EOF");
+    let left_raw = deinterleave_left(rendered, usize::from(CHANNELS));
+    let left = normalize_with_gain(&left_raw, PROVENANCE_LEVEL);
     let classes = classify_windows(&left, WINDOW_FRAMES, ASCENDING_TOL);
     let runs = collect_runs(&classes);
     let b_onset_window = require_first_sustained_descending_window(
         &classes,
-        seek_issue_frame,
+        capture.seek_issue_frame,
         "sustained Descending B onset must be rendered",
-        || dump(&[], &runs, None, None, setup.queue.current_index()),
+        || dump(&[], &runs, None, None, queue.current_index()),
     );
-    let seek_complete_window = seek_complete_frame / WINDOW_FRAMES;
+    let requested = Duration::try_from_secs_f64(capture.duration - SEEK_OFFSET_SECS)
+        .expect("requested near-EOF cue");
+    let (applied_at, segment) = {
+        let observed = observation.lock();
+        let requests: Vec<_> = observed.seeks[seek_index..]
+            .iter()
+            .filter(|(item, origin, _)| *item == first && *origin == LinkReceiptOrigin::Deck)
+            .collect();
+        let [(_, _, seq)] = requests.as_slice() else {
+            panic!("near-EOF seek must have one deck request: {requests:?}");
+        };
+        let requests: Vec<_> = observed.timeline[command_index..]
+            .iter()
+            .filter(|entry| entry.get("item").and_then(Value::as_u64) == Some(u64::from(first)))
+            .filter_map(|entry| entry.get("details").and_then(|details| details.get("Seek")))
+            .collect();
+        assert_eq!(requests.len(), 1, "one original cue must reach the player");
+        let cue = requested.as_nanos().to_string();
+        assert_eq!(requests[0].as_str(), Some(cue.as_str()));
+        let receipts: Vec<_> = observed
+            .placement_receipts
+            .iter()
+            .filter_map(|(item, origin, receipt)| {
+                (*item == first && *origin == LinkReceiptOrigin::Deck)
+                    .then_some(receipt)
+                    .filter(|receipt| matches!(receipt, Settled::Applied { seq: answered, .. } | Settled::Rejected { seq: answered, .. } if answered == seq))
+            })
+            .collect();
+        let [Settled::Applied { at, .. }] = receipts.as_slice() else {
+            panic!("near-EOF seek must have one actual Applied outcome: {receipts:?}");
+        };
+        let applied_at = *at;
+        let segments: Vec<_> = observed.timeline[command_index..]
+            .iter()
+            .filter(|entry| {
+                entry.get("event").and_then(|value| value.as_str()) == Some("deck receipt")
+                    && entry.get("item").and_then(Value::as_u64) == Some(u64::from(first))
+                    && entry
+                        .get("details")
+                        .and_then(|details| details.get("seq"))
+                        .and_then(Value::as_u64)
+                        == Some(seq.get())
+            })
+            .filter_map(|entry| {
+                entry
+                    .get("details")
+                    .and_then(|details| details.get("parts"))
+                    .and_then(|value| value.as_array())
+            })
+            .flatten()
+            .filter_map(|part| {
+                part.get("Adopt")
+                    .and_then(|adopt| adopt.get("segment"))
+                    .and_then(Value::as_u64)
+            })
+            .collect();
+        drop(observed);
+        let [segment] = segments.as_slice() else {
+            panic!("near-EOF seek must adopt exactly one actual segment: {segments:?}");
+        };
+        (applied_at, *segment)
+    };
+    let applied_at = u64::try_from(i64::from(applied_at)).expect("nonnegative adoption frame");
+    let landing_frame = usize::try_from(
+        applied_at
+            .checked_sub(capture.session_start)
+            .expect("adoption is inside capture"),
+    )
+    .expect("capture adoption frame");
+    assert!(landing_frame >= capture.seek_issue_frame);
+    let declick = DeckMixerConfig::default().declick_frames(sample_rate).get();
+    let phase_start_frame = landing_frame
+        .checked_add(declick)
+        .expect("declick boundary");
+    let expected_source_frame = frames_from_secs(capture.duration - SEEK_OFFSET_SECS, SAMPLE_RATE);
+    let seek_complete_window = capture.seek_complete_frame / WINDOW_FRAMES;
     let search_context = ProvenanceDumpContext {
         replays: &[],
         runs: &runs,
-        onset_window: Some(seek_complete_window),
+        onset_window: Some(landing_frame / WINDOW_FRAMES),
         b_onset_window: Some(b_onset_window),
         switch_issue_frame: None,
-        current_index: setup.queue.current_index(),
+        current_index: queue.current_index(),
     };
-    let b_onset_frame = frame_for_window(b_onset_window);
-    let expected_phase = frames_from_secs(duration - SEEK_OFFSET_SECS, SAMPLE_RATE) % SAW_PERIOD;
-
-    // Where the seek landed, read off the rendered audio rather than off the
-    // event. `SeekComplete` is published from a read, so its frame leads the
-    // audible position by the ring depth, and a length measured from it would
-    // carry that lead as a tolerance instead of stating a property. The landing
-    // is the frame carrying the requested phase: the sawtooth repeats only every
-    // `SAW_PERIOD` frames, which is longer than the stretch searched here, so one
-    // frame in it holds that phase. Reading the landing off a class run instead
-    // would depend on the seam splitting the run, and a seam that falls inside a
-    // window leaves the pre-seek and post-seek stretches joined.
-    let landing_frame = require_phase_landing(
-        &left,
-        seek_issue_frame,
-        b_onset_frame,
-        expected_phase,
-        &search_context,
-    );
-    // The phase check stops at the last Ascending window: the windows between it and B
-    // hold the seam itself, whose mixed frames are not track A's phase.
     let last_ascending_window = require_last_class_window_before(
         &classes,
         FrameClass::Ascending,
@@ -863,8 +963,50 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(
         &search_context,
     );
     let last_ascending_end_frame = frame_for_window(last_ascending_window + 1);
-
-    let phase_start_frame = seek_complete_frame.saturating_add(WINDOW_FRAMES);
+    check_seek_source_law(
+        &capture.points,
+        capture.session_start,
+        applied_at,
+        segment,
+        expected_source_frame,
+        last_ascending_end_frame,
+    )
+    .unwrap_or_else(|error| {
+        let timeline: Vec<_> = observation.lock().timeline[command_index..].iter()
+            .filter(|entry| !matches!(
+                entry.get("event").and_then(|value| value.as_str()),
+                Some("entry" | "planned")
+            ))
+            .cloned()
+            .collect();
+        let after_applied: Vec<_> = capture.points.iter()
+            .filter(|(frame, _)| capture.session_start + *frame as u64 >= applied_at)
+            .take(8)
+            .collect();
+        let first_consumed: Vec<_> = capture.points.iter()
+            .filter(|(_, snapshot)| snapshot.slots.iter().any(|slot| {
+                slot.mark.is_some_and(|mark| mark.lane.segment.get() == segment)
+            }))
+            .take(3)
+            .collect();
+        panic!(
+            "near-EOF consumed source law: {error}; issue={}; seek_complete={}; session_start={}; Applied={applied_at}; landing={landing_frame}; segment={segment}; requested_source={expected_source_frame}; pcm_frames={}; A_end={last_ascending_end_frame}; current={:?}; metrics={:?}; after_applied={after_applied:#?}; first_consumed={first_consumed:#?}; command_lifecycle={timeline:#?}",
+            capture.seek_issue_frame,
+            capture.seek_complete_frame,
+            capture.session_start,
+            left.len(),
+            queue.current_index(),
+            harness.metrics(),
+        );
+    });
+    check_seek_phase(
+        &left,
+        phase_start_frame,
+        last_ascending_end_frame,
+        landing_frame,
+        expected_source_frame,
+    )
+    .unwrap_or_else(|error| panic!("near-EOF physical source phase: {error}"));
     let replays = ascending_phase_replays(
         &left,
         phase_start_frame,
@@ -874,24 +1016,18 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(
     let context = ProvenanceDumpContext {
         replays: &replays,
         runs: &runs,
-        onset_window: Some(seek_complete_window),
+        onset_window: Some(landing_frame / WINDOW_FRAMES),
         b_onset_window: Some(b_onset_window),
         switch_issue_frame: None,
-        current_index: setup.queue.current_index(),
+        current_index: queue.current_index(),
     };
     assert!(
         replays.is_empty(),
-        "post-seek track A phase must be monotonic until B starts; \
-         seek_issue_frame={seek_issue_frame}; {}",
-        dump(
-            &replays,
-            &runs,
-            Some(seek_complete_window),
-            Some(b_onset_window),
-            setup.queue.current_index()
-        )
+        "post-seek track A phase must be monotonic until B starts; seek_issue_frame={}; \
+         applied_frame={landing_frame}; declick={declick}; seek_complete_window={seek_complete_window}; {}",
+        capture.seek_issue_frame,
+        context.dump(),
     );
-
     assert_close_len(
         last_ascending_end_frame - landing_frame,
         EXPECTED_POST_SEEK_FRAMES,
@@ -899,14 +1035,86 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(
         "post-seek ascending length must be approximately 0.5s before B starts",
         &context,
     );
-
+    let mut wrong_source = left.clone();
+    for sample in &mut wrong_source[phase_start_frame..last_ascending_end_frame] {
+        *sample = -*sample;
+    }
+    assert!(
+        check_seek_phase(
+            &wrong_source,
+            phase_start_frame,
+            last_ascending_end_frame,
+            landing_frame,
+            expected_source_frame
+        )
+        .is_err()
+    );
+    let replay_start = phase_start_frame + BLOCK_FRAMES;
+    assert!(
+        replay_start + BLOCK_FRAMES < last_ascending_end_frame,
+        "post-seek body covers a real replay negative"
+    );
+    let mut replayed = left.clone();
+    replayed.copy_within(phase_start_frame..replay_start, replay_start);
+    assert!(
+        check_seek_phase(
+            &replayed,
+            phase_start_frame,
+            last_ascending_end_frame,
+            landing_frame,
+            expected_source_frame
+        )
+        .is_err()
+    );
+    assert!(
+        !ascending_phase_replays(
+            &replayed,
+            phase_start_frame,
+            last_ascending_end_frame,
+            PHASE_TOL_UNITS
+        )
+        .is_empty()
+    );
+    let mut wrong_mark = capture.points.clone();
+    let (_, snapshot) = wrong_mark
+        .iter_mut()
+        .find(|(frame, snapshot)| {
+            *frame >= phase_start_frame
+                && *frame < last_ascending_end_frame
+                && snapshot.slots.iter().any(|slot| {
+                    slot.mark
+                        .is_some_and(|mark| mark.lane.segment.get() == segment)
+                })
+        })
+        .expect("post-seek consumed mark negative");
+    let mark = snapshot
+        .slots
+        .iter_mut()
+        .find_map(|slot| {
+            slot.mark
+                .as_mut()
+                .filter(|mark| mark.lane.segment.get() == segment)
+        })
+        .expect("adopted mark");
+    mark.lane.frame += 1;
+    assert!(
+        check_seek_source_law(
+            &wrong_mark,
+            capture.session_start,
+            applied_at,
+            segment,
+            expected_source_frame,
+            last_ascending_end_frame
+        )
+        .is_err()
+    );
     assert_no_ascending_after_b(
         &classes,
         "B region must not contain Ascending A windows",
         &context,
     );
     assert_eq!(
-        setup.queue.current_index(),
+        queue.current_index(),
         Some(1),
         "queue.current_index must advance to track B after near-EOF seek; {}",
         dump(
@@ -914,10 +1122,11 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(
             &runs,
             Some(seek_complete_window),
             Some(b_onset_window),
-            setup.queue.current_index()
+            queue.current_index()
         )
     );
-    setup.close().await;
+    drop(queue);
+    harness.close().await;
 }
 
 /// AAC cannot preserve the 0.67 Hz sawtooth slope/phase provenance reliably;
@@ -1564,9 +1773,11 @@ fn drain_variant_applied_events(
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn render_seek_near_end_until_b_with_postroll(
     queue: &QueueControl<TestPools>,
-    harness: &OfflinePlayer,
+    harness: &OfflinePlayer<ObservedFactory<TestPools>>,
     render_sample_rate: u32,
-) -> (Vec<f32>, usize, usize, f64) {
+) -> SeekCapture {
+    let session_start = harness.host().position();
+    let mut points = Vec::new();
     let block_duration = render_block_duration(render_sample_rate);
     let mut progress = RenderProgress::new();
     let mut events = queue.subscribe();
@@ -1598,6 +1809,7 @@ async fn render_seek_near_end_until_b_with_postroll(
 
         let block = harness.render(BLOCK_FRAMES).await;
         progress.push_block(&block, ASCENDING_TOL, seek_issue_frame);
+        points.push((progress.rendered_frames(), harness.deck_snapshot()));
 
         if seek_issue_frame.is_none()
             && progress.rendered_frames()
@@ -1623,12 +1835,16 @@ async fn render_seek_near_end_until_b_with_postroll(
         }
     }
 
-    (
-        progress.rendered,
-        seek_issue_frame.expect("seek must be issued after duration becomes available"),
-        seek_complete_frame.expect("seek must complete before track B postroll"),
-        seek_duration.expect("seek must be issued after duration becomes available"),
-    )
+    SeekCapture {
+        rendered: progress.rendered,
+        seek_issue_frame: seek_issue_frame
+            .expect("seek must be issued after duration becomes available"),
+        seek_complete_frame: seek_complete_frame
+            .expect("seek must complete before track B postroll"),
+        duration: seek_duration.expect("seek must be issued after duration becomes available"),
+        session_start,
+        points,
+    }
 }
 
 #[kithara::flash(true)]
@@ -1952,27 +2168,133 @@ fn require_last_class_window_before(
         })
 }
 
-/// The frame between `from` and `to` whose phase is `expected_phase`. A seek
-/// states where it landed by the phase it resumes at, so the landing is found by
-/// that phase rather than by the class seam around it.
-fn require_phase_landing(
-    left: &[f32],
-    from: usize,
-    to: usize,
-    expected_phase: usize,
-    context: &ProvenanceDumpContext<'_>,
-) -> usize {
-    (from..to.min(left.len()))
-        .find(|frame| {
-            phase::distance(phase::units(left[*frame]), expected_phase) <= SEEK_PHASE_TOL_UNITS
-        })
-        .unwrap_or_else(|| {
-            panic!(
-                "seek must land at the requested position in track A: \
-                 expected_phase={expected_phase}; searched frames {from}..{to}; {}",
-                context.dump()
+struct SeekCapture {
+    rendered: Vec<f32>,
+    seek_issue_frame: usize,
+    seek_complete_frame: usize,
+    duration: f64,
+    session_start: u64,
+    points: Vec<(usize, DeckSnapshot)>,
+}
+
+fn check_seek_source_law(
+    points: &[(usize, DeckSnapshot)],
+    session_start: u64,
+    applied_at: u64,
+    segment: u64,
+    requested: usize,
+    end: usize,
+) -> Result<(), String> {
+    let mut checked = 0;
+    for (frame, snapshot) in points {
+        let session = session_start
+            .checked_add(*frame as u64)
+            .ok_or("capture clock overflow")?;
+        if session <= applied_at || *frame >= end {
+            continue;
+        }
+        if snapshot.sample_rate != SAMPLE_RATE {
+            return Err(format!(
+                "capture frame {frame} has a different output clock"
+            ));
+        }
+        let slots: Vec<_> = snapshot
+            .slots
+            .iter()
+            .filter(|slot| slot.state == SlotState::Playing)
+            .collect();
+        let [slot] = slots.as_slice() else {
+            return Err(format!(
+                "capture frame {frame} has no unique Playing A slot"
+            ));
+        };
+        let mark = slot.mark.ok_or_else(|| format!(
+            "post-seek A has no consumed mark at capture {frame}, session {session}, Applied {applied_at}, segment {segment}: {snapshot:?}"
+        ))?;
+        let info = slot.source.ok_or_else(|| {
+            format!(
+                "post-seek A has no source facts at capture {frame}, session {session}: {slot:?}"
             )
-        })
+        })?;
+        let span = info.source_span.ok_or_else(|| format!(
+            "post-seek A has no exact SourceSpan at capture {frame}, session {session}: {info:?}"
+        ))?;
+        if mark.lane.segment.get() != segment
+            || info.segment.get() != segment
+            || info.spec.sample_rate.get() != SAMPLE_RATE
+            || span.sample_rate().get() != SAMPLE_RATE
+            || info.spec.channels != CHANNELS
+            || info.media_origin != Some(Duration::ZERO)
+            || info.render_revision != span.render_revision()
+            || info.mapping_revision != span.mapping_revision()
+            || span.output_frames() != u64::from(info.frames)
+        {
+            return Err(format!(
+                "capture frame {frame} lost adopted Segment/source axes"
+            ));
+        }
+        if u64::try_from(i64::from(mark.session)).ok() != Some(session)
+            || session.checked_sub(mark.lane.frame) != Some(applied_at)
+        {
+            return Err(format!(
+                "capture frame {frame} changes the actual Adopt/Lane/session clock"
+            ));
+        }
+        let offset = mark
+            .lane
+            .frame
+            .checked_sub(info.lane_frame)
+            .ok_or("mark precedes source payload")?;
+        if span.position_at(offset) != Some(mark.position) {
+            return Err(format!(
+                "capture frame {frame} mark is not its actual source coordinate"
+            ));
+        }
+        for output in 0..=span.output_frames() {
+            let (numerator, denominator) = span
+                .source_ratio_at(output)
+                .ok_or("unmapped post-seek source coordinate")?;
+            let expected = (requested as u128)
+                .checked_add(u128::from(info.lane_frame))
+                .and_then(|value| value.checked_add(u128::from(output)))
+                .and_then(|value| value.checked_mul(denominator.get()))
+                .ok_or("requested source coordinate overflow")?;
+            if numerator != expected {
+                return Err(format!(
+                    "capture frame {frame} replays or skips source PCM at lane frame {}",
+                    info.lane_frame + output
+                ));
+            }
+        }
+        checked += 1;
+    }
+    if checked < 2 {
+        return Err("post-seek A has no sustained consumed source evidence".to_owned());
+    }
+    Ok(())
+}
+
+fn check_seek_phase(
+    left: &[f32],
+    start: usize,
+    end: usize,
+    landing: usize,
+    requested: usize,
+) -> Result<(), String> {
+    if start >= end || end > left.len() || start < landing {
+        return Err("post-declick phase domain is empty or invalid".to_owned());
+    }
+    for (frame, &sample) in left.iter().enumerate().take(end).skip(start) {
+        let expected = (requested + frame - landing) % SAW_PERIOD;
+        if !sample.is_finite()
+            || phase::distance(phase::units(sample), expected) > PHASE_TOL_UNITS as usize
+        {
+            return Err(format!(
+                "frame {frame} carries PCM from a different source frame than requested {expected}"
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn class_count_between(

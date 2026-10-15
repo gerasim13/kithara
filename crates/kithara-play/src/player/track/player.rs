@@ -127,6 +127,7 @@ impl<S> Player<S> for PlayerImpl<S> {
                 self.issued_segment = segment;
                 let seq = out.deferred(vec![DeckPart::Adopt { slot, segment }])?;
                 self.segment = segment;
+                self.segment_origin = Some(Position::ZERO);
                 self.playback_commands.clear();
                 self.segment_speed = self.settings.projected().speed();
                 self.ready = None;
@@ -346,7 +347,11 @@ impl<S> Player<S> for PlayerImpl<S> {
             pending_lane: self
                 .lane_commands
                 .iter()
-                .any(|operation| operation.applied().is_none()),
+                .any(|operation| operation.applied().is_none())
+                || self
+                    .loading
+                    .as_ref()
+                    .is_some_and(|loading| loading.speed.is_some()),
             attached: self.attached(),
             declick: self.declick,
         }

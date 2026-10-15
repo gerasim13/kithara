@@ -55,6 +55,7 @@ pub(crate) struct SymphoniaDemuxer {
     time_base: TimeBase,
     /// Declared native origin translated to the public raw PCM basis.
     timestamp_origin: Timestamp,
+    media_origin: Option<Duration>,
     track_info: TrackInfo,
     /// Native (timebase-unit) timestamp the *next* packet must start at.
     /// Authoritative across a `Pending`: set to the seek's `actual_ts` on
@@ -610,6 +611,10 @@ impl SymphoniaDemuxer {
             detail: "audio track has no time base",
         })?;
         let timestamp_origin = timestamp_origin(&track, format);
+        let media_origin = Timestamp::ZERO
+            .duration_from(timestamp_origin)
+            .and_then(|duration| time_base.calc_duration(duration))
+            .and_then(time_to_duration);
         Ok(Self {
             track_id,
             track_info,
@@ -617,6 +622,7 @@ impl SymphoniaDemuxer {
             native_params,
             time_base,
             timestamp_origin,
+            media_origin,
             byte_pos_handle,
             byte_map,
             format_reader: Packets::new(format_reader),
@@ -747,7 +753,7 @@ impl Demuxer for SymphoniaDemuxer {
     }
 
     fn media_origin(&self) -> Option<Duration> {
-        self.ts_to_duration(Timestamp::ZERO).ok()
+        self.media_origin
     }
 
     fn track_info(&self) -> &TrackInfo {
@@ -854,6 +860,26 @@ impl SymphoniaDemuxer {
     /// Set encoder trim obtained from container metadata.
     pub(crate) const fn set_gapless(&mut self, gapless: Option<crate::GaplessInfo>) {
         self.track_info.gapless = gapless;
+    }
+
+    #[cfg(feature = "symphonia")]
+    pub(crate) fn set_mp4_presentations(
+        &mut self,
+        presentations: Vec<crate::mp4::Presentation>,
+        gapless: bool,
+    ) {
+        if let Some(presentation) = presentations
+            .into_iter()
+            .find(|item| item.track_id == self.track_id)
+        {
+            self.media_origin = presentation.media_origin;
+            if gapless {
+                self.track_info.gapless = presentation.gapless;
+            }
+            if let Some(end) = presentation.media_end {
+                self.track_info.duration = Some(crate::DecoderDuration::MediaEnd(end));
+            }
+        }
     }
 }
 

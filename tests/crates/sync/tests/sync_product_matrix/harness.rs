@@ -5,6 +5,9 @@ use kithara::{
     decode::DecoderBackend,
     events::EventBus,
 };
+use kithara_integration_tests::offline::linked::LinkSpeed;
+use kithara_render::bridge::SlotSnapshot;
+use num_traits::ToPrimitive;
 
 use super::{cases::*, imports::*, providers::*};
 
@@ -13,6 +16,12 @@ pub(crate) enum SyncRequest {
     On,
     Off,
     Align,
+}
+
+enum CaptureMode {
+    SourceBoundaries,
+    Fixed,
+    Paced,
 }
 
 pub(crate) struct ProductHarness {
@@ -30,12 +39,10 @@ pub(crate) struct ProductHarness {
     worker: PlayWorker<TestPools>,
     trajectory: TempoTrajectory,
     operation_grid: Option<kithara::warp::BeatGridSnapshot>,
-    capture_marks: Vec<(
-        SessionFrame,
-        kithara::events::TrackId,
-        kithara_render::bridge::SlotSnapshot,
-    )>,
+    capture_marks: Vec<(SessionFrame, kithara::events::TrackId, SlotSnapshot)>,
     host_grids: Vec<(SessionFrame, kithara::warp::BeatGridSnapshot)>,
+    decoded: Vec<Arc<Mutex<super::control::DecodedCapture>>>,
+    source_uris: Vec<String>,
     /// The second each deck's start opens it at, before its stagger.
     cues: Vec<f64>,
     decoder_backends: Vec<EventDecoderBackend>,
@@ -47,6 +54,16 @@ pub(crate) struct ProductHarness {
     master_tap: kithara_integration_tests::audio_artifact::AudioArtifactTap,
     #[cfg(not(target_os = "android"))]
     metronome_delta_peak: f32,
+}
+
+fn linked_mixer() -> kithara::play::DeckMixerConfig {
+    kithara::play::DeckMixerConfig::builder()
+        .mix(
+            kithara::play::DeckMixSettings::builder()
+                .level(super::control::CONTROL_GAIN)
+                .build(),
+        )
+        .build()
 }
 
 fn linked_queue(
@@ -64,6 +81,7 @@ fn linked_queue(
                 .trajectory(trajectory.clone())
                 .build(),
         ))
+        .mixer(linked_mixer())
         .should_autoplay(false)
         .prep(
             ResourcePrep::builder()
@@ -219,6 +237,7 @@ impl ProductHarness {
             .take(case.decks)
             .cloned()
             .collect();
+        let source_uris = sources.clone();
         let pools = pools();
         let worker = PlayWorker::new(
             PlayWorkerConfig::builder(pools.clone())
@@ -285,6 +304,7 @@ impl ProductHarness {
         let mut decks = Vec::with_capacity(sources.len());
         let mut ids = Vec::with_capacity(sources.len());
         let mut decoder_receivers = Vec::new();
+        let mut decoded = Vec::with_capacity(sources.len());
         for (index, source) in sources.into_iter().enumerate() {
             hang_tick!(format!("{}: creating deck {index}", case.id));
             // Ruling: PlayerImpl-backed Host deck → Queue<LinkedFactory<ObservedFactory>> on LinkedHost — spec §4.4–§4.6, §11.2.
@@ -314,15 +334,20 @@ impl ProductHarness {
             };
             let control = deck.control().clone();
             let muted = !audible.hears(index);
+            let reference = Arc::new(Mutex::new(super::control::DecodedCapture::default()));
+            let observer = super::control::DecodedObserver(reference.clone());
             let id = host
                 .run(move || {
                     control.set_muted(muted).expect("deck mute");
-                    control.append(TrackSource::Config(Box::new(config)))
+                    let item = control.append(TrackSource::Config(Box::new(config)))?;
+                    control.attach_observer(item, observer);
+                    Ok::<_, kithara::queue::QueueError>(item)
                 })
                 .await
                 .unwrap_or_else(|error| panic!("{}: append deck {index}: {error}", case.id));
             decks.push(deck);
             ids.push(id);
+            decoded.push(reference);
             hang_reset!();
         }
         let mut harness = Self {
@@ -339,6 +364,8 @@ impl ProductHarness {
             operation_grid: None,
             capture_marks: Vec::new(),
             host_grids: Vec::new(),
+            decoded,
+            source_uris,
             decoder_backends: Vec::new(),
             decoder_rates: Vec::new(),
             cues: (0..case.decks)
@@ -740,6 +767,253 @@ impl ProductHarness {
         }
     }
 
+    pub(crate) fn physical_failures(
+        &mut self,
+        case: SyncCase,
+        deck: usize,
+        pcm: &[f32],
+        wrong_source: &kithara_integration_tests::pcm_oracle::Audio,
+        jump: Option<(SessionFrame, SessionFrame)>,
+    ) -> Vec<String> {
+        let selected = &self.decks[deck];
+        let item = selected
+            .current()
+            .expect("selected physical capture item")
+            .id;
+        if selected
+            .track_source(item)
+            .as_ref()
+            .and_then(TrackSource::uri)
+            != Some(self.source_uris[deck].as_str())
+        {
+            return vec![format!(
+                "deck {deck}: selected source differs from the requested provider URI"
+            )];
+        }
+        let ArtifactSource::Value(grid) = self.provider.beat_grid(deck) else {
+            panic!("physical capture has a declared source grid");
+        };
+        let marks: Vec<_> = self
+            .capture_marks
+            .iter()
+            .filter_map(|(frame, owner, slot)| (*owner == item).then_some((*frame, *slot)))
+            .collect();
+        let failures = self.decoded[deck].lock().physical_failures(
+            pcm,
+            &marks,
+            case.sample_rate,
+            &grid,
+            wrong_source,
+            |frame| match jump {
+                Some((start, landing)) if frame >= start => {
+                    let declick = (i64::from(landing) - i64::from(start))
+                        .to_f32()
+                        .expect("i64 declick frames fit the f32 range");
+                    let elapsed = (i64::from(frame) - i64::from(start))
+                        .to_f32()
+                        .expect("i64 elapsed frames fit the f32 range");
+                    if frame < landing {
+                        1.0 - (elapsed / declick.max(1.0)).min(1.0)
+                    } else {
+                        ((elapsed - declick) / declick.max(1.0)).min(1.0)
+                    }
+                }
+                _ => 1.0,
+            },
+        );
+        #[cfg(not(target_os = "android"))]
+        self.master_tap.evidence(
+            "physical_capture",
+            serde_json::json!({
+                "boundary": "postdecoder/SRC PCM through actual Warp SourceSpan to Master",
+                "source": self.source_uris[deck], "item": u64::from(item),
+                "mix_gain": super::control::CONTROL_GAIN,
+                "frames": pcm.len() / usize::from(CHANNELS), "ledger_points": marks.len(),
+                "failures": failures,
+            }),
+        );
+        failures
+    }
+
+    pub(crate) async fn command_boundary_failures(
+        &self,
+        issued: SessionFrame,
+        expected: SessionFrame,
+        first_speed: usize,
+        jump: Option<SessionFrame>,
+    ) -> Vec<String> {
+        use kithara::play::Settled;
+        use kithara_command::When;
+
+        let host_grid = self.host.session_grid().await;
+        let source_rate = self.host.spec().await.sample_rate;
+        let ArtifactSource::Value(model) = self.provider.beat_grid(0) else {
+            panic!("command has a declared source grid");
+        };
+        let deck = &self.decks[0];
+        let mut failures = Vec::new();
+        deck.observe(|observation| {
+            let speeds = &observation.speeds[first_speed..];
+            let [speed] = speeds else {
+                failures.push(format!(
+                    "one command produced {} lane speed operations",
+                    speeds.len()
+                ));
+                return;
+            };
+            if speed.at != When::At(expected) {
+                failures.push(format!(
+                    "lane speed admitted at {:?}, expected {expected:?}",
+                    speed.at
+                ));
+            }
+            if speed.landing.map(|(_, frame)| frame) != jump {
+                failures.push(format!(
+                    "lane jump landing differs: {:?}, expected {jump:?}",
+                    speed.landing
+                ));
+            }
+            let applied = observation.settled.iter().any(|(item, receipt)| {
+                *item == speed.item
+                    && matches!(receipt, Settled::Applied { seq, at }
+                    if *seq == speed.seq && *at == expected)
+            });
+            if !applied {
+                failures.push(format!(
+                    "lane command {:?} has no exact Applied at {expected:?}",
+                    speed.seq
+                ));
+            }
+            let first = self.capture_marks.first().and_then(|(frame, item, slot)| {
+                (*frame == issued && *item == speed.item).then_some(*slot)
+            });
+            if first != speed.consumed {
+                failures
+                    .push("command capture lost its actual pre-command consumed slot".to_owned());
+            }
+            let mut selected_jump = None;
+            if let Some(landing) = jump {
+                let anchor = (|| {
+                    let before =
+                        first.ok_or_else(|| "jump has no actual consumed source".to_owned())?;
+                    let mark = before
+                        .mark
+                        .ok_or_else(|| "jump has no source mark".to_owned())?;
+                    let media_origin = before
+                        .source
+                        .and_then(|info| info.media_origin)
+                        .ok_or_else(|| "jump has no immutable media origin".to_owned())?;
+                    let elapsed = Duration::from_secs_f64(
+                        (i64::from(landing) - i64::from(issued))
+                            .to_f64()
+                            .ok_or_else(|| "jump duration is not representable".to_owned())?
+                            / f64::from(source_rate.get()),
+                    );
+                    let projected = mark
+                        .position
+                        .checked_sub(media_origin)
+                        .and_then(|position| position.checked_add(elapsed))
+                        .ok_or_else(|| "jump projection overflows the source axis".to_owned())?;
+                    let anchor = super::binding::select_nearest(
+                        &model,
+                        source_rate,
+                        &host_grid,
+                        projected,
+                        landing,
+                        4,
+                    )?;
+                    let (actual, at) = speed
+                        .landing
+                        .ok_or_else(|| "SYNC command has no actual jump target".to_owned())?;
+                    let mut errors =
+                        anchor.command_failures(&model, source_rate, &host_grid, actual, at)?;
+                    let consumed = observation
+                        .consumed
+                        .iter()
+                        .find_map(|(item, slot)| (*item == speed.item).then_some(*slot))
+                        .ok_or_else(|| "jump has no final consumed PCM".to_owned())?;
+                    errors.extend(anchor.consumption_failures(
+                        &model,
+                        source_rate,
+                        &host_grid,
+                        consumed,
+                        mark.lane.segment,
+                    )?);
+                    Ok::<_, String>((errors, (anchor.media, landing)))
+                })();
+                match anchor {
+                    Ok((errors, target)) => {
+                        failures.extend(errors);
+                        selected_jump = Some(target);
+                    }
+                    Err(error) => failures.push(error),
+                }
+            }
+            let marks: Vec<_> = self
+                .capture_marks
+                .iter()
+                .filter_map(|(frame, item, slot)| (*item == speed.item).then_some((*frame, *slot)))
+                .collect();
+            match super::binding::commanded_span_failures(
+                speed,
+                issued,
+                expected,
+                &marks,
+                selected_jump,
+            ) {
+                Ok(errors) => failures.extend(errors),
+                Err(error) => failures.push(error),
+            }
+            self.check_command_consumption(speed, first.as_ref(), issued, expected, &mut failures);
+        });
+        failures
+    }
+
+    fn check_command_consumption(
+        &self,
+        speed: &LinkSpeed,
+        first: Option<&SlotSnapshot>,
+        issued: SessionFrame,
+        expected: SessionFrame,
+        failures: &mut Vec<String>,
+    ) {
+        let previous = first
+            .and_then(|slot| slot.source)
+            .map(|info| info.render_revision);
+        let mut first_changed = None;
+        for (_, item, slot) in &self.capture_marks {
+            if *item != speed.item {
+                continue;
+            }
+            let Some((mark, info)) = slot.mark.zip(slot.source) else {
+                failures.push("command capture lost its consumed mark or SourceSpan".to_owned());
+                continue;
+            };
+            let Some(origin) = i64::try_from(mark.lane.frame)
+                .ok()
+                .and_then(|lane| i64::from(mark.session).checked_sub(lane))
+                .and_then(|frame| frame.checked_add(i64::try_from(info.lane_frame).ok()?))
+                .map(SessionFrame::new)
+            else {
+                failures.push("command PCM interval has no session coordinate".to_owned());
+                continue;
+            };
+            if origin < expected && Some(info.render_revision) != previous {
+                failures
+                    .push("consumed source law changed before the admitted lane frame".to_owned());
+            }
+            if info.render_revision == speed.seq.get() && origin >= issued {
+                first_changed =
+                    Some(first_changed.map_or(origin, |first: SessionFrame| first.min(origin)));
+            }
+        }
+        if first_changed != Some(expected) {
+            failures.push(format!(
+                "new source law first consumed at {first_changed:?}, expected {expected:?}"
+            ));
+        }
+    }
+
     pub(crate) async fn grid_binding_failures(&mut self, case: SyncCase) -> Vec<String> {
         use kithara::play::TrackStatus as OwnerTrackStatus;
         let host_grid = self.host.session_grid().await;
@@ -1073,15 +1347,115 @@ impl ProductHarness {
         self.settle(case, 4).await;
     }
 
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
+    async fn wait_capture_ready(&mut self, case: SyncCase) {
+        let deadline = Instant::now() + LOAD_TIMEOUT;
+        let sample_rate = NonZeroU32::new(case.sample_rate).expect("capture sample rate");
+        let declick = i64::try_from(linked_mixer().declick_frames(sample_rate).get())
+            .expect("configured declick fits the session axis");
+        loop {
+            hang_tick!(format!(
+                "{}: waiting for actual Start and completed declick at {}",
+                case.id, self.output_frames
+            ));
+            let ready: Option<Vec<_>> = self.decks.iter().map(|deck| {
+                let item = deck.current()?.id;
+                let snapshot = deck.track_snapshot(item)?;
+                if snapshot.track.pending_lane
+                    || !matches!(snapshot.track.status, kithara::play::TrackStatus::Playing { .. })
+                {
+                    return None;
+                }
+                deck.observe(|observation| {
+                    let (_, slot) = observation.consumed.iter().find(|(owner, _)| *owner == item)?;
+                    let mark = slot.mark?;
+                    let info = slot.source?;
+                    if slot.state != kithara_render::bridge::SlotState::Playing
+                        || slot.gain != 1.0
+                        || snapshot.track.mark != Some(mark)
+                        || mark.lane.segment != info.segment
+                    {
+                        return None;
+                    }
+                    let &(_, seq) = observation.starts.iter().rev().find(|(owner, _)| *owner == item)?;
+                    let at = observation.placement_receipts.iter().find_map(|(owner, origin, receipt)| {
+                        (*owner == item && *origin == kithara_integration_tests::offline::linked::LinkReceiptOrigin::Deck)
+                            .then_some(receipt).and_then(|receipt| match receipt {
+                                kithara::play::Settled::Applied { seq: answered, at } if *answered == seq => Some(*at),
+                                _ => None,
+                            })
+                    })?;
+                    let stable_at = i64::from(at).checked_add(declick)?;
+                    if i64::from(mark.session) < stable_at {
+                        return None;
+                    }
+                    let slot_id = snapshot.track.slot?.get();
+                    let owns_segment = observation.timeline.iter().any(|entry| {
+                        entry.get("event").and_then(serde_json::Value::as_str) == Some("deck receipt")
+                            && entry.get("item").and_then(serde_json::Value::as_u64) == Some(u64::from(item))
+                            && entry.get("details").and_then(|details| details.get("applied_frame")).and_then(serde_json::Value::as_i64).is_some_and(|frame| frame <= i64::from(mark.session))
+                            && entry.get("details").and_then(|details| details.get("parts")).and_then(serde_json::Value::as_array).is_some_and(|parts| {
+                                parts.iter().any(|part| ["Attach", "Replace", "Adopt"].iter().any(|kind| {
+                                    part.get(kind).is_some_and(|part| {
+                                        part.get("segment").and_then(serde_json::Value::as_u64) == Some(info.segment.get())
+                                            && part.get("slot").and_then(serde_json::Value::as_u64) == Some(u64::from(slot_id))
+                                    })
+                                }))
+                            })
+                    });
+                    owns_segment.then(|| serde_json::json!({
+                        "item": u64::from(item), "start_seq": seq.get(), "start_applied": i64::from(at),
+                        "declick_frames": declick, "stable_at": stable_at,
+                        "consumed_at": i64::from(mark.session), "segment": info.segment.get(), "slot_gain": slot.gain,
+                    }))
+                })
+            }).collect();
+            if let Some(_ready) = ready {
+                #[cfg(not(target_os = "android"))]
+                self.master_tap
+                    .evidence("capture_ready", serde_json::json!(_ready));
+                hang_reset!();
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{}: capture has no real Applied Start/current Segment with a completed configured declick",
+                case.id
+            );
+            let _ = self.render(case, self.block_frames.min(128)).await;
+            hang_reset!();
+        }
+    }
+
     pub(super) async fn capture(&mut self, case: SyncCase) -> Vec<f32> {
         self.play_all().await;
-        self.settle(case, 4).await;
+        self.wait_capture_ready(case).await;
         let capture_frames: usize = (f64::from(case.sample_rate) * 60.0 / case.ride.final_bpm()
             * 6.0)
             .round()
             .as_();
-        self.capture_frames(case, capture_frames, self.block_frames)
-            .await
+        self.capture_blocks(
+            case,
+            capture_frames,
+            self.block_frames.min(128),
+            CaptureMode::SourceBoundaries,
+        )
+        .await
+    }
+
+    pub(crate) async fn capture_source_frames(
+        &mut self,
+        case: SyncCase,
+        capture_frames: usize,
+        block_frames: usize,
+    ) -> Vec<f32> {
+        self.capture_blocks(
+            case,
+            capture_frames,
+            block_frames,
+            CaptureMode::SourceBoundaries,
+        )
+        .await
     }
 
     pub(crate) async fn capture_frames(
@@ -1090,7 +1464,7 @@ impl ProductHarness {
         capture_frames: usize,
         block_frames: usize,
     ) -> Vec<f32> {
-        self.capture_blocks(case, capture_frames, block_frames, false)
+        self.capture_blocks(case, capture_frames, block_frames, CaptureMode::Fixed)
             .await
     }
 
@@ -1099,7 +1473,7 @@ impl ProductHarness {
         case: SyncCase,
         capture_frames: usize,
     ) -> Vec<f32> {
-        self.capture_blocks(case, capture_frames, self.block_frames, true)
+        self.capture_blocks(case, capture_frames, self.block_frames, CaptureMode::Paced)
             .await
     }
 
@@ -1109,8 +1483,10 @@ impl ProductHarness {
         case: SyncCase,
         capture_frames: usize,
         block_frames: usize,
-        paced: bool,
+        mode: CaptureMode,
     ) -> Vec<f32> {
+        assert!(block_frames > 0, "capture block contains frames");
+        let paced = matches!(mode, CaptureMode::Paced);
         let capture_kind = if paced { "paced" } else { "product" };
         let observed_frame = SessionFrame::new(
             i64::try_from(self.output_frames).expect("actual capture frame fits session axis"),
@@ -1131,7 +1507,40 @@ impl ProductHarness {
                 "{}: capturing at frame {} with {remaining_frames} frames remaining",
                 case.id, self.output_frames
             ));
-            let frames = remaining_frames.min(block_frames);
+            let mut frames = remaining_frames.min(block_frames);
+            if matches!(mode, CaptureMode::SourceBoundaries) {
+                let packet_remaining = self
+                    .decks
+                    .iter()
+                    .map(|deck| {
+                        let item = deck
+                            .current()
+                            .expect("capture has a selected Playing item")
+                            .id;
+                        deck.observe(|observation| {
+                            let (_, slot) = observation
+                                .consumed
+                                .iter()
+                                .find(|(owner, _)| *owner == item)
+                                .expect("capture has the selected consumed source");
+                            assert_eq!(slot.state, kithara_render::bridge::SlotState::Playing);
+                            let mark = slot.mark.expect("capture has a consumed lane mark");
+                            let info = slot.source.expect("capture has consumed source metadata");
+                            assert_eq!(mark.lane.segment, info.segment);
+                            let span = info.source_span.expect("capture has an exact source span");
+                            info.lane_frame
+                                .checked_add(span.output_frames())
+                                .and_then(|end| end.checked_sub(mark.lane.frame))
+                                .expect("capture mark lies within its consumed source span")
+                                .max(1)
+                        })
+                    })
+                    .min()
+                    .expect("product capture has at least one deck");
+                frames = frames.min(
+                    usize::try_from(packet_remaining).expect("capture packet length fits usize"),
+                );
+            }
             let started = paced.then(Instant::now);
             let block = self.render(case, frames).await;
             let observed_frame = SessionFrame::new(
@@ -1143,9 +1552,10 @@ impl ProductHarness {
                     .flat_map(|deck| deck.observe(|observation| observation.consumed.clone()))
                     .map(|(item, slot)| (observed_frame, item, slot)),
             );
-            assert!(
-                !block.is_empty(),
-                "{}: {capture_kind} capture stopped making PCM progress",
+            assert_eq!(
+                block.len(),
+                frames * usize::from(CHANNELS),
+                "{}: {capture_kind} capture must retain every requested PCM frame",
                 case.id,
             );
             pcm.extend(block);

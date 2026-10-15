@@ -22,6 +22,26 @@ pub(super) use crate::{
 pub(super) const A: Slot = Slot::new(0);
 pub(super) const B: Slot = Slot::new(1);
 
+fn retain_projection_source(track: &mut Track, rate: NonZeroU32) {
+    let mark = track.mark.expect("observed fixture mark");
+    let spec = AudioSpec::new(2, rate);
+    let source = AudioChunkInfo {
+        spec,
+        timestamp: mark.position,
+        end_timestamp: mark.position + spec.duration_for(1).expect("one native frame"),
+        frames: 1,
+        frame_offset: spec.frame_at(mark.position).expect("native source offset"),
+        segment: mark.lane.segment,
+        lane_frame: mark.lane.frame,
+        visible_origin: track.visible_origin,
+        media_origin: track.media_origin,
+        media_end: track.duration,
+        ..AudioChunkInfo::default()
+    };
+    track.source_basis = Some(source);
+    track.observed_source = Some(source);
+}
+
 #[kithara::test]
 #[case::remaining_equals_window(157.0, 162.0, 1.0, 5.0, true)]
 #[case::remaining_below_window(160.0, 162.0, 1.0, 5.0, true)]
@@ -58,6 +78,7 @@ fn ends_within_cases(
         },
         position: Duration::from_secs_f64(pos),
     });
+    retain_projection_source(&mut track, mock::SAMPLE_RATE);
     let window_end = frame(
         (f64::from(window) * f64::from(mock::SAMPLE_RATE.get()))
             .to_i64()
@@ -243,6 +264,7 @@ pub(super) fn prepared_track() -> (Track, Inbox<LaneProtocol>) {
     track.status = TrackStatus::Loaded;
     track.attach_at = Some(frame(0));
     track.ready = Some(SegmentId::FIRST);
+    track.segment_origin = Some(Position::ZERO);
     (track, inbox)
 }
 
@@ -1026,6 +1048,7 @@ fn player_phase_kind_exhaustive() {
             1,
         ) {
             due.apply(kithara_render::LaneApplied {
+                native_pcm_basis: None,
                 engine_latency: FrameCount::new(0),
                 ready: Some(track.segment),
             });
@@ -1586,6 +1609,7 @@ pub(super) fn lane_commands(inbox: &mut Inbox<LaneProtocol>) -> Vec<LaneCommand>
     ) {
         commands.extend(due.commands().iter().cloned());
         due.apply(kithara_render::LaneApplied {
+            native_pcm_basis: None,
             engine_latency: FrameCount::new(0),
             ready: None,
         });
@@ -1743,6 +1767,7 @@ fn a_speed_curve_clamps_every_finite_subfloor_point(#[case] speed: SpeedCurve) {
     let (sender, mut inbox) = lane();
     let mut track = track(A);
     track.lane = Some(sender);
+    track.status = TrackStatus::Playing { since: frame(0) };
     rig.with_outbox(|out| {
         track.apply(
             TrackCommand::SetSpeed {
@@ -1802,6 +1827,16 @@ fn a_refused_open_leaves_the_track_idle() {
     let mut rig = rig();
     let mut track = track(A);
     let seq = load(&mut track, &mut rig, Position::ZERO);
+    assert!(
+        command_at_zero(
+            &mut track,
+            &mut rig,
+            TrackCommand::Configure(TrackSettingsChange::Speed(2.0), When::Next),
+        )
+        .is_none()
+    );
+    assert_eq!(track.projected().speed(), 2.0);
+    assert_eq!(track.snapshot().speed, 1.0);
 
     let receipt = rig
         .open(Err(LoadRefusal::Cancelled))
@@ -1815,6 +1850,9 @@ fn a_refused_open_leaves_the_track_idle() {
         "{settled:?}"
     );
     assert_eq!(track.snapshot().status, TrackStatus::Idle);
+    assert_eq!(track.snapshot().speed, 1.0);
+    assert_eq!(track.projected().speed(), 1.0);
+    assert!(track.loading.is_none());
     assert!(
         rig.block(frame(0), 0.0).is_empty(),
         "nothing went to the deck"
@@ -2332,6 +2370,7 @@ fn superseding_a_scheduled_batch_leaves_the_slot_sounding_as_it_was(
                 |command| matches!(command, LaneCommand::Segment { id, .. } if *id == original),
             );
             due.apply(kithara_render::LaneApplied {
+                native_pcm_basis: None,
                 engine_latency: FrameCount::new(0),
                 ready: Some(original),
             });
@@ -2660,15 +2699,16 @@ pub(super) async fn a_cancelled_repeat_reaches_its_original_end(frames: usize) {
         )
     })
     .expect("Configure after supersession is neither NotReady nor Late");
+    let next_segment = track.issued_segment.next();
     with_mixer(&mut mixer, &mut dispatcher, frame(2_048), |out| {
         track.apply(TrackCommand::Seek { to: Position::ZERO }, out)
     })
     .expect("a later seek remains admissible");
     assert_eq!(
-        track.segment,
-        original.next().next(),
+        track.segment, next_segment,
         "a cancelled segment's buffered PCM is never adopted by a later seek"
     );
+    assert_ne!(track.segment, original.next());
     drop(driver);
 }
 
@@ -2774,6 +2814,40 @@ fn a_load_the_deck_has_no_room_for_leaves_the_lane_untouched() {
     assert_eq!(track.snapshot().status, TrackStatus::Idle);
     let commands = lane_commands(&mut inbox);
     assert!(commands.is_empty(), "{commands:?}");
+    let (mut prepared, mut inbox) = prepared_track();
+    let before = prepared.snapshot();
+    let segment = prepared.segment;
+    assert!(matches!(
+        in_pass(&mut rig, frame(0), |out| prepared.admit(
+            TrackSettingsChange::Speed(2.0),
+            When::Next,
+            out,
+        )),
+        Err(PlayError::Full("deck"))
+    ));
+    assert!(matches!(
+        in_pass(&mut rig, frame(0), |out| prepared.apply(
+            TrackCommand::Configure(TrackSettingsChange::Speed(2.0), When::Next),
+            out,
+        )),
+        Err(PlayError::Full("deck"))
+    ));
+    assert_eq!(prepared.segment, segment);
+    assert_eq!(prepared.snapshot().position, before.position);
+    assert_eq!(prepared.snapshot().status, before.status);
+    assert_eq!(prepared.snapshot().speed, before.speed);
+    assert_eq!(prepared.ready, Some(segment));
+    assert!(prepared.adopting.is_empty());
+    assert!(lane_commands(&mut inbox).is_empty());
+    assert_eq!(
+        in_pass(&mut rig, frame(0), |out| prepared.admit(
+            TrackSettingsChange::Speed(1.0),
+            When::Next,
+            out,
+        ))
+        .expect("full deck permits an unchanged scalar"),
+        None
+    );
 }
 
 #[kithara::test]
@@ -2792,11 +2866,20 @@ fn a_loaded_track_sends_each_change_to_its_lane() {
         .expect("a valid speed");
 
     assert!(sent.is_some());
-    let commands = lane_commands(&mut inbox);
+    let segment = track.segment;
+    assert_ne!(segment, SegmentId::FIRST);
+    assert_eq!(track.ready, None);
+    assert_eq!(track.entry(crate::Bound::AtOrAfter(frame(128))), None);
+    inbox.drain();
+    let due = inbox
+        .next_due(LaneFrame { segment, frame: 0 }, 1)
+        .expect("quiet native segment");
+    let commands = due.commands();
     assert!(
         matches!(
-            commands.as_slice(),
-            [LaneCommand::SetSpeed(SpeedCurve::Constant(changed))] if *changed == 2.0
+            commands,
+            [LaneCommand::Segment { id, from, speed: SpeedCurve::Constant(changed) }]
+                if *id == segment && from.is_zero() && *changed == 2.0
         ),
         "{commands:?}"
     );
@@ -2804,15 +2887,78 @@ fn a_loaded_track_sends_each_change_to_its_lane() {
         (track.snapshot().speed - 1.0).abs() < f32::EPSILON,
         "the speed shows once the lane applied it"
     );
+    due.apply(kithara_render::LaneApplied {
+        native_pcm_basis: None,
+        engine_latency: FrameCount::new(0),
+        ready: Some(segment),
+    });
     rig.with_outbox(|out| track.tick(frame(0), out))
         .expect("live deck scope");
     assert!((track.snapshot().speed - 2.0).abs() < f32::EPSILON);
+    assert_eq!(track.ready, Some(segment));
+    assert_eq!(track.prepared_speed(), Some(&SpeedCurve::Constant(2.0)));
+    for curve in [
+        SpeedCurve::Ramp {
+            to: 1.5,
+            frames: std::num::NonZeroU64::new(128).expect("ramp"),
+        },
+        SpeedCurve::Approach(
+            kithara_signal::ExponentialApproach::new(1.0, 1.5, 220.5).expect("approach"),
+        ),
+    ] {
+        let (mut track, mut inbox) = prepared_track();
+        track.media_origin = Some(Duration::from_millis(576));
+        assert_eq!(
+            in_pass(&mut rig, frame(0), |out| track.admit(
+                TrackSettingsChange::Speed(1.5),
+                When::Next,
+                out
+            ))
+            .expect("quiet admission"),
+            Some(1),
+        );
+        in_pass(&mut rig, frame(0), |out| {
+            track.apply(
+                TrackCommand::SetSpeed {
+                    speed: curve.clone(),
+                    at: When::Next,
+                },
+                out,
+            )
+        })
+        .expect("quiet curve");
+        let segment = track.segment;
+        inbox.drain();
+        let due = inbox
+            .next_due(LaneFrame { segment, frame: 0 }, 1)
+            .expect("quiet native curve");
+        if matches!(curve, SpeedCurve::Ramp { .. }) {
+            assert!(
+                matches!(due.commands(), [LaneCommand::SetSpeed(SpeedCurve::Constant(1.0)), LaneCommand::Segment { id, from, speed }]
+                if *id == segment && from.is_zero() && *speed == curve)
+            );
+        } else {
+            assert!(
+                matches!(due.commands(), [LaneCommand::Segment { id, from, speed }]
+                if *id == segment && from.is_zero() && *speed == curve)
+            );
+        }
+        assert_eq!(track.ready, None);
+        assert_eq!(track.prepared_speed(), Some(&curve));
+        assert_eq!(track.snapshot().speed, 1.0);
+        due.apply(kithara_render::LaneApplied {
+            native_pcm_basis: None,
+            engine_latency: FrameCount::new(0),
+            ready: Some(segment),
+        });
+    }
 }
 
 #[kithara::test]
 fn full_notification_ring_retries_latest_effective_rate_once() {
     let mut rig = rig();
     let (mut track, _) = prepared_track();
+    track.status = TrackStatus::Playing { since: frame(0) };
     let (sender, mut inbox) = channel(
         ChannelConfig::builder()
             .capacity(std::num::NonZeroUsize::new(2).expect("two outstanding rates"))
@@ -2878,39 +3024,169 @@ fn full_notification_ring_retries_latest_effective_rate_once() {
 
 #[kithara::test]
 fn an_unchanged_speed_target_still_cancels_a_ramp() {
-    let mut rig = rig();
-    let (mut track, mut inbox) = prepared_track();
-    assert!(
-        command_at_zero(
-            &mut track,
-            &mut rig,
-            TrackCommand::SetSpeed {
-                speed: SpeedCurve::Ramp {
-                    to: 1.5,
-                    frames: std::num::NonZeroU64::new(128).expect("ramp frames"),
+    for sounding in [false, true] {
+        let mut rig = rig();
+        let (mut track, mut inbox) = loaded(&mut rig, A, "ramp-cancellation");
+        if sounding {
+            command_at_zero(&mut track, &mut rig, TrackCommand::Play { at: When::Next });
+            let mut receipts = rig.block(frame(0), 0.0);
+            settle(&mut track, &mut rig, &mut receipts);
+            assert!(matches!(track.status, TrackStatus::Playing { .. }));
+        }
+        let curve = SpeedCurve::Ramp {
+            to: 1.5,
+            frames: std::num::NonZeroU64::new(128).expect("ramp frames"),
+        };
+        assert!(
+            command_at_zero(
+                &mut track,
+                &mut rig,
+                TrackCommand::SetSpeed {
+                    speed: curve.clone(),
+                    at: When::Next,
+                }
+            )
+            .is_some()
+        );
+        let segment = track.segment;
+        inbox.drain();
+        let due = inbox
+            .next_due(LaneFrame { segment, frame: 0 }, 1)
+            .expect("native ramp");
+        if sounding {
+            assert!(matches!(
+                due.commands(),
+                [LaneCommand::SetSpeed(SpeedCurve::Ramp { .. })]
+            ));
+        } else {
+            assert!(
+                matches!(due.commands(), [LaneCommand::SetSpeed(SpeedCurve::Constant(1.0)), LaneCommand::Segment { id, from, speed }]
+                if *id == segment && from.is_zero() && *speed == curve)
+            );
+            assert_eq!(track.ready, None);
+            assert_eq!(track.entry(crate::Bound::AtOrAfter(frame(128))), None);
+        }
+        assert_eq!(track.snapshot().speed, 1.0);
+        due.apply(kithara_render::LaneApplied {
+            native_pcm_basis: None,
+            engine_latency: FrameCount::new(0),
+            ready: (!sounding).then_some(segment),
+        });
+        rig.with_outbox(|out| track.tick(frame(0), out))
+            .expect("ramp applies");
+        assert_eq!(track.snapshot().speed, 1.5);
+        assert!(
+            command_at_zero(
+                &mut track,
+                &mut rig,
+                TrackCommand::Configure(TrackSettingsChange::Speed(1.5), When::Next),
+            )
+            .is_some()
+        );
+        let replacement = track.segment;
+        inbox.drain();
+        let due = inbox
+            .next_due(
+                LaneFrame {
+                    segment: replacement,
+                    frame: 0,
                 },
-                at: When::Next,
-            }
-        )
-        .is_some()
-    );
-    assert!(matches!(
-        lane_commands(&mut inbox).as_slice(),
-        [LaneCommand::SetSpeed(SpeedCurve::Ramp { .. })]
-    ));
-    rig.with_outbox(|out| track.tick(frame(0), out))
-        .expect("ramp applies");
-    assert_eq!(track.snapshot().speed, 1.5);
-    assert!(
-        command_at_zero(
-            &mut track,
-            &mut rig,
-            TrackCommand::Configure(TrackSettingsChange::Speed(1.5), When::Next,)
-        )
-        .is_some()
-    );
-    assert!(matches!(lane_commands(&mut inbox).as_slice(),
-        [LaneCommand::SetSpeed(SpeedCurve::Constant(speed))] if *speed == 1.5));
+                1,
+            )
+            .expect("constant cancellation");
+        if sounding {
+            assert_eq!(replacement, segment);
+            assert!(
+                matches!(due.commands(), [LaneCommand::SetSpeed(SpeedCurve::Constant(speed))]
+                if *speed == 1.5)
+            );
+        } else {
+            assert_eq!(replacement, segment.next());
+            assert!(
+                matches!(due.commands(), [LaneCommand::Segment { id, from, speed: SpeedCurve::Constant(speed) }]
+                if *id == replacement && from.is_zero() && *speed == 1.5)
+            );
+            assert_eq!(track.ready, None);
+        }
+        due.apply(kithara_render::LaneApplied {
+            native_pcm_basis: None,
+            engine_latency: FrameCount::new(0),
+            ready: (!sounding).then_some(replacement),
+        });
+        rig.with_outbox(|out| track.tick(frame(0), out))
+            .expect("cancellation applies");
+        assert_eq!(track.snapshot().speed, 1.5);
+        assert_eq!(
+            in_pass(&mut rig, frame(0), |out| track.admit(
+                TrackSettingsChange::Speed(1.5),
+                When::Next,
+                out,
+            ))
+            .expect("unchanged steady speed"),
+            None
+        );
+        if !sounding {
+            assert_eq!(track.ready, Some(replacement));
+            assert_eq!(track.prepared_speed(), Some(&SpeedCurve::Constant(1.5)));
+            command_at_zero(
+                &mut track,
+                &mut rig,
+                TrackCommand::SetSpeed {
+                    speed: SpeedCurve::Ramp {
+                        to: 1.75,
+                        frames: std::num::NonZeroU64::new(128).expect("ramp frames"),
+                    },
+                    at: When::Next,
+                },
+            )
+            .expect("quiet rejected preparation");
+            let seq = track.lane_commands.last().expect("native preparation").seq;
+            inbox.drain();
+            let due = inbox
+                .next_due(
+                    LaneFrame {
+                        segment: track.segment,
+                        frame: 0,
+                    },
+                    1,
+                )
+                .expect("seeded preparation batch");
+            assert!(matches!(
+                due.commands(),
+                [
+                    LaneCommand::SetSpeed(SpeedCurve::Constant(1.5)),
+                    LaneCommand::Segment { .. }
+                ]
+            ));
+            drop(due);
+            track.settle_lane();
+            assert_eq!(track.snapshot().speed, 1.5);
+            assert_eq!(track.ready, None);
+            let operations = track
+                .lane_commands
+                .iter()
+                .filter(|operation| operation.seq == seq)
+                .collect::<Vec<_>>();
+            assert_eq!(operations.len(), 2);
+            assert!(
+                operations
+                    .iter()
+                    .all(|operation| operation.verdict == Some(Err(Rejection::Unanswered)))
+            );
+            assert!(
+                track
+                    .speed_answers
+                    .iter()
+                    .all(|(answered, _)| *answered != seq)
+            );
+        }
+    }
+    #[cfg(any(
+        feature = "stretch-glide",
+        feature = "stretch-signalsmith",
+        feature = "stretch-bungee"
+    ))]
+    media_time::assert_quiet_curve_source_span_projection();
 }
 
 #[kithara::test]
@@ -2936,6 +3212,16 @@ fn a_change_at_a_frame_is_refused_as_untimed(#[case] attached: bool) {
     assert!(matches!(refused, Err(PlayError::Untimed)), "{refused:?}");
     assert!(lane_commands(&mut inbox).is_empty());
     assert!(!track.snapshot().status.eq(&TrackStatus::Released));
+    let refused = rig
+        .with_outbox(|out| {
+            track.apply(
+                TrackCommand::Configure(TrackSettingsChange::Speed(2.0), When::At(frame(4_096))),
+                out,
+            )
+        })
+        .expect("live scope");
+    assert!(matches!(refused, Err(PlayError::Untimed)));
+    assert!(lane_commands(&mut inbox).is_empty());
 }
 
 #[kithara::test]
@@ -2955,6 +3241,134 @@ fn a_change_before_the_load_applies_at_once_and_starts_the_lane_there() {
 
     assert!(sent.is_none(), "no lane to send to yet");
     assert!((track.snapshot().speed - 1.25).abs() < f32::EPSILON);
+    let seq = load(&mut track, &mut rig, Position::ZERO);
+    track.media_origin = None;
+    let (sender, mut inbox) = lane();
+    track.lane = Some(sender);
+    let curve = SpeedCurve::Ramp {
+        to: 2.0,
+        frames: std::num::NonZeroU64::new(128).expect("native ramp"),
+    };
+    let sent = in_pass(&mut rig, frame(0), |out| {
+        track.apply(
+            TrackCommand::SetSpeed {
+                speed: curve.clone(),
+                at: When::Next,
+            },
+            out,
+        )
+    })
+    .expect("pending load speed");
+    assert!(sent.is_none());
+    assert_eq!(track.media_origin, None);
+    assert_eq!(track.snapshot().speed, 1.25);
+    assert_eq!(track.projected().speed(), 2.0);
+    assert!(track.snapshot().pending_lane);
+    assert!(lane_commands(&mut inbox).is_empty());
+    let opened = opened_fixture(&mut rig, "pending-speed");
+    let native = opened
+        .opened
+        .pcm
+        .next_chunk_info()
+        .expect("real first PCM")
+        .timestamp;
+    let receipt = rig.open(Ok(opened)).expect("original load");
+    assert_eq!(receipt.seq(), seq);
+    rig.with_outbox(|out| track.settle(TrackReceipt::Loaded(receipt), out))
+        .expect("native load receipt");
+    assert!(
+        track
+            .loading
+            .as_ref()
+            .expect("pending attachment")
+            .speed
+            .is_none()
+    );
+    let segment = track.segment;
+    assert_ne!(segment, SegmentId::FIRST);
+    assert_eq!(track.ready, None);
+    assert_eq!(track.snapshot().speed, 1.25);
+    inbox.drain();
+    let due = inbox
+        .next_due(LaneFrame { segment, frame: 0 }, 1)
+        .expect("deferred native speed");
+    assert!(
+        matches!(due.commands(), [LaneCommand::SetSpeed(SpeedCurve::Constant(1.25)), LaneCommand::Segment { id, from, speed }]
+        if *id == segment && *from == native && *speed == curve)
+    );
+    due.apply(kithara_render::LaneApplied {
+        native_pcm_basis: None,
+        engine_latency: FrameCount::new(0),
+        ready: Some(segment),
+    });
+    rig.with_outbox(|out| track.tick(frame(0), out))
+        .expect("native speed receipt");
+    assert_eq!(track.snapshot().speed, 2.0);
+    assert_eq!(track.ready, Some(segment));
+    let attach = track
+        .attaching
+        .expect("Attach is in flight")
+        .seq
+        .expect("native Attach Seq");
+    assert!(
+        track
+            .loading
+            .as_ref()
+            .expect("load custody")
+            .opened
+            .is_none()
+    );
+    let adopt = command_at_zero(
+        &mut track,
+        &mut rig,
+        TrackCommand::Configure(TrackSettingsChange::Speed(3.0), When::Next),
+    )
+    .expect("speed between Loaded and Attach");
+    assert_ne!(adopt, attach);
+    assert!(
+        track
+            .loading
+            .as_ref()
+            .expect("load custody")
+            .speed
+            .is_none()
+    );
+    assert_eq!(track.snapshot().speed, 2.0);
+    assert_eq!(track.projected().speed(), 3.0);
+    let latest = track.segment;
+    assert_eq!(latest, segment.next());
+    assert_eq!(track.ready, None);
+    inbox.drain();
+    let due = inbox
+        .next_due(
+            LaneFrame {
+                segment: latest,
+                frame: 0,
+            },
+            1,
+        )
+        .expect("native speed after Loaded");
+    assert!(
+        matches!(due.commands(), [LaneCommand::Segment { id, from, speed: SpeedCurve::Constant(3.0) }]
+        if *id == latest && *from == native)
+    );
+    due.apply(kithara_render::LaneApplied {
+        native_pcm_basis: None,
+        engine_latency: FrameCount::new(0),
+        ready: Some(latest),
+    });
+    let mut receipts = rig.block(frame(0), 0.0);
+    assert!(receipts.iter().any(|receipt| receipt.seq == attach));
+    assert!(receipts.iter().any(|receipt| receipt.seq == adopt));
+    let settled = settle(&mut track, &mut rig, &mut receipts);
+    assert!(settled.iter().any(|settled| matches!(settled,
+        Settled::Applied { seq: caller, .. } if *caller == seq)));
+    assert!(track.loading.is_none());
+    rig.with_outbox(|out| track.tick(frame(0), out))
+        .expect("actual newest speed receipt");
+    assert_eq!(track.snapshot().speed, 3.0);
+    assert_eq!(track.ready, Some(latest));
+    assert_eq!(track.prepared_speed(), Some(&SpeedCurve::Constant(3.0)));
 }
 
 #[kithara::test]
@@ -3060,6 +3474,7 @@ fn planned_end_uses_the_visible_length_in_the_raw_source_clock(#[case] origin: O
         },
         position: Duration::from_millis(1_500),
     });
+    retain_projection_source(&mut track, mock::SAMPLE_RATE);
     let expected = origin.map(|_| frame(7_453));
     assert_eq!(
         track
@@ -3072,6 +3487,82 @@ fn planned_end_uses_the_visible_length_in_the_raw_source_clock(#[case] origin: O
         Duration::from_millis(1_500)
     );
     assert_eq!(track.duration, origin.map(|_| Duration::from_millis(1_669)));
+    for rate in [44_100, 48_000] {
+        let rate = NonZeroU32::new(rate).expect("native rate");
+        let spec = AudioSpec::new(2, rate);
+        let mut exact = self::track(A);
+        let source = AudioChunkInfo {
+            spec,
+            frame_offset: 1,
+            frames: 2,
+            timestamp: spec.duration_for(1).expect("nonzero native origin"),
+            end_timestamp: spec.duration_for(3).expect("native endpoint"),
+            media_origin: Some(Duration::ZERO),
+            media_end: Some(spec.duration_for(3).expect("logical endpoint")),
+            ..AudioChunkInfo::default()
+        };
+        exact.source_basis = Some(source);
+        exact.observed_source = Some(source);
+        exact.duration = source.media_end;
+        exact.status = TrackStatus::Playing { since: frame(0) };
+        exact.mark = Some(SlotMark {
+            session: frame(1),
+            lane: LaneFrame {
+                segment: exact.segment,
+                frame: 1,
+            },
+            position: spec.duration_for(2).expect("interior native mark"),
+        });
+        assert_eq!(
+            exact.planned_end(rate).expect("one physical frame remains"),
+            Some(frame(2))
+        );
+    }
+    let rate = NonZeroU32::new(1_000).expect("fractional PTS rate");
+    let origin = Duration::from_nanos(42_250_000);
+    let source = AudioChunkInfo {
+        spec: AudioSpec::new(2, rate),
+        frame_offset: 42,
+        frames: 4,
+        timestamp: origin,
+        end_timestamp: Duration::from_nanos(46_250_000),
+        media_origin: Some(origin),
+        media_end: Some(Duration::from_millis(4)),
+        ..AudioChunkInfo::default()
+    };
+    let span = kithara_signal::SourceSpan::try_from((
+        169,
+        1,
+        std::num::NonZeroU128::new(4).expect("quarter-frame phase"),
+        rate,
+        16,
+    ))
+    .expect("physical quarter-speed source law");
+    let mut exact = self::track(A);
+    exact.source_basis = Some(source);
+    exact.observed_source = Some(AudioChunkInfo {
+        source_span: Some(span),
+        frames: 16,
+        ..source
+    });
+    exact.media_origin = Some(origin);
+    exact.duration = source.media_end;
+    exact.segment_speed = 0.25;
+    exact.status = TrackStatus::Playing { since: frame(0) };
+    for at in [0, 1, 7, 15] {
+        exact.mark = Some(SlotMark {
+            session: frame(i64::try_from(at).expect("session mark")),
+            lane: LaneFrame {
+                segment: exact.segment,
+                frame: at,
+            },
+            position: span.position_at(at).expect("fractional consumed phase"),
+        });
+        assert_eq!(
+            exact.planned_end(rate).expect("fractional physical EOF"),
+            Some(frame(16))
+        );
+    }
 }
 
 #[kithara::test]
@@ -3088,6 +3579,7 @@ fn planned_end_projects_a_raw_jump_through_the_same_original_origin() {
         },
         position: Duration::from_millis(1_000),
     });
+    retain_projection_source(&mut track, mock::SAMPLE_RATE);
     let (sender, _inbox) = lane();
     track.lane = Some(sender);
     let seq = track
@@ -3111,6 +3603,96 @@ fn planned_end_projects_a_raw_jump_through_the_same_original_origin() {
         track.planned_end(mock::SAMPLE_RATE).expect("projected end"),
         Some(frame(7_553))
     );
+    track.duration = Some(Duration::from_millis(1_002));
+    assert_eq!(
+        track
+            .planned_end(mock::SAMPLE_RATE)
+            .expect("EOF before Jump"),
+        Some(frame(88))
+    );
+    track.duration = Some(Duration::from_millis(1_669));
+    let operation = track
+        .lane_commands
+        .iter_mut()
+        .find(|operation| operation.seq == seq)
+        .expect("accepted Jump");
+    operation.when = When::At(LaneFrame {
+        segment: track.segment,
+        frame: 40_000,
+    });
+    assert_eq!(
+        track
+            .planned_end(mock::SAMPLE_RATE)
+            .expect("Jump after physical EOF"),
+        Some(frame(29_503))
+    );
+    let rate = NonZeroU32::new(1_000).expect("native fractional PTS rate");
+    let basis = AudioChunkInfo {
+        spec: AudioSpec::new(2, rate),
+        frame_offset: 37,
+        frames: 4,
+        timestamp: Duration::from_nanos(37_750_000),
+        end_timestamp: Duration::from_nanos(41_750_000),
+        media_origin: Some(Duration::from_micros(750)),
+        media_end: Some(Duration::from_millis(41)),
+        visible_origin: Some(Duration::from_micros(750)),
+        ..AudioChunkInfo::default()
+    };
+    let span = kithara_signal::SourceSpan::try_from((
+        151,
+        1,
+        std::num::NonZeroU128::new(4).expect("native phase denominator"),
+        rate,
+        16,
+    ))
+    .expect("physical quarter-speed prefix");
+    for (target, expected) in [
+        (38_249_999, 17),
+        (38_250_000, 13),
+        (38_250_001, 13),
+        (36_249_999, 25),
+        (36_250_000, 21),
+        (36_250_001, 21),
+    ] {
+        let mut exact = self::track(A);
+        exact.media_origin = basis.media_origin;
+        exact.visible_origin = basis.visible_origin;
+        exact.duration = basis.media_end;
+        exact.source_basis = Some(basis);
+        exact.observed_source = Some(AudioChunkInfo {
+            frames: 16,
+            source_span: Some(span),
+            ..basis
+        });
+        exact.status = TrackStatus::Playing { since: frame(0) };
+        exact.segment_speed = 0.25;
+        exact.mark = Some(SlotMark {
+            session: frame(0),
+            lane: LaneFrame {
+                segment: exact.segment,
+                frame: 0,
+            },
+            position: basis.timestamp,
+        });
+        let (sender, _inbox) = lane();
+        exact.lane = Some(sender);
+        exact
+            .send_lane(
+                LaneCommand::Jump {
+                    to: Duration::from_nanos(target),
+                },
+                When::At(LaneFrame {
+                    segment: exact.segment,
+                    frame: 1,
+                }),
+            )
+            .expect("native-basis future Jump");
+        assert_eq!(
+            exact.planned_end(rate).expect("native-basis physical EOF"),
+            Some(frame(expected)),
+            "raw target {target}"
+        );
+    }
 }
 
 #[kithara::test]

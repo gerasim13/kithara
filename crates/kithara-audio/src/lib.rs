@@ -18,7 +18,7 @@ mod producer;
 pub(crate) use kithara_test_utils::bufpool as test_pools;
 mod traits;
 
-pub use audio::{Audio, event::map_decode_error_kind};
+pub use audio::{Audio, event::map_decode_error_kind, source_geometry, source_lattice_position};
 pub use event::{
     AudioEvent, DecodeErrorClass, DecodeErrorKind, DecoderBackend, DecoderChangeCause,
     DecoderEvent, FrameDomain, PlaybackResamplerKind, ResamplerKind, SeekLifecycleStage,

@@ -50,6 +50,8 @@ pub enum LaneCommand {
 /// Latency of the resulting engine and the segment whose preload is admitted.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LaneApplied {
+    /// Current decoder PCM geometry captured before source-coordinate resume translation.
+    pub native_pcm_basis: Option<AudioChunkInfo>,
     pub engine_latency: FrameCount,
     pub ready: Option<SegmentId>,
 }
@@ -122,6 +124,7 @@ struct Preparation {
     at: LaneFrame,
     entry: LaneFrame,
     source: Option<AudioChunkInfo>,
+    native_pcm_basis: Option<AudioChunkInfo>,
     requested_entry: Option<Duration>,
     render_revision: u64,
     latency: FrameCount,
@@ -226,19 +229,25 @@ impl Lane {
                 "lane preparation finished"
             );
             due.apply(LaneApplied {
+                native_pcm_basis: ready.and(pending.native_pcm_basis),
                 engine_latency: pending.latency,
                 ready,
             });
         }
     }
 
-    pub(crate) fn observe_input(&mut self, meta: AudioChunkInfo) {
+    pub(crate) fn observe_input(
+        &mut self,
+        meta: AudioChunkInfo,
+        native_pcm_basis: Option<AudioChunkInfo>,
+    ) {
         if meta.frames > 0
             && matches!(self.preload, Preload::Filling(0))
             && let Some(pending) = &mut self.pending
             && pending.source.is_none()
         {
             pending.source = Some(meta);
+            pending.native_pcm_basis = native_pcm_basis;
         }
     }
 
@@ -286,16 +295,7 @@ impl Lane {
         self.ended = true;
     }
 
-    pub(crate) fn execute_due<T, S>(
-        &mut self,
-        source: &mut T,
-        warp: &mut WarpRenderer<S>,
-        spec: AudioSpec,
-    ) -> Result<LaneChange, TrackFailureKind>
-    where
-        T: AudioSource<Chunk = AudioChunk>,
-        S: HasPool<f32>,
-    {
+    fn drain_commands(&mut self) -> Result<(), TrackFailureKind> {
         self.inbox.drain();
         loop {
             let next = match self.inbox.next_deferred() {
@@ -307,6 +307,20 @@ impl Lane {
                 drop(self.inbox.resume(previous, self.cursor, self.cursor));
             }
         }
+        Ok(())
+    }
+
+    pub(crate) fn execute_due<T, S>(
+        &mut self,
+        source: &mut T,
+        warp: &mut WarpRenderer<S>,
+        spec: AudioSpec,
+    ) -> Result<LaneChange, TrackFailureKind>
+    where
+        T: AudioSource<Chunk = AudioChunk>,
+        S: HasPool<f32>,
+    {
+        self.drain_commands()?;
         let mut changed = LaneChange::None;
         let declick_frames = self.declick_frames(spec.sample_rate).get();
         loop {
@@ -421,6 +435,7 @@ impl Lane {
                     at,
                     entry: self.cursor,
                     source: None,
+                    native_pcm_basis: None,
                     requested_entry,
                     render_revision: warp.render_revision(),
                     latency,
@@ -434,6 +449,11 @@ impl Lane {
                     pending.latency = latency;
                 }
                 due.apply(LaneApplied {
+                    native_pcm_basis: if restored_same {
+                        source.native_pcm_basis()
+                    } else {
+                        None
+                    },
                     engine_latency: latency,
                     ready: restored_same.then_some(self.cursor.segment),
                 });

@@ -82,7 +82,7 @@ where
         buf: SampleBuffer,
         frames: u32,
         timestamp: Duration,
-        source_bytes: u64,
+        packet: crate::demuxer::PacketMetadata,
     ) -> AudioChunk {
         if let PcmOriginState::Observing(packet) = self.origin {
             self.origin = packet.map_or(PcmOriginState::Sealed, |packet| {
@@ -115,10 +115,10 @@ where
             media_origin: self.source_media_origin(),
             frames,
             frame_offset,
-            source_bytes,
-            segment_index: self.demuxer.current_segment_index(),
+            source_bytes: packet.source_bytes,
+            segment_index: packet.segment_index,
             source_byte_offset: None,
-            variant_index: self.demuxer.current_variant_index(),
+            variant_index: packet.variant_index,
             spec: live_spec,
             render_revision: 0,
             mapping_revision: None,
@@ -133,37 +133,6 @@ where
         })??;
         self.output = Some(Ok(output));
         self.next_chunk_inner()
-    }
-
-    fn drain_codec_eof(&mut self) -> DecodeResult<DecoderChunkOutcome> {
-        if !self
-            .codec
-            .needs_eof_drain(self.demuxer.track_info().sample_rate)
-        {
-            return Ok(DecoderChunkOutcome::Eof);
-        }
-
-        let mut buf = self.output.take().ok_or(DecodeError::InvalidData {
-            detail: "decoder output was not prepared",
-        })??;
-        let timestamp = self
-            .spec
-            .duration_for(self.frame_offset)
-            .unwrap_or(Duration::from_nanos(u64::MAX));
-        let frames = match self.codec.decode_frame(&[], timestamp, &[], &mut buf) {
-            Ok(frames) => frames,
-            Err(error) => {
-                self.output = Some(Ok(buf));
-                return Err(error);
-            }
-        };
-        if frames == 0 {
-            self.output = Some(Ok(buf));
-            return Ok(DecoderChunkOutcome::Eof);
-        }
-        let timestamp = self.codec.decoded_pts().unwrap_or(timestamp);
-        let chunk = self.build_chunk(buf, frames, timestamp, 0);
-        Ok(DecoderChunkOutcome::Chunk(Box::new(chunk)))
     }
 
     fn emit_chunk_signal(&mut self, outcome: &DecoderChunkOutcome) {
@@ -202,37 +171,78 @@ where
     fn next_chunk_inner(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         loop {
             hang_tick!();
-            let frame = match self.demuxer.next_frame_prepared()? {
-                DemuxOutcome::Frame(frame) => frame,
-                DemuxOutcome::Pending(reason) => {
-                    return Ok(DecoderChunkOutcome::Pending(reason));
-                }
-                DemuxOutcome::Eof => return self.drain_codec_eof(),
+            let mut at_eof = false;
+            let needs_eof_drain = self
+                .codec
+                .needs_eof_drain(self.demuxer.track_info().sample_rate);
+            let mut packet = crate::demuxer::PacketMetadata {
+                segment_index: self.demuxer.current_segment_index(),
+                variant_index: self.demuxer.current_variant_index(),
+                source_bytes: 0,
+            };
+            let frame = if self.codec.has_output() {
+                None
+            } else {
+                Some(match self.demuxer.next_frame_prepared()? {
+                    DemuxOutcome::Frame(frame) => frame,
+                    DemuxOutcome::Pending(reason) => {
+                        return Ok(DecoderChunkOutcome::Pending(reason));
+                    }
+                    DemuxOutcome::Eof => {
+                        if !needs_eof_drain {
+                            return Ok(DecoderChunkOutcome::Eof);
+                        }
+                        at_eof = true;
+                        crate::demuxer::Frame {
+                            data: &[],
+                            packet_desc: &[],
+                            duration: Duration::ZERO,
+                            pts: self.spec.duration_for(self.frame_offset)?,
+                        }
+                    }
+                })
             };
             hang_reset!();
-            let frame_pts = frame.pts;
-            if let PcmOriginState::Observing(packet) = &mut self.origin
+            if !at_eof
+                && let Some(frame) = frame
+                && let PcmOriginState::Observing(packet) = &mut self.origin
                 && packet.is_none()
             {
-                *packet = Some(frame_pts);
+                *packet = Some(frame.pts);
             }
-            let frame_duration = frame.duration;
-            let frame_end = frame_pts.saturating_add(frame_duration);
-            let source_bytes = u64::try_from(frame.data.len()).unwrap_or(u64::MAX);
             let mut buf = self.output.take().ok_or(DecodeError::InvalidData {
                 detail: "decoder output was not prepared",
             })??;
-            let mut frames =
-                match self
-                    .codec
-                    .decode_frame(frame.data, frame_pts, frame.packet_desc, &mut buf)
-                {
-                    Ok(frames) => frames,
-                    Err(error) => {
-                        self.output = Some(Ok(buf));
-                        return Err(error);
-                    }
-                };
+            if let Some(frame) = frame {
+                packet.source_bytes = u64::try_from(frame.data.len()).unwrap_or(u64::MAX);
+            }
+            let result = match frame {
+                Some(frame) => self.codec.decode_frame(frame, packet, &mut buf),
+                None => self.codec.take_output(&mut buf),
+            };
+            let decoded = match result {
+                Ok(decoded) => decoded,
+                Err(error) => {
+                    self.output = Some(Ok(buf));
+                    return Err(error);
+                }
+            };
+            let mut frames = decoded.frames;
+            if at_eof && frames == 0 {
+                self.output = Some(Ok(buf));
+                return Ok(DecoderChunkOutcome::Eof);
+            }
+            let frame_pts = match frame {
+                Some(frame) => frame.pts,
+                None => self.codec.decoded_pts().ok_or(DecodeError::InvalidData {
+                    detail: "buffered codec output has no presentation timestamp",
+                })?,
+            };
+            let frame_duration = frame.map_or_else(
+                || self.codec.spec().duration_for(u64::from(frames)),
+                |frame| Ok(frame.duration),
+            )?;
+            let frame_end = frame_pts.saturating_add(frame_duration);
             let prior_head_strip = self.head_strip.frames();
             let decoded_pts = self.codec.decoded_pts();
             if decoded_pts.is_none() {
@@ -316,7 +326,7 @@ where
                 }
                 continue;
             }
-            let chunk = self.build_chunk(buf, frames, chunk_pts, source_bytes);
+            let chunk = self.build_chunk(buf, frames, chunk_pts, decoded.metadata);
             return Ok(DecoderChunkOutcome::Chunk(Box::new(chunk)));
         }
     }
@@ -435,7 +445,9 @@ where
         if matches!(self.prefill, Prefill::Buffered(_)) {
             self.prefill = Prefill::Needed;
         }
-        if let Err(error) = self.demuxer.prepare_frame() {
+        if !self.codec.has_output()
+            && let Err(error) = self.demuxer.prepare_frame()
+        {
             self.output = Some(Err(error));
             return;
         }

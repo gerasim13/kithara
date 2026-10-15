@@ -14,6 +14,7 @@ use super::{
         settings::TrackSettingsChange,
     },
     core::PlayerImpl,
+    geometry::session_at,
     state::*,
 };
 use crate::PlayError;
@@ -42,19 +43,20 @@ impl<S> PlayerImpl<S> {
     ) -> Result<Option<Seq>, PlayError> {
         let final_speed = super::geometry::check_curve(&mut speed)?;
         let change = TrackSettingsChange::Speed(final_speed);
+        let starting_speed = match &speed {
+            SpeedCurve::Ramp { .. } => Some(self.consumed_speed()?),
+            SpeedCurve::Steps(steps) if steps.first().is_some_and(|(at, _)| *at > 0) => {
+                Some(self.consumed_speed()?)
+            }
+            _ => None,
+        };
+        self.check_segment(out)?;
         let attached = self.attached();
-        if attached && out.is_grouped() {
-            return Err(PlayError::Internal(
-                "a segment adoption cannot join a timed group".into(),
-            ));
-        }
-        let lane = self.lane.as_ref().ok_or(PlayError::NotReady)?;
-        if lane.available() == 0 {
-            return Err(PlayError::Full("lane"));
-        }
-        if attached && out.deck_available() == 0 {
-            return Err(PlayError::Full("deck"));
-        }
+        let origin = if rate.is_some() {
+            self.speed_position().ok()
+        } else {
+            Some(from)
+        };
         let segment = self.issued_segment.next();
         let command = rate.map_or(
             LaneCommand::Segment {
@@ -64,13 +66,19 @@ impl<S> PlayerImpl<S> {
             },
             |rate| LaneCommand::SetHostRate { id: segment, rate },
         );
-        let seq = self.send_lane(command, When::Next)?;
+        let commands = match starting_speed {
+            Some(speed) => vec![LaneCommand::SetSpeed(SpeedCurve::Constant(speed)), command],
+            None => vec![command],
+        };
+        let seq = self.send_lane_batch(commands, When::Next)?;
         self.issued_segment = segment;
         if rate.is_none() {
             self.settings.track(seq, When::Next, change);
         }
         self.segment = segment;
-        self.segment_speed = final_speed;
+        self.segment_origin = origin;
+        self.observed_source = None;
+        self.segment_speed = starting_speed.unwrap_or(final_speed);
         self.ready = None;
         self.mark = None;
         self.resume = None;
@@ -99,6 +107,23 @@ impl<S> PlayerImpl<S> {
             return Ok(adopt);
         }
         Ok(Some(seq))
+    }
+
+    pub(super) fn check_segment(&self, out: &Outbox<'_, S>) -> Result<(), PlayError> {
+        let attached = self.attached();
+        if attached && out.is_grouped() {
+            return Err(PlayError::Internal(
+                "a segment adoption cannot join a timed group".into(),
+            ));
+        }
+        let lane = self.lane.as_ref().ok_or(PlayError::NotReady)?;
+        if lane.available() == 0 {
+            return Err(PlayError::Full("lane"));
+        }
+        if attached && out.deck_available() == 0 {
+            return Err(PlayError::Full("deck"));
+        }
+        Ok(())
     }
 
     pub(super) fn applied(
@@ -137,6 +162,8 @@ impl<S> PlayerImpl<S> {
                         };
                     }
                     self.segment = segment;
+                    self.segment_origin = Some(position);
+                    self.observed_source = None;
                     self.ready = None;
                 }
                 self.repeat = false;
@@ -298,5 +325,89 @@ impl<S> PlayerImpl<S> {
             self.release = Some(out.release(lane)?);
         }
         Ok(())
+    }
+    pub(super) fn settle_lane(&mut self) {
+        let Some(lane) = self.lane.as_mut() else {
+            return;
+        };
+        for receipt in lane.receipts() {
+            self.settings.settle(&receipt);
+            let segment = receipt
+                .batch()
+                .commands
+                .iter()
+                .any(|command| matches!(command, LaneCommand::Segment { .. }));
+            let operations = self
+                .lane_commands
+                .iter_mut()
+                .filter(|operation| operation.seq == receipt.seq());
+            if let Outcome::Applied { at, data } = receipt.outcome() {
+                let mut speed_session = None;
+                for operation in operations {
+                    tracing::debug!(
+                        item = u64::from(self.item),
+                        seq = receipt.seq().get(),
+                        actual_apply_segment = at.segment.get(),
+                        actual_apply_frame = at.frame,
+                        current_segment = self.segment.get(),
+                        requested_when = ?operation.when,
+                        paused_resume = ?self.resume,
+                        mark = ?self.mark,
+                        ready_segment = ?data.ready,
+                        command = ?operation.command,
+                        "lane command settled"
+                    );
+                    let session = match operation.when {
+                        When::At(requested) if requested == *at => operation.session,
+                        _ => self.mark.and_then(|mark| session_at(mark, *at)),
+                    };
+                    operation.when = When::At(*at);
+                    operation.verdict = Some(Ok(()));
+                    if matches!(&operation.command, LaneCommand::SetSpeed(_)) {
+                        speed_session = Some(session);
+                    }
+                    if let LaneCommand::Segment { id, from, .. } = operation.command
+                        && data.ready == Some(id)
+                        && id == self.segment
+                        && !matches!(self.status, TrackStatus::Playing { .. })
+                        && let Some(origin) = self.media_origin
+                    {
+                        self.position = from.saturating_sub(origin);
+                        if matches!(self.status, TrackStatus::Paused { .. }) {
+                            self.status = TrackStatus::Paused { at: self.position };
+                        }
+                    }
+                }
+                if let Some(session) = speed_session
+                    && !segment
+                {
+                    self.speed_answers
+                        .push_back((receipt.seq(), Ok((*at, session))));
+                }
+                self.engine_latency = data.engine_latency;
+                if let Some(ready) = data.ready
+                    && !matches!(self.status, TrackStatus::Failed { .. })
+                {
+                    self.ready = Some(ready);
+                    if ready == self.segment {
+                        self.source_basis = data.native_pcm_basis;
+                    }
+                }
+            } else if let Outcome::Rejected(reason) = receipt.outcome() {
+                let mut speed = false;
+                for operation in operations {
+                    operation.verdict = Some(Err(*reason));
+                    speed |= matches!(operation.command, LaneCommand::SetSpeed(_));
+                }
+                if speed && !segment {
+                    self.speed_answers.push_back((
+                        receipt.seq(),
+                        Err(rejection(reason, |failure| PlayError::Lane(*failure))),
+                    ));
+                }
+                warn!(?reason, "lane command was rejected");
+            }
+        }
+        self.reserved_ready();
     }
 }

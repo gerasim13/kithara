@@ -298,16 +298,22 @@ mod apple_factory_tests {
     impl FrameCodec for OutputDomainCodec {
         fn decode_frame(
             &mut self,
-            bytes: &[u8],
-            _pts: Duration,
-            _packet_desc: &[u8],
+            frame: Frame<'_>,
+            metadata: crate::demuxer::PacketMetadata,
             out: &mut SampleBuffer,
-        ) -> DecodeResult<u32> {
+        ) -> DecodeResult<crate::codec::DecodedPacket> {
+            let Frame {
+                data: bytes,
+                pts: _pts,
+                packet_desc: _packet_desc,
+                ..
+            } = frame;
             if bytes.is_empty() {
                 out.clear();
-                return Ok(0);
+                return Ok(crate::codec::DecodedPacket::new(0, metadata));
             }
             write_silent_frame(&self.pcm, self.spec, self.frames_per_call, out)
+                .map(|frames| crate::codec::DecodedPacket::new(frames, metadata))
         }
 
         fn flush(&mut self) -> DecodeResult<()> {

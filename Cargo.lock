@@ -2759,15 +2759,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fdk-aac"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7bb67e142688083cb9afb63f2424203fc98c4e7afb494bf912b60b55513b177e"
-dependencies = [
- "fdk-aac-sys",
-]
-
-[[package]]
 name = "fdk-aac-sys"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4846,10 +4837,12 @@ dependencies = [
  "kithara",
  "kithara-app",
  "kithara-integration-tests",
+ "kithara-render",
  "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
  "num-traits",
+ "serde_json",
  "url",
 ]
 
@@ -5148,7 +5141,6 @@ dependencies = [
  "core-foundation-sys",
  "delegate",
  "derive_more",
- "fdk-aac",
  "fieldwork",
  "hotpath",
  "js-sys",
@@ -5158,6 +5150,7 @@ dependencies = [
  "kithara-config",
  "kithara-decode",
  "kithara-dsp",
+ "kithara-fdk",
  "kithara-mp4",
  "kithara-mpa",
  "kithara-platform",
@@ -5417,6 +5410,15 @@ dependencies = [
  "portable-atomic",
  "smallvec",
  "wasm-bindgen-test",
+]
+
+[[package]]
+name = "kithara-fdk"
+version = "0.0.1-alpha5"
+dependencies = [
+ "fdk-aac-sys",
+ "kithara-workspace-hack",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -5985,6 +5987,7 @@ dependencies = [
  "kithara-derive",
  "kithara-download",
  "kithara-drm",
+ "kithara-dsp",
  "kithara-effects",
  "kithara-events",
  "kithara-file",

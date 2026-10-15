@@ -186,109 +186,6 @@ pub(super) fn curve_area(
     }
 }
 
-pub(super) fn curve_end(
-    curve: &SpeedCurve,
-    origin: f64,
-    start: u64,
-    mut remaining: f64,
-    limit: Option<u64>,
-) -> Result<Option<u64>, PlayError> {
-    if remaining <= 0.0 {
-        return Ok(Some(start));
-    }
-    if matches!(
-        curve,
-        SpeedCurve::Approach(_) | SpeedCurve::ApproachSteps(_)
-    ) {
-        return approach_end(curve, origin, start, remaining, limit);
-    }
-    let mut cursor = start;
-    let end = limit.unwrap_or(u64::MAX);
-    while cursor < end {
-        let speed = curve_speed(curve, origin, cursor)?;
-        if !speed.is_finite() || speed <= 0.0 {
-            return Err(PlayError::Internal(
-                "planned speed must be finite and positive".into(),
-            ));
-        }
-        let (boundary, slope) = match curve {
-            SpeedCurve::Ramp { to, frames } if cursor < frames.get() => (
-                end.min(frames.get()),
-                (f64::from(*to) - origin) / frames.get().to_f64().ok_or(PlayError::Untimed)?,
-            ),
-            SpeedCurve::Constant(_) | SpeedCurve::Ramp { .. } => (end, 0.0),
-            SpeedCurve::Steps(steps) => (
-                steps
-                    .iter()
-                    .find(|(frame, _)| *frame > cursor)
-                    .map_or(end, |(frame, _)| end.min(*frame)),
-                0.0,
-            ),
-            _ => {
-                return Err(PlayError::Internal(
-                    "unsupported planned speed curve".into(),
-                ));
-            }
-        };
-        let area = curve_area(curve, origin, cursor, boundary)?;
-        if remaining <= area {
-            let distance = if slope == 0.0 {
-                remaining / speed
-            } else {
-                2.0 * remaining
-                    / (speed + (speed * speed + 2.0 * slope * remaining).max(0.0).sqrt())
-            };
-            let rounded = distance.ceil().to_u64().ok_or(PlayError::Untimed)?;
-            return cursor
-                .checked_add(rounded)
-                .map(|frame| Some(frame.min(boundary)))
-                .ok_or(PlayError::Untimed);
-        }
-        remaining -= area;
-        cursor = boundary;
-    }
-    Ok(None)
-}
-
-fn approach_end(
-    curve: &SpeedCurve,
-    origin: f64,
-    start: u64,
-    remaining: f64,
-    limit: Option<u64>,
-) -> Result<Option<u64>, PlayError> {
-    if !remaining.is_finite() {
-        return Err(PlayError::Untimed);
-    }
-    let end = limit.unwrap_or(u64::MAX);
-    if start >= end {
-        return Ok(None);
-    }
-    let area = |frame| curve_area(curve, origin, start, frame);
-    let mut lower = start;
-    let mut upper = start.checked_add(1).ok_or(PlayError::Untimed)?;
-    while area(upper)? < remaining {
-        if upper == end {
-            return Ok(None);
-        }
-        lower = upper;
-        upper = upper
-            .checked_add((upper - start).min(end - upper))
-            .ok_or(PlayError::Untimed)?;
-    }
-    while upper - lower > 1 {
-        let middle = lower
-            .checked_add((upper - lower) / 2)
-            .ok_or(PlayError::Untimed)?;
-        if area(middle)? < remaining {
-            lower = middle;
-        } else {
-            upper = middle;
-        }
-    }
-    Ok(Some(upper))
-}
-
 #[cfg(test)]
 mod tests {
     use kithara_platform::sync::Arc;
@@ -297,8 +194,69 @@ mod tests {
     use kithara_warp::SpeedCurve;
     use num_traits::ToPrimitive;
 
-    use super::{curve_area, curve_end, curve_speed};
+    use super::{curve_area, curve_speed};
     use crate::PlayError;
+
+    fn curve_end(
+        curve: &SpeedCurve,
+        origin: f64,
+        start: u64,
+        remaining: f64,
+        limit: Option<u64>,
+    ) -> Result<Option<u64>, PlayError> {
+        use std::num::{NonZeroU32, NonZeroU128};
+
+        use kithara_warp::SourceTrajectory;
+
+        if !remaining.is_finite() || remaining < 0.0 {
+            return Err(PlayError::Untimed);
+        }
+        if start == u64::MAX || limit.is_some_and(|end| end <= start) {
+            return Ok(None);
+        }
+        let rate = NonZeroU32::MIN;
+        let mut trajectory = SourceTrajectory::new(origin.to_f32().ok_or(PlayError::Untimed)?);
+        trajectory
+            .replace(curve.clone())
+            .map_err(|_| PlayError::Untimed)?;
+        trajectory
+            .advance_by(0, rate, start)
+            .map_err(|_| PlayError::Untimed)?;
+        trajectory.reset();
+        let bits = remaining.to_bits();
+        let exponent = i32::try_from((bits >> 52) & 2047).map_err(|_| PlayError::Untimed)? - 1075;
+        let mantissa = u128::from((bits & 0x000f_ffff_ffff_ffff) | 0x0010_0000_0000_0000);
+        let (numerator, denominator) = if remaining == 0.0 {
+            (0, 1)
+        } else if exponent >= 0 {
+            (
+                mantissa
+                    .checked_shl(exponent.unsigned_abs())
+                    .ok_or(PlayError::Untimed)?,
+                1,
+            )
+        } else {
+            (
+                mantissa,
+                1u128
+                    .checked_shl(exponent.unsigned_abs())
+                    .ok_or(PlayError::Untimed)?,
+            )
+        };
+        let shift = numerator.trailing_zeros().min(denominator.trailing_zeros());
+        let numerator = numerator >> shift;
+        let denominator = NonZeroU128::new(denominator >> shift).ok_or(PlayError::Untimed)?;
+        trajectory
+            .first_at_or_after(
+                0,
+                rate,
+                (numerator, denominator),
+                limit.map(|end| end - start),
+            )
+            .map_err(|_| PlayError::Untimed)?
+            .map(|offset| start.checked_add(offset).ok_or(PlayError::Untimed))
+            .transpose()
+    }
 
     #[kithara::test]
     #[case::rising(1.0, 2.0, 1_068_338_765)]

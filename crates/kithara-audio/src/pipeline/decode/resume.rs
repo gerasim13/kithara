@@ -1,9 +1,15 @@
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo};
 
+#[derive(Clone, Copy)]
+struct DecodedBoundary {
+    source: AudioChunkInfo,
+    native_end: Duration,
+}
+
 #[derive(Default)]
 pub(crate) struct ResumeCursor {
-    decoded: Option<AudioChunkInfo>,
+    decoded: Option<DecodedBoundary>,
     rendered_source_head: Option<crate::SourceEnd>,
 }
 
@@ -21,7 +27,8 @@ impl ResumeCursor {
                 self.rendered_source_head
                     .map(|end| (end.frame(), end.sample_rate().get()))
             },
-            |meta| {
+            |boundary| {
+                let meta = boundary.source;
                 Some((
                     meta.frame_offset.saturating_add(u64::from(meta.frames)),
                     meta.spec.sample_rate.get(),
@@ -29,20 +36,21 @@ impl ResumeCursor {
             },
         )
     }
-    pub(crate) fn record(&mut self, chunk: &AudioChunk) {
-        self.decoded = Some(chunk.meta);
+    pub(crate) fn record(&mut self, chunk: &AudioChunk, native_end: Duration) {
+        self.decoded = Some(DecodedBoundary {
+            source: chunk.meta,
+            native_end,
+        });
     }
     pub(crate) fn decoded_end(&self, source_revision: u64) -> Option<Duration> {
-        let meta = self
-            .decoded
-            .filter(|meta| meta.source_revision == source_revision)?;
-        meta.source_span.map_or(Some(meta.end_timestamp), |span| {
-            span.position_at(u64::from(meta.frames))
-        })
+        self.decoded
+            .filter(|boundary| boundary.source.source_revision == source_revision)
+            .map(|boundary| boundary.native_end)
     }
     pub(crate) fn source_end(&self) -> Option<crate::SourceEnd> {
         self.rendered_source_head.or_else(|| {
-            self.decoded.map(|meta| {
+            self.decoded.map(|boundary| {
+                let meta = boundary.source;
                 meta.source_span.map_or_else(
                     || crate::SourceEnd::new(meta.frame_range().end, meta.spec.sample_rate),
                     |span| {

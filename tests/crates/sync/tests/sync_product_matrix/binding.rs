@@ -1586,6 +1586,142 @@ impl AppliedCurve<'_> {
     }
 }
 
+pub(super) fn commanded_span_failures(
+    command: &LinkSpeed,
+    issued: SessionFrame,
+    at: SessionFrame,
+    marks: &[(SessionFrame, SlotSnapshot)],
+    jump: Option<(Duration, SessionFrame)>,
+) -> Result<Vec<String>, String> {
+    let (_, first) = marks
+        .first()
+        .ok_or_else(|| "command law has no initial PCM".to_owned())?;
+    let mark = first
+        .mark
+        .ok_or_else(|| "command law has no initial mark".to_owned())?;
+    let info = first
+        .source
+        .ok_or_else(|| "command law has no initial source".to_owned())?;
+    let rate = info.spec.sample_rate;
+    let initial = info
+        .source_span
+        .filter(|span| span.sample_rate() == rate)
+        .and_then(|span| span.source_ratio_at(mark.lane.frame.checked_sub(info.lane_frame)?))
+        .ok_or_else(|| "command law has no exact initial source coordinate".to_owned())?;
+    if command.before.speed != 1.0 {
+        return Err("latency fixture must issue from settled unity PCM".to_owned());
+    }
+    let end = marks
+        .last()
+        .ok_or_else(|| "command law has no final PCM".to_owned())?
+        .0;
+    let constant =
+        ExponentialApproach::new(1.0, 1.0, 0.0).ok_or_else(|| "unity law is invalid".to_owned())?;
+    let mut events = vec![(issued, constant, None)];
+    for (offset, law) in analytic_parts(&command.curve)? {
+        events.push((frame_after(at, offset)?, law, None));
+    }
+    if let Some((media, landing)) = jump {
+        let law = events
+            .iter()
+            .rev()
+            .find(|(frame, _, _)| *frame <= landing)
+            .ok_or_else(|| "jump has no admitted law".to_owned())?
+            .1;
+        if law.initial() != 1.0 || law.target() != 1.0 {
+            return Err("running SYNC fixture must jump at unity speed".to_owned());
+        }
+        let raw = media
+            .checked_add(
+                info.media_origin
+                    .ok_or_else(|| "jump law has no immutable media origin".to_owned())?,
+            )
+            .ok_or_else(|| "jump raw coordinate overflows".to_owned())?;
+        let position = kithara::audio::source_lattice_position(&info, raw)
+            .map_err(|error| error.to_string())?;
+        events.push((landing, law, Some(position)));
+    }
+    events.sort_by_key(|(frame, _, _)| *frame);
+    let mut expected = Vec::new();
+    let mut position = initial;
+    for (index, &(start, law, reset)) in events.iter().enumerate() {
+        if start >= end {
+            break;
+        }
+        if let Some(reset) = reset {
+            position = reset;
+        }
+        let stop = events
+            .get(index + 1)
+            .map_or(end, |(frame, _, _)| (*frame).min(end));
+        let frames = stop
+            .frames_since(start)
+            .filter(|frames| *frames > 0)
+            .ok_or_else(|| "command law has nonpositive output extent".to_owned())?;
+        let span =
+            kithara::signal::SourceSpan::approaching(position.0, position.1, law, 0, rate, frames)
+                .ok_or_else(|| {
+                    "declared command law cannot represent its source span".to_owned()
+                })?;
+        position = span
+            .source_ratio_at(frames)
+            .ok_or_else(|| "declared command law has no source endpoint".to_owned())?;
+        expected.push((start, span));
+    }
+    let mut checked = std::collections::BTreeSet::new();
+    for (_, slot) in marks {
+        let mark = slot
+            .mark
+            .ok_or_else(|| "command PCM lost its mark".to_owned())?;
+        let info = slot
+            .source
+            .ok_or_else(|| "command PCM lost its source".to_owned())?;
+        let span = info
+            .source_span
+            .ok_or_else(|| "command PCM lost its exact SourceSpan".to_owned())?;
+        let start = i64::try_from(mark.lane.frame)
+            .ok()
+            .and_then(|lane| i64::from(mark.session).checked_sub(lane))
+            .and_then(|frame| frame.checked_add(i64::try_from(info.lane_frame).ok()?))
+            .map(SessionFrame::new)
+            .ok_or_else(|| "command source span has no session interval".to_owned())?;
+        if !checked.insert((start, info.render_revision)) {
+            continue;
+        }
+        for offset in 0..=span.output_frames() {
+            let frame = frame_after(start, offset)?;
+            if frame < issued || frame > end {
+                continue;
+            }
+            let index = expected
+                .partition_point(|(start, _)| {
+                    *start == issued
+                        || *start < frame
+                        || *start == frame && (offset == 0 || offset < span.output_frames())
+                })
+                .checked_sub(1)
+                .ok_or_else(|| "command expected law does not cover actual PCM".to_owned())?;
+            let (origin, law) = expected[index];
+            let expected = law
+                .source_ratio_at(
+                    frame
+                        .frames_since(origin)
+                        .ok_or_else(|| "expected source span reverses".to_owned())?,
+                )
+                .ok_or_else(|| "expected source law has a coverage gap".to_owned())?;
+            let actual = span
+                .source_ratio_at(offset)
+                .ok_or_else(|| "actual source span has an unmapped output frame".to_owned())?;
+            if actual != expected {
+                return Ok(vec![format!(
+                    "consumed SourceSpan at {frame:?} maps {actual:?}, commanded Host/grid law requires {expected:?}"
+                )]);
+            }
+        }
+    }
+    Ok(Vec::new())
+}
+
 pub(super) fn executed_law(
     model: &BeatGridModel,
     host_grid: &BeatGridSnapshot,
@@ -2221,13 +2357,21 @@ fn direct_grid_binding_rejects_a_frame_a_beat_and_a_missing_origin() {
     let ArtifactSource::Value(model) = synthetic_grid() else {
         panic!("declared source grid");
     };
+    assert_eq!(
+        model
+            .as_raw()
+            .meter
+            .expect("declared source meter")
+            .origin_beat_ordinal,
+        1
+    );
     let consumed = SlotSnapshot {
         state: SlotState::Playing,
         mark: Some(SlotMark {
-            session: SessionFrame::new(196_000),
+            session: SessionFrame::new(171_500),
             lane: LaneFrame {
                 segment: SegmentId::FIRST,
-                frame: 196_000,
+                frame: 171_500,
             },
             position: Duration::from_millis(4_012),
         }),
@@ -2243,20 +2387,20 @@ fn direct_grid_binding_rejects_a_frame_a_beat_and_a_missing_origin() {
         .expect("declared source and Host grids");
     assert!(binding.failures().is_empty(), "{binding:?}");
     assert_eq!(binding.source_beat, 8.0);
-    assert_eq!(binding.host_beat, 8.0);
-    assert_eq!(binding.expected_frame, SessionFrame::new(196_000));
+    assert_eq!(binding.host_beat, 7.0);
+    assert_eq!(binding.expected_frame, SessionFrame::new(171_500));
 
     let shifted_mark = SlotSnapshot {
         mark: consumed.mark.map(|mark| SlotMark {
-            session: SessionFrame::new(196_001),
+            session: SessionFrame::new(171_501),
             ..mark
         }),
         ..consumed
     };
     let shifted =
         check(&model, source_rate, &host_grid, shifted_mark, 0.9, 4).expect("shifted source mark");
-    assert_eq!(shifted.expected_frame, SessionFrame::new(196_000));
-    assert_eq!(shifted.mark.session, SessionFrame::new(196_001));
+    assert_eq!(shifted.expected_frame, SessionFrame::new(171_500));
+    assert_eq!(shifted.mark.session, SessionFrame::new(171_501));
     assert_eq!(shifted.failures().len(), 1);
 
     let mut wrong_grid = model.as_raw().clone();
@@ -2269,7 +2413,7 @@ fn direct_grid_binding_rejects_a_frame_a_beat_and_a_missing_origin() {
     let wrong_grid = BeatGridModel::try_from(wrong_grid).expect("a valid misplaced source grid");
     let misplaced = check(&wrong_grid, source_rate, &host_grid, consumed, 0.9, 4)
         .expect("one-beat misplaced grid");
-    assert_eq!(misplaced.expected_frame, SessionFrame::new(171_500));
+    assert_eq!(misplaced.expected_frame, SessionFrame::new(147_000));
     assert_eq!(misplaced.failures().len(), 1);
 
     let mut one_frame_grid = model.as_raw().clone();
@@ -2284,7 +2428,7 @@ fn direct_grid_binding_rejects_a_frame_a_beat_and_a_missing_origin() {
         BeatGridModel::try_from(one_frame_grid).expect("a one-frame displaced source grid");
     let misplaced_frame = check(&one_frame_grid, source_rate, &host_grid, consumed, 0.9, 4)
         .expect("one-frame displaced source grid");
-    assert_eq!(misplaced_frame.expected_frame, SessionFrame::new(195_999));
+    assert_eq!(misplaced_frame.expected_frame, SessionFrame::new(171_499));
     assert_eq!(misplaced_frame.failures().len(), 1);
 
     assert!(
@@ -2319,7 +2463,7 @@ fn direct_grid_binding_rejects_a_frame_a_beat_and_a_missing_origin() {
         4,
     )
     .expect("incorrect raw/media translation");
-    assert_eq!(ignored_origin.expected_frame, SessionFrame::new(196_588));
+    assert_eq!(ignored_origin.expected_frame, SessionFrame::new(172_088));
     assert_eq!(ignored_origin.failures().len(), 1);
 
     let mut missed_crossing = model.as_raw().clone();
@@ -2362,7 +2506,15 @@ fn direct_grid_anchor_rejects_a_whole_bar_and_a_wrong_selected_cue() {
     let ArtifactSource::Value(model) = synthetic_grid() else {
         panic!("declared source grid");
     };
-    let frame = SessionFrame::new(196_000);
+    assert_eq!(
+        model
+            .as_raw()
+            .meter
+            .expect("declared source meter")
+            .origin_beat_ordinal,
+        1
+    );
+    let frame = SessionFrame::new(171_500);
     let selected = select_nearest(
         &model,
         evaluation_rate,
@@ -2374,7 +2526,7 @@ fn direct_grid_anchor_rejects_a_whole_bar_and_a_wrong_selected_cue() {
     .expect("selected source position");
     assert_eq!(selected.media, Duration::from_secs(4));
     assert_eq!(selected.source_beat, 8.0);
-    assert_eq!(selected.host_beat, 8.0);
+    assert_eq!(selected.host_beat, 7.0);
     assert_eq!(selected.frame, frame);
     assert!(
         selected
@@ -2412,7 +2564,7 @@ fn direct_grid_anchor_rejects_a_whole_bar_and_a_wrong_selected_cue() {
             session: frame,
             lane: LaneFrame {
                 segment: SegmentId::FIRST,
-                frame: 196_000,
+                frame: 171_500,
             },
             position: Duration::from_millis(4_012),
         }),
@@ -2467,7 +2619,7 @@ fn direct_grid_anchor_rejects_a_whole_bar_and_a_wrong_selected_cue() {
             1
         );
     }
-    let next_frame = SessionFrame::new(196_001);
+    let next_frame = SessionFrame::new(171_501);
     assert_eq!(
         selected
             .command_failures(
@@ -2561,7 +2713,7 @@ fn direct_grid_anchor_rejects_a_whole_bar_and_a_wrong_selected_cue() {
                 frame: 240_100,
                 ..mark.lane
             },
-            position: Duration::from_millis(4_912),
+            position: Duration::from_millis(5_412),
         }),
         ..consumed
     };
@@ -2597,7 +2749,7 @@ fn direct_grid_anchor_rejects_a_whole_bar_and_a_wrong_selected_cue() {
         evaluation_rate,
         &host_grid,
         Duration::ZERO,
-        SessionFrame::new(73_500),
+        SessionFrame::new(49_000),
         4,
     )
     .expect("nearest nonnegative source position");
@@ -2630,7 +2782,7 @@ fn direct_grid_anchor_rejects_a_whole_bar_and_a_wrong_selected_cue() {
         evaluation_rate,
         &host_grid,
         Duration::from_secs(1),
-        SessionFrame::new(73_500),
+        SessionFrame::new(49_000),
         4,
     )
     .expect("nearest mapped source position within its head");
@@ -2646,10 +2798,10 @@ fn direct_grid_anchor_rejects_a_whole_bar_and_a_wrong_selected_cue() {
         4,
     )
     .expect("selected paused entry");
-    assert_eq!(entry.media, Duration::from_secs(6));
-    assert_eq!(entry.source_beat, 12.0);
+    assert_eq!(entry.media, Duration::from_millis(6_500));
+    assert_eq!(entry.source_beat, 13.0);
     assert_eq!(entry.host_beat, 8.0);
-    assert_eq!(entry.frame, frame);
+    assert_eq!(entry.frame, SessionFrame::new(196_000));
     assert!(
         entry
             .command_failures(
@@ -2664,8 +2816,12 @@ fn direct_grid_anchor_rejects_a_whole_bar_and_a_wrong_selected_cue() {
     );
     let entry_consumed = SlotSnapshot {
         mark: consumed.mark.map(|mark| SlotMark {
-            position: Duration::from_millis(6_012),
-            ..mark
+            session: SessionFrame::new(196_000),
+            lane: LaneFrame {
+                frame: 196_000,
+                ..mark.lane
+            },
+            position: Duration::from_millis(6_512),
         }),
         ..consumed
     };
@@ -2699,11 +2855,11 @@ fn direct_grid_anchor_rejects_a_whole_bar_and_a_wrong_selected_cue() {
         evaluation_rate,
         &host_grid,
         Duration::from_millis(5_250),
-        next_frame,
+        SessionFrame::new(196_001),
         4,
     )
     .expect("entry after the previous Host downbeat");
-    assert_eq!(after.source_beat, 12.0);
+    assert_eq!(after.source_beat, 13.0);
     assert_eq!(after.host_beat, 12.0);
     assert_eq!(after.frame, SessionFrame::new(294_000));
 

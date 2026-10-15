@@ -304,13 +304,20 @@ impl FrameCodec for AppleCodec {
 
     fn decode_frame(
         &mut self,
-        frame_data: &[u8],
-        pts: Duration,
-        packet_desc: &[u8],
+        frame: crate::demuxer::Frame<'_>,
+        metadata: crate::demuxer::PacketMetadata,
         out: &mut SampleBuffer,
-    ) -> DecodeResult<u32> {
+    ) -> DecodeResult<crate::codec::DecodedPacket> {
+        let crate::demuxer::Frame {
+            data: frame_data,
+            pts,
+            packet_desc,
+            ..
+        } = frame;
         if frame_data.is_empty() {
-            return self.drain_eof(out);
+            return self
+                .drain_eof(out)
+                .map(|frames| crate::codec::DecodedPacket::new(frames, metadata));
         }
 
         let desc = if packet_desc.len() == size_of::<AudioStreamPacketDescription>() {
@@ -359,7 +366,7 @@ impl FrameCodec for AppleCodec {
         )?;
         let frames = self.fill_converter(out, target_frames)?;
         self.refresh_gapless_after_first_chunk();
-        Ok(frames)
+        Ok(crate::codec::DecodedPacket::new(frames, metadata))
     }
 
     fn decoded_pts(&self) -> Option<Duration> {
@@ -733,12 +740,17 @@ mod aac_lc_decode_tests {
             let mut buf = pools.get::<f32>();
             let decoded = codec
                 .decode_frame(
-                    &seg[frame.offset..frame.offset + frame.size],
-                    Duration::ZERO,
-                    &[],
+                    crate::demuxer::Frame {
+                        data: &seg[frame.offset..frame.offset + frame.size],
+                        pts: Duration::ZERO,
+                        duration: Duration::ZERO,
+                        packet_desc: &[],
+                    },
+                    crate::demuxer::PacketMetadata::default(),
                     &mut buf,
                 )
-                .expect("BUG: decode Apple AAC-LC frame");
+                .expect("BUG: decode Apple AAC-LC frame")
+                .frames;
             total += u64::from(decoded);
         }
         total
@@ -749,8 +761,18 @@ mod aac_lc_decode_tests {
         for _ in 0..consts::MAX_EOF_DRAIN_CALLS {
             let mut buf = pools.get::<f32>();
             let frames = codec
-                .decode_frame(&[], Duration::ZERO, &[], &mut buf)
-                .expect("BUG: drain Apple AAC-LC EOF");
+                .decode_frame(
+                    crate::demuxer::Frame {
+                        data: &[],
+                        pts: Duration::ZERO,
+                        duration: Duration::ZERO,
+                        packet_desc: &[],
+                    },
+                    crate::demuxer::PacketMetadata::default(),
+                    &mut buf,
+                )
+                .expect("BUG: drain Apple AAC-LC EOF")
+                .frames;
             if frames == 0 {
                 return total;
             }
@@ -786,7 +808,16 @@ mod aac_lc_decode_tests {
         for &(offset, size) in &ranges {
             let mut buf = pools.get::<f32>();
             codec
-                .decode_frame(&seg[offset..offset + size], Duration::ZERO, &[], &mut buf)
+                .decode_frame(
+                    crate::demuxer::Frame {
+                        data: &seg[offset..offset + size],
+                        pts: Duration::ZERO,
+                        duration: Duration::ZERO,
+                        packet_desc: &[],
+                    },
+                    crate::demuxer::PacketMetadata::default(),
+                    &mut buf,
+                )
                 .expect("BUG: decode Apple AAC-LC frame");
             pcm.extend_from_slice(&buf[..]);
         }
@@ -834,8 +865,18 @@ mod aac_lc_decode_tests {
         for &(offset, size) in &ranges {
             let mut buf = pools.get::<f32>();
             let frames = codec
-                .decode_frame(&seg[offset..offset + size], Duration::ZERO, &[], &mut buf)
-                .expect("BUG: decode resampled Apple AAC-LC frame");
+                .decode_frame(
+                    crate::demuxer::Frame {
+                        data: &seg[offset..offset + size],
+                        pts: Duration::ZERO,
+                        duration: Duration::ZERO,
+                        packet_desc: &[],
+                    },
+                    crate::demuxer::PacketMetadata::default(),
+                    &mut buf,
+                )
+                .expect("BUG: decode resampled Apple AAC-LC frame")
+                .frames;
             let capacity = output_frame_capacity(
                 super::consts::AAC_FRAMES_PER_PACKET,
                 init.sample_rate,
@@ -1016,8 +1057,13 @@ mod flac_decode_tests {
                 DemuxOutcome::Frame(frame) => {
                     frames += u64::from(
                         codec
-                            .decode_frame(frame.data, frame.duration, frame.packet_desc, &mut pcm)
-                            .expect("decode FLAC packet"),
+                            .decode_frame(
+                                frame,
+                                crate::demuxer::PacketMetadata::default(),
+                                &mut pcm,
+                            )
+                            .expect("decode FLAC packet")
+                            .frames,
                     );
                     assert!(pcm.iter().all(|sample| sample.is_finite()));
                     peak = pcm.iter().fold(peak, |peak, sample| peak.max(sample.abs()));

@@ -19,8 +19,8 @@ pub(crate) const METRONOME_DUCK: f32 = 0.2;
 /// A deadline of ~85 ms at 48 kHz: many times what one player's ring holds
 /// at the bounded render quantum.
 pub(crate) const LOOSE_RESPONSE_BUDGET: usize = 4_096;
-/// The synthetic rhythm fixtures: 12 seconds at `START_BPM`, first beat on
-/// frame 0.
+/// The synthetic rhythm fixtures: 12 seconds at `START_BPM`, with the first
+/// audible downbeat one beat after zero.
 pub(crate) const SYNTHETIC_BEATS: u32 = 24;
 pub(crate) const SECONDS_PER_MINUTE: f64 = 60.0;
 /// A start well inside every track, off its downbeat, for a case that needs
@@ -45,7 +45,7 @@ pub(crate) fn synthetic_grid() -> ArtifactSource<BeatGridModel> {
         duration: None,
         bpm: START_BPM,
         beats,
-        downbeats: (0..SYNTHETIC_BEATS)
+        downbeats: (1..SYNTHETIC_BEATS)
             .step_by(4)
             .map(|ordinal| kithara::beat::GridDownbeat {
                 at: f64::from(ordinal) * spacing,
@@ -55,7 +55,7 @@ pub(crate) fn synthetic_grid() -> ArtifactSource<BeatGridModel> {
             .collect(),
         meter: Some(kithara::beat::Meter {
             beats_per_bar: std::num::NonZeroU16::new(4).expect("fixture meter"),
-            origin_beat_ordinal: 0,
+            origin_beat_ordinal: 1,
         }),
     })
     .expect("synthetic rhythm beats form a valid grid");
@@ -168,7 +168,7 @@ impl SyncCase {
         }
     }
 
-    const fn response_budget(mut self, frames: NonZeroUsize) -> Self {
+    pub(crate) const fn response_budget(mut self, frames: NonZeroUsize) -> Self {
         self.response_budget = Some(frames);
         self
     }
@@ -378,8 +378,8 @@ pub(crate) const CROSS_STYLE_SYNC: SyncCase = SyncCase::running(
 .hold(124.0);
 
 pub(crate) const AMBIENT_TRIP_HOP: &[&str] = &[
-    "rhythm_wav_ambient_dub_62_aligned",
-    "rhythm_wav_trip_hop_74_aligned",
+    "rhythm_wav_long_ambient_dub_62_aligned",
+    "rhythm_wav_long_trip_hop_74_aligned",
 ];
 pub(crate) const DOWNTEMPO_HOUSE: &[&str] = &[
     "rhythm_wav_downtempo_96_aligned",
@@ -390,7 +390,7 @@ pub(crate) const TECHNO_BREAKBEAT: &[&str] = &[
     "rhythm_wav_breakbeat_140_aligned",
 ];
 pub(crate) const CROSS_STYLE: &[&str] = &[
-    "rhythm_wav_ambient_dub_62_aligned",
+    "rhythm_wav_long_ambient_dub_62_aligned",
     "rhythm_wav_downtempo_96_aligned",
     "rhythm_wav_house_124_aligned",
     "rhythm_wav_breakbeat_140_aligned",

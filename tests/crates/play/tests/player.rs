@@ -443,29 +443,116 @@ fn select_item_rejects_invalid_crossfade_before_index_or_engine_side_effects() {
 }
 
 #[kithara::test]
-fn select_item_on_consumed_slot_errors_without_bookkeeping() {
-    let (_host, player) = hosted(QueueConfig::builder().prep(prep()).build());
-    player
-        .append("https://example.com/first.mp3".to_owned())
-        .expect("first entry");
-    let item = player
-        .append("https://example.com/consumed.mp3".to_owned())
-        .expect("second entry");
-    player
-        .select(item, Transition::None)
-        .expect_err("the entry has no loadable resource");
-    let mut events = player.subscribe::<QueueEvent>();
-    let result = player.select(item, Transition::None);
-    assert!(result.is_err(), "selecting an emptied slot must fail");
-    assert!(matches!(result, Err(QueueError::NotReady(id)) if id == item));
-    assert_eq!(
-        player.current_index(),
-        None,
-        "bookkeeping must not move on a failed select"
-    );
+fn select_item_without_runtime_errors_without_bookkeeping() {
+    use kithara::{
+        platform::tokio::runtime::Handle,
+        play::{ResourceConfig, ResourceSrc},
+        queue::{RepeatMode, TrackStatus},
+    };
+
     assert!(
-        events.try_recv().is_err(),
-        "a refused select announces no current item"
+        Handle::try_current().is_err(),
+        "the fixture has no load runtime"
+    );
+    let dir = kithara_test_utils::temp_dir();
+    let path = dir.path().join("selection.wav");
+    mock::write_pcm_wav(&path, &[0.25; 8_192], AudioSpec::new(2, mock::SAMPLE_RATE))
+        .expect("valid local PCM fixture");
+    let source = ResourceConfig::for_src(ResourceSrc::Path(path.clone()))
+        .store(AssetStore::builder(pools()).build())
+        .build();
+    let prep = prep();
+    let prepared = prep
+        .prepare(source.clone(), &mock::output(None).get())
+        .expect("the source config is valid before runtime admission");
+    assert!(
+        prepared.cancel().is_some(),
+        "the load has its per-track token"
+    );
+    let (mut host, player) = hosted(QueueConfig::builder().prep(prep).build());
+    let first = player.append(source.clone()).expect("first entry");
+    let item = player.append(source).expect("second entry");
+    player.set_repeat(RepeatMode::All);
+    assert_eq!(player.repeat_mode(), RepeatMode::All);
+    let before = player.playback_view();
+    let before_statuses = player
+        .tracks()
+        .iter()
+        .map(|entry| (entry.id, entry.status.clone()))
+        .collect::<Vec<_>>();
+    assert!(
+        before_statuses
+            .iter()
+            .all(|(_, status)| matches!(status, TrackStatus::Failed(_))),
+        "both appended sources must already have failed runtime admission: {before_statuses:?}"
+    );
+    let mut events = player.subscribe::<QueueEvent>();
+
+    let cause = QueueError::NoRuntime.to_string();
+    for _ in 0..2 {
+        let error = player
+            .select(item, Transition::None)
+            .expect_err("the valid source cannot load without a runtime");
+        let reason = match error {
+            QueueError::Play(PlayError::ItemFailed { reason }) => reason,
+            other => panic!("load admission must return its typed failure: {other:?}"),
+        };
+        assert_eq!(
+            reason, cause,
+            "a retried select preserves the actual load refusal"
+        );
+        assert!(player.current().is_none());
+        assert_eq!(player.current_index(), None);
+        assert_eq!(player.playback_view(), before);
+        assert_eq!(
+            player.track(item).expect("entry remains queued").status,
+            TrackStatus::Failed(reason.clone())
+        );
+        assert!(
+            matches!(events.try_recv(), Err(kithara::events::TryRecvError::Empty)),
+            "a refused retry preserves the same failed status and announces no change"
+        );
+    }
+
+    player
+        .next(Transition::None)
+        .expect("no refused target remains selectable even when repeat wraps");
+    player
+        .previous(Transition::None)
+        .expect("no admitted selection added history");
+    assert_eq!(
+        player
+            .tracks()
+            .iter()
+            .map(|entry| (entry.id, entry.status.clone()))
+            .collect::<Vec<_>>(),
+        before_statuses,
+        "refused commands preserve the queue order and loading states"
+    );
+    for id in [first, item] {
+        assert_eq!(
+            player
+                .track_source(id)
+                .expect("source remains reusable")
+                .uri(),
+            path.to_str()
+        );
+    }
+    let request = OfflineRenderRequest::builder()
+        .spec(AudioSpec::new(2, mock::SAMPLE_RATE))
+        .frames(0..16)
+        .build();
+    let mut sink = Capture::default();
+    host.render(&request, &CancelScope::new(None).token(), &mut sink)
+        .expect("refused selections leave the host renderable");
+    assert_eq!(sink.0.len(), 32);
+    assert!(sink.0.iter().all(|sample| *sample == 0.0));
+    assert!(player.current().is_none());
+    assert_eq!(player.current_index(), None);
+    assert_eq!(player.playback_view(), before);
+    assert!(
+        matches!(events.try_recv(), Err(kithara::events::TryRecvError::Empty)),
+        "a refused selection must not announce a current item or navigation"
     );
 }
 

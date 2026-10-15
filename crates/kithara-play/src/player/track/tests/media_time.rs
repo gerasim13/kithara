@@ -1,5 +1,357 @@
 use super::*;
 
+#[cfg(any(
+    feature = "stretch-glide",
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee"
+))]
+fn curve_source(
+    inbox: Inbox<LaneProtocol>,
+    rate: NonZeroU32,
+    origin: u64,
+    quantum: std::num::NonZeroUsize,
+) -> kithara_render::WarpSource<kithara_render::mock::ScriptedSource, TestPools> {
+    let pools = pools();
+    let spec = AudioSpec::new(2, rate);
+    let chunks = [origin, origin + 600].map(|start| {
+        kithara_audio::TrackStep::Produced(kithara_audio::Fetch::data(
+            kithara_signal::AudioChunk::new(
+                AudioChunkInfo {
+                    spec,
+                    frames: 8_192,
+                    frame_offset: start,
+                    timestamp: spec.duration_for(start).expect("source frame"),
+                    end_timestamp: spec.duration_for(start + 8_192).expect("source end"),
+                    source_span: kithara_signal::SourceSpan::new(
+                        start,
+                        start + 8_192,
+                        spec.sample_rate,
+                        8_192,
+                    ),
+                    visible_origin: Some(Duration::ZERO),
+                    media_origin: Some(Duration::ZERO),
+                    ..AudioChunkInfo::default()
+                },
+                kithara_test_utils::bufpool::sample_buffer(&pools, &[0.25; 16_384]),
+            ),
+        ))
+    });
+    let backend = *StretchKind::all()
+        .iter()
+        .find(|backend| {
+            backend
+                .capabilities()
+                .contains(kithara_warp::WarpCapabilities::RATE)
+        })
+        .expect("a rate backend is enabled");
+    let warp = kithara_warp::Warp::new(
+        (),
+        &kithara_warp::WarpConfig::builder()
+            .backend(backend)
+            .render_quantum_frames(quantum)
+            .build(),
+    );
+    kithara_render::WarpSource::new(
+        kithara_render::mock::ScriptedSource::new(chunks),
+        warp.renderer(spec, pools.clone()),
+        Vec::new(),
+        kithara_effects::EffectDrain::new(0, &pools).expect("drain"),
+        spec,
+        pools,
+        kithara_render::LaneSetup {
+            inbox,
+            preload_chunks: std::num::NonZeroUsize::MIN,
+            declick: kithara_dsp::param::SmootherConfig::default(),
+        },
+    )
+}
+
+#[cfg(any(
+    feature = "stretch-glide",
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee"
+))]
+#[kithara::hang_watchdog]
+fn next_curve_chunk<T: kithara_audio::AudioSource<Chunk = kithara_signal::AudioChunk>>(
+    source: &mut kithara_render::WarpSource<T, TestPools>,
+) -> kithara_signal::AudioChunk {
+    use kithara_audio::AudioSource;
+    loop {
+        hang_tick!();
+        let _ = source.prepare_deferred();
+        source.finish_deferred();
+        match source.step_track() {
+            kithara_audio::TrackStep::Produced(kithara_audio::Fetch::Data { data, .. }) => {
+                source.admitted();
+                hang_reset!();
+                return data;
+            }
+            kithara_audio::TrackStep::StateChanged | kithara_audio::TrackStep::Blocked(_) => {}
+            _ => panic!("the prepared curve source must produce PCM"),
+        }
+    }
+}
+
+#[cfg(any(
+    feature = "stretch-glide",
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee"
+))]
+pub(super) fn assert_quiet_curve_source_span_projection() {
+    let frames = std::num::NonZeroU64::new(1_920).expect("curve frames");
+    let curves = [
+        SpeedCurve::Constant(1.0),
+        SpeedCurve::Constant(0.5),
+        SpeedCurve::Constant(1.5),
+        SpeedCurve::Constant(1.1),
+        SpeedCurve::Ramp { to: 2.0, frames },
+        SpeedCurve::Steps(Arc::from([(960, 2.0)])),
+        SpeedCurve::Steps(Arc::from([(0, 1.25), (960, 2.0)])),
+        SpeedCurve::Approach(
+            kithara_signal::ExponentialApproach::new(1.25, 2.0, 480.0).expect("explicit origin"),
+        ),
+        SpeedCurve::ApproachSteps(Arc::from([
+            (
+                0,
+                kithara_signal::ExponentialApproach::new(1.25, 2.0, 480.0).expect("first law"),
+            ),
+            (
+                700,
+                kithara_signal::ExponentialApproach::new(1.8, 0.75, 220.5).expect("second law"),
+            ),
+        ])),
+    ];
+    for rate in [44_100, 48_000] {
+        let rate = NonZeroU32::new(rate).expect("native rate");
+        for origin in [0, 1] {
+            for quantum in [40, 120] {
+                let quantum = std::num::NonZeroUsize::new(quantum).expect("quantum");
+                for curve in &curves {
+                    assert_quiet_curve_projection(curve, frames, rate, origin, quantum);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(any(
+    feature = "stretch-glide",
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee"
+))]
+#[kithara::hang_watchdog]
+fn assert_quiet_curve_projection(
+    curve: &SpeedCurve,
+    frames: std::num::NonZeroU64,
+    rate: NonZeroU32,
+    origin: u64,
+    quantum: std::num::NonZeroUsize,
+) {
+    let mut rig = rig();
+    let (mut track, inbox) = prepared_track();
+    let mut source = curve_source(inbox, rate, origin, quantum);
+    track.status = TrackStatus::Playing { since: frame(0) };
+    let predecessor = command_at_zero(
+        &mut track,
+        &mut rig,
+        TrackCommand::SetSpeed {
+            speed: SpeedCurve::Ramp { to: 3.0, frames },
+            at: When::Next,
+        },
+    )
+    .expect("native in-segment speed");
+    let mut consumed = None;
+    while source.cursor().frame < 1_920 {
+        hang_tick!();
+        let chunk = next_curve_chunk(&mut source);
+        if track.source_basis.is_none() {
+            track.source_basis = Some(chunk.meta);
+        }
+        let end = chunk.meta.lane_frame + u64::from(chunk.meta.frames);
+        if end == 480 {
+            consumed = Some(SlotMark {
+                session: frame(480),
+                lane: LaneFrame {
+                    segment: chunk.meta.segment,
+                    frame: end,
+                },
+                position: chunk
+                    .meta
+                    .source_span
+                    .expect("native predecessor span")
+                    .position_at(u64::from(chunk.meta.frames))
+                    .expect("consumed endpoint"),
+            });
+        }
+    }
+    rig.with_outbox(|out| track.tick(frame(480), out))
+        .expect("native predecessor receipt");
+    let consumed = consumed.expect("a consumed predecessor quantum");
+    let spec = AudioSpec::new(2, rate);
+    assert_eq!(
+        consumed.position,
+        spec.duration_for(origin + 600)
+            .expect("native consumed mark")
+    );
+    assert_eq!(source.cursor().frame, 1_920);
+    assert_eq!(track.snapshot().speed, 3.0);
+    track.mark = Some(consumed);
+    assert!(
+        matches!(track.speed_receipt(), Some(Settled::Applied { seq, at })
+            if seq == predecessor && at == frame(0))
+    );
+    assert!(track.speed_receipt().is_none());
+    assert!(track.speed_answers.is_empty());
+    track.status = TrackStatus::Paused {
+        at: consumed.position,
+    };
+    track.resume = Some(consumed);
+    track.mark = Some(consumed);
+    let available = track.lane.as_ref().expect("real lane").available();
+    command_at_zero(
+        &mut track,
+        &mut rig,
+        TrackCommand::SetSpeed {
+            speed: curve.clone(),
+            at: When::Next,
+        },
+    );
+    let segment = track.segment;
+    let seq = track.lane_commands.last().expect("native Segment").seq;
+    assert_eq!(
+        track.lane.as_ref().expect("real lane").available() + 1,
+        available
+    );
+    assert!(
+        track
+            .lane_commands
+            .iter()
+            .rev()
+            .take_while(|operation| operation.seq == seq)
+            .all(|operation| operation.applied().is_none())
+    );
+    assert_eq!(track.ready, None);
+    assert_eq!(track.snapshot().speed, 3.0);
+    let mut spans = Vec::new();
+    let mut metadata = Vec::new();
+    let endpoint = origin + 3_960;
+    while source.cursor().segment != segment
+        || metadata.last().is_none_or(|meta: &AudioChunkInfo| {
+            meta.source_span
+                .and_then(|span| span.source_ratio_at(span.output_frames()))
+                .is_none_or(|(numerator, denominator)| {
+                    numerator / denominator.get() < u128::from(endpoint)
+                })
+        })
+    {
+        hang_tick!();
+        let chunk = next_curve_chunk(&mut source);
+        metadata.push(chunk.meta);
+
+        assert_eq!(chunk.meta.segment, segment);
+        spans.push((
+            chunk.meta.lane_frame,
+            chunk.meta.source_span.expect("actual rendered source law"),
+        ));
+    }
+    rig.with_outbox(|out| track.tick(frame(0), out))
+        .expect("real segment readiness");
+    assert_eq!(track.ready, Some(segment));
+    let final_speed = match curve {
+        SpeedCurve::Constant(speed) | SpeedCurve::Ramp { to: speed, .. } => *speed,
+        SpeedCurve::Steps(steps) => steps.last().expect("speed tail").1,
+        SpeedCurve::Approach(approach) => approach.target().to_f32().expect("published speed"),
+        SpeedCurve::ApproachSteps(steps) => steps
+            .last()
+            .expect("law tail")
+            .1
+            .target()
+            .to_f32()
+            .expect("published speed"),
+        _ => panic!("unsupported test curve"),
+    };
+    assert_eq!(track.snapshot().speed, final_speed);
+
+    assert!(
+        track
+            .lane_commands
+            .iter()
+            .filter(|operation| operation.seq == seq)
+            .all(|operation| operation.applied() == Some(true))
+    );
+    assert!(
+        track
+            .speed_answers
+            .iter()
+            .all(|(answered, _)| *answered != seq)
+    );
+    assert!(track.speed_receipt().is_none());
+    track.observed_source = metadata.first().copied();
+    let initial = spans
+        .first()
+        .expect("first new quantum")
+        .1
+        .position_at(0)
+        .expect("physical initial anchor");
+    assert_eq!(initial, consumed.position);
+    track.status = TrackStatus::Playing { since: frame(0) };
+    track.mark = Some(SlotMark {
+        session: frame(0),
+        lane: LaneFrame { segment, frame: 0 },
+        position: initial,
+    });
+    track.duration = Some(spec.duration_for(endpoint).expect("native endpoint"));
+    let mut physical_end = None;
+    for (start, span) in spans {
+        for offset in 0..=span.output_frames() {
+            let actual = span.position_at(offset).expect("actual source coordinate");
+            let at = start + offset;
+            let planned = track
+                .planned(frame(i64::try_from(at).expect("session frame")), rate)
+                .expect("Player projection")
+                .0;
+            assert!(
+                planned.abs_diff(actual) <= Duration::from_nanos(1),
+                "{curve:?} at {at}: planned {planned:?}, source {actual:?}"
+            );
+            let (numerator, denominator) = span
+                .source_ratio_at(offset)
+                .expect("exact physical boundary");
+            if physical_end.is_none() && numerator / denominator.get() >= u128::from(endpoint) {
+                physical_end = Some(frame(i64::try_from(at).expect("physical end")));
+            }
+        }
+    }
+    assert_eq!(
+        track.planned_end(rate).expect("physical end projection"),
+        physical_end,
+        "{curve:?}"
+    );
+    for meta in metadata {
+        let span = meta.source_span.expect("observed source geometry");
+        for offset in [0, 1, u64::from(meta.frames) / 2, u64::from(meta.frames)] {
+            let at = meta.lane_frame + offset;
+            if at
+                >= u64::try_from(i64::from(physical_end.expect("physical EOF")))
+                    .expect("positive EOF")
+            {
+                continue;
+            }
+            track.observed_source = Some(meta);
+            track.mark = Some(SlotMark {
+                session: frame(i64::try_from(at).expect("session mark")),
+                lane: LaneFrame { segment, frame: at },
+                position: span.position_at(offset).expect("exact consumed position"),
+            });
+            assert_eq!(
+                track.planned_end(rate).expect("interior physical EOF"),
+                physical_end,
+                "{curve:?}, rate {rate}, source origin {origin}, quantum {quantum}, consumed {at}"
+            );
+        }
+    }
+}
+
 #[kithara::test]
 #[case::seek(false)]
 #[case::cue(true)]
@@ -65,6 +417,7 @@ fn timed_media_target_is_translated_once_before_the_raw_lane_batch(#[case] align
         matches!(command, LaneCommand::Jump { to } if *to == Duration::from_millis(2_576))
     }));
     due.apply(kithara_render::LaneApplied {
+        native_pcm_basis: None,
         engine_latency: FrameCount::new(0),
         ready: None,
     });
@@ -283,6 +636,348 @@ fn host_rate_change_keeps_raw_resume_custody_without_a_media_seek(
     ));
     assert_eq!(track.snapshot().position, Duration::from_millis(media_ms));
     assert_eq!(track.media_origin, Some(Duration::from_millis(576)));
+    #[cfg(any(
+        feature = "stretch-glide",
+        feature = "stretch-signalsmith",
+        feature = "stretch-bungee"
+    ))]
+    {
+        let old_rate = NonZeroU32::new(48_000).expect("old PCM rate");
+        let rate = NonZeroU32::new(44_100).expect("new PCM rate");
+        let (mut track, inbox) = prepared_track();
+        let old_spec = AudioSpec::new(2, old_rate);
+        track.source_basis = Some(AudioChunkInfo {
+            spec: old_spec,
+            frames: 1,
+            timestamp: Duration::ZERO,
+            end_timestamp: old_spec.duration_for(1).expect("old native frame"),
+            ..AudioChunkInfo::default()
+        });
+        track.status = TrackStatus::Playing { since: frame(0) };
+        track.mark = Some(SlotMark {
+            session: frame(0),
+            lane: LaneFrame {
+                segment: track.segment,
+                frame: 0,
+            },
+            position: Duration::ZERO,
+        });
+        let mut rig = core::rig();
+        command_at_zero(
+            &mut track,
+            &mut rig,
+            TrackCommand::SetSpeed {
+                speed: SpeedCurve::Constant(0.25),
+                at: When::Next,
+            },
+        )
+        .expect("actual preceding speed command");
+        command_at_zero(&mut track, &mut rig, TrackCommand::SetHostRate { rate })
+            .expect("actual new-generation command");
+        let segment = track.segment;
+        let mut source = curve_source(
+            inbox,
+            rate,
+            0,
+            std::num::NonZeroUsize::new(40).expect("quantum"),
+        );
+        let chunk = next_curve_chunk(&mut source);
+        assert_eq!(chunk.meta.segment, segment);
+        assert!(source.is_preloaded());
+        rig.with_outbox(|out| track.tick(frame(0), out))
+            .expect("actual ready receipt");
+        let basis = track.source_basis.expect("prepared native PCM fact");
+        assert_eq!(basis.spec.sample_rate, rate);
+        assert_eq!(basis.timestamp, Duration::ZERO);
+        assert_eq!(
+            basis
+                .source_span
+                .expect("actual native input span")
+                .output_frames(),
+            8_192
+        );
+        assert_ne!(
+            basis.frames, chunk.meta.frames,
+            "the native fact must precede Warp output partitioning"
+        );
+        track.observed_source = Some(chunk.meta);
+        track.duration = Some(
+            AudioSpec::new(2, rate)
+                .duration_for(1_000)
+                .expect("native EOF"),
+        );
+        track.status = TrackStatus::Playing { since: frame(0) };
+        track.mark = Some(SlotMark {
+            session: frame(0),
+            lane: LaneFrame { segment, frame: 0 },
+            position: chunk
+                .meta
+                .source_span
+                .expect("physical new-rate source law")
+                .position_at(0)
+                .expect("physical origin"),
+        });
+        assert_eq!(
+            track.planned_end(rate).expect("new native EOF projection"),
+            Some(frame(4_000))
+        );
+        track.declick = source.declick_frames();
+        let landing = 1 + u64::try_from(track.declick.get()).expect("native declick");
+        assert!(landing < 4_000);
+        track
+            .send_lane(
+                LaneCommand::Jump {
+                    to: Duration::from_nanos(56_689),
+                },
+                When::At(LaneFrame { segment, frame: 1 }),
+            )
+            .expect("future Jump on the new native lattice");
+        let expected =
+            i64::try_from(landing + (1_000 - 2) * 4).expect("physical projected boundary");
+        assert_eq!(
+            track.planned_end(rate).expect("new native Jump projection"),
+            Some(frame(expected))
+        );
+    }
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        feature = "symphonia",
+        feature = "resample-rubato",
+        any(
+            feature = "stretch-glide",
+            feature = "stretch-signalsmith",
+            feature = "stretch-bungee"
+        )
+    ))]
+    if media_ms == 2_000 {
+        assert_source_end_resume_endpoint();
+    }
+}
+
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    feature = "symphonia",
+    feature = "resample-rubato",
+    any(
+        feature = "stretch-glide",
+        feature = "stretch-signalsmith",
+        feature = "stretch-bungee"
+    )
+))]
+#[kithara::hang_watchdog]
+fn assert_source_end_resume_endpoint() {
+    use kithara_audio::{Audio, AudioSource, Fetch, SourceEnd, TrackStep};
+
+    let old_rate = NonZeroU32::new(48_000).expect("old host rate");
+    let rate = NonZeroU32::new(44_100).expect("new host rate");
+    let native_spec = AudioSpec::new(2, rate);
+    let old_spec = AudioSpec::new(2, old_rate);
+    let pools = pools();
+    let directory = TestTempDir::new();
+    let path = directory.path().join("source-end-resume.wav");
+    mock::write_pcm_wav(&path, &[0.25; 1_764], native_spec).expect("twenty milliseconds of PCM");
+    let worker = crate::PlayWorker::new(crate::PlayWorkerConfig::builder(pools.clone()).build());
+    let config: ResourceConfig<TestPools> = ResourceConfig::for_src(ResourceSrc::Path(path))
+        .store(AssetStore::builder(pools.clone()).build())
+        .host_sample_rate(old_rate)
+        .decoder(
+            kithara_audio::AudioDecoderConfig::builder()
+                .backend(kithara_decode::DecoderBackend::Symphonia)
+                .gapless_mode(kithara_decode::GaplessMode::Disabled)
+                .build(),
+        )
+        .build();
+    let runtime = kithara_platform::tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("offline source runtime");
+    let mut audio = runtime
+        .block_on(Audio::prepare(
+            config.build_file_config(&worker, None),
+            Arc::new(kithara_stream::mock::NoopWorkerWake),
+            pools.clone(),
+        ))
+        .expect("real WAV source");
+    let old = loop {
+        hang_tick!();
+        let _ = audio.prepare_deferred();
+        audio.finish_deferred();
+        match audio.step_track() {
+            TrackStep::Produced(Fetch::Data { data, .. }) => {
+                hang_reset!();
+                break data;
+            }
+            TrackStep::StateChanged | TrackStep::Blocked(_) => {}
+            TrackStep::Failed(failure) | TrackStep::Produced(Fetch::Failure { failure }) => {
+                panic!("old generation failed: {failure:?}")
+            }
+            _ => panic!("old generation must produce PCM"),
+        }
+    };
+    assert_eq!(old.meta.spec.sample_rate, old_rate);
+    audio.commit_source_end(SourceEnd::new(1, old_rate), old.meta);
+
+    let (mut track, inbox) = prepared_track();
+    track.source_basis = Some(old.meta);
+    track.status = TrackStatus::Playing { since: frame(0) };
+    track.mark = Some(SlotMark {
+        session: frame(0),
+        lane: LaneFrame {
+            segment: track.segment,
+            frame: 0,
+        },
+        position: old_spec.duration_for(1).expect("retained old source end"),
+    });
+    let mut rig = rig();
+    command_at_zero(
+        &mut track,
+        &mut rig,
+        TrackCommand::SetSpeed {
+            speed: SpeedCurve::Constant(0.25),
+            at: When::Next,
+        },
+    )
+    .expect("actual quarter-speed command");
+    command_at_zero(&mut track, &mut rig, TrackCommand::SetHostRate { rate })
+        .expect("actual source recreation command");
+    let segment = track.segment;
+    let backend = *StretchKind::all()
+        .iter()
+        .find(|backend| {
+            backend
+                .capabilities()
+                .contains(kithara_warp::WarpCapabilities::RATE)
+        })
+        .expect("rate backend");
+    let warp = kithara_warp::Warp::new(
+        (),
+        &kithara_warp::WarpConfig::builder()
+            .backend(backend)
+            .render_quantum_frames(std::num::NonZeroUsize::new(40).expect("quantum"))
+            .build(),
+    );
+    let mut source = kithara_render::WarpSource::new(
+        audio,
+        warp.renderer(old_spec, pools.clone()),
+        Vec::new(),
+        kithara_effects::EffectDrain::new(0, &pools).expect("no effect tail"),
+        old_spec,
+        pools,
+        kithara_render::LaneSetup {
+            inbox,
+            preload_chunks: std::num::NonZeroUsize::MIN,
+            declick: kithara_dsp::param::SmootherConfig::default(),
+        },
+    );
+    let first = next_curve_chunk(&mut source);
+    rig.with_outbox(|out| track.tick(frame(0), out))
+        .expect("real prepared receipt");
+    let basis = track.source_basis.expect("new native PCM basis");
+    assert_eq!(basis.spec.sample_rate, rate);
+    let (landing, denominator) = kithara_audio::source_lattice_position(
+        &basis,
+        old_spec.duration_for(1).expect("retained old source end"),
+    )
+    .expect("native PCM landing");
+    assert_eq!(
+        landing,
+        denominator.get(),
+        "the nearest new native frame is one"
+    );
+    assert_eq!(basis.frame_offset, 1);
+    assert_eq!(
+        basis.timestamp,
+        native_spec.duration_for(1).expect("new native frame one")
+    );
+    let first_span = first.meta.source_span.expect("actual Warp source law");
+    assert_eq!(first_span.sample_rate(), rate);
+    assert_eq!(
+        first_span.source_ratio_at(0),
+        Some((1, std::num::NonZeroU128::MIN))
+    );
+    assert_eq!(source.media_end(), Some(Duration::from_millis(20)));
+    track.observed_source = Some(first.meta);
+    track.media_origin = source.media_origin();
+    track.duration = source
+        .media_end()
+        .zip(track.media_origin)
+        .map(|(end, origin)| end.checked_sub(origin).expect("media extent"));
+    track.status = TrackStatus::Playing { since: frame(0) };
+    track.mark = Some(SlotMark {
+        session: frame(0),
+        lane: LaneFrame { segment, frame: 0 },
+        position: first
+            .meta
+            .source_span
+            .expect("resumed source mapping")
+            .position_at(0)
+            .expect("physical resume position"),
+    });
+    let before = track.planned_end(rate).expect("forecast before source EOF");
+    let mut metadata = vec![first.meta];
+    loop {
+        hang_tick!();
+        let _ = source.prepare_deferred();
+        source.finish_deferred();
+        match source.step_track() {
+            TrackStep::Produced(Fetch::Data { data, .. }) => {
+                source.admitted();
+                metadata.push(data.meta);
+                hang_reset!();
+            }
+            TrackStep::Eof | TrackStep::Produced(Fetch::NaturalEof) => break,
+            TrackStep::StateChanged | TrackStep::Blocked(_) => {}
+            TrackStep::Failed(failure) | TrackStep::Produced(Fetch::Failure { failure }) => {
+                panic!("resumed generation failed: {failure:?}")
+            }
+        }
+    }
+    let final_span = metadata
+        .last()
+        .expect("physical tail")
+        .source_span
+        .expect("tail law");
+    let (endpoint, endpoint_denominator) = final_span
+        .source_ratio_at(final_span.output_frames())
+        .expect("exact physical EOF");
+    assert_eq!(final_span.sample_rate(), rate);
+    assert_eq!(
+        (endpoint, endpoint_denominator),
+        (882, std::num::NonZeroU128::MIN)
+    );
+    let endpoint_denominator =
+        endpoint_denominator.get() * u128::from(final_span.sample_rate().get());
+    let physical = metadata
+        .iter()
+        .find_map(|meta| {
+            let span = meta.source_span.expect("physical source law");
+            (0..=span.output_frames()).find_map(|offset| {
+                let (position, denominator) = span
+                    .source_ratio_at(offset)
+                    .expect("exact source coordinate");
+                let denominator = denominator.get() * u128::from(span.sample_rate().get());
+                (position * endpoint_denominator >= endpoint * denominator).then(|| {
+                    frame(i64::try_from(meta.lane_frame + offset).expect("physical session EOF"))
+                })
+            })
+        })
+        .expect("first physical EOF boundary");
+    assert_eq!(
+        physical,
+        frame(3_524),
+        "881 real remaining native PCM frames at quarter speed"
+    );
+    assert_eq!(source.media_end(), Some(Duration::from_millis(20)));
+    track.duration = source
+        .media_end()
+        .zip(source.media_origin())
+        .map(|(end, origin)| end.checked_sub(origin).expect("reconciled media extent"));
+    let after = track.planned_end(rate).expect("forecast after source EOF");
+    assert_eq!(
+        (before, after),
+        (Some(physical), Some(physical)),
+        "SourceEnd frame 1/48000 must keep the same endpoint clock before and after EOF"
+    );
 }
 
 #[kithara::test]
@@ -461,6 +1156,7 @@ fn stopped_raw_mark_stays_raw_while_pause_and_resume_publish_media_position(
                 if *id == sought && *from == raw_target
         ));
         due.apply(kithara_render::LaneApplied {
+            native_pcm_basis: None,
             engine_latency: FrameCount::new(0),
             ready: Some(sought),
         });
@@ -572,6 +1268,7 @@ fn cancelled_parked_repeat_restores_the_raw_coordinate_without_reapplying_media_
             )
         });
         due.apply(kithara_render::LaneApplied {
+            native_pcm_basis: None,
             engine_latency: FrameCount::new(0),
             ready: Some(original),
         });

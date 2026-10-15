@@ -144,14 +144,17 @@ impl<T: StreamType<Events = EventBus>> Audio<Stream<T>> {
         let visible_origin = initial.initial_pcm_origin().and_then(|origin| {
             crate::pipeline::gapless::visible_origin(origin.position(), profile, mode)
         });
-        let duration = visible_duration(
-            initial.duration(),
-            profile,
-            mode,
-            visible_origin,
-            initial.media_origin(),
-        );
-        playhead.set_duration(duration);
+        // A decoder that declares no duration leaves the stream's measured extent in place.
+        if let Some(declared) = initial.duration() {
+            playhead.set_duration(visible_duration(
+                Some(declared),
+                profile,
+                mode,
+                visible_origin,
+                initial.media_origin(),
+            ));
+        }
+        let duration = playhead.duration();
         deps.publish_initial_events(&bus, info.as_ref(), spec, &track_info, duration, rate);
         let generation =
             DecoderGeneration::new(initial, info, 0, gate, None, deps.decoder.gapless_mode());

@@ -43,12 +43,18 @@ impl LaggedQueueCodec {
 impl FrameCodec for ConstFrameCodec {
     fn decode_frame(
         &mut self,
-        _bytes: &[u8],
-        _pts: Duration,
-        _packet_desc: &[u8],
+        frame: crate::demuxer::Frame<'_>,
+        metadata: crate::demuxer::PacketMetadata,
         out: &mut SampleBuffer,
-    ) -> DecodeResult<u32> {
+    ) -> DecodeResult<crate::codec::DecodedPacket> {
+        let crate::demuxer::Frame {
+            data: _bytes,
+            pts: _pts,
+            packet_desc: _packet_desc,
+            ..
+        } = frame;
         super::write_silent_test_frame(&self.pcm, self.spec, self.frames_per_call, out)
+            .map(|frames| crate::codec::DecodedPacket::new(frames, metadata))
     }
 
     fn flush(&mut self) -> DecodeResult<()> {
@@ -67,11 +73,16 @@ impl FrameCodec for LaggedQueueCodec {
 
     fn decode_frame(
         &mut self,
-        bytes: &[u8],
-        pts: Duration,
-        _packet_desc: &[u8],
+        frame: crate::demuxer::Frame<'_>,
+        metadata: crate::demuxer::PacketMetadata,
         out: &mut SampleBuffer,
-    ) -> DecodeResult<u32> {
+    ) -> DecodeResult<crate::codec::DecodedPacket> {
+        let crate::demuxer::Frame {
+            data: bytes,
+            pts,
+            packet_desc: _packet_desc,
+            ..
+        } = frame;
         let pending = if bytes.is_empty() {
             self.pending_pts.take()
         } else {
@@ -79,10 +90,11 @@ impl FrameCodec for LaggedQueueCodec {
         };
         let Some(decoded_pts) = pending else {
             out.clear();
-            return Ok(0);
+            return Ok(crate::codec::DecodedPacket::new(0, metadata));
         };
         self.decoded_pts = decoded_pts;
         super::write_silent_test_frame(&self.pcm, self.spec, self.frames_per_call, out)
+            .map(|frames| crate::codec::DecodedPacket::new(frames, metadata))
     }
 
     fn decoded_pts(&self) -> Option<Duration> {

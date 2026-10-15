@@ -7,8 +7,8 @@
 //!
 //! The model's `duration` and the decoded axis are two statements about the
 //! same recording. Neither overrides the other: the geometry reaches only as
-//! far as both allow, rounded down to the last whole beat that fits, so a
-//! disagreement between them narrows what the grid claims rather than being
+//! far as both allow, rounded down to the last whole beat that fits at its end.
+//! A disagreement between them narrows what the grid claims rather than being
 //! silently resolved in favour of one of them.
 
 use kithara_beat::{BeatGridModel, BeatGridState as WireState, GridBeat, RawBeatGrid};
@@ -16,9 +16,9 @@ use num_traits::cast::ToPrimitive;
 
 use super::{BeatGridId, BeatGridRevision, BeatGridSnapshot, BeatGridSnapshotError, BeatGridState};
 use crate::{
-    AssetAxis, AssetExtent, AssetFrame, BeatEvidence, BeatMarker, BeatOrdinal, FrameUncertainty,
-    MapAxis, MapCoordinateError, MapSegment, Meter, MeterError, MeterFacts, SegmentError,
-    SegmentFacts, SegmentSet, consts,
+    AssetAxis, AssetExtent, AssetFrame, Beat, BeatEvidence, BeatMarker, BeatOrdinal,
+    FrameUncertainty, MapAxis, MapCoordinateError, MapSegment, Meter, MeterError, MeterFacts,
+    SegmentError, SegmentFacts, SegmentSet, consts,
 };
 
 /// A served beat grid cannot be expressed on the decoded axis it was given.
@@ -214,29 +214,23 @@ fn segments(
     Ok(segments)
 }
 
-/// The whole beats before the first marked one, at the stated tempo.
+/// The stated tempo before the first marked beat, clipped at the asset origin.
 fn head(
     first: Anchor,
     beat_frames: f64,
     meter: Option<(Meter, BeatEvidence)>,
 ) -> Result<Option<MapSegment>, BeatGridModelError> {
-    let beats = whole_beats(first.frame / beat_frames)?;
-    if beats == 0 {
+    if first.frame == 0.0 {
         return Ok(None);
     }
-    let ordinal = first
-        .ordinal
-        .checked_sub(beats)
-        .ok_or(BeatGridModelError::Ordinal {
+    let beat = Beat::new(
+        first.ordinal.to_f64().ok_or(BeatGridModelError::Ordinal {
             ordinal: first.ordinal,
-        })?;
-    let start = Anchor {
-        ordinal,
-        frame: beat_frames.mul_add(-beats.to_f64().unwrap_or_default(), first.frame),
-        evidence: BeatEvidence::Extrapolated,
-    };
-    Ok(Some(MapSegment::new(
-        marker(start)?,
+        })? - first.frame / beat_frames,
+    )?;
+    Ok(Some(MapSegment::partial_start(
+        AssetFrame::new(0.0)?.into(),
+        beat,
         marker(first)?,
         extrapolated(meter),
     )?))
@@ -535,18 +529,53 @@ mod tests {
 
     #[kithara::test]
     fn one_marked_beat_fixes_the_phase_the_tempo_extends() {
-        let grid = grid(
+        let original = grid(
             served(vec![beat(4, Some(1.0))]),
             bounded(consts::SAMPLE_RATE, 4.0),
         );
 
         assert_eq!(
-            beat_at(&grid, 96_000.0),
+            beat_at(&original, 96_000.0),
             BeatGridQuery::Resolved(4.0),
             "the single marked beat keeps the ordinal the producer gave it"
         );
-        assert_eq!(beat_at(&grid, 24_000.0), BeatGridQuery::Resolved(1.0));
-        assert_eq!(beat_at(&grid, 144_000.0), BeatGridQuery::Resolved(6.0));
+        assert_eq!(beat_at(&original, 24_000.0), BeatGridQuery::Resolved(1.0));
+        assert_eq!(beat_at(&original, 144_000.0), BeatGridQuery::Resolved(6.0));
+
+        let first_frame = 20_571.0;
+        let partial = grid(
+            RawBeatGrid {
+                bpm: 140.0,
+                ..served(vec![GridBeat {
+                    ordinal: 0,
+                    at: first_frame / 48_000.0,
+                    confidence: Some(1.0),
+                }])
+            },
+            bounded(48_000, 12.0),
+        );
+        let initial = MapPoint::new(
+            partial.stamp(),
+            MapPosition::Asset(AssetFrame::new(0.0).expect("asset origin")),
+        );
+        let BeatGridQuery::Resolved(origin) = partial.beat_at(initial) else {
+            panic!("the partial pickup carries extrapolated geometry");
+        };
+        assert_eq!(origin.evidence(), BeatEvidence::Extrapolated);
+        assert_eq!(
+            f64::from(*origin.value().value()),
+            -first_frame / (48_000.0 * 60.0 / 140.0)
+        );
+        let BeatGridQuery::Resolved(round_trip) = partial.position_at(*origin.value()) else {
+            panic!("the partial beat maps back to the asset origin");
+        };
+        assert_eq!(*round_trip.value().value(), *initial.value());
+        let BeatGridQuery::Resolved(tempo) = partial.tempo_at(initial) else {
+            panic!("the pickup preserves the stated tempo");
+        };
+        assert!((f64::from(*tempo.value()) - 140.0).abs() < 1e-12);
+        assert_eq!(beat_at(&partial, first_frame), BeatGridQuery::Resolved(0.0));
+        assert_eq!(beat_at(&partial, 576_001.0), BeatGridQuery::OutsideDomain);
     }
 
     #[kithara::test]

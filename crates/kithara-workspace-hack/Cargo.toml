@@ -65,7 +65,6 @@ zerocopy = { version = "0.8", default-features = false, features = ["derive", "s
 audioadapter-buffers = { version = "5" }
 bitflags = { version = "2", default-features = false, features = ["serde"] }
 bytemuck = { version = "1", default-features = false, features = ["extern_crate_alloc"] }
-cc = { version = "1", default-features = false, features = ["parallel"] }
 crossbeam-utils = { version = "0.8" }
 dashmap = { version = "6", default-features = false, features = ["serde"] }
 either = { version = "1", default-features = false, features = ["use_std"] }
@@ -171,6 +170,7 @@ bit-vec = { version = "0.8" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 bytemuck = { version = "1", default-features = false, features = ["aarch64_simd", "derive", "min_const_generics", "wasm_simd"] }
 cbc = { version = "0.2", features = ["alloc"] }
+cc = { version = "1", default-features = false, features = ["parallel"] }
 cipher = { version = "0.5", default-features = false, features = ["alloc", "block-padding"] }
 clang-sys = { version = "1", default-features = false, features = ["clang_11_0", "runtime"] }
 clap = { version = "4", features = ["derive", "env"] }
@@ -267,6 +267,7 @@ bit-vec = { version = "0.8" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 block2 = { version = "0.6" }
 bytemuck = { version = "1", default-features = false, features = ["aarch64_simd", "derive", "min_const_generics", "wasm_simd"] }
+cc = { version = "1", default-features = false, features = ["parallel"] }
 clang-sys = { version = "1", default-features = false, features = ["clang_11_0", "runtime"] }
 clap = { version = "4", features = ["derive", "env"] }
 clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
@@ -362,6 +363,7 @@ bit-vec = { version = "0.8" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 block2 = { version = "0.6" }
 bytemuck = { version = "1", default-features = false, features = ["aarch64_simd", "derive", "min_const_generics", "wasm_simd"] }
+cc = { version = "1", default-features = false, features = ["parallel"] }
 clang-sys = { version = "1", default-features = false, features = ["clang_11_0", "runtime"] }
 clap = { version = "4", features = ["derive", "env"] }
 clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
@@ -435,6 +437,7 @@ zstd-sys = { version = "2", default-features = false, features = ["legacy", "std
 [target.aarch64-apple-ios.build-dependencies]
 aho-corasick = { version = "1" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
+cc = { version = "1", default-features = false, features = ["parallel"] }
 clang-sys = { version = "1", default-features = false, features = ["clang_11_0", "runtime"] }
 crc32fast = { version = "1" }
 dasp_sample = { version = "0.11" }
@@ -511,6 +514,7 @@ bit-set = { version = "0.8" }
 bit-vec = { version = "0.8" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 bytemuck = { version = "1", default-features = false, features = ["aarch64_simd", "derive", "min_const_generics", "wasm_simd"] }
+cc = { version = "1", default-features = false, features = ["parallel"] }
 clang-sys = { version = "1", default-features = false, features = ["clang_11_0", "runtime"] }
 clap = { version = "4", features = ["derive", "env"] }
 clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
@@ -594,6 +598,7 @@ bit-set = { version = "0.8" }
 bit-vec = { version = "0.8" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 bytemuck = { version = "1", default-features = false, features = ["aarch64_simd", "derive", "min_const_generics", "wasm_simd"] }
+cc = { version = "1", default-features = false, features = ["parallel"] }
 clang-sys = { version = "1", default-features = false, features = ["clang_11_0", "runtime"] }
 clap = { version = "4", features = ["derive", "env"] }
 clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
