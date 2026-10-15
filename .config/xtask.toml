@@ -238,16 +238,7 @@ default_modes = [
   "rtsan-file",
   "rtsan-hls",
 ]
-# Repeat engine contracts, including distinct backend and analysis feature
-# builds. App, UI, tooling and test-infrastructure self-tests use ordinary CI.
-# Positive package selections keep new workspace members out until reviewed.
-lanes = [
-  "engine",
-  "engine-broadcast",
-  "net-host",
-  "analysis",
-  "integration-regressions",
-]
+default_tier = "nightly"
 nextest_config = ".config/nextest.toml"
 nextest_profile = "stress"
 default_filter = "all()"
@@ -263,6 +254,40 @@ build_dir = "target-stress"
 raw_output = "target/stress"
 report_output = "target/stress-report.md"
 workflow_job_timeout_minutes = 1380
+
+# A night repeats the player's core. Its domains share one build per mode:
+# a lane per domain cost a build each, and a repeat waits on its slowest test,
+# so nine small lanes left the host idle between repeats. `warp` keeps its own
+# lane because it runs without an audio backend.
+[stress.tiers.nightly]
+lanes = ["player", "warp"]
+
+# A week repeats every engine contract, including distinct backend and
+# analysis feature builds.
+[stress.tiers.weekly]
+lanes = [
+  "engine",
+  "engine-broadcast",
+  "net-host",
+  "analysis",
+  "integration-regressions",
+]
+
+# A month repeats everything a repeat can count: each lane not exempt below,
+# either itself or through a lane that runs all of its tests with its features.
+[stress.tiers.monthly]
+covers_every_lane = true
+lanes = [
+  "workspace",
+  "analysis",
+  "tooling",
+  "harness",
+  "fixtures",
+  "broadcast",
+  "net-host",
+  "engine-broadcast",
+  "integration-regressions",
+]
 
 [stress.not_stressed]
 loom = "a loom model explores every interleaving in one run; a repeat replays the same search"
@@ -610,6 +635,37 @@ cargo.exclude = [
   "kithara-test-macros",
   "kithara-ffi-web-tests",
   "kithara-ffi-web-analysis-tests",
+]
+cargo.profile = "test-release"
+
+# The player's core domains in one build: what a night repeats. Its features
+# are the union of theirs, as `engine` takes them.
+[test.lanes.player]
+default_features = ["kithara-platform/tokio-rt-multi-thread"]
+cargo.packages = [
+  "kithara-bufpool",
+  "kithara-events",
+  "kithara-platform",
+  "kithara-signal",
+  "kithara-stream",
+  "kithara-stream-tests",
+  "kithara-audio",
+  "kithara-record",
+  "kithara-resampler",
+  "kithara-stretch",
+  "kithara-audio-tests",
+  "kithara-sync",
+  "kithara-sync-tests",
+  "kithara-file",
+  "kithara-file-tests",
+  "kithara-hls",
+  "kithara-hls-tests",
+  "kithara-host",
+  "kithara-host-tests",
+  "kithara-play",
+  "kithara-play-tests",
+  "kithara-queue",
+  "kithara-queue-tests",
 ]
 cargo.profile = "test-release"
 

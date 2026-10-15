@@ -133,7 +133,20 @@ fn every_typed_lane_key_renders_the_recorded_command() {
             report.push('\n');
             let mut envs = envs_of(&command);
             envs.sort();
-            for (key, value) in envs {
+            for (key, mut value) in envs {
+                if key == "CARGO" && !test.lanes[name].env.contains_key("CARGO") {
+                    assert_eq!(
+                        value,
+                        which::which(
+                            cargo_metadata::MetadataCommand::new()
+                                .cargo_command()
+                                .get_program()
+                        )
+                        .expect("resolve Cargo")
+                        .to_string_lossy()
+                    );
+                    value = "<cargo>".to_owned();
+                }
                 report.push_str(&format!("    {key}={value}\n"));
             }
         }
@@ -664,7 +677,7 @@ fn the_default_lane_renders_its_selection_features_and_the_callers_profile() {
     )
     .expect("command");
 
-    assert_eq!(command.get_program().to_string_lossy(), "cargo");
+    assert_eq!(command.get_program().to_string_lossy(), "cargo-nextest");
     assert_eq!(
         args_of(&command),
         [
@@ -863,14 +876,88 @@ fn every_lane_takes_the_callers_profile() {
 }
 
 #[test]
-fn a_lane_that_names_none_runs_with_none() {
-    let project = synthetic_project();
+fn a_nextest_lane_supplies_cargo_unless_the_lane_names_it() {
+    let mut project = synthetic_project();
     let request = TestRequest::parse(&[]).expect("parse request");
     let name = select_lane(&project.test, &request).expect("select default lane");
 
     let cmd = lane_command(&project.test, name, &request).expect("default lane command");
 
-    assert!(envs_of(&cmd).is_empty());
+    assert_eq!(
+        envs_of(&cmd),
+        vec![(
+            "CARGO".to_owned(),
+            which::which(
+                cargo_metadata::MetadataCommand::new()
+                    .cargo_command()
+                    .get_program()
+            )
+            .expect("resolve Cargo")
+            .to_string_lossy()
+            .into_owned()
+        )]
+    );
+
+    project
+        .test
+        .lanes
+        .get_mut("workspace")
+        .expect("default lane")
+        .env
+        .insert("CARGO".to_owned(), "lane-cargo".to_owned());
+    let command = lane_command(&project.test, "workspace", &request).expect("lane override");
+    assert_eq!(
+        envs_of(&command),
+        vec![("CARGO".to_owned(), "lane-cargo".to_owned())]
+    );
+}
+
+#[test]
+fn a_nextest_lane_resolves_relative_cargo_before_its_path_changes() {
+    const CHILD: &str = "KITHARA_RELATIVE_CARGO_PROBE";
+    if std::env::var_os(CHILD).is_none() {
+        let output = Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "test::tests::a_nextest_lane_resolves_relative_cargo_before_its_path_changes",
+                "--nocapture",
+            ])
+            .env("CARGO", "cargo")
+            .env(CHILD, "1")
+            .output()
+            .expect("run the relative Cargo contract");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "relative Cargo contract failed: {stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    let temp = TempDir::new().expect("lane PATH directory");
+    let mut project = synthetic_project();
+    project
+        .test
+        .lanes
+        .get_mut("workspace")
+        .expect("default lane")
+        .env
+        .insert("PATH".to_owned(), temp.path().display().to_string());
+    let request = TestRequest::parse(&[]).expect("parse request");
+    let command = lane_command(&project.test, "workspace", &request).expect("lane command");
+    let envs = envs_of(&command);
+    let (_, cargo) = envs
+        .iter()
+        .find(|(key, _)| key == "CARGO")
+        .expect("the lane supplies Cargo");
+    let cargo = Path::new(cargo);
+    assert!(cargo.is_absolute(), "Cargo remains relative: {cargo:?}");
+    assert_eq!(
+        cargo.file_name().expect("Cargo filename"),
+        format!("cargo{}", std::env::consts::EXE_SUFFIX).as_str()
+    );
+    assert!(!cargo.starts_with(temp.path()), "Cargo uses the lane PATH");
 }
 
 /// A lane is clean only once its report agrees. The verdict lives past

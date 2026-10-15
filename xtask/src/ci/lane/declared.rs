@@ -14,6 +14,7 @@ use kithara_devtools::{
 use toml::Value;
 use tracing::warn;
 
+use super::nextest;
 use crate::{
     ci::{
         cache::snapshot, config::CiPins, environment::CacheTrust, process::Process,
@@ -53,6 +54,7 @@ pub(crate) fn run(
     for check in &lane.pinned {
         require_pinned_version(process, check, pins, tools)?;
     }
+    let nextest_bin = nextest::prepare(process, pins, tools.program("cargo"))?;
     let target_snapshot_to_publish = if process.is_recording() {
         None
     } else {
@@ -87,12 +89,21 @@ pub(crate) fn run(
             );
         }
         let vars = step_vars(step, process, pins)?;
-        process.run_command(
-            process.command(&program).args(&args).envs(&vars),
-            &step.label,
-        )?;
+        let mut command = process.command(&program);
+        command.args(&args).envs(&vars);
+        if let Some(bin) = &nextest_bin {
+            nextest::prepend(&mut command, bin)?;
+        }
+        process.run_command(&mut command, &step.label)?;
         if step.rebuild_check {
-            rebuild_check(process, &program, &args, &vars, &step.label)?;
+            rebuild_check(
+                process,
+                &program,
+                &args,
+                &vars,
+                &step.label,
+                nextest_bin.as_deref(),
+            )?;
         }
     }
     if !process.is_recording() && lane.publishes_sources {
@@ -171,6 +182,7 @@ fn rebuild_check(
     args: &[String],
     vars: &BTreeMap<String, String>,
     label: &str,
+    nextest_bin: Option<&Path>,
 ) -> Result<()> {
     let repeat = args
         .iter()
@@ -178,8 +190,12 @@ fn rebuild_check(
         .filter(|arg| !arg.starts_with("--timings"))
         .chain(consts::REBUILD_CHECK_ARGS);
     let label = format!("{label} rebuild check");
-    let transcript =
-        process.transcript(process.command(program).args(repeat).envs(vars), &label)?;
+    let mut command = process.command(program);
+    command.args(repeat).envs(vars);
+    if let Some(bin) = nextest_bin {
+        nextest::prepend(&mut command, bin)?;
+    }
+    let transcript = process.transcript(&mut command, &label)?;
     let rebuilt = rebuilt(&transcript);
     if !rebuilt.is_empty() {
         bail!(
@@ -566,6 +582,317 @@ mod tests {
                 "Compiling probe v0.0.0 (/w)",
             ]
         );
+    }
+
+    #[cfg(unix)]
+    fn nextest_fixture() -> (tempfile::TempDir, Process, CiPins, PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().expect("isolated nextest lane");
+        let root = directory.path();
+        let pins = fixture().pins;
+        let version = pins
+            .cargo_tool_version("cargo-nextest")
+            .expect("nextest pin");
+        let cargo_home = root.join("cargo-home");
+        let executable = cargo_home
+            .join("kithara-nextest")
+            .join(CacheTrust::from_environment().expect("CI trust").as_str())
+            .join(format!("{}-{}", env::consts::OS, env::consts::ARCH))
+            .join(version)
+            .join("bin/cargo-nextest");
+        std::fs::create_dir_all(executable.parent().expect("binary directory"))
+            .expect("create pinned tool cache");
+        let inherited = Process::new(root, BTreeMap::new());
+        let installed = inherited
+            .resolve_program("cargo-nextest")
+            .expect("installed nextest");
+        std::fs::copy(installed, &executable).expect("seed cache with real pinned nextest");
+        let obsolete = root.join("obsolete/bin");
+        std::fs::create_dir_all(&obsolete).expect("obsolete PATH directory");
+        let shadow = obsolete.join("cargo-nextest");
+        std::fs::write(
+            &shadow,
+            "#!/bin/sh\nprintf '%s\\n' 'cargo-nextest 0.9.140'\n",
+        )
+        .expect("write obsolete shadow");
+        std::fs::set_permissions(&shadow, std::fs::Permissions::from_mode(0o755))
+            .expect("make shadow executable");
+        let stale = cargo_home.join("bin/cargo-nextest");
+        std::fs::create_dir_all(stale.parent().expect("Cargo-home binary directory"))
+            .expect("create stale Cargo-home tools");
+        std::fs::copy(&shadow, &stale).expect("seed stale Cargo-home nextest");
+        let path = env::join_paths(
+            std::iter::once(obsolete).chain(env::split_paths(&env::var_os("PATH").expect("PATH"))),
+        )
+        .expect("obsolete inherited PATH");
+        let process = Process::new(
+            root,
+            BTreeMap::from([
+                (OsString::from("CARGO_HOME"), cargo_home.into_os_string()),
+                (OsString::from("PATH"), path),
+            ]),
+        );
+        (directory, process, pins, executable)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_lane_selects_real_pinned_nextest_over_an_obsolete_step_path() {
+        use kithara_devtools::verdict::NotClean;
+
+        let (directory, process, pins, _) = nextest_fixture();
+        let root = directory.path();
+        let fixture = crate::ci::config::workspace_root()
+            .join("crates/kithara-devtools/tests/fixtures/nextest-stress");
+        for file in ["Cargo.toml", "stress.rs"] {
+            std::fs::copy(fixture.join(file), root.join(file)).expect("copy stress contract");
+        }
+        std::fs::write(
+            root.join("nextest.toml"),
+            "[profile.default.junit]\npath = \"junit.xml\"\n",
+        )
+        .expect("isolated nextest configuration");
+        let lane = CiLaneConfig {
+            label: "pinned nextest fixture".to_owned(),
+            program: "cargo-nextest".to_owned(),
+            steps: vec![CiLaneStep {
+                args: [
+                    "nextest",
+                    "run",
+                    "--offline",
+                    "--profile",
+                    "default",
+                    "--stress-count",
+                    "2",
+                    "--no-fail-fast",
+                    "--retries",
+                    "0",
+                    "--color",
+                    "never",
+                    "--user-config-file",
+                    "none",
+                    "--config-file",
+                    "nextest.toml",
+                ]
+                .map(str::to_owned)
+                .to_vec(),
+                label: "stress verdict".to_owned(),
+                env: BTreeMap::from([
+                    (
+                        "PATH".to_owned(),
+                        process
+                            .environment_path("PATH")
+                            .expect("PATH")
+                            .to_string_lossy()
+                            .into_owned(),
+                    ),
+                    (
+                        "CARGO_TARGET_DIR".to_owned(),
+                        root.join("build").display().to_string(),
+                    ),
+                    ("RUSTFLAGS".to_owned(), String::new()),
+                    ("CARGO_ENCODED_RUSTFLAGS".to_owned(), String::new()),
+                ]),
+                ..CiLaneStep::default()
+            }],
+            ..CiLaneConfig::default()
+        };
+        let error = run(
+            &process,
+            &lane,
+            &pins,
+            &ToolsConfig::default(),
+            PipelineKind::Branch,
+            None,
+        )
+        .expect_err("an earlier stress failure fails the lane");
+        assert_eq!(NotClean::report(&error), 100, "{error:#}");
+        let xml = std::fs::read_to_string(root.join("target/nextest/default/junit.xml"))
+            .expect("real nextest wrote both iterations");
+        let cases = kithara_devtools::junit::parse_junit(&xml).expect("actual nextest JUnit");
+        let mut iterations = cases
+            .iter()
+            .map(|case| (case.iteration, case.failed, case.flaky))
+            .collect::<Vec<_>>();
+        iterations.sort();
+        assert_eq!(
+            iterations,
+            [(Some(0), true, false), (Some(1), false, false)],
+            "{xml}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_lane_rejects_a_corrupt_pinned_cache_before_running_steps() {
+        let (directory, process, pins, executable) = nextest_fixture();
+        let corrupt = b"#!/bin/sh\nprintf '%s\\n' 'cargo-nextest 0.9.140'\n";
+        std::fs::write(&executable, corrupt).expect("corrupt pinned cache");
+        let marker = directory.path().join("step-ran");
+        let lane = CiLaneConfig {
+            label: "corrupt cache fixture".to_owned(),
+            program: "touch".to_owned(),
+            steps: vec![CiLaneStep {
+                args: vec![marker.display().to_string()],
+                label: "must not execute".to_owned(),
+                ..CiLaneStep::default()
+            }],
+            ..CiLaneConfig::default()
+        };
+        let error = run(
+            &process,
+            &lane,
+            &pins,
+            &ToolsConfig::default(),
+            PipelineKind::Branch,
+            None,
+        )
+        .expect_err("a mismatched cached version fails explicitly");
+        assert!(error.to_string().contains("version mismatch"), "{error:#}");
+        assert!(!marker.exists(), "no lane step runs with a corrupt cache");
+        assert_eq!(
+            std::fs::read(executable).expect("unchanged corrupt artifact"),
+            corrupt
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nextest_install_uses_process_scratch_and_releases_build_and_lock() {
+        use std::{fs, os::unix::fs::PermissionsExt};
+
+        use kithara_devtools::lock::FileLock;
+
+        let (directory, inherited, pins, source) = nextest_fixture();
+        let root = directory.path();
+        let scratch = root.join("scratch");
+        let engine_target = root.join("engine-target");
+        fs::create_dir_all(&scratch).expect("process-only scratch");
+        fs::create_dir_all(&engine_target).expect("isolated engine target");
+        let current_trust = CacheTrust::from_environment().expect("inherited trust");
+        let trust = if current_trust.as_str() == "trusted" {
+            "quarantine"
+        } else {
+            "trusted"
+        };
+        let observed = root.join("install-build.txt");
+        let observed_cwd = root.join("install-cwd.txt");
+        let installer = root.join("cargo-installer");
+        fs::write(
+            &installer,
+            r#"#!/bin/sh
+set -eu
+test "$1" = install
+    while [ "$#" -gt 0 ]; do
+        if [ "$1" = --root ]; then
+            shift
+            install_root=$1
+        fi
+        shift
+    done
+    printf '%s\n' "$(cd "$CARGO_TARGET_DIR" && pwd -P)" > "$OBSERVED_BUILD"
+    printf '%s\n' "$(pwd -P)" > "$OBSERVED_CWD"
+    test -d "$CARGO_TARGET_DIR"
+    test "$(pwd -P)" = "$(cd "$CARGO_TARGET_DIR" && pwd -P)"
+    test "${RUSTFLAGS+set}" != set
+    test "${CARGO_ENCODED_RUSTFLAGS+set}" != set
+    test "${RUSTDOCFLAGS+set}" != set
+    test "${CARGO_BUILD_TARGET+set}" != set
+    touch "$CARGO_TARGET_DIR/temporary-build"
+    mkdir -p "$install_root/bin"
+    cp "$INSTALL_SOURCE" "$install_root/bin/cargo-nextest"
+    exit 0
+"#,
+        )
+        .expect("installation boundary");
+        fs::set_permissions(&installer, fs::Permissions::from_mode(0o755))
+            .expect("executable installer");
+        let cargo_home = root.join("cargo-home");
+        let process = Process::new(
+            root,
+            BTreeMap::from([
+                (
+                    OsString::from("CARGO_HOME"),
+                    cargo_home.clone().into_os_string(),
+                ),
+                (OsString::from("TMPDIR"), scratch.clone().into_os_string()),
+                (
+                    OsString::from("CARGO_TARGET_DIR"),
+                    engine_target.clone().into_os_string(),
+                ),
+                (OsString::from("KITHARA_CACHE_TRUST"), OsString::from(trust)),
+                (
+                    OsString::from("PATH"),
+                    inherited.environment_var("PATH").expect("inherited PATH"),
+                ),
+                (
+                    OsString::from("OBSERVED_BUILD"),
+                    observed.clone().into_os_string(),
+                ),
+                (
+                    OsString::from("OBSERVED_CWD"),
+                    observed_cwd.clone().into_os_string(),
+                ),
+                (OsString::from("INSTALL_SOURCE"), source.into_os_string()),
+                (
+                    OsString::from("RUSTFLAGS"),
+                    OsString::from("--cfg engine_only"),
+                ),
+                (
+                    OsString::from("CARGO_ENCODED_RUSTFLAGS"),
+                    OsString::from("--cfg\u{1f}engine_only"),
+                ),
+                (
+                    OsString::from("RUSTDOCFLAGS"),
+                    OsString::from("--cfg engine_docs"),
+                ),
+                (
+                    OsString::from("CARGO_BUILD_TARGET"),
+                    OsString::from("wasm32-unknown-unknown"),
+                ),
+            ]),
+        );
+        let selected =
+            nextest::prepare(&process, &pins, installer.to_str().expect("installer path"))
+                .expect("install and validate real pinned nextest")
+                .expect("a running lane selects its tool");
+        let version = pins
+            .cargo_tool_version("cargo-nextest")
+            .expect("nextest pin");
+        let cache = cargo_home.join("kithara-nextest").join(trust).join(format!(
+            "{}-{}",
+            env::consts::OS,
+            env::consts::ARCH
+        ));
+        assert_eq!(selected, cache.join(version).join("bin"));
+        let build = PathBuf::from(fs::read_to_string(observed).expect("observed build").trim());
+        let cwd = PathBuf::from(
+            fs::read_to_string(observed_cwd)
+                .expect("observed install cwd")
+                .trim(),
+        );
+        let physical_scratch = scratch.canonicalize().expect("physical scratch");
+        assert_eq!(build.parent(), Some(physical_scratch.as_path()));
+        assert_eq!(
+            cwd, build,
+            "installation runs outside the repository configuration"
+        );
+        assert!(
+            !build.exists(),
+            "installation build is removed before the lane runs"
+        );
+        assert_eq!(
+            fs::read_dir(engine_target).expect("engine target").count(),
+            0
+        );
+        assert!(!cache.join(version).join("target").exists());
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(cache.join(format!("{version}.lock")))
+            .expect("installer lock");
+        FileLock::try_exclusive(lock).expect("per-pin lock released before lane steps");
     }
 
     #[test]

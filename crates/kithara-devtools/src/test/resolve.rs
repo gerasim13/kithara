@@ -4,6 +4,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use cargo_metadata::MetadataCommand;
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -60,7 +61,17 @@ impl ResolvedLane {
     /// nextest unions repeated `-E`. A caller package selection replaces a
     /// workspace selection, so `-p` narrows any workspace lane.
     pub(crate) fn command(&self, action: NextestAction, caller: &[String]) -> Result<Command> {
-        let mut command = Command::new("cargo");
+        let mut command = Command::new(match &self.runner {
+            TestRunner::Nextest(_) => "cargo-nextest",
+            TestRunner::Cargo(_) => "cargo",
+        });
+        if matches!(&self.runner, TestRunner::Nextest(_)) && !self.env.contains_key("CARGO") {
+            command.env(
+                "CARGO",
+                which::which(MetadataCommand::new().cargo_command().get_program())
+                    .context("resolve Cargo for the nextest lane")?,
+            );
+        }
         command.envs(&self.env);
         match &self.runner {
             TestRunner::Nextest(nextest) => {

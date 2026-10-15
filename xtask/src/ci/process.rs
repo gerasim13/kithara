@@ -173,12 +173,15 @@ impl Process {
             .map_or_else(|| self.root.join("target"), PathBuf::from)
     }
 
-    pub(crate) fn environment_path(&self, name: &str) -> Option<PathBuf> {
+    pub(crate) fn environment_var(&self, name: &str) -> Option<OsString> {
         self.vars
             .get(OsStr::new(name))
             .cloned()
             .or_else(|| env::var_os(name))
-            .map(PathBuf::from)
+    }
+
+    pub(crate) fn environment_path(&self, name: &str) -> Option<PathBuf> {
+        self.environment_var(name).map(PathBuf::from)
     }
 
     /// Where this process's Cargo keeps its registry and git checkouts.

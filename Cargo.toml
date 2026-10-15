@@ -578,6 +578,7 @@ web-time = "1.1"
 webbrowser = { version = "1.2.4", features = ["hardened"] }
 # Keep Masonry's WGPU/Naga diagnostic writer aligned with iced's.
 wgpu-vello = { package = "wgpu", version = "26", default-features = false, features = ["naga-ir"] }
+which = "8"
 window_clipboard = "0.5.1"
 # The Windows native secret store for keyring-core.
 windows-native-keyring-store = "1.1.0"

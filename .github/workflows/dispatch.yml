@@ -23,12 +23,16 @@ on:
     # The week: the lanes that cost hours - Miri, the deep assessment - and
     # would owe the machine a night it needs for lanes that answer faster.
     - cron: '17 8 * * 6'
+    # The month: the stress tier that repeats every lane a repeat can count.
+    # It is the repeated run's cadence alone; the night and the week already
+    # run everything else.
+    - cron: '17 3 1 * *'
   workflow_dispatch:
     inputs:
       kind:
         description: Which cadence to run, when starting this by hand.
         type: choice
-        options: [nightly, weekly]
+        options: [nightly, weekly, monthly]
         default: nightly
       only:
         description: >-
@@ -55,18 +59,20 @@ on:
 # whole night per push for the fleet. Another selection, or the other cadence,
 # is another question and keeps its run.
 concurrency:
-  group: dispatch-${{ github.ref }}-${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || 'nightly') }}-${{ inputs.only || '' }}-${{ inputs.narrow || '' }}-${{ inputs.mutants || false }}
+  group: dispatch-${{ github.ref }}-${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || github.event.schedule == '17 3 1 * *' && 'monthly' || 'nightly') }}-${{ inputs.only || '' }}-${{ inputs.narrow || '' }}-${{ inputs.mutants || false }}
   cancel-in-progress: true
 
 jobs:
   # The gate lanes a night adds to the ones every push already runs: the
   # sanitizer soak, the secret scan, the check the merge request does.
   gate:
-    if: vars.KITHARA_RUNNER_LABELS != ''
+    if: >-
+      vars.KITHARA_RUNNER_LABELS != ''
+      && (inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || github.event.schedule == '17 3 1 * *' && 'monthly' || 'nightly')) != 'monthly'
     uses: ./.github/workflows/run.yml
     with:
       role: gate
-      kind: ${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || 'nightly') }}
+      kind: ${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || github.event.schedule == '17 3 1 * *' && 'monthly' || 'nightly') }}
       only: ${{ inputs.only || '' }}
       narrow: ${{ inputs.narrow || '' }}
 
@@ -74,11 +80,13 @@ jobs:
   # platform lane names a machine this fleet does not have. The jobs below call
   # the workflows that do.
   platforms:
-    if: vars.KITHARA_RUNNER_LABELS != ''
+    if: >-
+      vars.KITHARA_RUNNER_LABELS != ''
+      && (inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || github.event.schedule == '17 3 1 * *' && 'monthly' || 'nightly')) != 'monthly'
     uses: ./.github/workflows/run.yml
     with:
       role: platforms
-      kind: ${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || 'nightly') }}
+      kind: ${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || github.event.schedule == '17 3 1 * *' && 'monthly' || 'nightly') }}
       only: ${{ inputs.only || '' }}
       narrow: ${{ inputs.narrow || '' }}
 
@@ -89,7 +97,9 @@ jobs:
   # eighteen runner slots idle. The group is held by the calling job, so the
   # fan-out's own lanes still run concurrently inside its turn.
   deep:
-    if: vars.KITHARA_RUNNER_LABELS != ''
+    if: >-
+      vars.KITHARA_RUNNER_LABELS != ''
+      && (inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || github.event.schedule == '17 3 1 * *' && 'monthly' || 'nightly')) != 'monthly'
     concurrency:
       group: heavy-linux-${{ github.repository }}
       cancel-in-progress: false
@@ -97,7 +107,7 @@ jobs:
     uses: ./.github/workflows/run.yml
     with:
       role: deep
-      kind: ${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || 'nightly') }}
+      kind: ${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || github.event.schedule == '17 3 1 * *' && 'monthly' || 'nightly') }}
       only: ${{ inputs.only || '' }}
       narrow: ${{ inputs.narrow || '' }}
 
@@ -107,6 +117,7 @@ jobs:
     if: >-
       vars.KITHARA_RUNNER_LABELS != ''
       && (inputs.mutants || (inputs.only || '') != '')
+      && (inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || github.event.schedule == '17 3 1 * *' && 'monthly' || 'nightly')) != 'monthly'
     concurrency:
       group: heavy-linux-${{ github.repository }}
       cancel-in-progress: false
@@ -114,12 +125,14 @@ jobs:
     uses: ./.github/workflows/run.yml
     with:
       role: mutants
-      kind: ${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || 'nightly') }}
+      kind: ${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || github.event.schedule == '17 3 1 * *' && 'monthly' || 'nightly') }}
       only: ${{ inputs.only || 'all' }}
       narrow: ${{ inputs.narrow || '' }}
 
   quality:
-    if: vars.KITHARA_RUNNER_LABELS != ''
+    if: >-
+      vars.KITHARA_RUNNER_LABELS != ''
+      && (inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || github.event.schedule == '17 3 1 * *' && 'monthly' || 'nightly')) != 'monthly'
     concurrency:
       group: heavy-linux-${{ github.repository }}
       cancel-in-progress: false
@@ -127,7 +140,7 @@ jobs:
     uses: ./.github/workflows/run.yml
     with:
       role: quality
-      kind: ${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || 'nightly') }}
+      kind: ${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || github.event.schedule == '17 3 1 * *' && 'monthly' || 'nightly') }}
       only: ${{ inputs.only || '' }}
       narrow: ${{ inputs.narrow || '' }}
 
@@ -136,7 +149,7 @@ jobs:
   network:
     if: >-
       vars.KITHARA_RUNNER_LABELS != ''
-      && (inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || 'nightly')) == 'nightly'
+      && (inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || github.event.schedule == '17 3 1 * *' && 'monthly' || 'nightly')) == 'nightly'
       && (inputs.only || '') == ''
     uses: ./.github/workflows/network.yml
     # A called workflow starts with no secrets of its own, so the keys its
@@ -155,7 +168,7 @@ jobs:
   windows:
     if: >-
       vars.KITHARA_WINDOWS_RUNNER_LABELS != ''
-      && (inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || 'nightly')) == 'nightly'
+      && (inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || github.event.schedule == '17 3 1 * *' && 'monthly' || 'nightly')) == 'nightly'
       && (inputs.only || '') == ''
     uses: ./.github/workflows/windows.yml
 
@@ -164,23 +177,26 @@ jobs:
   android:
     if: >-
       vars.KITHARA_ANDROID_RUNNER_LABELS != ''
+      && (inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || github.event.schedule == '17 3 1 * *' && 'monthly' || 'nightly')) != 'monthly'
       && ((inputs.only || '') == '' || contains(inputs.only, 'android-test'))
     uses: ./.github/workflows/android.yml
 
   ui:
     if: >-
       vars.KITHARA_GPU_RUNNER_LABELS != ''
-      && (inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || 'nightly')) == 'nightly'
+      && (inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || github.event.schedule == '17 3 1 * *' && 'monthly' || 'nightly')) == 'nightly'
       && ((inputs.only || '') == '' || contains(inputs.only, 'deep-ui'))
     uses: ./.github/workflows/ui.yml
 
   # The repeated run that turns "fails sometimes" into a rate. It has a runner
   # of its own and a group of its own, and its own admission: only the owner of
-  # a fork may spend a night of the fleet on it.
+  # a fork may spend a night of the fleet on it. Each cadence repeats the
+  # stress tier of the same name.
   stress:
     if: >-
       vars.KITHARA_STRESS_ENABLED == 'true'
       && vars.KITHARA_STRESS_RUNNER_LABELS != ''
-      && (inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || 'nightly')) == 'nightly'
       && (inputs.only || '') == ''
     uses: ./.github/workflows/stress.yml
+    with:
+      tier: ${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || github.event.schedule == '17 3 1 * *' && 'monthly' || 'nightly') }}

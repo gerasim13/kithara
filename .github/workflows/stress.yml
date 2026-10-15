@@ -28,7 +28,11 @@ on:
         required: false
         type: string
       lane:
-        description: stressed test lane; empty uses every lane the project stresses
+        description: stressed test lane; empty uses the tier's lanes
+        required: false
+        type: string
+      tier:
+        description: configured stress tier; empty uses the project's default tier
         required: false
         type: string
   workflow_dispatch:
@@ -50,7 +54,11 @@ on:
         required: false
         type: string
       lane:
-        description: stressed test lane; empty uses every lane the project stresses
+        description: stressed test lane; empty uses the tier's lanes
+        required: false
+        type: string
+      tier:
+        description: configured stress tier; empty uses the project's default tier
         required: false
         type: string
 
@@ -72,8 +80,15 @@ jobs:
     name: Stress authorization
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # One shard per runner that serves the run. Shards on one runner take
+    # turns, so a run split wider than its pool repeats nothing sooner and
+    # holds every unit's evidence back until the slowest shard reports.
+    outputs:
+      shards: ${{ steps.shards.outputs.shards }}
+      shard-count: ${{ steps.shards.outputs.shard-count }}
     steps:
       - name: Validate fork owner and runner configuration
+        id: shards
         env:
           ACTOR: ${{ github.actor }}
           COUNT: ${{ inputs.count || vars.KITHARA_STRESS_COUNT }}
@@ -83,6 +98,7 @@ jobs:
           OWNER: ${{ github.repository_owner }}
           REVISION: ${{ inputs.revision || github.sha }}
           RUNNER_LABELS: ${{ vars.KITHARA_STRESS_RUNNER_LABELS }}
+          SHARDS: ${{ vars.KITHARA_STRESS_SHARDS }}
           TRIGGERING_ACTOR: ${{ github.triggering_actor }}
         shell: bash
         run: |
@@ -110,6 +126,21 @@ jobs:
             echo "runner labels must include self-hosted, linux, x64, and kithara-stress"
             exit 1
           }
+          if [[ -n "$SHARDS" ]]; then
+            [[ "$SHARDS" =~ ^[1-3]$ ]] || { echo "shard count must be between 1 and 3"; exit 1; }
+          fi
+          SHARDS="${SHARDS:-1}"
+          shards='['
+          separator=''
+          for ((shard = 0; shard < SHARDS; shard++)); do
+            shards+="$separator$shard"
+            separator=','
+          done
+          shards+=']'
+          {
+            echo "shards=$shards"
+            echo "shard-count=$SHARDS"
+          } >> "$GITHUB_OUTPUT"
 
   execute:
     name: Repeated run (shard ${{ matrix.shard }})
@@ -127,9 +158,9 @@ jobs:
     timeout-minutes: 1380
     strategy:
       fail-fast: false
-      max-parallel: 3
+      max-parallel: ${{ fromJSON(needs.authorize.outputs.shard-count) }}
       matrix:
-        shard: [0, 1, 2]
+        shard: ${{ fromJSON(needs.authorize.outputs.shards) }}
     steps:
       - name: Checkout controller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -155,19 +186,22 @@ jobs:
           FILTER: ${{ inputs.filter }}
           MODE: ${{ inputs.mode }}
           LANE: ${{ inputs.lane }}
+          SHARD_COUNT: ${{ needs.authorize.outputs.shard-count }}
           SHARD_INDEX: ${{ matrix.shard }}
           SUBJECT_SHA: ${{ inputs.revision || github.sha }}
+          TIER: ${{ inputs.tier }}
         run: |
           args=(
             --subject-root "$GITHUB_WORKSPACE/subject"
-            --output "$RUNNER_TEMP/kithara-stress/raw"
+            --output "$RUNNER_TEMP/kithara-stress/raw/shard-$SHARD_INDEX"
             --expected-controller-sha "$CONTROLLER_SHA"
             --expected-subject-sha "$SUBJECT_SHA"
             --shard-index "$SHARD_INDEX"
-            --shard-count 3
+            --shard-count "$SHARD_COUNT"
           )
           [[ -z "$FILTER" ]] || args+=(--filter "$FILTER")
           [[ -z "$COUNT" ]] || args+=(--count "$COUNT")
+          [[ -z "$TIER" ]] || args+=(--tier "$TIER")
           # `--mode` and `--lane` repeat per entry; each input is a space-separated
           # list, so one flag carrying the whole string would name a mode or a lane
           # that does not exist and fail the run at argument parsing.
@@ -200,26 +234,13 @@ jobs:
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
 
-      - name: Download shard 0 evidence
+      - name: Download every shard's evidence
         if: always()
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: stress-raw-${{ github.run_id }}-${{ github.run_attempt }}-shard-0
-          path: raw/shard-0
-
-      - name: Download shard 1 evidence
-        if: always()
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: stress-raw-${{ github.run_id }}-${{ github.run_attempt }}-shard-1
-          path: raw/shard-1
-
-      - name: Download shard 2 evidence
-        if: always()
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: stress-raw-${{ github.run_id }}-${{ github.run_attempt }}-shard-2
-          path: raw/shard-2
+          pattern: stress-raw-${{ github.run_id }}-${{ github.run_attempt }}-shard-*
+          path: raw
+          merge-multiple: true
 
       - name: Install just
         if: always()
@@ -250,11 +271,12 @@ jobs:
           MODE: ${{ inputs.mode }}
           LANE: ${{ inputs.lane }}
           SUBJECT_SHA: ${{ inputs.revision || github.sha }}
+          TIER: ${{ inputs.tier }}
         run: |
-          args=(
-            --raw "$GITHUB_WORKSPACE/raw/shard-0"
-            --raw "$GITHUB_WORKSPACE/raw/shard-1"
-            --raw "$GITHUB_WORKSPACE/raw/shard-2"
+          args=()
+          # One root per shard: each artifact carries its evidence under `shard-<index>`.
+          for raw in "$GITHUB_WORKSPACE"/raw/shard-*; do args+=(--raw "$raw"); done
+          args+=(
             --output "$GITHUB_WORKSPACE/target/stress-report.md"
             --expected-controller-sha "$CONTROLLER_SHA"
             --expected-subject-sha "$SUBJECT_SHA"
@@ -262,6 +284,7 @@ jobs:
           )
           [[ -z "$FILTER" ]] || args+=(--filter "$FILTER")
           [[ -z "$COUNT" ]] || args+=(--count "$COUNT")
+          [[ -z "$TIER" ]] || args+=(--tier "$TIER")
           for mode in $MODE; do args+=(--mode "$mode"); done
           for lane in $LANE; do args+=(--lane "$lane"); done
           just ci stress-report "${args[@]}"

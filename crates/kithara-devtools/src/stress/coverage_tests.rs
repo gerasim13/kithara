@@ -241,10 +241,14 @@ fn builds_of(lanes: &[ResolvedLane]) -> Vec<Build> {
     })
 }
 
-#[test]
-fn every_engine_domain_is_stressed_or_covered_with_its_features() {
-    let project = ProjectConfig::load(&root()).expect("load repository config");
-    let metadata = this_workspace();
+/// Each of `candidates` that no lane of `stressed` repeats with at least its
+/// features, under some default lane mode, with the reasons it is not.
+fn uncovered<'a>(
+    project: &ProjectConfig,
+    metadata: &Metadata,
+    candidates: &[&'a str],
+    stressed: &[&str],
+) -> Vec<(&'a str, Vec<String>)> {
     let (test, stress) = (&project.test, &project.stress);
     let resolved = |lane: &str, flash: Option<bool>, no_block: Option<bool>, load: Option<bool>| {
         resolve(
@@ -253,30 +257,15 @@ fn every_engine_domain_is_stressed_or_covered_with_its_features() {
         )
         .expect("resolve")
     };
-    let mut failures = Vec::new();
-    if stress.default_filter != "all()" {
-        failures.push(format!(
-            "stress.default_filter `{}` leaves part of every stressed lane unrepeated",
-            stress.default_filter
-        ));
-    }
-    let candidates = ENGINE_DOMAINS
+    let candidates = candidates
         .iter()
-        .filter(|name| !stress.lanes.iter().any(|lane| lane == **name))
+        .filter(|name| !stressed.contains(name))
         .map(|&name| {
             let lane = &test.lanes[name];
-            let within = stress
-                .lanes
+            let within = stressed
                 .iter()
-                .filter(|stressed| {
-                    runs_within(
-                        name,
-                        lane,
-                        stressed,
-                        &test.lanes[stressed.as_str()],
-                        &metadata,
-                    )
-                })
+                .copied()
+                .filter(|other| runs_within(name, lane, other, &test.lanes[*other], metadata))
                 .collect::<Vec<_>>();
             (name, within)
         })
@@ -290,8 +279,8 @@ fn every_engine_domain_is_stressed_or_covered_with_its_features() {
         }
     }
     let mut units = BTreeMap::<&str, Vec<(&str, usize)>>::new();
-    for stressed in candidates.iter().flat_map(|(_, within)| within) {
-        if units.contains_key(stressed.as_str()) {
+    for other in candidates.iter().flat_map(|(_, within)| within) {
+        if units.contains_key(other) {
             continue;
         }
         let mut indices = Vec::new();
@@ -299,44 +288,106 @@ fn every_engine_domain_is_stressed_or_covered_with_its_features() {
             let mode = &stress.modes[name];
             if mode.command.is_empty() {
                 indices.push((name.as_str(), lanes.len()));
-                lanes.push(resolved(stressed, mode.flash, mode.no_block, mode.load));
+                lanes.push(resolved(other, mode.flash, mode.no_block, mode.load));
             }
         }
-        units.insert(stressed.as_str(), indices);
+        units.insert(other, indices);
     }
     let builds = builds_of(&lanes);
+    let mut gaps = Vec::new();
     for (name, within) in &candidates {
         let lane = own.get(name).map(|&index| &builds[index]);
-        let covered_by = within.iter().find(|stressed| {
+        let covered = within.iter().any(|other| {
             lane.is_some_and(|lane| {
-                units[stressed.as_str()]
+                units[other]
                     .iter()
                     .any(|&(_, unit)| first_uncovered(lane, &builds[unit]).is_none())
             })
         });
-        if covered_by.is_none() {
-            let mut why = Vec::new();
-            for stressed in within {
-                for &(mode, unit) in &units[stressed.as_str()] {
-                    if let Some((package, features)) =
-                        lane.and_then(|lane| first_uncovered(lane, &builds[unit]))
-                    {
-                        why.push(format!(
-                            "`{stressed}` under `{mode}` builds no `{package}` with {features:?}"
-                        ));
-                    }
+        if covered {
+            continue;
+        }
+        let mut why = Vec::new();
+        for other in within {
+            for &(mode, unit) in &units[other] {
+                if let Some((package, features)) =
+                    lane.and_then(|lane| first_uncovered(lane, &builds[unit]))
+                {
+                    why.push(format!(
+                        "`{other}` under `{mode}` builds no `{package}` with {features:?}"
+                    ));
                 }
             }
-            if why.is_empty() {
-                why.push(
-                    "no stress lane runs it under the same runner, profile, environment, \
-                     selection and targets"
-                        .to_owned(),
-                );
-            }
+        }
+        if why.is_empty() {
+            why.push(
+                "no stress lane runs it under the same runner, profile, environment, \
+                 selection and targets"
+                    .to_owned(),
+            );
+        }
+        gaps.push((*name, why));
+    }
+    gaps
+}
+
+#[test]
+fn every_engine_domain_is_stressed_or_covered_with_its_features() {
+    let project = ProjectConfig::load(&root()).expect("load repository config");
+    let metadata = this_workspace();
+    let stress = &project.stress;
+    let mut failures = Vec::new();
+    if stress.default_filter != "all()" {
+        failures.push(format!(
+            "stress.default_filter `{}` leaves part of every stressed lane unrepeated",
+            stress.default_filter
+        ));
+    }
+    let stressed = stress
+        .tiers
+        .values()
+        .flat_map(|tier| tier.lanes.iter().map(String::as_str))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    for (name, why) in uncovered(&project, &metadata, ENGINE_DOMAINS, &stressed) {
+        failures.push(format!(
+            "engine domain lane `{name}` is in no stress tier and no stress lane \
+             preserves its engine tests and features: {}",
+            why.join("; ")
+        ));
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// A tier that answers for every lane repeats each lane the project does not
+/// exempt, either itself or through a lane that runs all of its tests with at
+/// least its features.
+#[test]
+fn a_tier_covering_every_lane_repeats_each_unexempt_lane_or_a_lane_covering_it() {
+    let project = ProjectConfig::load(&root()).expect("load repository config");
+    let metadata = this_workspace();
+    let stress = &project.stress;
+    let lanes = project
+        .test
+        .lanes
+        .keys()
+        .map(String::as_str)
+        .filter(|name| !stress.not_stressed.contains_key(*name))
+        .collect::<Vec<_>>();
+    let tiers = stress
+        .tiers
+        .iter()
+        .filter(|(_, tier)| tier.covers_every_lane)
+        .collect::<Vec<_>>();
+    assert!(!tiers.is_empty(), "no stress tier covers every lane");
+    let mut failures = Vec::new();
+    for (tier_name, tier) in tiers {
+        let stressed = tier.lanes.iter().map(String::as_str).collect::<Vec<_>>();
+        for (name, why) in uncovered(&project, &metadata, &lanes, &stressed) {
             failures.push(format!(
-                "engine domain lane `{name}` is not in stress.lanes and no stress lane \
-                 preserves its engine tests and features: {}",
+                "lane `{name}` is neither in stress tier `{tier_name}` nor repeated by one \
+                 of its lanes: {}",
                 why.join("; ")
             ));
         }
