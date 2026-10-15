@@ -102,36 +102,40 @@ mod fixture {
 
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     pub(crate) fn ask(state: &mut TestState, command: Command) -> Result<(), PlayError> {
-        hang_tick!();
-        state.owner.begin_pass();
-        for message in state.messages.try_iter() {
+        kithara_platform::flash::participate_sync(|| {
             hang_tick!();
-            message.run(&mut state.owner);
+            state.owner.begin_pass();
+            for message in state.messages.try_iter() {
+                hang_tick!();
+                message.run(&mut state.owner);
+                hang_tick!();
+                hang_reset!();
+            }
+            let result = state.owner.apply(command);
             hang_tick!();
-            hang_reset!();
-        }
-        let result = state.owner.apply(command);
-        hang_tick!();
-        result?;
-        state.owner.pass();
-        state.owner.begin_pass();
-        state.owner.pass();
-        hang_tick!();
-        Ok(())
+            result?;
+            state.owner.pass();
+            state.owner.begin_pass();
+            state.owner.pass();
+            hang_tick!();
+            Ok(())
+        })
     }
 
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     pub(crate) fn render_block(state: &mut TestState, clock: u64) -> Vec<f32> {
-        hang_tick!();
-        let mut block = vec![0.0; 1024];
-        let SessionStream::Offline(stream) = state.stream.as_mut().expect("stream") else {
-            panic!("offline fixture")
-        };
-        stream
-            .render(clock, 512, &mut block)
-            .expect("offline render");
-        hang_tick!();
-        block
+        kithara_platform::flash::participate_sync(|| {
+            hang_tick!();
+            let mut block = vec![0.0; 1024];
+            let SessionStream::Offline(stream) = state.stream.as_mut().expect("stream") else {
+                panic!("offline fixture")
+            };
+            stream
+                .render(clock, 512, &mut block)
+                .expect("offline render");
+            hang_tick!();
+            block
+        })
     }
 
     pub(crate) fn probe_owner(
@@ -212,24 +216,26 @@ mod fixture {
 
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     pub(crate) fn fixture_pass(state: &mut TestState, clock: &mut u64) -> Vec<f32> {
-        hang_tick!();
-        state.owner.begin_pass();
-        for message in state.messages.try_iter() {
+        kithara_platform::flash::participate_sync(|| {
             hang_tick!();
-            message.run(&mut state.owner);
+            state.owner.begin_pass();
+            for message in state.messages.try_iter() {
+                hang_tick!();
+                message.run(&mut state.owner);
+                hang_tick!();
+                hang_reset!();
+            }
+            state
+                .owner
+                .each_deck(&mut |_, deck, out, pass| deck.tick(pass, out));
+            state.owner.pass();
+            let block = render_block(state, *clock);
+            *clock += 512;
+            state.owner.begin_pass();
+            state.owner.pass();
             hang_tick!();
-            hang_reset!();
-        }
-        state
-            .owner
-            .each_deck(&mut |_, deck, out, pass| deck.tick(pass, out));
-        state.owner.pass();
-        let block = render_block(state, *clock);
-        *clock += 512;
-        state.owner.begin_pass();
-        state.owner.pass();
-        hang_tick!();
-        block
+            block
+        })
     }
 
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
