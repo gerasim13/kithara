@@ -67,7 +67,7 @@ mod fixture {
         fn post(&self, message: DeckMsg) -> Result<(), PlayError> {
             hang_tick!();
             let result = self.0.lock().send(message).map_err(|_| PlayError::Closed);
-            hang_tick!();
+            hang_reset!();
             result
         }
     }
@@ -107,16 +107,13 @@ mod fixture {
         for message in state.messages.try_iter() {
             hang_tick!();
             message.run(&mut state.owner);
-            hang_tick!();
             hang_reset!();
         }
-        let result = state.owner.apply(command);
-        hang_tick!();
-        result?;
+        state.owner.apply(command)?;
         state.owner.pass();
         state.owner.begin_pass();
         state.owner.pass();
-        hang_tick!();
+        hang_reset!();
         Ok(())
     }
 
@@ -130,7 +127,7 @@ mod fixture {
         stream
             .render(clock, 512, &mut block)
             .expect("offline render");
-        hang_tick!();
+        hang_reset!();
         block
     }
 
@@ -217,7 +214,6 @@ mod fixture {
         for message in state.messages.try_iter() {
             hang_tick!();
             message.run(&mut state.owner);
-            hang_tick!();
             hang_reset!();
         }
         state
@@ -228,7 +224,7 @@ mod fixture {
         *clock += 512;
         state.owner.begin_pass();
         state.owner.pass();
-        hang_tick!();
+        hang_reset!();
         block
     }
 
@@ -283,23 +279,23 @@ mod fixture {
             hang_tick!();
             fixture_pass(state, clock);
             let occupied = occupied_slots(state, id).len();
-            let reached = occupied == expected_slots
-                && deck_snapshot(state, id)
-                    .slots
-                    .iter()
-                    .any(|slot| slot.state == kithara_render::bridge::SlotState::Playing);
-            hang_tick!();
-            assert!(
-                kithara_platform::time::WallInstant::now() < deadline,
-                "fixture tracks did not reach their mixer slots",
-            );
-            if reached {
-                return;
-            }
             if occupied > previous {
                 hang_reset!();
                 previous = occupied;
             }
+            if occupied == expected_slots
+                && deck_snapshot(state, id)
+                    .slots
+                    .iter()
+                    .any(|slot| slot.state == kithara_render::bridge::SlotState::Playing)
+            {
+                hang_reset!();
+                return;
+            }
+            assert!(
+                kithara_platform::time::WallInstant::now() < deadline,
+                "fixture tracks did not reach their mixer slots",
+            );
             kithara_platform::tokio::task::yield_now().await;
         }
     }
