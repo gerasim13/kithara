@@ -218,13 +218,12 @@ where
         let (receiver, lane) = {
             let wake = StreamWake::new(self.0.dispatcher.wake_handle());
             // Keep cold source preparation out of the callers' inline future state.
-            let mut audio = Box::pin(Audio::<Stream<T>>::prepare(
+            let prepared = Box::pin(Audio::<Stream<T>>::prepare(
                 audio,
                 Arc::new(wake.clone()),
                 self.pools().clone(),
             ))
-            .await
-            .map_err(decode_refusal)?;
+            .await;
             if self.0.dispatcher.is_cancelled()
                 || cancel
                     .as_ref()
@@ -232,6 +231,7 @@ where
             {
                 return Err(LoadRefusal::Cancelled);
             }
+            let mut audio = prepared.map_err(decode_refusal)?;
             let position = if position.is_zero() {
                 position
             } else {
@@ -410,5 +410,80 @@ mod tests {
         assert!(!base.is_cancelled());
         drop(play);
         assert!(!base.is_cancelled());
+    }
+
+    struct GatedFailure;
+
+    impl StreamType for GatedFailure {
+        type Config = futures::channel::oneshot::Receiver<()>;
+        type Events = EventBus;
+        type Source = unimock::Unimock;
+
+        async fn create(config: Self::Config) -> Result<Self::Source, kithara_stream::SourceError> {
+            config.await.expect("the test releases source preparation");
+            Err(kithara_stream::SourceError::InvalidPath(
+                "gated source failure".to_owned(),
+            ))
+        }
+    }
+
+    #[kithara::test(native, tokio)]
+    #[case::live_error(false, false)]
+    #[case::cancelled_audio(true, false)]
+    #[case::cancelled_dispatcher(false, true)]
+    async fn cancellation_during_failed_preparation_wins_over_its_source_error(
+        #[case] cancel_audio: bool,
+        #[case] cancel_dispatcher: bool,
+    ) {
+        let audio_cancel = CancelScope::new(None);
+        let dispatcher_cancel = CancelScope::new(None);
+        let play = PlayWorker::new(
+            PlayWorkerConfig::builder(pools())
+                .cancel(dispatcher_cancel.token())
+                .build(),
+        );
+        let (release, gate) = futures::channel::oneshot::channel();
+        let audio = AudioConfig::<GatedFailure, NoResamplerBackend>::for_stream(gate)
+            .cancel(audio_cancel.token())
+            .build();
+        let (_sender, inbox) = play.lane_channel();
+        let start = LaneStart {
+            speed: SpeedCurve::Constant(1.0),
+            keylock: false,
+            backend: StretchKind::default(),
+        };
+        let mut opening = Box::pin(play.load::<GatedFailure, NoResamplerBackend, _>(
+            audio,
+            Duration::ZERO,
+            start,
+            inbox,
+        ));
+        assert!(futures::poll!(opening.as_mut()).is_pending());
+        if cancel_audio {
+            audio_cancel.cancel();
+        }
+        if cancel_dispatcher {
+            dispatcher_cancel.cancel();
+        }
+        release.send(()).expect("release the pending source");
+        let Err(refusal) = opening.await else {
+            panic!("the gated source cannot open");
+        };
+        if cancel_audio || cancel_dispatcher {
+            assert!(matches!(&refusal, LoadRefusal::Cancelled), "{refusal:?}");
+        } else {
+            let LoadRefusal::Open(DecodeError::Io { source }) = refusal else {
+                panic!("live preparation keeps its source error: {refusal:?}");
+            };
+            let error = source
+                .get_ref()
+                .and_then(|error| error.downcast_ref::<kithara_stream::SourceError>())
+                .expect("the original stream error remains typed");
+            assert!(matches!(
+                error,
+                kithara_stream::SourceError::InvalidPath(path)
+                    if path == "gated source failure"
+            ));
+        }
     }
 }
