@@ -90,7 +90,7 @@ impl NavigationState {
         }
     }
 
-    fn next_sequential(
+    pub(crate) fn next_sequential(
         tracks: &[TrackId],
         current: Option<TrackId>,
         allow_wrap: bool,

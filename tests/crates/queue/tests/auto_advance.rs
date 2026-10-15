@@ -1188,14 +1188,15 @@ async fn a_consumed_successor_reloads_its_lead_in_session_time_before_the_end() 
         .build();
     let queue = harness.insert_control(Queue::new(config)).await;
 
-    let a = assets::constant_wav_quiet_1_5s();
-    let id_a = append_loaded(&harness, &queue, &a).await;
-    let b = assets::constant_wav_loud_1_5s();
-    let id_b = append_loaded(&harness, &queue, &b).await;
     harness
         .run(&queue, move |q| q.set_default_rate(SPEED))
         .await
         .expect("a finite rate is accepted");
+
+    let a = assets::constant_wav_quiet_1_5s();
+    let id_a = append_loaded(&harness, &queue, &a).await;
+    let b = assets::constant_wav_loud_1_5s();
+    let id_b = append_loaded(&harness, &queue, &b).await;
 
     harness
         .run(&queue, move |q| q.select(id_b, Transition::None))
