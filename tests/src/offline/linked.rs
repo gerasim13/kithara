@@ -20,7 +20,7 @@ use kithara::{
 use kithara_command::{Outcome, Rejection, Seq, When};
 use kithara_render::{
     LoadRefusal,
-    bridge::{DeckPart, SlotSnapshot, SlotState},
+    bridge::{DeckEvent, DeckPart, SlotSnapshot, SlotState},
     rt::DeckMixerConfig,
 };
 
@@ -574,6 +574,15 @@ where
     }
 
     fn settle(&mut self, receipt: TrackReceipt<'_, S>, out: &mut Outbox<'_, S>) -> Settled {
+        if let TrackReceipt::Event(DeckEvent::Underrun { slot, at, frames }) = &receipt {
+            self.trace(
+                "deck event",
+                &serde_json::json!({
+                    "Underrun": {"slot": slot.get(), "at": i64::from(*at), "frames": frames},
+                }),
+                out,
+            );
+        }
         if let TrackReceipt::Loaded(receipt) = &receipt {
             self.trace(
                 "load receipt",

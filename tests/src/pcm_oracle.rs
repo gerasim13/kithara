@@ -6,7 +6,10 @@ use kithara::platform::time::Duration;
 
 /// Decode the supplied container bytes without using Kithara's decoder.
 pub async fn decode(bytes: &[u8]) -> Result<Vec<f32>> {
-    let pcm = decode_bytes(bytes).await?;
+    decode_samples(&decode_bytes(bytes).await?)
+}
+
+fn decode_samples(pcm: &[u8]) -> Result<Vec<f32>> {
     ensure!(
         pcm.len().is_multiple_of(4),
         "FFmpeg returned non-f32le output"
@@ -17,13 +20,14 @@ pub async fn decode(bytes: &[u8]) -> Result<Vec<f32>> {
         .collect())
 }
 
-/// Decode one audio stream at its independently probed native rate and channel count.
+/// Decode one declared presentation at its independently probed native audio spec.
 ///
 /// Container edits and codec priming do not establish a raw-to-media origin here.
 ///
 /// # Errors
 /// Returns an error when probing or decoding fails, the stream is ambiguous,
-/// or the decoded samples do not form nonempty finite audio at the probed spec.
+/// its declared duration is not an exact native frame count, or its decoded
+/// samples do not form nonempty finite audio at the probed spec.
 #[cfg(not(target_os = "android"))]
 #[kithara::flash(io)]
 pub async fn decode_native(bytes: &[u8]) -> Result<Audio> {
@@ -39,7 +43,7 @@ pub async fn decode_native(bytes: &[u8]) -> Result<Audio> {
                 "-select_streams",
                 "a",
                 "-show_entries",
-                "stream=sample_rate,channels",
+                "stream=sample_rate,channels,time_base,duration_ts",
                 "-of",
                 "json",
             ])
@@ -80,7 +84,8 @@ pub async fn decode_native(bytes: &[u8]) -> Result<Audio> {
         sample_rate > 0 && channels > 0,
         "FFprobe returned an empty audio spec"
     );
-    let samples = decode(bytes).await?;
+    let frames = presentation_frames(stream, sample_rate)?;
+    let samples = decode_samples(&decode_file(&input, Some(frames)).await?)?;
     ensure!(!samples.is_empty(), "FFmpeg returned no audio samples");
     ensure!(
         samples.len().is_multiple_of(usize::from(channels)),
@@ -95,6 +100,39 @@ pub async fn decode_native(bytes: &[u8]) -> Result<Audio> {
         channels,
         sample_rate,
     })
+}
+
+#[cfg(not(target_os = "android"))]
+fn presentation_frames(stream: &serde_json::Value, sample_rate: u32) -> Result<u64> {
+    let duration = stream
+        .get("duration_ts")
+        .and_then(serde_json::Value::as_u64)
+        .context("FFprobe omitted a nonnegative presentation duration")?;
+    let (numerator, denominator) = stream
+        .get("time_base")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|base| base.split_once('/'))
+        .context("FFprobe omitted a rational time base")?;
+    let numerator = numerator
+        .parse::<u64>()
+        .context("invalid time-base numerator")?;
+    let denominator = denominator
+        .parse::<u64>()
+        .context("invalid time-base denominator")?;
+    ensure!(
+        numerator > 0 && denominator > 0,
+        "FFprobe returned a nonpositive time base"
+    );
+    let scaled = u128::from(duration)
+        .checked_mul(u128::from(numerator))
+        .and_then(|ticks| ticks.checked_mul(u128::from(sample_rate)))
+        .context("FFprobe presentation frame count overflowed")?;
+    ensure!(
+        scaled > 0 && scaled.is_multiple_of(u128::from(denominator)),
+        "FFprobe presentation duration is not a positive native frame count"
+    );
+    u64::try_from(scaled / u128::from(denominator))
+        .context("FFprobe presentation frame count exceeds u64")
 }
 
 #[cfg(target_os = "android")]
@@ -126,11 +164,21 @@ async fn decode_bytes(bytes: &[u8]) -> Result<Vec<u8>> {
     let directory = tempfile::tempdir().context("creating FFmpeg input directory")?;
     let input = directory.path().join("fragment.m4a");
     std::fs::write(&input, bytes).context("writing current media for FFmpeg")?;
+    decode_file(&input, None).await
+}
+
+#[cfg(not(target_os = "android"))]
+async fn decode_file(input: &std::path::Path, presentation_frames: Option<u64>) -> Result<Vec<u8>> {
+    let mut command = tokio::process::Command::new("ffmpeg");
+    command
+        .args(["-nostdin", "-hide_banner", "-loglevel", "error", "-i"])
+        .arg(input);
+    if let Some(frames) = presentation_frames {
+        command.args(["-af", &format!("atrim=end_sample={frames}")]);
+    }
     let output = kithara::platform::time::timeout(
         Duration::from_secs(30),
-        tokio::process::Command::new("ffmpeg")
-            .args(["-nostdin", "-hide_banner", "-loglevel", "error", "-i"])
-            .arg(&input)
+        command
             .args(["-f", "f32le", "-acodec", "pcm_f32le", "-"])
             .kill_on_drop(true)
             .output(),

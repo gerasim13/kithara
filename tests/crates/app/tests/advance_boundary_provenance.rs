@@ -1,6 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::{num::NonZeroU32, path::Path};
+use std::{num::NonZeroU32, ops::Range, path::Path};
 
 use kithara::{
     abr::AbrEvent,
@@ -28,7 +28,7 @@ use kithara_integration_tests::{
     },
     waits::wait_for_loader_done_event,
 };
-use kithara_render::bridge::{DeckSnapshot, SlotState};
+use kithara_render::bridge::{DeckSnapshot, SlotSnapshot, SlotState};
 use kithara_test_fixtures::signal::{
     FrameClass, Replay, SAW_PERIOD, ascending_phase_replays, classify_windows, deinterleave_left,
     goertzel_magnitude, phase,
@@ -935,18 +935,37 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(
         (applied_at, *segment)
     };
     let applied_at = u64::try_from(i64::from(applied_at)).expect("nonnegative adoption frame");
-    let landing_frame = usize::try_from(
+    let expected_source_frame = frames_from_secs(capture.duration - SEEK_OFFSET_SECS, SAMPLE_RATE);
+    let (entry_at, missing) = seek_pcm_entry(
+        &capture.points,
+        &observation.lock().timeline[command_index..],
+        u64::from(first),
+        capture.session_start,
+        applied_at,
+        segment,
+        expected_source_frame,
+    )
+    .unwrap_or_else(|error| panic!("near-EOF PCM entry custody: {error}"));
+    let adoption_frame = usize::try_from(
         applied_at
             .checked_sub(capture.session_start)
             .expect("adoption is inside capture"),
     )
     .expect("capture adoption frame");
+    assert!(adoption_frame >= capture.seek_issue_frame);
+    let landing_frame = usize::try_from(
+        entry_at
+            .checked_sub(capture.session_start)
+            .expect("PCM entry is inside capture"),
+    )
+    .expect("capture PCM entry frame");
     assert!(landing_frame >= capture.seek_issue_frame);
     let declick = DeckMixerConfig::default().declick_frames(sample_rate).get();
     let phase_start_frame = landing_frame
         .checked_add(declick)
         .expect("declick boundary");
-    let expected_source_frame = frames_from_secs(capture.duration - SEEK_OFFSET_SECS, SAMPLE_RATE);
+    check_seek_gap(&left, adoption_frame, landing_frame, declick)
+        .unwrap_or_else(|error| panic!("near-EOF missing PCM ledger {missing:?}: {error}"));
     let seek_complete_window = capture.seek_complete_frame / WINDOW_FRAMES;
     let search_context = ProvenanceDumpContext {
         replays: &[],
@@ -966,7 +985,7 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(
     check_seek_source_law(
         &capture.points,
         capture.session_start,
-        applied_at,
+        entry_at,
         segment,
         expected_source_frame,
         last_ascending_end_frame,
@@ -990,7 +1009,7 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(
             .take(3)
             .collect();
         panic!(
-            "near-EOF consumed source law: {error}; issue={}; seek_complete={}; session_start={}; Applied={applied_at}; landing={landing_frame}; segment={segment}; requested_source={expected_source_frame}; pcm_frames={}; A_end={last_ascending_end_frame}; current={:?}; metrics={:?}; after_applied={after_applied:#?}; first_consumed={first_consumed:#?}; command_lifecycle={timeline:#?}",
+            "near-EOF consumed source law: {error}; issue={}; seek_complete={}; session_start={}; Applied={applied_at}; entry={entry_at}; missing={missing:?}; landing={landing_frame}; segment={segment}; requested_source={expected_source_frame}; pcm_frames={}; A_end={last_ascending_end_frame}; current={:?}; metrics={:?}; after_applied={after_applied:#?}; first_consumed={first_consumed:#?}; command_lifecycle={timeline:#?}",
             capture.seek_issue_frame,
             capture.seek_complete_frame,
             capture.session_start,
@@ -1034,6 +1053,51 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(
         TRACK_FRAME_TOLERANCE,
         "post-seek ascending length must be approximately 0.5s before B starts",
         &context,
+    );
+    let mut without_missing_receipts = observation.lock().timeline[command_index..].to_vec();
+    without_missing_receipts.retain(|entry| entry["details"].get("Underrun").is_none());
+    if !missing.is_empty() {
+        assert!(
+            seek_pcm_entry(
+                &capture.points,
+                &without_missing_receipts,
+                u64::from(first),
+                capture.session_start,
+                applied_at,
+                segment,
+                expected_source_frame,
+            )
+            .is_err(),
+            "missing PCM requires its actual native underrun receipts"
+        );
+    }
+    let mut wrong_entry_payload = capture.points.clone();
+    let slot = wrong_entry_payload
+        .iter_mut()
+        .find_map(|(_, snapshot)| {
+            snapshot.slots.iter_mut().find(|slot| {
+                slot.mark
+                    .is_some_and(|mark| mark.lane.segment.get() == segment && mark.lane.frame > 0)
+            })
+        })
+        .expect("first positive consumed payload negative");
+    let mark = slot.mark.expect("positive consumed mark");
+    slot.source
+        .as_mut()
+        .expect("positive consumed source")
+        .lane_frame = mark.lane.frame + 1;
+    assert!(
+        seek_pcm_entry(
+            &wrong_entry_payload,
+            &observation.lock().timeline[command_index..],
+            u64::from(first),
+            capture.session_start,
+            applied_at,
+            segment,
+            expected_source_frame,
+        )
+        .is_err(),
+        "the first positive consumed mismatch cannot be skipped"
     );
     let mut wrong_source = left.clone();
     for sample in &mut wrong_source[phase_start_frame..last_ascending_end_frame] {
@@ -1101,7 +1165,7 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(
         check_seek_source_law(
             &wrong_mark,
             capture.session_start,
-            applied_at,
+            entry_at,
             segment,
             expected_source_frame,
             last_ascending_end_frame
@@ -2177,10 +2241,216 @@ struct SeekCapture {
     points: Vec<(usize, DeckSnapshot)>,
 }
 
+fn seek_pcm_entry(
+    points: &[(usize, DeckSnapshot)],
+    timeline: &[Value],
+    item: u64,
+    session_start: u64,
+    applied_at: u64,
+    segment: u64,
+    requested: usize,
+) -> Result<(u64, Vec<Range<u64>>), String> {
+    let (frame, snapshot, slot_index, slot) = points
+        .iter()
+        .find_map(|(frame, snapshot)| {
+            snapshot.slots.iter().enumerate().find_map(|(index, slot)| {
+                slot.mark
+                    .is_some_and(|mark| {
+                        mark.lane.segment.get() == segment && mark.lane.frame > 0
+                    })
+                    .then_some((*frame, snapshot, index, slot))
+            })
+        })
+        .ok_or_else(|| {
+            format!(
+                "adopted segment has no positive consumed mark; Applied={applied_at}; session_start={session_start}; segment={segment}; points={points:#?}"
+            )
+        })?;
+    let mark = slot.mark.ok_or("first consumed PCM has no mark")?;
+    let session = session_start
+        .checked_add(frame as u64)
+        .ok_or("capture clock overflow")?;
+    let entry_at = session.checked_sub(mark.lane.frame).ok_or_else(|| {
+        format!(
+            "PCM entry precedes session zero; frame={frame}; Applied={applied_at}; session={session}; slot_index={slot_index}; slot={slot:?}"
+        )
+    })?;
+    if slot.state != SlotState::Playing
+        || snapshot.sample_rate != SAMPLE_RATE
+        || entry_at < applied_at
+    {
+        return Err(format!(
+            "first consumed PCM lost its Segment/Lane/session custody; frame={frame}; Applied={applied_at}; session={session}; entry={entry_at}; slot_index={slot_index}; snapshot={snapshot:?}"
+        ));
+    }
+    check_seek_source_payload(slot, session, segment, requested).map_err(|error| {
+        format!(
+            "first positive consumed mark is invalid; frame={frame}; Applied={applied_at}; session={session}; entry={entry_at}; slot_index={slot_index}: {error}"
+        )
+    })?;
+    let mut missing = Vec::new();
+    let mut accounted_until = applied_at;
+    for event in timeline {
+        if event["event"].as_str() != Some("deck event") || event["item"].as_u64() != Some(item) {
+            continue;
+        }
+        let Some(underrun) = event["details"].get("Underrun") else {
+            continue;
+        };
+        let at = underrun["at"]
+            .as_u64()
+            .ok_or("native underrun has no session frame")?;
+        if at < applied_at || at > entry_at || underrun["slot"].as_u64() != Some(slot_index as u64)
+        {
+            continue;
+        }
+        let frames = underrun["frames"]
+            .as_u64()
+            .ok_or("native underrun has no frame count")?;
+        let start = at
+            .checked_sub(frames)
+            .ok_or("native missing-frame range underflows")?;
+        if start != accounted_until || frames == 0 {
+            return Err(format!(
+                "native missing-frame ledger is not contiguous: {missing:?}, {start}..{at}"
+            ));
+        }
+        missing.push(start..at);
+        accounted_until = at;
+    }
+    if accounted_until != entry_at {
+        return Err(format!(
+            "PCM entry {entry_at} has unaccounted frames after Adopt {applied_at}: {missing:?}"
+        ));
+    }
+    for (frame, snapshot) in points {
+        let session = session_start
+            .checked_add(*frame as u64)
+            .ok_or("capture clock overflow")?;
+        if session <= applied_at || session > entry_at {
+            continue;
+        }
+        let slots: Vec<_> = snapshot
+            .slots
+            .iter()
+            .filter(|slot| slot.state == SlotState::Playing)
+            .collect();
+        let [slot] = slots.as_slice() else {
+            return Err(format!(
+                "missing-frame range has no unique Playing slot; frame={frame}; Applied={applied_at}; session={session}; entry={entry_at}; snapshot={snapshot:?}"
+            ));
+        };
+        if snapshot.sample_rate != SAMPLE_RATE {
+            return Err(format!(
+                "missing-frame range has a different session clock; frame={frame}; Applied={applied_at}; session={session}; entry={entry_at}; snapshot={snapshot:?}"
+            ));
+        }
+        match (slot.mark, slot.source) {
+            (None, None) => {}
+            (Some(mark), Some(_)) if mark.lane.frame == 0 => {
+                check_seek_source_payload(slot, session, segment, requested).map_err(|error| {
+                    format!(
+                        "missing-frame range has invalid ready PCM; frame={frame}; Applied={applied_at}; session={session}; entry={entry_at}: {error}"
+                    )
+                })?;
+            }
+            _ => {
+                return Err(format!(
+                    "missing-frame range carries unaccounted PCM; frame={frame}; Applied={applied_at}; session={session}; entry={entry_at}; slot={slot:?}"
+                ));
+            }
+        }
+    }
+    Ok((entry_at, missing))
+}
+
+fn check_seek_gap(
+    left: &[f32],
+    adopted: usize,
+    entry: usize,
+    declick: usize,
+) -> Result<(), String> {
+    if adopted > entry || entry > left.len() {
+        return Err("native missing-frame domain is outside captured PCM".to_owned());
+    }
+    let tail_end = adopted
+        .checked_add(declick)
+        .ok_or("declick boundary overflow")?;
+    for (frame, sample) in left.iter().enumerate().take(entry).skip(tail_end) {
+        if *sample != 0.0 {
+            return Err(format!(
+                "native missing-frame ledger carries stale PCM after its declick at {frame}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn check_seek_source_payload(
+    slot: &SlotSnapshot,
+    session: u64,
+    segment: u64,
+    requested: usize,
+) -> Result<(), String> {
+    let proof = || -> Result<(), String> {
+        let mark = slot.mark.ok_or("post-seek A has no mark")?;
+        let info = slot.source.ok_or("post-seek A has no source facts")?;
+        let span = info
+            .source_span
+            .ok_or("post-seek A has no exact SourceSpan")?;
+        if mark.lane.segment.get() != segment
+            || info.segment.get() != segment
+            || info.spec.sample_rate.get() != SAMPLE_RATE
+            || span.sample_rate().get() != SAMPLE_RATE
+            || info.spec.channels != CHANNELS
+            || info.media_origin != Some(Duration::ZERO)
+            || info.render_revision != span.render_revision()
+            || info.mapping_revision != span.mapping_revision()
+            || info.frames == 0
+            || span.output_frames() != u64::from(info.frames)
+        {
+            return Err("post-seek A lost adopted Segment/source axes".to_owned());
+        }
+        if u64::try_from(i64::from(mark.session)).ok() != Some(session) {
+            return Err("post-seek A has a different mark session clock".to_owned());
+        }
+        let offset = mark
+            .lane
+            .frame
+            .checked_sub(info.lane_frame)
+            .ok_or("mark precedes source payload")?;
+        if span.position_at(offset) != Some(mark.position) {
+            return Err("mark is not inside its actual source coordinate".to_owned());
+        }
+        for output in 0..=span.output_frames() {
+            let (numerator, denominator) = span
+                .source_ratio_at(output)
+                .ok_or("unmapped post-seek source coordinate")?;
+            let expected = (requested as u128)
+                .checked_add(u128::from(info.lane_frame))
+                .and_then(|value| value.checked_add(u128::from(output)))
+                .and_then(|value| value.checked_mul(denominator.get()))
+                .ok_or("requested source coordinate overflow")?;
+            if numerator != expected {
+                return Err(format!(
+                    "post-seek A replays or skips source PCM at lane frame {}",
+                    info.lane_frame + output
+                ));
+            }
+        }
+        Ok(())
+    };
+    proof().map_err(|error| {
+        format!(
+            "{error}; session={session}; segment={segment}; requested_source={requested}; slot={slot:?}"
+        )
+    })
+}
+
 fn check_seek_source_law(
     points: &[(usize, DeckSnapshot)],
     session_start: u64,
-    applied_at: u64,
+    entry_at: u64,
     segment: u64,
     requested: usize,
     end: usize,
@@ -2190,7 +2460,7 @@ fn check_seek_source_law(
         let session = session_start
             .checked_add(*frame as u64)
             .ok_or("capture clock overflow")?;
-        if session <= applied_at || *frame >= end {
+        if session <= entry_at || *frame >= end {
             continue;
         }
         if snapshot.sample_rate != SAMPLE_RATE {
@@ -2208,63 +2478,13 @@ fn check_seek_source_law(
                 "capture frame {frame} has no unique Playing A slot"
             ));
         };
-        let mark = slot.mark.ok_or_else(|| format!(
-            "post-seek A has no consumed mark at capture {frame}, session {session}, Applied {applied_at}, segment {segment}: {snapshot:?}"
-        ))?;
-        let info = slot.source.ok_or_else(|| {
-            format!(
-                "post-seek A has no source facts at capture {frame}, session {session}: {slot:?}"
-            )
-        })?;
-        let span = info.source_span.ok_or_else(|| format!(
-            "post-seek A has no exact SourceSpan at capture {frame}, session {session}: {info:?}"
-        ))?;
-        if mark.lane.segment.get() != segment
-            || info.segment.get() != segment
-            || info.spec.sample_rate.get() != SAMPLE_RATE
-            || span.sample_rate().get() != SAMPLE_RATE
-            || info.spec.channels != CHANNELS
-            || info.media_origin != Some(Duration::ZERO)
-            || info.render_revision != span.render_revision()
-            || info.mapping_revision != span.mapping_revision()
-            || span.output_frames() != u64::from(info.frames)
-        {
+        check_seek_source_payload(slot, session, segment, requested)
+            .map_err(|error| format!("capture frame {frame}, PCM entry {entry_at}: {error}"))?;
+        let mark = slot.mark.ok_or("post-seek A has no consumed mark")?;
+        if session.checked_sub(mark.lane.frame) != Some(entry_at) {
             return Err(format!(
-                "capture frame {frame} lost adopted Segment/source axes"
+                "capture frame {frame} changes the actual PCM/Lane/session clock; entry={entry_at}; session={session}; slot={slot:?}"
             ));
-        }
-        if u64::try_from(i64::from(mark.session)).ok() != Some(session)
-            || session.checked_sub(mark.lane.frame) != Some(applied_at)
-        {
-            return Err(format!(
-                "capture frame {frame} changes the actual Adopt/Lane/session clock"
-            ));
-        }
-        let offset = mark
-            .lane
-            .frame
-            .checked_sub(info.lane_frame)
-            .ok_or("mark precedes source payload")?;
-        if span.position_at(offset) != Some(mark.position) {
-            return Err(format!(
-                "capture frame {frame} mark is not its actual source coordinate"
-            ));
-        }
-        for output in 0..=span.output_frames() {
-            let (numerator, denominator) = span
-                .source_ratio_at(output)
-                .ok_or("unmapped post-seek source coordinate")?;
-            let expected = (requested as u128)
-                .checked_add(u128::from(info.lane_frame))
-                .and_then(|value| value.checked_add(u128::from(output)))
-                .and_then(|value| value.checked_mul(denominator.get()))
-                .ok_or("requested source coordinate overflow")?;
-            if numerator != expected {
-                return Err(format!(
-                    "capture frame {frame} replays or skips source PCM at lane frame {}",
-                    info.lane_frame + output
-                ));
-            }
         }
         checked += 1;
     }
