@@ -275,6 +275,13 @@ impl kithara_audio::AudioSource for SeekSource {
         })
     }
 
+    fn seek_for_render(
+        &mut self,
+        target: Duration,
+    ) -> Result<SeekOutcome, kithara_audio::AudioReadError> {
+        self.seek(target)
+    }
+
     fn set_host_sample_rate(&mut self, rate: NonZeroU32) {
         self.spec.sample_rate = rate;
     }
