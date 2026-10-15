@@ -1,4 +1,7 @@
-use kithara_play::{DeckMixSettings, DeckMixSettingsChange, DeckMixerConfig, HostedDeck};
+use kithara_effects::GainDb;
+use kithara_play::{
+    DeckEqChange, DeckMixSettings, DeckMixSettingsChange, DeckMixerConfig, HostedDeck,
+};
 
 use super::*;
 
@@ -30,12 +33,15 @@ fn settle_block(state: &mut TestState, clock: &mut u64) -> Vec<crate::HostSettle
     state.owner.pass()
 }
 
-fn assert_level_receipts(receipts: Vec<crate::HostSettled>, expected: [kithara_command::Seq; 2]) {
+fn assert_applied<const N: usize>(
+    receipts: Vec<crate::HostSettled>,
+    expected: [kithara_command::Seq; N],
+) {
     let applied = receipts
         .into_iter()
         .filter_map(|receipt| match receipt {
             crate::HostSettled::Batch { seq, outcome } => {
-                Some((seq, outcome.expect("each independent level must apply")))
+                Some((seq, outcome.expect("each accepted batch must apply")))
             }
             _ => None,
         })
@@ -44,11 +50,11 @@ fn assert_level_receipts(receipts: Vec<crate::HostSettled>, expected: [kithara_c
         applied.iter().map(|(seq, _)| *seq).collect::<Vec<_>>(),
         expected
     );
-    assert_eq!(applied[0].1, applied[1].1);
+    assert!(applied.windows(2).all(|pair| pair[0].1 == pair[1].1));
 }
 
 #[kithara::test]
-fn engine_initial_state() {
+fn an_idle_host_has_no_output_or_registered_decks() {
     let mut state = test_state(start_route_loss_stream);
     let prep = ResourcePrep::builder()
         .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
@@ -57,38 +63,66 @@ fn engine_initial_state() {
     let mut held = Vec::new();
     state.owner.each_deck(&mut |id, _, _, _| held.push(id));
     assert!(state.stream.is_none());
-    assert_eq!(held.len(), 0);
     assert_eq!(deck.mixer_config().slots().get(), 4);
     assert!(held.is_empty());
     assert_eq!(state.deck_nodes.len(), 0);
 }
 
-#[kithara::test]
-fn engine_master_volume_default() {
-    let state = test_state(start_route_loss_stream);
+#[kithara::test(tokio)]
+async fn a_default_deck_renders_at_unity_gain() {
+    let mut state = test_state(start_route_loss_stream);
     let prep = ResourcePrep::builder()
         .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+        .block_on_underrun(true)
         .build();
-    let deck = Queue::<TestPools>::new(QueueConfig::builder().prep(prep).build());
-    assert!((deck.mixer_config().mix().level() - 1.0).abs() < f32::EPSILON);
+    let deck = Queue::new(QueueConfig::builder().prep(prep).build());
+    assert_eq!(deck.mixer_config().mix().level(), 1.0);
     assert!(state.stream.is_none());
+    let id = BeatGridId::allocate().expect("fixture deck id");
+    ask(
+        &mut state,
+        HostCommand::Register {
+            id,
+            deck: Box::new(deck),
+        },
+    )
+    .expect("default deck registration");
+    let directory = constant_fixture();
+    let mut clock = 0;
+    play_fixture(
+        &mut state,
+        id,
+        &directory.path().join("constant.wav"),
+        &mut clock,
+        1,
+    )
+    .await;
+    let mut output = Vec::new();
+    for _ in 0..40 {
+        output = fixture_pass(&mut state, &mut clock);
+    }
+    assert_eq!(mix_level(&mut state, id), 1.0);
+    assert_eq!(output.len(), 1024);
+    assert!(output.iter().all(|sample| *sample == 0.5));
 }
 
 #[kithara::test]
-fn apply_updates_desired_levels_for_two_players() {
+fn independent_deck_levels_publish_only_after_rendering() {
     let mut state = test_state(start_route_loss_stream);
     let first = insert(&mut state);
     let second = insert(&mut state);
     state.owner.begin_pass();
-    apply_level(&mut state, first, 0.25).expect("first level");
-    apply_level(&mut state, second, 0.75).expect("second level");
-    settle_block(&mut state, &mut 0);
+    let first_seq = apply_level(&mut state, first, 0.25).expect("first level");
+    let second_seq = apply_level(&mut state, second, 0.75).expect("second level");
+    assert_eq!(mix_level(&mut state, first), 1.0);
+    assert_eq!(mix_level(&mut state, second), 1.0);
+    assert_applied(settle_block(&mut state, &mut 0), [first_seq, second_seq]);
     assert_eq!(mix_level(&mut state, first), 0.25);
     assert_eq!(mix_level(&mut state, second), 0.75);
 }
 
 #[kithara::test]
-fn apply_rejects_invalid_level_without_mutation() {
+fn invalid_levels_send_no_batch_or_mutation() {
     let mut state = test_state(start_route_loss_stream);
     let id = insert(&mut state);
     for bad in [f32::NAN, f32::INFINITY, 1.5, -0.1] {
@@ -96,10 +130,12 @@ fn apply_rejects_invalid_level_without_mutation() {
         assert!(matches!(error, PlayError::MixLevel { .. }));
         assert_eq!(mix_level(&mut state, id), 1.0);
     }
+    assert_applied(settle_block(&mut state, &mut 0), []);
+    assert_eq!(mix_level(&mut state, id), 1.0);
 }
 
 #[kithara::test]
-fn never_started_player_receives_desired_before_first_start() {
+fn registration_adopts_the_decks_configured_level() {
     let mut state = test_state(start_route_loss_stream);
     let prep = ResourcePrep::builder()
         .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
@@ -127,12 +163,12 @@ fn never_started_player_receives_desired_before_first_start() {
     assert_eq!(
         mix_level(&mut state, id),
         0.2,
-        "start must adopt the desired level stored before registration"
+        "registration adopts the configured level"
     );
 }
 
 #[kithara::test]
-fn stopped_player_retains_level_on_restart() {
+fn a_confirmed_deck_level_survives_output_restart() {
     let mut state = test_state(start_route_loss_stream);
     let id = insert(&mut state);
     state.owner.begin_pass();
@@ -145,7 +181,7 @@ fn stopped_player_retains_level_on_restart() {
 }
 
 #[kithara::test]
-fn empty_batch_is_noop() {
+fn an_empty_group_sends_no_batch() {
     let mut state = test_state(start_route_loss_stream);
     let id = insert(&mut state);
     state
@@ -155,11 +191,12 @@ fn empty_batch_is_noop() {
             assert_eq!(sent, None);
         })
         .expect("held deck");
+    assert_applied(settle_block(&mut state, &mut 0), []);
     assert_eq!(mix_level(&mut state, id), 1.0);
 }
 
 #[kithara::test]
-fn apply_rejects_duplicate_player_without_mutation() {
+fn independent_levels_for_one_deck_apply_in_send_order() {
     let mut state = test_state(start_route_loss_stream);
     let id = insert(&mut state);
     state.owner.begin_pass();
@@ -167,36 +204,77 @@ fn apply_rejects_duplicate_player_without_mutation() {
     let second = apply_level(&mut state, id, 0.4).expect("second independent level");
     assert!(second > first);
     assert_eq!(mix_level(&mut state, id), 1.0);
-    assert_level_receipts(settle_block(&mut state, &mut 0), [first, second]);
+    assert_applied(settle_block(&mut state, &mut 0), [first, second]);
     assert_eq!(mix_level(&mut state, id), 0.4);
 }
 
 #[kithara::test]
-fn host_mix_rejects_duplicate_player_without_mutation() {
+fn a_refused_group_sends_none_of_its_staged_eq_changes() {
+    fn stage(out: &mut kithara_play::Outbox<'_, TestPools>) -> Result<(), PlayError> {
+        for (band, gain) in [(0, -6.0), (1, 3.0)] {
+            assert_eq!(
+                out.eq(vec![DeckEqChange::Gain {
+                    band,
+                    gain: GainDb::from(gain),
+                }])?,
+                None,
+            );
+        }
+        Ok(())
+    }
+
     let mut state = test_state(start_route_loss_stream);
     let id = insert(&mut state);
-    state.owner.begin_pass();
-    let first = apply_level(&mut state, id, 0.3).expect("first independent level");
-    let second = apply_level(&mut state, id, 0.4).expect("second independent level");
-    assert!(second > first);
+    let mut clock = 0;
+    assert_applied(settle_block(&mut state, &mut clock), []);
+    let before = deck_snapshot(&mut state, id).eq;
+    assert_eq!(before.gain(0), Some(GainDb::DEFAULT));
+    assert_eq!(before.gain(1), Some(GainDb::DEFAULT));
+
+    state
+        .owner
+        .with_deck(id, &mut |_, out, _| {
+            let refused = out.together(When::Next, |out| {
+                stage(out)?;
+                Err::<(), _>(PlayError::NotReady)
+            });
+            assert!(matches!(refused, Err(PlayError::NotReady)));
+        })
+        .expect("held deck");
+    assert_applied(settle_block(&mut state, &mut clock), []);
+    assert_eq!(deck_snapshot(&mut state, id).eq, before);
+
+    let mut accepted = None;
+    state
+        .owner
+        .with_deck(id, &mut |_, out, _| {
+            let (_, seq) = out.together(When::Next, stage).expect("accepted EQ group");
+            accepted = seq;
+        })
+        .expect("held deck");
+    assert_applied(
+        settle_block(&mut state, &mut clock),
+        [accepted.expect("one batch for both EQ changes")],
+    );
+    let applied = deck_snapshot(&mut state, id).eq;
+    assert_eq!(applied.gain(0), Some(GainDb::from(-6.0)));
+    assert_eq!(applied.gain(1), Some(GainDb::from(3.0)));
     assert_eq!(mix_level(&mut state, id), 1.0);
-    assert_level_receipts(settle_block(&mut state, &mut 0), [first, second]);
-    assert_eq!(mix_level(&mut state, id), 0.4);
 }
 
 #[kithara::test]
-fn host_mix_rejects_invalid_level_without_mutation() {
+fn an_invalid_deck_level_does_not_cancel_an_independent_valid_level() {
     for bad in [f32::NAN, f32::INFINITY, 1.5, -0.1] {
         let mut state = test_state(start_route_loss_stream);
         let first = insert(&mut state);
         let second = insert(&mut state);
         state.owner.begin_pass();
-        apply_level(&mut state, first, 0.5).expect("independent valid level");
+        let valid = apply_level(&mut state, first, 0.5).expect("independent valid level");
         let error = apply_level(&mut state, second, bad).expect_err("invalid level");
         assert!(matches!(error, PlayError::MixLevel { .. }));
         assert_eq!(mix_level(&mut state, first), 1.0);
         assert_eq!(mix_level(&mut state, second), 1.0);
-        settle_block(&mut state, &mut 0);
+        assert_applied(settle_block(&mut state, &mut 0), [valid]);
         assert_eq!(mix_level(&mut state, first), 0.5);
         assert_eq!(
             mix_level(&mut state, second),
@@ -207,35 +285,34 @@ fn host_mix_rejects_invalid_level_without_mutation() {
 }
 
 #[kithara::test]
-fn apply_rejects_foreign_session() {
+fn a_foreign_deck_level_sends_no_batch_or_mutation() {
     let mut state = test_state(start_route_loss_stream);
     let known = insert(&mut state);
     let foreign = BeatGridId::allocate().expect("foreign fixture grid id");
     state.owner.begin_pass();
-    apply_level(&mut state, known, 0.5).expect("independent known level");
     let error = apply_level(&mut state, foreign, 0.5).expect_err("foreign deck");
     assert!(matches!(
         error,
         PlayError::Session(SessionError::DeckNotFound(id)) if id == foreign
     ));
     assert_eq!(mix_level(&mut state, known), 1.0);
-    settle_block(&mut state, &mut 0);
-    assert_eq!(mix_level(&mut state, known), 0.5);
+    assert_applied(settle_block(&mut state, &mut 0), []);
+    assert_eq!(mix_level(&mut state, known), 1.0);
 }
 
 #[kithara::test]
-fn host_mix_rejects_foreign_member_leaving_known_unchanged() {
+fn a_foreign_deck_refusal_does_not_cancel_a_known_decks_pending_level() {
     let mut state = test_state(start_route_loss_stream);
     let known = insert(&mut state);
     let foreign = BeatGridId::allocate().expect("foreign fixture grid id");
     state.owner.begin_pass();
-    apply_level(&mut state, known, 0.2).expect("independent known level");
+    let valid = apply_level(&mut state, known, 0.2).expect("independent known level");
     let error = apply_level(&mut state, foreign, 0.3).expect_err("foreign deck");
     assert!(matches!(
         error,
         PlayError::Session(SessionError::DeckNotFound(id)) if id == foreign
     ));
     assert_eq!(mix_level(&mut state, known), 1.0);
-    settle_block(&mut state, &mut 0);
+    assert_applied(settle_block(&mut state, &mut 0), [valid]);
     assert_eq!(mix_level(&mut state, known), 0.2);
 }

@@ -175,15 +175,29 @@ impl Rig {
     #[test_attrs::hang_watchdog(timeout = Duration::from_secs(2))]
     pub(crate) fn pump(&mut self) -> Vec<u64> {
         let mut applied = Vec::new();
+        let _ = __hang_detector.remaining();
+        hang_tick!();
         while let Ok(envelope) = self.commands.try_recv() {
-            hang_tick!();
             applied.push(envelope.seq);
             self.engine.apply(envelope);
+            let remaining = __hang_detector.remaining();
+            hang_tick!();
+            assert!(
+                !remaining.is_zero(),
+                "app fixture command application exceeded its idle budget"
+            );
             hang_reset!();
+            let _ = __hang_detector.remaining();
         }
         crate::engine::render_fixture(self, 128);
         self.engine.tick();
         self.engine.publish();
+        let remaining = __hang_detector.remaining();
+        hang_tick!();
+        assert!(
+            !remaining.is_zero(),
+            "app fixture render and publication exceeded its idle budget"
+        );
         applied
     }
 
@@ -273,29 +287,33 @@ impl Rig {
             )
         };
         loop {
-            hang_tick!();
+            let _ = __hang_detector.remaining();
             let before = progress(self);
             crate::engine::render_fixture(self, 1024);
             self.engine.tick();
             self.engine.publish();
             step(self);
-            if done(self) {
-                hang_reset!();
-                return;
-            }
+            let reached = done(self);
             let after = progress(self);
-            if before != after {
-                tracing::debug!(what, ?after, "the app fixture advanced");
-                hang_reset!();
-            }
+            let remaining = __hang_detector.remaining();
+            hang_tick!();
+            assert!(
+                !remaining.is_zero(),
+                "{what}: app fixture step exceeded its idle budget"
+            );
             assert!(
                 WallInstant::now() < deadline,
                 "{what}: not within {within:?} | {}",
                 real_clock_verdict(started_real, within)
             );
-            hang_park!(|remaining: Duration| {
-                thread::paced_backoff(remaining.min(Duration::from_millis(5)));
-            });
+            if reached {
+                return;
+            }
+            if before != after {
+                tracing::debug!(what, ?after, "the app fixture advanced");
+                hang_reset!();
+            }
+            thread::paced_backoff(__hang_detector.remaining().min(Duration::from_millis(5)));
         }
     }
 }

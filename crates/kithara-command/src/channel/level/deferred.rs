@@ -14,22 +14,23 @@ pub struct Deferred<'inbox, P: Protocol> {
 }
 
 impl<P: Protocol> Deferred<'_, P> {
-    /// The batch's send number.
-    #[must_use]
-    pub fn seq(&self) -> Seq {
-        self.seq
-    }
-
-    /// The batch's declared basis, not yet judged.
-    #[must_use]
-    pub fn basis(&self) -> &[(P::Target, Option<Seq>)] {
-        &self.basis
-    }
-
-    /// Commands the executor may inspect before parking.
-    #[must_use]
-    pub fn commands(&self) -> &[P::Command] {
-        &self.commands
+    delegate::delegate! {
+        to self {
+            /// The batch's send number.
+            #[must_use]
+            #[field]
+            pub fn seq(&self) -> Seq;
+        }
+        to &self {
+            /// The batch's declared basis, not yet judged.
+            #[must_use]
+            #[field]
+            pub fn basis(&self) -> &[(P::Target, Option<Seq>)];
+            /// Commands the executor may inspect before parking.
+            #[must_use]
+            #[field]
+            pub fn commands(&self) -> &[P::Command];
+        }
     }
 
     /// Parks unless the basis is already outdated, in which case it answers Stale.

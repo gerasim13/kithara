@@ -1,3 +1,6 @@
+use kithara_platform::time::Duration;
+use kithara_test_utils::{hang, kithara};
+
 use super::*;
 
 pub(crate) enum EngineMsg {
@@ -21,7 +24,7 @@ impl Wake for SessionWake {
     }
 }
 
-#[kithara_test_utils::kithara::hang_watchdog(ctx = String, timeout = kithara_test_utils::hang::default_timeout().min(kithara_platform::time::Duration::from_secs(4)))]
+#[kithara::hang_watchdog(ctx = String, timeout = hang::default_timeout().min(Duration::from_secs(4)))]
 pub(crate) fn receive_message<M>(
     cmd_rx: &mpsc::Receiver<M>,
     active: bool,
@@ -46,7 +49,7 @@ pub(crate) fn receive_message<M>(
     }
 }
 
-#[kithara_test_utils::kithara::hang_watchdog(ctx = String, timeout = kithara_test_utils::hang::default_timeout().min(kithara_platform::time::Duration::from_secs(4)))]
+#[kithara::hang_watchdog(ctx = String, timeout = hang::default_timeout().min(Duration::from_secs(4)))]
 pub(super) fn engine_thread<S, O: HostOwner<S>>(
     cmd_rx: &mpsc::Receiver<EngineMsg>,
     mut mailbox: HostMailbox<O::Command>,

@@ -47,7 +47,7 @@ use crate::{
     },
 };
 
-mod legacy_engine_contracts;
+mod command_contracts;
 mod membership;
 #[cfg(feature = "mock")]
 mod mock;

@@ -458,17 +458,23 @@ async fn serve_requests(
 /// ever one clock step away.
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 pub(crate) async fn wait_for_revision(state: &Mutex<UiState>, revision: u64) {
+    let _ = __hang_detector.remaining();
     for _ in 0..consts::REVISION_POLLS {
-        hang_tick!(format!("deck awaits analysis revision {revision}"));
-        if state
+        let observed = state
             .lock()
             .analysis
             .as_ref()
             .and_then(TrackArtifacts::analysis)
-            .map(TrackAnalysis::revision)
-            == Some(revision)
-        {
-            hang_reset!();
+            .map(TrackAnalysis::revision);
+        let remaining = __hang_detector.remaining();
+        hang_tick!(format!(
+            "deck read analysis while awaiting revision {revision}"
+        ));
+        assert!(
+            !remaining.is_zero(),
+            "analysis revision poll exceeded its idle budget"
+        );
+        if observed == Some(revision) {
             return;
         }
         sleep(consts::REVISION_POLL_INTERVAL).await;

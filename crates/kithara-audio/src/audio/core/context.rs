@@ -2,6 +2,7 @@ use kithara_decode::TrackMetadata;
 use kithara_events::DeferredBus;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_stream::{Activity, ActivityWriter, PlayheadWrite};
+
 pub(in crate::audio) struct AudioContext {
     pub(in crate::audio) playhead: Arc<dyn PlayheadWrite>,
     pub(in crate::audio) emit: Arc<DeferredBus<crate::AudioLaneEvent>>,

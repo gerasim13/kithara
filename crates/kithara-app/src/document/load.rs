@@ -119,25 +119,25 @@ impl Config {
         store
     }
 
-    /// Knobs the document sets on every track's audio pipeline. `audio:`,
-    /// `hls:`, and `file:` are the document's only spelling for the three
-    /// configurations a track is opened with -- `resource.audio`,
-    /// `resource.hls`, and `resource.file` are refused -- and each rides to
-    /// its construction site as a patch, because none of those configurations
-    /// exists until a track does.
-    #[must_use]
-    pub fn audio(&self) -> AudioConfigPatch {
-        self.document.audio.pipeline.clone()
-    }
-
-    #[must_use]
-    pub fn preload_chunks(&self) -> Option<NonZeroUsize> {
-        self.document.audio.preload_chunks
-    }
-
-    #[must_use]
-    pub fn audio_buffer_chunks(&self) -> Option<NonZeroUsize> {
-        self.document.audio.audio_buffer_chunks
+    delegate::delegate! {
+        to self.document.audio {
+            /// Knobs the document sets on every track's audio pipeline. `audio:`,
+            /// `hls:`, and `file:` are the document's only spelling for the three
+            /// configurations a track is opened with -- `resource.audio`,
+            /// `resource.hls`, and `resource.file` are refused -- and each rides to
+            /// its construction site as a patch, because none of those configurations
+            /// exists until a track does.
+            #[must_use]
+            #[field(pipeline)]
+            #[expr($.clone())]
+            pub fn audio(&self) -> AudioConfigPatch;
+            #[must_use]
+            #[field]
+            pub fn preload_chunks(&self) -> Option<NonZeroUsize>;
+            #[must_use]
+            #[field]
+            pub fn audio_buffer_chunks(&self) -> Option<NonZeroUsize>;
+        }
     }
 
     #[must_use]

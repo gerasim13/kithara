@@ -186,16 +186,15 @@ impl<'inbox, P: Protocol> LevelInbox<'inbox, P> {
     }
 
     pub(in crate::channel) fn unanswered(&mut self) {
-        while let Some((_, sent)) = self.docket.committed.pop() {
-            self.reject(sent, Rejection::Unanswered);
-        }
-        while let Some(sent) = self.docket.arrived.pop() {
-            self.reject(sent, Rejection::Unanswered);
-        }
-        while let Some(sent) = self.docket.parked.pop() {
-            self.reject(sent, Rejection::Unanswered);
-        }
-        while let Some(sent) = self.docket.schedule.pop() {
+        while let Some(sent) = self
+            .docket
+            .committed
+            .pop()
+            .map(|(_, sent)| sent)
+            .or_else(|| self.docket.arrived.pop())
+            .or_else(|| self.docket.parked.pop())
+            .or_else(|| self.docket.schedule.pop())
+        {
             self.reject(sent, Rejection::Unanswered);
         }
     }

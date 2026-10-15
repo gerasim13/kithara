@@ -51,16 +51,19 @@ impl Decoder for OriginDecoder {
         None
     }
 
-    fn initial_pcm_origin(&self) -> Option<PcmOrigin> {
-        self.initial
+    delegate::delegate! {
+        to self {
+            #[field(initial)]
+            fn initial_pcm_origin(&self) -> Option<PcmOrigin>;
+            #[field(gap)]
+            fn timeline_gap_frames(&self) -> u64;
+            #[field]
+            fn spec(&self) -> AudioSpec;
+        }
     }
 
     fn gapless_profile(&self, _codec: Option<AudioCodec>) -> GaplessProfile {
         GaplessProfile::new(self.spec, self.gapless, None, self.priming)
-    }
-
-    fn timeline_gap_frames(&self) -> u64 {
-        self.gap
     }
 
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
@@ -88,10 +91,6 @@ impl Decoder for OriginDecoder {
             landed_byte: None,
             preroll: PrerollHint::NotNeeded,
         })
-    }
-
-    fn spec(&self) -> AudioSpec {
-        self.spec
     }
 
     fn update_byte_len(&self, _len: u64) {}
