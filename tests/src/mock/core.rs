@@ -415,7 +415,7 @@ impl<T, S> LaneAudio<T, S> {
         Ok(())
     }
 
-    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
+    #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
     fn pull(&mut self) -> Result<ChunkOutcome, AudioReadError> {
         if !self.block_on_underrun && !self.current_segment_ready() {
             return Ok(ChunkOutcome::Pending {

@@ -275,22 +275,51 @@ pub(in crate::worker) fn packet_fixture(
     )
 }
 
-/// Waits for fixture PCM or producer closure with a one-second liveness budget.
-#[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+/// Waits for fixture PCM or producer closure under the test liveness policy.
+#[kithara::hang_watchdog(ctx = String)]
 pub fn wait_for_packet(receiver: &PcmReceiver) {
     let Some(ready) = &receiver.ready else {
         return;
     };
+    let context = |stage: &str, waited: Option<(u64, bool)>| {
+        let gate_before = ready.current();
+        let packet_ready = receiver.forward.try_peek().is_some();
+        let producer_held = receiver.forward.write_is_held();
+        let next_chunk = receiver.next_chunk_info();
+        let gate_after = ready.current();
+        format!(
+            "{stage}: waited={waited:?}, gate_before={gate_before}, gate_after={gate_after}, \
+             packet_ready={packet_ready}, producer_held={producer_held}, \
+             next_chunk={next_chunk:?}, position={:?}, frontier={:?}, spec={:?}, \
+             playhead_position={:?}, decoded_frontier={:?}, cached={:?}, duration={:?}, \
+             abr_variant={:?}",
+            receiver.position,
+            receiver.frontier,
+            receiver.spec,
+            receiver.playhead.position(),
+            receiver.playhead.decoded_frontier(),
+            receiver.playhead.cached(),
+            receiver.playhead.duration(),
+            receiver
+                .abr
+                .as_ref()
+                .and_then(kithara_abr::AbrHandle::current_variant_index),
+        )
+    };
     loop {
-        hang_tick!();
+        hang_tick!(context("before_predicate", None));
         let since = ready.current();
         if receiver.forward.try_peek().is_some() || !receiver.forward.write_is_held() {
             hang_reset!();
             return;
         }
         receiver.wake.wake();
-        hang_park!(|remaining: Duration| {
-            ready.wait_timeout(since, remaining);
-        });
+        let mut edge_moved = false;
+        hang_park!(
+            |remaining: Duration| {
+                edge_moved = ready.wait_timeout(since, remaining);
+            },
+            context("after_wait_before_predicate", Some((since, edge_moved)))
+        );
     }
 }
