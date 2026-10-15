@@ -9,6 +9,9 @@ pub(super) struct Ratio {
 }
 
 pub(super) fn divisor(mut first: u128, mut second: u128) -> u128 {
+    if second.is_power_of_two() {
+        return 1u128 << first.trailing_zeros().min(second.trailing_zeros());
+    }
     while second != 0 {
         (first, second) = (second, first % second);
     }
@@ -128,6 +131,9 @@ impl TryFrom<f64> for Ratio {
         } else {
             NonZeroU128::new(power).ok_or(())?
         };
-        Self::new(numerator, denominator).ok_or(())
+        Ok(Self {
+            numerator,
+            denominator,
+        })
     }
 }
