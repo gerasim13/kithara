@@ -446,55 +446,63 @@ fn append_run_failures(label: &str, run: &CommandRun, failures: &mut Vec<String>
 }
 
 #[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
+#[case::early_128("early", 47, 128)]
+#[case::early_256("early", 47, 256)]
+#[case::early_512("early", 47, 512)]
+#[case::middle_128("middle", 94, 128)]
+#[case::middle_256("middle", 94, 256)]
+#[case::middle_512("middle", 94, 512)]
+#[case::late_128("late", 140, 128)]
+#[case::late_256("late", 140, 256)]
+#[case::late_512("late", 140, 512)]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn bound_tempo_retarget_reaches_pcm_within_twenty_ms(
     #[future(awt)] sweep_sources: PreparedSources,
+    #[case] phase: &str,
+    #[case] warm_blocks: usize,
+    #[case] driver_frames: usize,
 ) {
     let wrong = wrong_source(&sweep_sources).await;
-    for (phase, warm_blocks) in [("early", 47), ("middle", 94), ("late", 140)] {
-        for driver_frames in [128, 256, 512] {
-            hang_tick!(format!(
-                "tempo retarget: {phase} phase, {driver_frames}-frame capture group"
-            ));
-            let control = tempo_retarget_run(
-                driver_frames,
-                warm_blocks,
-                false,
-                &sweep_sources,
-                Some(&wrong),
-            )
-            .await;
-            hang_reset!();
-            let candidate = tempo_retarget_run(
-                driver_frames,
-                warm_blocks,
-                true,
-                &sweep_sources,
-                Some(&wrong),
-            )
-            .await;
-            hang_reset!();
-            let aligned = align_source_runs(&candidate, &control);
-            let control_report = CochleaReport::measure(&aligned.control, CHANNELS, 48_000);
-            let candidate_report = CochleaReport::measure(&aligned.candidate, CHANNELS, 48_000);
-            let mut failures =
-                time_stretch_failures("bound tempo retarget", &candidate_report, &control_report);
-            append_run_failures("control", &control, &mut failures);
-            append_run_failures("candidate", &candidate, &mut failures);
-            let latency_budget = TWENTY_MS_FRAMES.min(driver_frames * 2);
-            failures.extend(command_latency_failures(
-                "retarget",
-                &aligned,
-                candidate.command_lead,
-                latency_budget,
-            ));
-            assert!(
-                failures.is_empty(),
-                "{driver_frames}-frame capture group/{LATENCY_CALLBACK_FRAMES}-frame callback {phase} retarget failed:\n{}",
-                failures.join("\n"),
-            );
-        }
-    }
+    hang_tick!(format!(
+        "tempo retarget: {phase} phase, {driver_frames}-frame capture group"
+    ));
+    let control = tempo_retarget_run(
+        driver_frames,
+        warm_blocks,
+        false,
+        &sweep_sources,
+        Some(&wrong),
+    )
+    .await;
+    hang_reset!();
+    let candidate = tempo_retarget_run(
+        driver_frames,
+        warm_blocks,
+        true,
+        &sweep_sources,
+        Some(&wrong),
+    )
+    .await;
+    hang_reset!();
+    let aligned = align_source_runs(&candidate, &control);
+    let control_report = CochleaReport::measure(&aligned.control, CHANNELS, 48_000);
+    let candidate_report = CochleaReport::measure(&aligned.candidate, CHANNELS, 48_000);
+    let mut failures =
+        time_stretch_failures("bound tempo retarget", &candidate_report, &control_report);
+    append_run_failures("control", &control, &mut failures);
+    append_run_failures("candidate", &candidate, &mut failures);
+    let latency_budget = TWENTY_MS_FRAMES.min(driver_frames * 2);
+    failures.extend(command_latency_failures(
+        "retarget",
+        &aligned,
+        candidate.command_lead,
+        latency_budget,
+    ));
+    assert!(
+        failures.is_empty(),
+        "{driver_frames}-frame capture group/{LATENCY_CALLBACK_FRAMES}-frame callback {phase} retarget failed:\n{}",
+        failures.join("\n"),
+    );
 }
 
 #[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
