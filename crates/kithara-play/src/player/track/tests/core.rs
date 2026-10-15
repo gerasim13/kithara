@@ -2041,6 +2041,35 @@ fn a_release_frees_the_track_once_the_mixer_let_its_consumer_go() {
 }
 
 #[kithara::test]
+fn a_repeated_release_answers_with_the_detach_already_in_flight() {
+    let mut rig = rig();
+    let (mut track, _lane) = loaded(&mut rig, A, "track");
+
+    let first = rig
+        .with_outbox(|out| track.apply(TrackCommand::Release, out))
+        .expect("live deck scope")
+        .expect("the deck has room");
+    let room = rig
+        .with_outbox(|out| out.deck_available())
+        .expect("live deck scope");
+    let second = rig
+        .with_outbox(|out| track.apply(TrackCommand::Release, out))
+        .expect("live deck scope")
+        .expect("a repeated release is accepted");
+
+    assert_eq!(second, first, "the second release names the same detach");
+    assert_eq!(
+        rig.with_outbox(|out| out.deck_available())
+            .expect("live deck scope"),
+        room,
+        "a repeated release spends no deck credit"
+    );
+    let mut receipts = rig.block(frame(0), 0.0);
+    settle(&mut track, &mut rig, &mut receipts);
+    assert_eq!(track.snapshot().status, TrackStatus::Released);
+}
+
+#[kithara::test]
 #[case::same_segment(false, false)]
 #[case::new_segment(true, false)]
 #[case::settled_then_new_segment(true, true)]

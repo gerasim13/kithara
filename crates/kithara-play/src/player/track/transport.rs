@@ -24,6 +24,9 @@ impl<S> PlayerImpl<S> {
         &mut self,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
+        if let Some(seq) = self.detaching.filter(|_| self.attached()) {
+            return Ok(Some(seq));
+        }
         self.play = None;
         self.playback_commands.clear();
         if let Some(loading) = self.loading.as_mut() {
@@ -47,11 +50,12 @@ impl<S> PlayerImpl<S> {
             return Ok(None);
         }
         if self.attached() {
-            return self.send_playback(
+            self.detaching = self.send_playback(
                 When::Next,
                 vec![DeckPart::Detach { slot: self.seat()? }],
                 out,
-            );
+            )?;
+            return Ok(self.detaching);
         }
         self.status = TrackStatus::Released;
         self.releasing = false;
