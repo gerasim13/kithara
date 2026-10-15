@@ -178,18 +178,7 @@ impl Preparation {
                         let position = source
                             .visible_origin
                             .map_or(requested, |origin| origin.max(requested));
-                        position
-                            .as_nanos()
-                            .checked_mul(u128::from(span.sample_rate().get()))
-                            .and_then(|numerator| {
-                                span.scaled_from(
-                                    (numerator, NonZeroU128::new(1_000_000_000)?),
-                                    (0, NonZeroU128::MIN),
-                                    (1, NonZeroU128::MIN),
-                                )
-                            })
-                            .and_then(|relative| relative.source_ratio_at(0))
-                            == Some((0, NonZeroU128::MIN))
+                        span.position_at(0) == Some(position)
                     }
                     None => span.source_ratio_at(0) == origin,
                 }
@@ -629,7 +618,7 @@ fn reanchor_source<S: HasPool<f32>>(
         .ok_or(WarpRenderError::InvalidSourceGeometry)?;
     let denominator =
         NonZeroU128::new(1_000_000_000).ok_or(WarpRenderError::InvalidSourceGeometry)?;
-    let position = if visible_origin == Some(to) && basis.position_at(0) == Some(to) {
+    let position = if basis.position_at(0) == Some(to) {
         (u128::from(meta.frame_offset), NonZeroU128::MIN)
     } else {
         basis

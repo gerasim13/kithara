@@ -175,6 +175,43 @@ fn a_segment_positioned_ahead_of_the_visible_origin_enters_there(
     }
 }
 
+/// A segment positioned exactly at a chunk's first frame enters on that chunk,
+/// even when the frame time has no exact nanosecond value.
+#[kithara::test]
+fn a_segment_positioned_at_a_chunk_start_enters_there() {
+    let mut fixture = LaneFixture::new();
+    let segment = SegmentId::FIRST.next();
+    let start = 1_001;
+    let chunk = AudioChunkInfo {
+        spec: fixture.spec,
+        frames: 16,
+        frame_offset: start,
+        source_span: SourceSpan::new(start, start + 16, fixture.spec.sample_rate, 16),
+        ..AudioChunkInfo::default()
+    };
+    let from = chunk
+        .source_geometry()
+        .and_then(|basis| basis.position_at(0))
+        .expect("chunk start time");
+    let seq = fixture.begin_at(segment, from);
+    fixture.entry = AudioChunkInfo {
+        render_revision: seq.get(),
+        source_span: chunk
+            .source_span
+            .map(|span| span.with_render_revision(seq.get())),
+        ..chunk
+    };
+    fixture.admit_preload();
+
+    let receipt = fixture.sender.receipts().next().expect("readiness verdict");
+    assert_eq!(receipt.seq(), seq);
+    assert!(
+        matches!(receipt.outcome(), Outcome::Applied { data, .. } if data.ready == Some(segment)),
+        "the chunk starting at the segment entry enters it: {:?}",
+        receipt.outcome()
+    );
+}
+
 #[kithara::test]
 #[case::next(When::Next)]
 #[case::at(When::At(LaneFrame { segment: SegmentId::FIRST, frame: 16 }))]
