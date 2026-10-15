@@ -370,9 +370,12 @@ fn run_markdown_format(check: bool, ctx: &Ctx) -> Result<()> {
         "preserve",
         "--ordered-list",
         "one",
-        "--exclude",
-        "docs/plans",
     ];
+    args.extend(
+        consts::OPENSPEC_SKILLS
+            .iter()
+            .flat_map(|skill| ["--exclude", skill]),
+    );
     if check {
         args.push("--check");
     } else {

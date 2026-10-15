@@ -6,13 +6,12 @@ use kithara_ui::{
     builtin,
 };
 use masonry::vello::{
-    AaConfig, AaSupport, DebugLayers, RenderParams, Renderer, RendererOptions,
-    peniko::Color,
+    AaConfig, AaSupport, DebugLayers, RenderParams, Renderer, RendererOptions, peniko::Color,
     util::block_on_wgpu,
-    wgpu::{
-        DeviceDescriptor, Extent3d, Instance, InstanceDescriptor, RequestAdapterOptions,
-        TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, TextureViewDescriptor,
-    },
+};
+use wgpu_vello::{
+    DeviceDescriptor, Extent3d, Instance, InstanceDescriptor, RequestAdapterOptions,
+    TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, TextureViewDescriptor,
 };
 
 use crate::{

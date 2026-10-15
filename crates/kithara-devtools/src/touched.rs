@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
+    ffi::OsString,
     fmt,
     path::Path,
     process::Command,
@@ -74,15 +75,6 @@ impl fmt::Display for Touched {
 pub(crate) fn lanes(
     test: &TestCommandConfig,
     root: &Path,
-    scope: &[String],
-) -> Result<Vec<Touched>> {
-    lanes_against(test, root, &base_branch(), scope)
-}
-
-/// [`lanes`] measured from where the branch left `base`.
-fn lanes_against(
-    test: &TestCommandConfig,
-    root: &Path,
     base: &str,
     scope: &[String],
 ) -> Result<Vec<Touched>> {
@@ -108,18 +100,26 @@ fn lanes_against(
 /// # Errors
 ///
 /// Returns an error for an unknown scoped lane or unreadable Git history.
-pub fn touches(test: &TestCommandConfig, root: &Path, scope: &[String]) -> Result<bool> {
+pub fn touches(
+    test: &TestCommandConfig,
+    root: &Path,
+    base: &str,
+    scope: &[String],
+) -> Result<bool> {
     let scope = &scoped(test, scope)?;
-    let Some(changed) = changed_paths(root, &base_branch())? else {
+    let Some(changed) = changed_paths(root, base)? else {
         return Ok(!scope.is_empty());
     };
     let changed: Vec<&str> = changed.lines().collect();
     Ok(!select(&test.lanes, &[], None, scope, &changed).is_empty())
 }
 
-/// The default branch this pipeline measures a branch from.
-fn base_branch() -> String {
-    std::env::var("KITHARA_TOUCHED_BASE").unwrap_or_else(|_| DEFAULT_BASE.to_owned())
+/// The default branch a job measures a branch from, read from the
+/// environment `var` gives that job.
+pub fn base_branch(var: &dyn Fn(&str) -> Option<OsString>) -> String {
+    var("KITHARA_TOUCHED_BASE")
+        .and_then(|base| base.into_string().ok())
+        .unwrap_or_else(|| DEFAULT_BASE.to_owned())
 }
 
 /// The branch's committed paths since it left `base`, or no comparison on
@@ -482,6 +482,7 @@ mod tests {
         assert!(touches(
             &test,
             &dir.path().join("work"),
+            "main",
             &scope(&["owned"])
         )?);
         Ok(())
@@ -494,6 +495,7 @@ mod tests {
         assert!(!touches(
             &test,
             &dir.path().join("work"),
+            "main",
             &scope(&["owned"])
         )?);
         Ok(())
@@ -503,7 +505,7 @@ mod tests {
     fn an_unowned_path_does_not_require_the_default_lane() -> Result<()> {
         let (dir, test) = ownership_branch("unowned.txt")?;
 
-        assert!(!touches(&test, &dir.path().join("work"), &[])?);
+        assert!(!touches(&test, &dir.path().join("work"), "main", &[])?);
         Ok(())
     }
 
@@ -511,7 +513,15 @@ mod tests {
     fn ownership_selection_rejects_an_unknown_scoped_lane() -> Result<()> {
         let (dir, test) = ownership_branch("owned/view.rs")?;
 
-        assert!(touches(&test, &dir.path().join("work"), &scope(&["missing"])).is_err());
+        assert!(
+            touches(
+                &test,
+                &dir.path().join("work"),
+                "main",
+                &scope(&["missing"])
+            )
+            .is_err()
+        );
         Ok(())
     }
 
@@ -567,7 +577,7 @@ mod tests {
             ..TestCommandConfig::default()
         };
 
-        let selected = lanes(&test, &checkout, &[])?;
+        let selected = lanes(&test, &checkout, "main", &[])?;
 
         assert_eq!(selected, vec![narrowed(&["play", "play-tests"])]);
         Ok(())
@@ -605,7 +615,7 @@ mod tests {
             ..TestCommandConfig::default()
         };
 
-        let selected = lanes_against(&test, &checkout, "develop", &[])?;
+        let selected = lanes(&test, &checkout, "develop", &[])?;
 
         assert_eq!(selected, vec![narrowed(&["play", "play-tests"])]);
         Ok(())

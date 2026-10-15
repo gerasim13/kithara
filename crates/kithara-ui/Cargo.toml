@@ -28,6 +28,7 @@ capture = [
 masonry = [
     "dep:futures-lite",
     "dep:masonry",
+    "dep:wgpu-vello",
     "dep:winit",
     "dep:window_clipboard",
     "kithara-ui-input/masonry",
@@ -94,6 +95,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true, optional = true }
 unicode-segmentation = { workspace = true, optional = true }
 vello = { workspace = true, optional = true }
+wgpu-vello = { workspace = true, optional = true }
 window_clipboard = { workspace = true, optional = true }
 winit = { workspace = true, optional = true }
 
@@ -128,6 +130,7 @@ ron = { workspace = true }
 serde_yaml_ng = { workspace = true }
 # The emitter is measured against the renderer it was written from.
 velato = { workspace = true }
+wgpu-vello = { workspace = true }
 
 [lints]
 workspace = true

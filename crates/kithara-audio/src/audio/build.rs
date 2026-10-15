@@ -238,7 +238,25 @@ async fn create_initial_decoder(
     if let Some(gate) = &gate {
         gate.arm();
     }
-    let built = spawn_blocking(move || factory.create(reader, info, rate)).await;
+    let open_span = tracing::debug_span!(
+        "initial_decoder",
+        byte_len = reader.byte_len().unwrap_or(0),
+        open_id = tracing::field::Empty,
+    );
+    if let Some(id) = open_span.id() {
+        open_span.record("open_id", id.into_u64());
+    }
+    tracing::debug!(parent: &open_span, phase = "factory_queued");
+    let factory_span = open_span.clone();
+    let built = spawn_blocking(move || {
+        let _entered = factory_span.enter();
+        tracing::debug!(phase = "factory_entered");
+        let result = factory.create(reader, info, rate);
+        tracing::debug!(phase = "factory_returned", succeeded = result.is_ok());
+        result
+    })
+    .await;
+    tracing::debug!(parent: &open_span, phase = "factory_joined", succeeded = built.is_ok());
     if let Some(gate) = &gate {
         gate.disarm();
     }

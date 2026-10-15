@@ -42,6 +42,7 @@ pub fn pause() -> Pause {
 
 #[inline(always)]
 #[track_caller]
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn forbid(_what: &'static str) {}
 
 #[doc(hidden)]

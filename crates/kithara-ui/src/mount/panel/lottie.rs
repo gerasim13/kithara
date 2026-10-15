@@ -11,6 +11,7 @@ pub(crate) struct Lottie;
 #[cfg(any(feature = "iced", feature = "masonry"))]
 pub(crate) mod host {
     use bon::Builder;
+    use kithara_platform::sync::Arc;
 
     use crate::ids::InternId;
 
@@ -32,7 +33,7 @@ pub(crate) mod host {
         atoms::picture::lottie::{Lottie as Face, Standing},
         expand::Binding,
         hosts::controls::{Draws, Reading},
-        lottie::builtin_artwork,
+        lottie::Artwork,
         render::{Ctx, ReadValue, Skin},
     };
 
@@ -46,7 +47,7 @@ pub(crate) mod host {
                 .unwrap_or(self.artwork);
 
             Some(standing(
-                read.ctx.ui.resolve(name),
+                read.skin.artwork(read.ctx.ui.resolve(name)).cloned(),
                 self.seconds,
                 seconds(read.value),
             ))
@@ -74,11 +75,11 @@ pub(crate) mod host {
         }
     }
 
-    pub(crate) fn standing(name: &str, pass: f32, seconds: f32) -> Standing {
-        let artwork = builtin_artwork(name);
-
+    pub(crate) fn standing(artwork: Option<Arc<Artwork>>, pass: f32, seconds: f32) -> Standing {
         Standing {
-            frame: artwork.map_or(0.0, |artwork| artwork.frame_at(seconds, pass)),
+            frame: artwork
+                .as_ref()
+                .map_or(0.0, |artwork| artwork.frame_at(seconds, pass)),
             artwork,
         }
     }
@@ -98,7 +99,7 @@ pub(crate) mod host {
         }
 
         fn frame(name: &str, pass: f32, seconds: f32) -> f64 {
-            standing(name, pass, seconds).frame
+            standing(crate::lottie::builtin_artwork(name).cloned(), pass, seconds).frame
         }
 
         #[kithara::test]

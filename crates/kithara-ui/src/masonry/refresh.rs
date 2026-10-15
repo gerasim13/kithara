@@ -120,18 +120,22 @@ mod lottie {
             read: Reading<'_>,
             endpoint: Option<&str>,
         ) -> Option<DataRefresh<Standing>> {
-            let artwork = read.ctx.ui.resolve(self.artwork).to_owned();
+            let artwork = read
+                .skin
+                .artwork(read.ctx.ui.resolve(self.artwork))
+                .cloned();
             let active_artwork = self
                 .active_artwork
-                .map(|name| read.ctx.ui.resolve(name).to_owned());
+                .and_then(|name| read.skin.artwork(read.ctx.ui.resolve(name)).cloned());
             let flag = read.ctx.endpoint(self.active).map(ToOwned::to_owned);
             let endpoint = endpoint?.to_owned();
             let pass = self.seconds;
             Some(Box::new(move |data, ctx| {
                 let showing = active_artwork
-                    .as_deref()
+                    .as_ref()
                     .filter(|_| flag.as_deref().is_some_and(|flag| flagged(ctx.get(flag))))
-                    .unwrap_or(&artwork);
+                    .cloned()
+                    .or_else(|| artwork.clone());
                 let next = standing(showing, pass, seconds(ctx.get(&endpoint).as_ref()));
                 if next == *data {
                     return false;
