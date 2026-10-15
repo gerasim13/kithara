@@ -186,7 +186,7 @@ impl<P> Linked<P> {
             return;
         }
         let required = match waiting {
-            Waiting::Sync { .. } => cue_position(track),
+            Waiting::Play { .. } | Waiting::Sync { .. } => cue_position(track),
             _ => waiting.required(),
         };
         if self.synced()

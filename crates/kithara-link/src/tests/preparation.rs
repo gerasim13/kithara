@@ -478,6 +478,17 @@ fn sync_load_snaps_to_the_first_strong_beat_and_waits_before_play(
         position(cue),
         "the cue is not committed early"
     );
+    assert!(deck.snapshot().as_ref().pending_lane);
+    assert_eq!(
+        rig.run(|out| deck.apply(TrackCommand::Play { at: When::Next }, out))
+            .expect("Play waits for the in-flight cue"),
+        None
+    );
+    assert_eq!(
+        control.commands(),
+        commands,
+        "Play preserves the admitted cue and waits for its receipt"
+    );
     rig.apply(&mut deck, seq, now);
     control.clear();
     rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
