@@ -152,7 +152,7 @@ impl ControlCapture {
             first.deck.sample_rate,
             grid,
             wrong_source,
-            |_| 1.0,
+            None,
         )
     }
 
@@ -519,12 +519,13 @@ fn source_sample(
                 format!("native source does not cover frame {source}+{offset}, channel {channel}")
             })
     };
-    mapped_sample(position, f64::from(speed), sample)
+    mapped_sample(position, f64::from(speed), Some(0), sample)
 }
 
 fn mapped_sample(
     position: (u128, u128),
     speed: f64,
+    source_head: Option<u64>,
     sample: impl Fn(i64) -> Result<f32, String>,
 ) -> Result<f32, String> {
     let fraction = (position.0 % position.1)
@@ -536,8 +537,18 @@ fn mapped_sample(
         if fraction == 0.0 {
             return sample(0);
         }
+        let current = sample(0)?;
+        let next = sample(1)?;
+        if source_head.is_some_and(|head| position.0 / position.1 == u128::from(head)) {
+            return Ok((next - current).mul_add(
+                fraction
+                    .to_f32()
+                    .ok_or_else(|| "source fraction is not finite f32".to_owned())?,
+                current,
+            ));
+        }
         return Ok(kithara::dsp::interp::quadratic(
-            [sample(-1)?, sample(0)?, sample(1)?],
+            [sample(-1)?, current, next],
             fraction,
         ));
     }
@@ -996,12 +1007,36 @@ impl DecodedCapture {
         sample_rate: u32,
         grid: &BeatGridModel,
         wrong_source: &Audio,
-        lane_gain: impl Fn(SessionFrame) -> f32,
+        jump: Option<(SessionFrame, SessionFrame)>,
     ) -> Vec<String> {
-        self.check_physical(pcm, marks, sample_rate, grid, wrong_source, lane_gain)
+        self.check_physical(pcm, marks, sample_rate, grid, wrong_source, jump)
             .err()
             .into_iter()
             .collect()
+    }
+
+    fn jump_source_head(
+        &self,
+        intervals: &std::collections::BTreeMap<i64, kithara::signal::AudioChunkInfo>,
+        jump: Option<(SessionFrame, SessionFrame)>,
+    ) -> Result<Option<(i64, u64)>, String> {
+        let Some((_, landing)) = jump else {
+            return Ok(None);
+        };
+        let info = intervals
+            .get(&i64::from(landing))
+            .ok_or_else(|| "commanded Jump landing has no actual source interval".to_owned())?;
+        let (head, denominator) = info
+            .source_span
+            .and_then(|span| span.source_ratio_at(0))
+            .ok_or_else(|| "commanded Jump landing has no source head".to_owned())?;
+        let head = u64::try_from(head / denominator.get()).map_err(|error| error.to_string())?;
+        self.sample(
+            *info,
+            i64::try_from(head).map_err(|error| error.to_string())?,
+            0,
+        )?;
+        Ok(Some((i64::from(landing), head)))
     }
 
     fn physical_capture_clock(
@@ -1036,10 +1071,11 @@ impl DecodedCapture {
         sample_rate: u32,
         grid: &BeatGridModel,
         wrong_source: &Audio,
-        lane_gain: impl Fn(SessionFrame) -> f32,
+        jump: Option<(SessionFrame, SessionFrame)>,
     ) -> Result<(), String> {
         let (capture_start, frames) = self.physical_capture_clock(pcm, marks)?;
         let intervals = physical_intervals(marks, sample_rate)?;
+        let source_head = self.jump_source_head(&intervals, jump)?;
         let mut expected = Vec::with_capacity(pcm.len());
         let mut wrong_cue = Vec::with_capacity(pcm.len());
         let mut wrong_tempo = Vec::with_capacity(pcm.len());
@@ -1047,7 +1083,8 @@ impl DecodedCapture {
         let mut supplied_beats = Vec::new();
         for frame in 0..frames {
             let session = i64::from(capture_start) + frame as i64;
-            let gain = lane_gain(SessionFrame::new(session));
+            let gain = physical_jump_gain(SessionFrame::new(session), jump);
+            let head = source_head.and_then(|(at, head)| (session >= at).then_some(head));
             if !gain.is_finite() || !(0.0..=1.0).contains(&gain) {
                 return Err("physical capture has an invalid commanded lane gain".to_owned());
             }
@@ -1073,13 +1110,14 @@ impl DecodedCapture {
             let source =
                 i64::try_from(numerator / denominator.get()).map_err(|error| error.to_string())?;
             for channel in 0..usize::from(CHANNELS) {
-                let sample = mapped_sample((numerator, denominator.get()), speed, |offset| {
-                    let source = source
-                        .checked_add(offset)
-                        .ok_or_else(|| "physical sample coordinate overflows".to_owned())?;
-                    self.sample(info, source, channel)
-                })? * gain
-                    * CONTROL_GAIN;
+                let sample =
+                    mapped_sample((numerator, denominator.get()), speed, head, |offset| {
+                        let source = source
+                            .checked_add(offset)
+                            .ok_or_else(|| "physical sample coordinate overflows".to_owned())?;
+                        self.sample(info, source, channel)
+                    })? * gain
+                        * CONTROL_GAIN;
                 if !sample.is_finite() || sample.abs() >= LimiterConfig::default().ceiling() {
                     return Err(format!(
                         "physical reference has no limiter headroom at frame {session}"
@@ -1092,7 +1130,7 @@ impl DecodedCapture {
                 let wrong_frame = i64::try_from(wrong_position / denominator.get())
                     .map_err(|error| error.to_string())?;
                 wrong_cue.push(
-                    mapped_sample((wrong_position, denominator.get()), speed, |offset| {
+                    mapped_sample((wrong_position, denominator.get()), speed, head, |offset| {
                         self.sample(
                             info,
                             wrong_frame
@@ -1121,6 +1159,7 @@ impl DecodedCapture {
                     mapped_sample(
                         (wrong_numerator, wrong_denominator),
                         speed * 0.5,
+                        head,
                         |offset| {
                             self.sample(
                                 info,
@@ -1173,6 +1212,25 @@ impl DecodedCapture {
             supplied_beats,
         }
         .check(pcm, sample_rate, frames)
+    }
+}
+
+fn physical_jump_gain(frame: SessionFrame, jump: Option<(SessionFrame, SessionFrame)>) -> f32 {
+    match jump {
+        Some((start, landing)) if frame >= start => {
+            let declick = (i64::from(landing) - i64::from(start))
+                .to_f32()
+                .expect("i64 declick frames fit the f32 range");
+            let elapsed = (i64::from(frame) - i64::from(start))
+                .to_f32()
+                .expect("i64 elapsed frames fit the f32 range");
+            if frame < landing {
+                1.0 - (elapsed / declick.max(1.0)).min(1.0)
+            } else {
+                ((elapsed - declick) / declick.max(1.0)).min(1.0)
+            }
+        }
+        _ => 1.0,
     }
 }
 

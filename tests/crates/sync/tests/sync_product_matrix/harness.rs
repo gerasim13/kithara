@@ -3,10 +3,13 @@ use kithara::{
         AudioDecoderConfig, DecoderBackend as EventDecoderBackend, DecoderChangeCause, DecoderEvent,
     },
     decode::DecoderBackend,
-    events::EventBus,
+    events::{EventBus, TrackId},
+    play::Settled,
+    signal::SegmentId,
 };
-use kithara_integration_tests::offline::linked::LinkSpeed;
-use kithara_render::bridge::SlotSnapshot;
+use kithara_command::Seq;
+use kithara_integration_tests::offline::linked::{LinkReceiptOrigin, LinkSpeed};
+use kithara_render::bridge::{Slot, SlotSnapshot};
 use num_traits::ToPrimitive;
 
 use super::{cases::*, imports::*, providers::*};
@@ -39,7 +42,7 @@ pub(crate) struct ProductHarness {
     worker: PlayWorker<TestPools>,
     trajectory: TempoTrajectory,
     operation_grid: Option<kithara::warp::BeatGridSnapshot>,
-    capture_marks: Vec<(SessionFrame, kithara::events::TrackId, SlotSnapshot)>,
+    capture_marks: Vec<(SessionFrame, TrackId, SlotSnapshot)>,
     host_grids: Vec<(SessionFrame, kithara::warp::BeatGridSnapshot)>,
     decoded: Vec<Arc<Mutex<super::control::DecodedCapture>>>,
     source_uris: Vec<String>,
@@ -54,6 +57,82 @@ pub(crate) struct ProductHarness {
     master_tap: kithara_integration_tests::audio_artifact::AudioArtifactTap,
     #[cfg(not(target_os = "android"))]
     metronome_delta_peak: f32,
+}
+
+fn native_start_at(
+    observation: &LinkObservation,
+    item: TrackId,
+    seq: Seq,
+    slot: Slot,
+) -> Option<i64> {
+    observation.timeline.iter().rev().find_map(|entry| {
+        if entry["event"].as_str() != Some("deck receipt")
+            || entry["item"].as_u64() != Some(u64::from(item))
+        {
+            return None;
+        }
+        let details = &entry["details"];
+        if details["seq"].as_u64() != Some(seq.get())
+            || !details["parts"]
+                .as_array()?
+                .iter()
+                .any(|part| part["Start"]["slot"].as_u64() == Some(u64::from(slot.get())))
+        {
+            return None;
+        }
+        details["applied_frame"].as_i64()
+    })
+}
+
+fn segment_custody(
+    observation: &LinkObservation,
+    item: TrackId,
+    slot: Slot,
+    segment: SegmentId,
+) -> Option<(i64, serde_json::Value)> {
+    let &(_, load) = observation.loads.iter().find(|(owner, _)| *owner == item)?;
+    let (_, prepared) = observation
+        .source_clocks
+        .iter()
+        .find(|(owner, _)| *owner == item)?;
+    if segment == prepared.segment {
+        return observation
+            .placement_receipts
+            .iter()
+            .find_map(|(owner, origin, receipt)| {
+                if *owner != item || *origin != LinkReceiptOrigin::Deck {
+                    return None;
+                }
+                match receipt {
+                    Settled::Applied { seq, at } if *seq == load => Some((
+                        i64::from(*at),
+                        serde_json::json!({
+                            "operation": "Load", "load_seq": load.get(),
+                            "applied_frame": i64::from(*at), "segment": segment.get(),
+                            "slot": slot.get(),
+                        }),
+                    )),
+                    _ => None,
+                }
+            });
+    }
+    observation.timeline.iter().rev().find_map(|entry| {
+        if entry["event"].as_str() != Some("deck receipt")
+            || entry["item"].as_u64() != Some(u64::from(item))
+        {
+            return None;
+        }
+        let details = &entry["details"];
+        let applied_at = details["applied_frame"].as_i64()?;
+        details["parts"]
+            .as_array()?
+            .iter()
+            .any(|part| {
+                part["Adopt"]["slot"].as_u64() == Some(u64::from(slot.get()))
+                    && part["Adopt"]["segment"].as_u64() == Some(segment.get())
+            })
+            .then(|| (applied_at, details.clone()))
+    })
 }
 
 fn linked_mixer() -> kithara::play::DeckMixerConfig {
@@ -492,7 +571,7 @@ impl ProductHarness {
                         .settled
                         .iter()
                         .any(|(owner, receipt)| *owner == item
-                            && matches!(receipt, kithara::play::Settled::Applied { .. })),
+                            && matches!(receipt, Settled::Applied { .. })),
                     "{}: renderer acknowledged that track",
                     case.id
                 );
@@ -501,7 +580,7 @@ impl ProductHarness {
     }
 
     #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
-    async fn wait_loaded(&mut self, case: SyncCase, ids: &[kithara::events::TrackId]) {
+    async fn wait_loaded(&mut self, case: SyncCase, ids: &[TrackId]) {
         let deadline = Instant::now() + LOAD_TIMEOUT;
         let mut completed = 0;
         loop {
@@ -804,22 +883,7 @@ impl ProductHarness {
             case.sample_rate,
             &grid,
             wrong_source,
-            |frame| match jump {
-                Some((start, landing)) if frame >= start => {
-                    let declick = (i64::from(landing) - i64::from(start))
-                        .to_f32()
-                        .expect("i64 declick frames fit the f32 range");
-                    let elapsed = (i64::from(frame) - i64::from(start))
-                        .to_f32()
-                        .expect("i64 elapsed frames fit the f32 range");
-                    if frame < landing {
-                        1.0 - (elapsed / declick.max(1.0)).min(1.0)
-                    } else {
-                        ((elapsed - declick) / declick.max(1.0)).min(1.0)
-                    }
-                }
-                _ => 1.0,
-            },
+            jump,
         );
         #[cfg(not(target_os = "android"))]
         self.master_tap.evidence(
@@ -1072,11 +1136,19 @@ impl ProductHarness {
                 let first = capture_start
                     .mark
                     .expect("actual Playing capture has a consumed mark");
-                let started = deck.observe(|observation| observation.starts.iter().any(|(owner, seq)| *owner == item
-                    && observation.placement_receipts.iter().any(|(owner, origin, receipt)| *owner == item
-                        && *origin == kithara_integration_tests::offline::linked::LinkReceiptOrigin::Deck
-                        && matches!(receipt, kithara::play::Settled::Applied { seq: answered, at }
-                            if answered == seq && *at >= capture_frame && *at <= first.session))));
+                let started = deck.observe(|observation| {
+                    observation.starts.iter().any(|(owner, seq)| {
+                        *owner == item
+                            && observation.placement_receipts.iter().any(
+                                |(owner, origin, receipt)| {
+                                    *owner == item
+                                        && *origin == LinkReceiptOrigin::Deck
+                                        && matches!(receipt, Settled::Applied { seq: answered, at }
+                            if answered == seq && *at >= capture_frame && *at <= first.session)
+                                },
+                            )
+                    })
+                });
                 if !started
                     || initial
                         .source
@@ -1353,11 +1425,17 @@ impl ProductHarness {
         let sample_rate = NonZeroU32::new(case.sample_rate).expect("capture sample rate");
         let declick = i64::try_from(linked_mixer().declick_frames(sample_rate).get())
             .expect("configured declick fits the session axis");
+        #[cfg(not(target_os = "android"))]
+        let mut first_live_at = None;
+        #[cfg(not(target_os = "android"))]
+        let mut sampled_live_after_second = false;
         loop {
             hang_tick!(format!(
                 "{}: waiting for actual Start and completed declick at {}",
                 case.id, self.output_frames
             ));
+            #[cfg(not(target_os = "android"))]
+            let mut rejected_mark_pair = None;
             let ready: Option<Vec<_>> = self.decks.iter().map(|deck| {
                 let item = deck.current()?.id;
                 let snapshot = deck.track_snapshot(item)?;
@@ -1375,36 +1453,23 @@ impl ProductHarness {
                         || snapshot.track.mark != Some(mark)
                         || mark.lane.segment != info.segment
                     {
+                        #[cfg(not(target_os = "android"))]
+                        if snapshot.track.mark != Some(mark) {
+                            rejected_mark_pair = Some((item, snapshot.track.mark, mark));
+                        }
                         return None;
                     }
                     let &(_, seq) = observation.starts.iter().rev().find(|(owner, _)| *owner == item)?;
-                    let at = observation.placement_receipts.iter().find_map(|(owner, origin, receipt)| {
-                        (*owner == item && *origin == kithara_integration_tests::offline::linked::LinkReceiptOrigin::Deck)
-                            .then_some(receipt).and_then(|receipt| match receipt {
-                                kithara::play::Settled::Applied { seq: answered, at } if *answered == seq => Some(*at),
-                                _ => None,
-                            })
-                    })?;
-                    let stable_at = i64::from(at).checked_add(declick)?;
+                    let slot_id = snapshot.track.slot?;
+                    let at = native_start_at(observation, item, seq, slot_id)?;
+                    let stable_at = at.checked_add(declick)?;
                     if i64::from(mark.session) < stable_at {
                         return None;
                     }
-                    let slot_id = snapshot.track.slot?.get();
-                    let owns_segment = observation.timeline.iter().any(|entry| {
-                        entry.get("event").and_then(serde_json::Value::as_str) == Some("deck receipt")
-                            && entry.get("item").and_then(serde_json::Value::as_u64) == Some(u64::from(item))
-                            && entry.get("details").and_then(|details| details.get("applied_frame")).and_then(serde_json::Value::as_i64).is_some_and(|frame| frame <= i64::from(mark.session))
-                            && entry.get("details").and_then(|details| details.get("parts")).and_then(serde_json::Value::as_array).is_some_and(|parts| {
-                                parts.iter().any(|part| ["Attach", "Replace", "Adopt"].iter().any(|kind| {
-                                    part.get(kind).is_some_and(|part| {
-                                        part.get("segment").and_then(serde_json::Value::as_u64) == Some(info.segment.get())
-                                            && part.get("slot").and_then(serde_json::Value::as_u64) == Some(u64::from(slot_id))
-                                    })
-                                }))
-                            })
-                    });
+                    let (custody_at, _) = segment_custody(observation, item, slot_id, info.segment)?;
+                    let owns_segment = custody_at <= i64::from(mark.session);
                     owns_segment.then(|| serde_json::json!({
-                        "item": u64::from(item), "start_seq": seq.get(), "start_applied": i64::from(at),
+                        "item": u64::from(item), "start_seq": seq.get(), "start_applied": at,
                         "declick_frames": declick, "stable_at": stable_at,
                         "consumed_at": i64::from(mark.session), "segment": info.segment.get(), "slot_gain": slot.gain,
                     }))
@@ -1417,14 +1482,139 @@ impl ProductHarness {
                 hang_reset!();
                 return;
             }
+            #[cfg(not(target_os = "android"))]
+            if !sampled_live_after_second {
+                let live = self.decks.iter().all(|deck| {
+                    let Some(item) = deck.current().map(|entry| entry.id) else {
+                        return false;
+                    };
+                    deck.observe(|observation| {
+                        observation.consumed.iter().any(|(owner, slot)| {
+                            *owner == item
+                                && slot.state == kithara_render::bridge::SlotState::Playing
+                                && slot.gain == 1.0
+                                && slot.mark.is_some()
+                                && slot.source.is_some()
+                        })
+                    })
+                });
+                if live {
+                    let event = match first_live_at {
+                        None => {
+                            first_live_at = Some(self.output_frames);
+                            Some("capture_readiness_first_live")
+                        }
+                        Some(first)
+                            if self.output_frames.saturating_sub(first)
+                                >= u64::from(case.sample_rate) =>
+                        {
+                            sampled_live_after_second = true;
+                            Some("capture_readiness_live_after_one_second")
+                        }
+                        Some(_) => None,
+                    };
+                    if let Some(event) = event {
+                        self.record_capture_readiness_failure(event, declick, rejected_mark_pair);
+                    }
+                }
+            }
+            let within_deadline = Instant::now() < deadline;
+            #[cfg(not(target_os = "android"))]
+            if !within_deadline {
+                self.record_capture_readiness_failure(
+                    "capture_readiness_failure",
+                    declick,
+                    rejected_mark_pair,
+                );
+            }
             assert!(
-                Instant::now() < deadline,
+                within_deadline,
                 "{}: capture has no real Applied Start/current Segment with a completed configured declick",
                 case.id
             );
             let _ = self.render(case, self.block_frames.min(128)).await;
             hang_reset!();
         }
+    }
+
+    #[cfg(not(target_os = "android"))]
+    fn record_capture_readiness_failure(
+        &mut self,
+        event: &str,
+        declick: i64,
+        rejected_mark_pair: Option<(
+            TrackId,
+            Option<kithara_render::bridge::SlotMark>,
+            kithara_render::bridge::SlotMark,
+        )>,
+    ) {
+        let decks: Vec<_> = self.decks.iter().map(|deck| deck.observe(|observation| {
+            let item = deck.current().map(|entry| entry.id);
+            let track = observation.tracks.iter()
+                .find(|track| Some(track.track.item) == item).map(|track| &track.track);
+            let slot = observation.consumed.iter()
+                .find(|(owner, _)| Some(*owner) == item).map(|(_, slot)| *slot);
+            let mark = slot.and_then(|slot| slot.mark);
+            let info = slot.and_then(|slot| slot.source);
+            let seq = observation.starts.iter().rev()
+                .find(|(owner, _)| Some(*owner) == item).map(|(_, seq)| *seq);
+            let slot_id = track.and_then(|track| track.slot);
+            let at = item.zip(seq).zip(slot_id)
+                .and_then(|((item, seq), slot)| native_start_at(observation, item, seq, slot));
+            let stable_at = at.and_then(|at| at.checked_add(declick));
+            let custody = item.zip(info).zip(slot_id)
+                .and_then(|((item, info), slot)| segment_custody(observation, item, slot, info.segment));
+            let owns_segment = mark.zip(custody.as_ref()).is_some_and(|(mark, (at, _))| {
+                *at <= i64::from(mark.session)
+            });
+            let predicates = [
+                ("current_item", item.is_some()),
+                ("track_snapshot", track.is_some()),
+                ("pending_lane_clear", track.is_some_and(|track| !track.pending_lane)),
+                ("owner_playing", track.is_some_and(|track| matches!(track.status, kithara::play::TrackStatus::Playing { .. }))),
+                ("consumed_slot", slot.is_some()),
+                ("consumed_mark", mark.is_some()),
+                ("source_payload", info.is_some()),
+                ("consumed_playing", slot.is_some_and(|slot| slot.state == kithara_render::bridge::SlotState::Playing)),
+                ("unity_gain", slot.is_some_and(|slot| slot.gain == 1.0)),
+                ("matching_marks", track.zip(mark).is_some_and(|(track, mark)| track.mark == Some(mark))),
+                ("matching_segment", mark.zip(info).is_some_and(|(mark, info)| mark.lane.segment == info.segment)),
+                ("actual_start", seq.is_some()),
+                ("applied_start", at.is_some()),
+                ("declick_complete", mark.zip(stable_at).is_some_and(|(mark, stable)| i64::from(mark.session) >= stable)),
+                ("current_segment_custody", owns_segment),
+            ];
+            let failed: Vec<_> = predicates.iter().filter_map(|(name, passed)| (!*passed).then_some(*name)).collect();
+            let receipts: Vec<_> = observation.placement_receipts.iter().rev()
+                .filter(|(owner, origin, _)| Some(*owner) == item && *origin == LinkReceiptOrigin::Deck)
+                .take(6).map(|(_, _, receipt)| format!("{receipt:?}")).collect();
+            let start_outcomes: Vec<_> = observation.timeline.iter()
+                .filter(|entry| entry["event"].as_str() == Some("deck receipt")
+                    && entry["item"].as_u64() == item.map(u64::from)
+                    && entry["details"]["seq"].as_u64() == seq.map(Seq::get))
+                .map(|entry| &entry["details"]).collect();
+            let latest_start = seq.and_then(|seq| observation.timeline.iter().rev().find(|entry| {
+                entry.get("event").and_then(serde_json::Value::as_str) == Some("deck receipt")
+                    && entry.get("item").and_then(serde_json::Value::as_u64) == item.map(u64::from)
+                    && entry.get("details").and_then(|details| details.get("seq")).and_then(serde_json::Value::as_u64) == Some(seq.get())
+            })).and_then(|entry| entry.get("details"));
+            serde_json::json!({
+                "deck": u64::from(deck.id()), "item": item.map(u64::from),
+                "failed_predicates": failed, "predicates": predicates,
+                "track": format!("{track:?}"), "slot": format!("{slot:?}"),
+                "latest_start_seq": seq.map(Seq::get), "latest_start_receipt": latest_start,
+                "start_applied": at, "start_outcomes": start_outcomes,
+                "stable_at": stable_at, "declick_frames": declick,
+                "current_segment_custody": custody.iter().map(|(_, proof)| proof).collect::<Vec<_>>(), "latest_deck_receipts": receipts,
+            })
+        })).collect();
+        self.master_tap.evidence(event, serde_json::json!({
+            "output_frame": self.output_frames,
+            "rejected_mark_pair": rejected_mark_pair.map(|(item, track, consumed)| serde_json::json!({
+                "item": u64::from(item), "track": format!("{track:?}"), "consumed": format!("{consumed:?}"),
+            })),
+            "decks": decks,
+        }));
     }
 
     pub(super) async fn capture(&mut self, case: SyncCase) -> Vec<f32> {
@@ -1601,7 +1791,7 @@ impl ProductHarness {
                             "cue_inputs": observation.cue_curves.iter().map(|cue| serde_json::json!({
                                 "item": u64::from(cue.item), "seq": cue.seq.get(), "position_ns": cue.position.as_nanos().to_string(),
                                 "host_input": cue.host_input, "consumed": format!("{:?}", cue.consumed),
-                                "native_origin": cue.native.map(|origin| format!("{origin:?}")), "adopted_segment": cue.segment.map(kithara::signal::SegmentId::get),
+                                "native_origin": cue.native.map(|origin| format!("{origin:?}")), "adopted_segment": cue.segment.map(SegmentId::get),
                             })).collect::<Vec<_>>(),
                             "capture_facts": self.capture_marks.iter().filter(|(_, item, _)| observation.tracks.iter().any(|track| track.track.item == *item))
                                 .map(|(frame, item, slot)| serde_json::json!({"frame": i64::from(*frame), "item": u64::from(*item), "slot": format!("{slot:?}")})).collect::<Vec<_>>(),

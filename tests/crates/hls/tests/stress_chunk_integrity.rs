@@ -7,7 +7,8 @@ use kithara::{
     platform::{
         CancelToken,
         sync::Arc,
-        time::{Duration, WallInstant, sleep},
+        thread,
+        time::{Duration, WallInstant},
     },
     play::{PlayWorker, PlayWorkerConfig},
     signal::{AudioChunk, AudioChunkInfo},
@@ -85,7 +86,7 @@ fn intra_chunk_breaks(chunk: &AudioChunk) -> usize {
 
 #[kithara::flash(io)]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-async fn next_chunk_with_timeout<R: AudioRead>(
+fn next_chunk_with_timeout<R: AudioRead>(
     audio: &mut R,
     timeout: Duration,
     stage: &str,
@@ -109,7 +110,7 @@ async fn next_chunk_with_timeout<R: AudioRead>(
             WallInstant::now() <= deadline,
             "next_chunk timeout at stage='{stage}'"
         );
-        sleep(Duration::from_micros(500)).await;
+        thread::paced_backoff(Duration::from_micros(500));
     }
 }
 
@@ -212,15 +213,14 @@ async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case]
         .expect("create Audio<Stream<Hls>> pipeline");
 
     let _ = blocking_audio(audio, move |audio| {
-        kithara::platform::tokio::runtime::Handle::current()
-            .block_on(check_chunk_integrity(audio, segment_duration));
+        check_chunk_integrity(audio, segment_duration);
     })
     .await;
 }
 
 #[kithara::flash(io)]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-async fn check_chunk_integrity(
+fn check_chunk_integrity(
     audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>,
     segment_duration: f64,
 ) {
@@ -255,9 +255,7 @@ async fn check_chunk_integrity(
             audio,
             Duration::from_millis(consts::WARMUP_NEXT_CHUNK_TIMEOUT_MS),
             "phase1_warmup",
-        )
-        .await
-        else {
+        ) else {
             panic!(
                 "Hit EOF before ABR switch (ascending={}, unknown={})",
                 warmup_ascending, warmup_unknown
@@ -311,9 +309,7 @@ async fn check_chunk_integrity(
             audio,
             Duration::from_millis(consts::NEXT_CHUNK_TIMEOUT_MS),
             &stage,
-        )
-        .await
-        else {
+        ) else {
             panic!("next_chunk returned None at post-switch chunk {chunk_idx}",);
         };
         hang_reset!();
@@ -415,9 +411,7 @@ async fn check_chunk_integrity(
                 audio,
                 Duration::from_millis(consts::NEXT_CHUNK_TIMEOUT_MS),
                 &stage,
-            )
-            .await
-            else {
+            ) else {
                 break;
             };
             hang_reset!();
@@ -589,9 +583,7 @@ async fn check_chunk_integrity(
             audio,
             Duration::from_millis(consts::NEXT_CHUNK_TIMEOUT_MS),
             "phase4_tail_drain",
-        )
-        .await
-        else {
+        ) else {
             break;
         };
         remaining_chunks += 1;

@@ -1201,7 +1201,20 @@ async fn a_consumed_successor_reloads_its_lead_in_session_time_before_the_end() 
         .run(&queue, move |q| q.select(id_b, Transition::None))
         .await
         .expect("select track B");
-    let _ = render_loop(&queue, &harness, 8).await;
+    let output_before_b = harness.host().position();
+    let b_pcm = render_loop(&queue, &harness, 8).await;
+    tracing::info!(
+        output_before_b,
+        output_after_b = harness.host().position(),
+        captured_frames = b_pcm.len() / usize::from(CHANNELS),
+        captured_mean_abs = ?mean_abs_window(&b_pcm, 0, BLOCK_FRAMES * 8),
+        first_active_frame = ?first_onset_frame(&b_pcm, 1.0e-4),
+        current = ?queue.current(),
+        tracks = ?queue.tracks(),
+        playback = ?queue.playback_view(),
+        metrics = ?queue.mixer_metrics(),
+        "consumed successor startup budget receipt",
+    );
     assert_eq!(
         queue.track(id_b).map(|entry| entry.status),
         Some(TrackStatus::Consumed),

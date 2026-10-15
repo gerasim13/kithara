@@ -766,7 +766,8 @@ fn host_rate_change_keeps_raw_resume_custody_without_a_media_seek(
 ))]
 #[kithara::hang_watchdog]
 fn assert_source_end_resume_endpoint() {
-    use kithara_audio::{Audio, AudioSource, Fetch, SourceEnd, TrackStep};
+    use kithara_audio::{Audio, AudioConfig, AudioSource, Fetch, SourceEnd, TrackStep};
+    use kithara_file::{File, FileConfig, FileSrc};
 
     let old_rate = NonZeroU32::new(48_000).expect("old host rate");
     let rate = NonZeroU32::new(44_100).expect("new host rate");
@@ -776,9 +777,13 @@ fn assert_source_end_resume_endpoint() {
     let directory = TestTempDir::new();
     let path = directory.path().join("source-end-resume.wav");
     mock::write_pcm_wav(&path, &[0.25; 1_764], native_spec).expect("twenty milliseconds of PCM");
-    let worker = crate::PlayWorker::new(crate::PlayWorkerConfig::builder(pools.clone()).build());
-    let config: ResourceConfig<TestPools> = ResourceConfig::for_src(ResourceSrc::Path(path))
+    let file = FileConfig::for_src(FileSrc::Local(path))
         .store(AssetStore::builder(pools.clone()).build())
+        .extension("wav")
+        .pools(pools.clone())
+        .build();
+    let config = AudioConfig::<File<TestPools>, crate::PlaybackResamplerBackend>::for_stream(file)
+        .hint("wav".to_owned())
         .host_sample_rate(old_rate)
         .decoder(
             kithara_audio::AudioDecoderConfig::builder()
@@ -793,7 +798,7 @@ fn assert_source_end_resume_endpoint() {
         .expect("offline source runtime");
     let mut audio = runtime
         .block_on(Audio::prepare(
-            config.build_file_config(&worker, None),
+            config,
             Arc::new(kithara_stream::mock::NoopWorkerWake),
             pools.clone(),
         ))

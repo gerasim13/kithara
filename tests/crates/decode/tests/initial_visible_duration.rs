@@ -90,23 +90,20 @@ async fn initial_visible_duration_matches_the_built_ruler_before_eof(#[case] ass
     let mut audio = Audio::prepare(config, Arc::new(NoopWorkerWake), pools)
         .await
         .expect("audio owner");
-    let initial_length = audio
-        .duration()
-        .expect("initial known visible duration before EOF");
-    let initial_frames = AudioSpec::new(2, NonZeroU32::new(44_100).expect("comparison rate"))
-        .frame_at(initial_length)
-        .expect("visible duration fits the comparison clock");
-    tracing::info!(
-        asset = asset.name(),
-        ?initial_length,
-        initial_frames,
-        "initial Audio duration receipt"
+    let prepared_length = audio.duration();
+    let prepared_geometry = (
+        audio.media_origin(),
+        audio.media_end(),
+        audio.visible_origin(),
     );
-    assert!(
-        initial_frames.abs_diff(264_600) <= 2_048,
-        "{} initial length {initial_frames} must match built six-second ruler 264600 before EOF; raw_before={raw_before:?}, raw_after={raw_after:?}, profile_before={profile_before:?}, profile_after={profile_after:?}",
-        asset.name()
-    );
+    if matches!(prepared_geometry, (Some(_), Some(_), None)) {
+        assert_eq!(prepared_length, None);
+    } else {
+        assert!(
+            prepared_length.is_some(),
+            "known initial geometry must publish its visible duration before PCM"
+        );
+    }
     let visible = loop {
         hang_tick!(format!("{} first original Audio PCM", asset.name()));
         match audio.next_chunk().expect("visible original PCM") {
@@ -127,6 +124,29 @@ async fn initial_visible_duration_matches_the_built_ruler_before_eof(#[case] ass
         visible.frames() * usize::from(visible.spec().channels)
     );
     assert!(visible.samples.iter().all(|sample| sample.is_finite()));
+    let initial_length = audio
+        .duration()
+        .expect("initial known visible duration before EOF");
+    if let Some(prepared_length) = prepared_length {
+        assert_eq!(
+            initial_length, prepared_length,
+            "first original PCM must retain the known initial duration"
+        );
+    }
+    let initial_frames = AudioSpec::new(2, NonZeroU32::new(44_100).expect("comparison rate"))
+        .frame_at(initial_length)
+        .expect("visible duration fits the comparison clock");
+    tracing::info!(
+        asset = asset.name(),
+        ?initial_length,
+        initial_frames,
+        "initial Audio duration receipt"
+    );
+    assert!(
+        initial_frames.abs_diff(264_600) <= 2_048,
+        "{} initial length {initial_frames} must match built six-second ruler 264600 before EOF; raw_before={raw_before:?}, raw_after={raw_after:?}, profile_before={profile_before:?}, profile_after={profile_after:?}",
+        asset.name()
+    );
     let playhead = audio.playhead_read();
     assert_eq!(visible.meta.visible_origin, Some(visible.meta.timestamp));
     assert_eq!(playhead.duration(), Some(initial_length));
@@ -246,12 +266,18 @@ async fn assert_complete_aac_presentation(bytes: &[u8], url: url::Url) {
         .expect("visible AAC owner");
     assert_eq!(audio.media_origin(), Some(origin));
     assert_eq!(audio.media_end(), Some(endpoint));
-    assert_eq!(audio.duration(), Some(endpoint));
+    assert_eq!(audio.visible_origin(), None);
+    assert_eq!(audio.duration(), None);
     let mut visible = Vec::new();
     loop {
         hang_tick!();
         match audio.next_chunk().expect("visible AAC PCM") {
             ChunkOutcome::Chunk(chunk) => {
+                if visible.is_empty() {
+                    assert!(!chunk.meta.end_of_track, "initial duration precedes EOF");
+                    assert_eq!(audio.visible_origin(), Some(origin));
+                    assert_eq!(audio.duration(), Some(endpoint));
+                }
                 assert_eq!(
                     spec.frame_at(chunk.meta.timestamp)
                         .expect("visible native coordinate"),

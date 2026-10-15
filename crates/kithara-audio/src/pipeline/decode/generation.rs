@@ -162,6 +162,15 @@ impl DecoderGeneration {
         let visible_origin = initial_position.and_then(|position| {
             crate::pipeline::gapless::visible_origin(position, gapless_profile, gapless_mode)
         });
+        tracing::debug!(
+            declared_duration = ?decoder.duration(),
+            ?gapless_profile,
+            ?gapless_mode,
+            ?media_origin,
+            ?initial_origin,
+            ?visible_origin,
+            "decoder generation source geometry",
+        );
         Self {
             decoder,
             media_info,

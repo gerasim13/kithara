@@ -240,14 +240,7 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
             return TrackStep::Blocked(reason);
         }
         self.waiting_for_source = false;
-        if !self.duration_reconciled {
-            let active = self.decode.active();
-            if let Some(duration) = active.visible_duration(self.decode.gapless_mode())
-                && Some(duration) > self.playhead.duration()
-            {
-                self.playhead.set_duration(Some(duration));
-            }
-        }
+        self.refresh_visible_duration();
         let action = tick(
             &mut self.decode,
             DecodeCtx {
@@ -259,7 +252,10 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
             },
         );
         match action {
-            DecodeAction::Produced(fetch) => TrackStep::Produced(*fetch),
+            DecodeAction::Produced(fetch) => {
+                self.refresh_visible_duration();
+                TrackStep::Produced(*fetch)
+            }
             DecodeAction::Progress => {
                 self.wake.wake();
                 TrackStep::StateChanged
@@ -366,6 +362,17 @@ impl<T: StreamType> StreamAudioSource<T> {
             failure_logged: false,
             resume: ResumeCursor::default(),
             duration_reconciled: false,
+        }
+    }
+
+    fn refresh_visible_duration(&self) {
+        if !self.duration_reconciled {
+            let active = self.decode.active();
+            if let Some(duration) = active.visible_duration(self.decode.gapless_mode())
+                && Some(duration) > self.playhead.duration()
+            {
+                self.playhead.set_duration(Some(duration));
+            }
         }
     }
 
