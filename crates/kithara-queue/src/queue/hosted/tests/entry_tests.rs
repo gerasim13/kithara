@@ -567,12 +567,12 @@ async fn atomic_track_id_cas_arm_then_disarm() {
         .expect("select sounding predecessor");
     });
     let loaded = arm_current_fixture(&mut rig, &dir).await;
-    let media_end = loaded
+    let source = loaded
         .opened
         .pcm
         .next_chunk_info()
-        .and_then(|info| info.media_end)
-        .expect("decoded predecessor endpoint");
+        .expect("decoded predecessor geometry");
+    assert!(source.media_end.is_some(), "decoded predecessor endpoint");
     answer_loaded(&mut queue, &mut rig, loaded);
     crate::mock::finish(&mut queue, &mut rig);
     assert_eq!(queue.current, Some(TrackId(2)));
@@ -582,15 +582,7 @@ async fn atomic_track_id_cas_arm_then_disarm() {
         .snapshot()
         .slot
         .expect("seated predecessor");
-    queue.deck.mixer.slots[usize::from(slot.get())].source = Some(AudioChunkInfo {
-        spec: AudioSpec::new(2, mock::SAMPLE_RATE),
-        segment: kithara_signal::SegmentId::FIRST,
-        source_revision: 0,
-        visible_origin: Some(Duration::ZERO),
-        media_origin: Some(Duration::ZERO),
-        media_end: Some(media_end),
-        ..AudioChunkInfo::default()
-    });
+    queue.deck.mixer.slots[usize::from(slot.get())].source = Some(source);
     queue.deck.mixer.slots[usize::from(slot.get())].mark = Some(SlotMark {
         session: SessionFrame::new(256),
         lane: LaneFrame {

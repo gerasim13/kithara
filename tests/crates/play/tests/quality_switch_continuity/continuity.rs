@@ -1,6 +1,7 @@
 use std::array;
 
 use cochlea_features::{Audio as ProbeAudio, ProbeOpts, SegmentOpts, probe, segment_timeline};
+use kithara::platform::tokio::join;
 use kithara_integration_tests::{TestServerHelper, cochlea::percentile_f32};
 use kithara_test_fixtures::integration_fixtures::{
     quality_control_a, quality_control_b, quality_control_joined,
@@ -512,7 +513,7 @@ fn the_two_baseline_oracle_still_rejects_a_click_at_the_join(
     multi_thread,
     native,
     serial,
-    timeout(Duration::from_secs(180)),
+    timeout(Duration::from_secs(25)),
     hang_timeout_secs(3)
 )]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
@@ -530,16 +531,25 @@ async fn manual_quality_switches_match_time_aligned_no_switch_pcm(#[case] backen
     let master_url = created.master_url();
     let mut failures = Vec::new();
 
+    // The references wait on decode rather than on a clock, so they render
+    // side by side; each switch plays in real time beside one other.
+    let (aac_low, aac_high, flac) = join!(
+        render_no_switch_control(&master_url, AAC_LOW, backend, "aac-low-no-switch-control"),
+        render_no_switch_control(&master_url, AAC_HIGH, backend, "aac-high-no-switch-control"),
+        render_no_switch_control(&master_url, FLAC, backend, "flac-no-switch-control"),
+    );
     let mut controls: [Option<AnalyzedControl>; 3] = array::from_fn(|_| None);
-    for (label, variant) in [("aac-low", AAC_LOW), ("aac-high", AAC_HIGH), ("flac", FLAC)] {
-        let control_label = format!("{label}-no-switch-control");
-        let control = render_no_switch_control(&master_url, variant, backend, &control_label).await;
+    for (control_label, variant, control) in [
+        ("aac-low-no-switch-control", AAC_LOW, aac_low),
+        ("aac-high-no-switch-control", AAC_HIGH, aac_high),
+        ("flac-no-switch-control", FLAC, flac),
+    ] {
         let coding = if variant == FLAC {
             Coding::Lossless
         } else {
             Coding::Lossy
         };
-        let (cochlea, onsets_ms) = assert_clean_control(&control.samples, &control_label, coding);
+        let (cochlea, onsets_ms) = assert_clean_control(&control.samples, control_label, coding);
         if let Some(reference) = controls.iter().flatten().next() {
             assert_eq!(
                 control.capture_frame, reference.render.capture_frame,
@@ -558,49 +568,54 @@ async fn manual_quality_switches_match_time_aligned_no_switch_pcm(#[case] backen
         });
     }
 
-    for transition in TRANSITIONS {
-        let switched = render_switch(&master_url, transition, backend).await;
-        let frames = switched.samples.len() / usize::from(CHANNELS);
-        let source_control = controls[transition.from]
-            .as_ref()
-            .expect("source variant control must exist");
-        let destination_control = controls[transition.to]
-            .as_ref()
-            .expect("destination variant control must exist");
-        assert_eq!(
-            switched.capture_frame, source_control.render.capture_frame,
-            "{} switch and source control must capture the exact same source frame: switched={}, control={}",
-            transition.label, switched.capture_frame, source_control.render.capture_frame,
+    for &[first, second] in TRANSITIONS.as_chunks::<2>().0 {
+        let (first_switched, second_switched) = join!(
+            render_switch(&master_url, first, backend),
+            render_switch(&master_url, second, backend),
         );
+        for (transition, switched) in [(first, first_switched), (second, second_switched)] {
+            let frames = switched.samples.len() / usize::from(CHANNELS);
+            let source_control = controls[transition.from]
+                .as_ref()
+                .expect("source variant control must exist");
+            let destination_control = controls[transition.to]
+                .as_ref()
+                .expect("destination variant control must exist");
+            assert_eq!(
+                switched.capture_frame, source_control.render.capture_frame,
+                "{} switch and source control must capture the exact same source frame: switched={}, control={}",
+                transition.label, switched.capture_frame, source_control.render.capture_frame,
+            );
 
-        let primary = primary_continuity_report(
-            &switched.samples,
-            &[
-                &source_control.render.samples,
-                &destination_control.render.samples,
-            ],
-        );
-        let cochlea = cochlea_failures(
-            &switched.samples,
-            source_control.cochlea,
-            destination_control.cochlea,
-        );
-        println!(
-            "QUALITY_SWITCH_CONTINUITY transition={} backend={backend:?} capture_source_frame={} applied_frame={} target_decoder_frame={} frames={} channels={} cochlea_failures={cochlea:?}",
-            transition.label,
-            switched.capture_frame,
-            switched.applied_frame,
-            switched.target_decoder_frame,
-            frames,
-            format_channels(&primary.channels),
-        );
-        failures.extend(
-            primary
-                .failures
-                .into_iter()
-                .chain(cochlea)
-                .map(|failure| format!("{}: {failure}", transition.label)),
-        );
+            let primary = primary_continuity_report(
+                &switched.samples,
+                &[
+                    &source_control.render.samples,
+                    &destination_control.render.samples,
+                ],
+            );
+            let cochlea = cochlea_failures(
+                &switched.samples,
+                source_control.cochlea,
+                destination_control.cochlea,
+            );
+            println!(
+                "QUALITY_SWITCH_CONTINUITY transition={} backend={backend:?} capture_source_frame={} applied_frame={} target_decoder_frame={} frames={} channels={} cochlea_failures={cochlea:?}",
+                transition.label,
+                switched.capture_frame,
+                switched.applied_frame,
+                switched.target_decoder_frame,
+                frames,
+                format_channels(&primary.channels),
+            );
+            failures.extend(
+                primary
+                    .failures
+                    .into_iter()
+                    .chain(cochlea)
+                    .map(|failure| format!("{}: {failure}", transition.label)),
+            );
+        }
     }
 
     assert!(

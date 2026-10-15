@@ -8,7 +8,7 @@ use kithara::{
     events::{EventBus, EventReceiver},
     host::{HostConfig, HostSettings},
     platform::{
-        time::{Duration, WallInstant, sleep},
+        time::{Duration, Instant, WallInstant, sleep},
         tokio::sync::broadcast::error::TryRecvError,
     },
     play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
@@ -34,7 +34,7 @@ pub(super) const BLOCK_FRAMES: usize = 512;
 pub(super) const SINE_HZ: f64 = 441.0;
 const SEGMENT_SECS: f64 = 0.5;
 const SEGMENTS_PER_VARIANT: usize = 16;
-pub(super) const REQUEST_AT_SECS: f64 = 1.0;
+pub(super) const REQUEST_AT_SECS: f64 = 0.5;
 pub(super) const ACTIVE_SAMPLE_THRESHOLD: f32 = 1.0e-3;
 pub(super) const ORACLE_RATIO: f32 = 3.0;
 pub(super) const ORACLE_SLACK: f32 = 2.0e-3;
@@ -88,11 +88,46 @@ impl Transition {
     }
 }
 
+/// How a render consumes the blocks it pulls from the player.
+#[derive(Clone, Copy, Debug)]
+enum Consumer {
+    /// Paced at playback speed and never waiting on decode: an underrun is
+    /// heard, as a device would hear it. The switch under test renders this way.
+    RealTime,
+    /// Waits on decode and never sleeps: a no-switch reference whose PCM, not
+    /// its timing, is what the switch is compared against.
+    Reference,
+}
+
+impl Consumer {
+    async fn render(
+        self,
+        player: &mut OfflinePlayer,
+        pacer: &mut Pacer,
+        frames: usize,
+    ) -> Vec<f32> {
+        match self {
+            Self::RealTime => render_paced(player, pacer, frames).await,
+            Self::Reference => player.render(frames).await,
+        }
+    }
+}
+
+/// Playback clock of one consumer: when its first block was taken and how
+/// much audio it has taken since, so every block is due at a fixed audio time
+/// however long rendering it took.
+#[derive(Debug, Default)]
+pub(super) struct Pacer {
+    started: Option<Instant>,
+    frames: usize,
+}
+
 pub(super) struct PreparedPlayer {
     pub(super) _temp: TestTempDir,
     pub(super) player: OfflinePlayer,
     pub(super) abr: AbrHandle,
     pub(super) events: EventReceiver<TestEvent>,
+    pub(super) pacer: Pacer,
     pub(super) capture_frame: i64,
 }
 
@@ -103,6 +138,7 @@ impl PreparedPlayer {
             player,
             abr,
             events,
+            pacer: _,
             capture_frame: _,
         } = self;
         drop(abr);
@@ -222,7 +258,13 @@ fn capture_frame_target() -> i64 {
 pub(super) fn observation_frames() -> usize {
     usize::try_from(SAMPLE_RATE)
         .expect("fixture sample rate fits usize")
-        .saturating_mul(3)
+        .saturating_mul(2)
+}
+
+/// Audio the observation window must still hold after the target decoder
+/// takes over, so a shorter window can never compare only pre-switch PCM.
+pub(super) fn heard_after_switch_frames() -> usize {
+    usize::try_from(SAMPLE_RATE).expect("fixture sample rate fits usize")
 }
 
 fn target_pcm_frames() -> usize {
@@ -302,6 +344,7 @@ async fn prepare_player(
     initial_variant: usize,
     backend: DecoderBackend,
     label: &str,
+    consumer: Consumer,
 ) -> PreparedPlayer {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
@@ -320,6 +363,7 @@ async fn prepare_player(
             .build(),
     )
     .initial_abr_mode(AbrMode::manual(initial_variant))
+    .block_on_underrun(matches!(consumer, Consumer::Reference))
     .events(bus)
     .build();
     // WHY: The fixture sine peaks at full scale, so its inter-sample reconstruction
@@ -365,6 +409,7 @@ async fn prepare_player(
     // now asks for exactly the frames still missing, so it lands on
     // `capture_frame` whatever the pipeline did on the way there.
     let capture_frame = capture_frame_target();
+    let mut pacer = Pacer::default();
     let deadline = WallInstant::now() + Duration::from_secs(15);
     let mut active_blocks = 0usize;
     let mut decoder_events = drain_decoder_events(&mut events, 0);
@@ -376,7 +421,9 @@ async fn prepare_player(
         let request = usize::try_from(remaining)
             .unwrap_or(BLOCK_FRAMES)
             .min(BLOCK_FRAMES);
-        let block = render_paced(&mut player, request.max(1)).await;
+        let block = consumer
+            .render(&mut player, &mut pacer, request.max(1))
+            .await;
         if player.position() > before {
             hang_reset!();
         }
@@ -414,12 +461,14 @@ async fn prepare_player(
         player,
         abr,
         events,
+        pacer,
         capture_frame,
     }
 }
 
-/// Consume one block and let the modelled playback clock advance by exactly
-/// its duration.
+/// Consume one block and wait until the audio it ends on is due on the
+/// modelled playback clock, as a device callback would: a slow render eats
+/// into the block's period instead of stretching the playback.
 ///
 /// The guard is what puts that advance on the same clock as everything else
 /// this test observes. Fixture delays already burn virtual time
@@ -432,12 +481,23 @@ async fn prepare_player(
 /// hands out zeros, so the length of the silence is a property of the machine
 /// rather than of the pipeline under test.
 #[kithara::flash(true)]
-pub(super) async fn render_paced(player: &mut OfflinePlayer, frames: usize) -> Vec<f32> {
+pub(super) async fn render_paced(
+    player: &mut OfflinePlayer,
+    pacer: &mut Pacer,
+    frames: usize,
+) -> Vec<f32> {
+    let started = *pacer.started.get_or_insert_with(Instant::now);
     let block = player.render(frames).await;
-    sleep(Duration::from_secs_f64(
-        frames.to_f64().expect("render frame count fits f64") / f64::from(SAMPLE_RATE),
-    ))
-    .await;
+    pacer.frames = pacer.frames.saturating_add(frames);
+    let due = started
+        + Duration::from_secs_f64(
+            pacer
+                .frames
+                .to_f64()
+                .expect("rendered frame count fits f64")
+                / f64::from(SAMPLE_RATE),
+        );
+    sleep(due.saturating_duration_since(Instant::now())).await;
     block
 }
 
@@ -448,7 +508,14 @@ pub(super) async fn render_switch(
     transition: Transition,
     backend: DecoderBackend,
 ) -> SwitchRender {
-    let mut prepared = prepare_player(master_url, transition.from, backend, transition.label).await;
+    let mut prepared = prepare_player(
+        master_url,
+        transition.from,
+        backend,
+        transition.label,
+        Consumer::RealTime,
+    )
+    .await;
     prepared
         .abr
         .set_mode(AbrMode::manual(transition.to))
@@ -464,7 +531,9 @@ pub(super) async fn render_switch(
         let rendered_frames = samples.len() / usize::from(CHANNELS);
         let remaining_frames = observation_frames.saturating_sub(rendered_frames);
         let render_frames = remaining_frames.min(BLOCK_FRAMES);
-        samples.extend_from_slice(&render_paced(&mut prepared.player, render_frames).await);
+        samples.extend_from_slice(
+            &render_paced(&mut prepared.player, &mut prepared.pacer, render_frames).await,
+        );
         if prepared.player.position() > before {
             hang_reset!();
         }
@@ -532,6 +601,11 @@ pub(super) async fn render_switch(
         transition.label,
     );
     let target_decoder_frame = target_event.frame_end;
+    assert!(
+        target_decoder_frame.saturating_add(heard_after_switch_frames()) <= observation_frames,
+        "{} switched too late to be heard: target_event_frame={target_decoder_frame}, window={observation_frames}",
+        transition.label,
+    );
     let active_after_target = samples
         .chunks_exact(usize::from(CHANNELS))
         .skip(target_decoder_frame.saturating_add(BLOCK_FRAMES))
@@ -565,7 +639,14 @@ pub(super) async fn render_no_switch_control(
     backend: DecoderBackend,
     label: &str,
 ) -> ControlRender {
-    let mut prepared = prepare_player(master_url, initial_variant, backend, label).await;
+    let mut prepared = prepare_player(
+        master_url,
+        initial_variant,
+        backend,
+        label,
+        Consumer::Reference,
+    )
+    .await;
     prepared
         .abr
         .set_mode(AbrMode::manual(initial_variant))
@@ -579,7 +660,11 @@ pub(super) async fn render_no_switch_control(
         let rendered_frames = samples.len() / usize::from(CHANNELS);
         let remaining_frames = observation_frames.saturating_sub(rendered_frames);
         let render_frames = remaining_frames.min(BLOCK_FRAMES);
-        samples.extend_from_slice(&render_paced(&mut prepared.player, render_frames).await);
+        samples.extend_from_slice(
+            &Consumer::Reference
+                .render(&mut prepared.player, &mut prepared.pacer, render_frames)
+                .await,
+        );
         if prepared.player.position() > before {
             hang_reset!();
         }

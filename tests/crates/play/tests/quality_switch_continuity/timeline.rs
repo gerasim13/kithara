@@ -1,4 +1,8 @@
-use kithara::{decode::DecoderBackend, platform::time::Duration, stream::AudioCodec};
+use kithara::{
+    decode::DecoderBackend,
+    platform::{time::Duration, tokio::join},
+    stream::AudioCodec,
+};
 use kithara_integration_tests::{CreatedHls, TestServerHelper, fixture_protocol::PackagedSignal};
 use num_traits::ToPrimitive;
 
@@ -130,7 +134,7 @@ fn best_lag_correlation(switched: &[f32], source: &[f32], start_frame: usize) ->
     multi_thread,
     native,
     serial,
-    timeout(Duration::from_secs(180)),
+    timeout(Duration::from_secs(20)),
     hang_timeout_secs(3)
 )]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
@@ -146,23 +150,24 @@ async fn decoder_recreation_preserves_sweep_timeline_against_no_switch_control(
     let (_server, created) = sweep_source;
     let master_url = created.master_url();
 
-    let controls = [
+    // The references wait on decode rather than on a clock, so they render
+    // side by side; each switch plays in real time beside one other.
+    let (aac_low, aac_high, flac) = join!(
         render_no_switch_control(
             &master_url,
             AAC_LOW,
             backend,
             "aac-low-sweep-no-switch-control",
-        )
-        .await,
+        ),
         render_no_switch_control(
             &master_url,
             AAC_HIGH,
             backend,
             "aac-high-sweep-no-switch-control",
-        )
-        .await,
-        render_no_switch_control(&master_url, FLAC, backend, "flac-sweep-no-switch-control").await,
-    ];
+        ),
+        render_no_switch_control(&master_url, FLAC, backend, "flac-sweep-no-switch-control"),
+    );
+    let controls = [aac_low, aac_high, flac];
     for (variant, control) in controls.iter().enumerate() {
         assert_eq!(
             control.capture_frame, controls[0].capture_frame,
@@ -176,67 +181,73 @@ async fn decoder_recreation_preserves_sweep_timeline_against_no_switch_control(
     }
 
     let mut failures = Vec::new();
-    for transition in PROVENANCE_TRANSITIONS {
-        let switched = render_switch(&master_url, transition, backend).await;
-        let source_control = &controls[transition.from];
-        let destination_control = &controls[transition.to];
-        assert_eq!(
-            switched.capture_frame, source_control.capture_frame,
-            "{} must use the exact same source fragment as its no-switch control",
-            transition.label,
+    for &[first, second] in PROVENANCE_TRANSITIONS.as_chunks::<2>().0 {
+        let (first_switched, second_switched) = join!(
+            render_switch(&master_url, first, backend),
+            render_switch(&master_url, second, backend),
         );
-        let correlation_start = switched
-            .target_decoder_frame
-            .saturating_add(POST_BOUNDARY_GUARD_FRAMES);
-        let best = best_lag_correlation(
-            &switched.samples,
-            &source_control.samples,
-            correlation_start,
-        );
-        let control_baseline = best_lag_correlation(
-            &destination_control.samples,
-            &source_control.samples,
-            correlation_start,
-        );
-        let expected_control_lag = control_lag_frames(transition);
-        let required_correlation =
-            (control_baseline.correlation - CONTROL_CORRELATION_SLACK).max(MIN_CORRELATION);
-        println!(
-            "QUALITY_SWITCH_TIMELINE transition={} backend={backend:?} capture_source_frame={} target_decoder_frame={} correlation_start={} lag_frames={} correlation={:.9} control_lag_frames={} expected_control_lag_frames={} control_correlation={:.9} required_correlation={:.9}",
-            transition.label,
-            switched.capture_frame,
-            switched.target_decoder_frame,
-            correlation_start,
-            best.lag_frames,
-            best.correlation,
-            control_baseline.lag_frames,
-            expected_control_lag,
-            control_baseline.correlation,
-            required_correlation,
-        );
-        if best.correlation < required_correlation {
-            failures.push(format!(
+        for (transition, switched) in [(first, first_switched), (second, second_switched)] {
+            let source_control = &controls[transition.from];
+            let destination_control = &controls[transition.to];
+            assert_eq!(
+                switched.capture_frame, source_control.capture_frame,
+                "{} must use the exact same source fragment as its no-switch control",
+                transition.label,
+            );
+            let correlation_start = switched
+                .target_decoder_frame
+                .saturating_add(POST_BOUNDARY_GUARD_FRAMES);
+            let best = best_lag_correlation(
+                &switched.samples,
+                &source_control.samples,
+                correlation_start,
+            );
+            let control_baseline = best_lag_correlation(
+                &destination_control.samples,
+                &source_control.samples,
+                correlation_start,
+            );
+            let expected_control_lag = control_lag_frames(transition);
+            let required_correlation =
+                (control_baseline.correlation - CONTROL_CORRELATION_SLACK).max(MIN_CORRELATION);
+            println!(
+                "QUALITY_SWITCH_TIMELINE transition={} backend={backend:?} capture_source_frame={} target_decoder_frame={} correlation_start={} lag_frames={} correlation={:.9} control_lag_frames={} expected_control_lag_frames={} control_correlation={:.9} required_correlation={:.9}",
+                transition.label,
+                switched.capture_frame,
+                switched.target_decoder_frame,
+                correlation_start,
+                best.lag_frames,
+                best.correlation,
+                control_baseline.lag_frames,
+                expected_control_lag,
+                control_baseline.correlation,
+                required_correlation,
+            );
+            if best.correlation < required_correlation {
+                failures.push(format!(
                 "{} post-switch PCM no longer matches its no-switch source control: lag={} frames, correlation={:.9}, codec-control={:.9}, required={required_correlation:.9}",
                 transition.label,
                 best.lag_frames,
                 best.correlation,
                 control_baseline.correlation,
             ));
-        }
-        if best.lag_frames.abs() > MAX_ACCEPTED_LAG_FRAMES {
-            failures.push(format!(
+            }
+            if best.lag_frames.abs() > MAX_ACCEPTED_LAG_FRAMES {
+                failures.push(format!(
                 "{} shifted the musical timeline relative to the same no-switch fragment: lag={} frames, correlation={:.9}, allowed=+/-{MAX_ACCEPTED_LAG_FRAMES}",
                 transition.label, best.lag_frames, best.correlation,
             ));
-        }
-        if (control_baseline.lag_frames - expected_control_lag).abs() > MAX_ACCEPTED_LAG_FRAMES {
-            failures.push(format!(
+            }
+            if (control_baseline.lag_frames - expected_control_lag).abs() > MAX_ACCEPTED_LAG_FRAMES
+            {
+                failures.push(format!(
                 "{} source and destination no-switch controls disagree with their codec origins: lag={} frames, expected={} frames, correlation={:.9}, allowed=+/-{MAX_ACCEPTED_LAG_FRAMES}",
                 transition.label,
                 control_baseline.lag_frames,
                 expected_control_lag,
                 control_baseline.correlation,
             ));
+            }
         }
     }
     assert!(

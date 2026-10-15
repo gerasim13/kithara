@@ -130,15 +130,6 @@ impl HandoverRig {
         crate::mock::finish(&mut rig.queue, &mut rig.deck);
         assert_eq!(rig.queue.current, Some(rig.ids[0]));
         let slot = rig.slot(0);
-        rig.queue.deck.mixer.slots[usize::from(slot.get())].source = Some(AudioChunkInfo {
-            spec: AudioSpec::new(2, mock::SAMPLE_RATE),
-            segment: LaneFrame::default().segment,
-            source_revision: 0,
-            visible_origin: Some(Duration::ZERO),
-            media_origin: Some(Duration::ZERO),
-            media_end: Some(Duration::from_secs_f64(64.295)),
-            ..AudioChunkInfo::default()
-        });
         rig.queue.deck.mixer.slots[usize::from(slot.get())].mark = Some(SlotMark {
             session: SessionFrame::new(128),
             lane: LaneFrame::default(),
@@ -201,7 +192,7 @@ impl HandoverRig {
         use kithara_render::{Dispatched, DispatcherCommand};
 
         self.deck.opens.drain();
-        loop {
+        let source = loop {
             hang_tick!();
             let mut due = self
                 .deck
@@ -210,7 +201,7 @@ impl HandoverRig {
                 .expect("queued dispatcher request");
             let command = due.commands_mut().pop().expect("one dispatcher command");
             assert!(due.commands_mut().is_empty());
-            let opened = match command {
+            let source = match command {
                 DispatcherCommand::Load(request) => {
                     let wanted = self
                         .queue
@@ -230,17 +221,22 @@ impl HandoverRig {
                         .load_request_fixture(*request)
                         .await
                         .expect("actual queued source");
+                    let source = loaded
+                        .opened
+                        .pcm
+                        .next_chunk_info()
+                        .expect("prepared source geometry");
                     self.last_lane = Some(loaded.lane);
                     due.apply(Dispatched::Loaded(loaded));
-                    true
+                    Some(source)
                 }
                 DispatcherCommand::Release(_) => {
                     due.apply(Dispatched::Released);
-                    false
+                    None
                 }
                 DispatcherCommand::SetPriority(_, _) => {
                     due.apply(Dispatched::Prioritized);
-                    false
+                    None
                 }
             };
             let receipt = self
@@ -253,21 +249,16 @@ impl HandoverRig {
                 Player::settle(queue, TrackReceipt::Loaded(receipt), out)
             });
             hang_reset!();
-            if opened {
-                break;
+            if let Some(source) = source {
+                break source;
             }
-        }
+        };
         crate::mock::settle(&mut self.queue, &mut self.deck, SessionFrame::new(0));
         let slot = self.slot(index);
         let snapshot = &mut self.queue.deck.mixer.slots[usize::from(slot.get())];
         snapshot.source = Some(AudioChunkInfo {
-            spec: AudioSpec::new(2, mock::SAMPLE_RATE),
-            segment: LaneFrame::default().segment,
-            source_revision: 0,
-            visible_origin: Some(Duration::ZERO),
-            media_origin: Some(Duration::ZERO),
             media_end: Some(Duration::from_secs_f64(duration)),
-            ..AudioChunkInfo::default()
+            ..source
         });
         snapshot.mark = Some(SlotMark {
             session: SessionFrame::new(0),
@@ -353,11 +344,25 @@ impl HandoverRig {
         let slot = self.slot(index);
         let snapshot = &mut self.queue.deck.mixer.slots[usize::from(slot.get())];
         snapshot.position = 62.3;
-        snapshot
-            .source
-            .as_mut()
-            .expect("declared fixture source")
-            .media_end = Some(Duration::from_secs_f64(64.295));
+        let source = snapshot.source.as_mut().expect("declared fixture source");
+        let start = 2_747_430;
+        let frames = u64::from(source.frames);
+        let span = kithara_signal::SourceSpan::new(
+            start,
+            start.checked_add(frames).expect("fixture source endpoint"),
+            source.spec.sample_rate,
+            frames,
+        )
+        .expect("outgoing native source geometry")
+        .with_render_revision(source.render_revision)
+        .with_mapping_revision(source.mapping_revision);
+        source.source_span = Some(span);
+        source.timestamp = span.position_at(0).expect("fixture source start");
+        source.end_timestamp = span.position_at(frames).expect("fixture source end");
+        source.frame_offset = start;
+        source.lane_frame = start;
+        source.media_end = Some(Duration::from_secs_f64(64.295));
+        assert_eq!(source.timestamp, Duration::from_secs_f64(62.3));
         snapshot.mark = Some(SlotMark {
             session: SessionFrame::new(256),
             lane: LaneFrame {
