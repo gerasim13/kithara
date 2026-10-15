@@ -525,3 +525,435 @@ async fn a_nonzero_initial_media_load_reaches_its_raw_source_target_without_reop
         "initial media translation never reopens the source"
     );
 }
+
+#[cfg(not(target_os = "android"))]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(30)))]
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
+async fn a_nonzero_initial_hls_load_returns_while_its_segment_is_pending_and_admits_only_real_pcm()
+{
+    use std::{future::Future, num::NonZeroU32, pin::Pin};
+
+    use kithara::{
+        audio::AudioEvent,
+        events::EventBus,
+        platform::{flash::real_io, time, tokio::sync::oneshot},
+        signal::AudioSpec,
+    };
+    use kithara_render::dispatch;
+
+    let _real_io = real_io();
+    let rate = NonZeroU32::new(44_100).expect("source and host rate");
+    let spec = AudioSpec::new(2, rate);
+    let target = Duration::from_millis(5_500);
+    let (_helper, hls, gate) = initial_hls::fixture(spec, target).await;
+
+    let temp = temp_dir();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
+    let bus = EventBus::default();
+    let mut events = bus.subscribe::<AudioEvent>();
+    let item = initial_hls::resource(&worker, &hls, temp.path(), rate, bus);
+    let (returned, mut observed) = oneshot::channel();
+    let (mut sender, inbox) =
+        channel::<DispatcherProtocol<initial_hls::ObservedLoad>>(ChannelConfig::builder().build());
+    let (_control, lane_inbox) = worker.lane_channel();
+    let warp = WarpConfig::builder().build();
+    let trace = usdt_trace::scope();
+    let load_seq = sender
+        .send(
+            When::Next,
+            Batch {
+                basis: Vec::new(),
+                commands: vec![DispatcherCommand::Load(Box::new(LoadRequest {
+                    class: ServiceClass::Warm,
+                    item: initial_hls::ObservedLoad { item, returned },
+                    position: target,
+                    start: LaneStart {
+                        speed: SpeedCurve::Constant(warp.speed()),
+                        keylock: warp.keylock(),
+                        backend: warp.backend(),
+                    },
+                    inbox: lane_inbox,
+                }))],
+            },
+        )
+        .expect("nonzero initial HLS Load");
+    let mut dispatcher = Box::pin(dispatch(inbox));
+    hang_tick!("initial Open must return while the target GET is held".to_owned());
+    time::timeout(
+        __hang_detector.remaining(),
+        poll_fn(|cx| {
+            assert!(dispatcher.as_mut().poll(cx).is_pending());
+            match Pin::new(&mut observed).poll(cx) {
+                Poll::Ready(result) => {
+                    result.expect("actual ResourceLoad::open returned");
+                    Poll::Ready(())
+                }
+                Poll::Pending => {
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                }
+            }
+        }),
+    )
+    .await
+    .expect("Open returns without the target body");
+    hang_reset!();
+    hang_tick!("the downloader reaches the held target GET".to_owned());
+    time::timeout(
+        __hang_detector.remaining(),
+        poll_fn(|cx| {
+            assert!(dispatcher.as_mut().poll(cx).is_pending());
+            assert!(sender.receipts().next().is_none(), "Loaded is still closed");
+            if gate.requested() > 0 {
+                Poll::Ready(())
+            } else {
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+        }),
+    )
+    .await
+    .expect("the held target body is actually requested");
+    hang_reset!();
+    assert_eq!(opened(&trace), 1);
+    initial_hls::assert_held_events(&mut events);
+    assert!(sender.receipts().next().is_none());
+
+    gate.release();
+    hang_tick!("ordinary dispatcher preparation admits the released PCM".to_owned());
+    let receipt = time::timeout(
+        __hang_detector.remaining(),
+        poll_fn(|cx| {
+            assert!(dispatcher.as_mut().poll(cx).is_pending());
+            sender.receipts().next().map_or_else(
+                || {
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                },
+                Poll::Ready,
+            )
+        }),
+    )
+    .await
+    .expect("released initial load admits its PCM");
+    hang_reset!();
+    assert_eq!(receipt.seq(), load_seq);
+    let (
+        Outcome::Applied {
+            data: Dispatched::Loaded(loaded),
+            ..
+        },
+        _,
+    ) = receipt.into()
+    else {
+        panic!("the released initial HLS load succeeds");
+    };
+    assert!(sender.receipts().next().is_none());
+    initial_hls::assert_applied_events(&mut events);
+
+    initial_hls::assert_pcm(&worker, loaded.opened, spec, target);
+    poll_fn(|cx| {
+        assert!(dispatcher.as_mut().poll(cx).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    assert!(sender.receipts().next().is_none());
+    initial_hls::assert_settled_events(&mut events);
+    assert_eq!(
+        opened(&trace),
+        1,
+        "pending continuation does not reopen the source"
+    );
+}
+
+#[cfg(not(target_os = "android"))]
+mod initial_hls {
+    use std::{fmt, num::NonZeroU32, path::Path};
+
+    use kithara::{
+        abr::AbrMode,
+        audio::{AudioDecoderConfig, AudioEvent, SeekLifecycleStage},
+        decode::{DecoderBackend, GaplessMode},
+        events::{EventBus, EventReceiver, TrackId},
+        platform::tokio::sync::oneshot,
+        play::{DeckMixerConfig, DeckPart, OpenedTrack, StreamShape, mock},
+        signal::{AudioSpec, SegmentId, SessionFrame},
+        stream::AudioCodec,
+    };
+    use kithara_command::Inbox;
+    use kithara_integration_tests::{
+        CreatedHls, SegmentGateHandle, TestServerHelper,
+        hls_fixture::{create_test_downloader, create_test_net},
+        hls_server::packaged_ladder,
+        test_defaults::packaged_content_frames,
+    };
+    use kithara_render::{LaneProtocol, LaneTask, Open, OpenResult, bridge::Fade};
+    use kithara_test_fixtures::{
+        fmp4::GaplessEncoding,
+        hls_fixtures::{frame_samples, load_variant},
+        signal::Wave,
+        variant_input::VariantInput,
+    };
+
+    use super::{
+        AudioObserverSlot, Duration, LaneStart, PlayWorker, ResourceConfig, ResourceLoad,
+        ResourceSrc, TestPools, When,
+    };
+
+    pub(super) struct ObservedLoad {
+        pub(super) item: ResourceLoad<TestPools>,
+        pub(super) returned: oneshot::Sender<()>,
+    }
+
+    impl fmt::Debug for ObservedLoad {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter
+                .debug_tuple("ObservedLoad")
+                .field(&self.item)
+                .finish()
+        }
+    }
+
+    impl Open for ObservedLoad {
+        type Opened = <ResourceLoad<TestPools> as Open>::Opened;
+        type Lane = <ResourceLoad<TestPools> as Open>::Lane;
+
+        async fn open(
+            self,
+            position: Duration,
+            start: LaneStart,
+            inbox: Inbox<LaneProtocol>,
+        ) -> OpenResult<Self::Opened, Self::Lane> {
+            let (opened, mut lane, latency) = self.item.open(position, start, inbox).await?;
+            assert!(matches!(lane.preload_status(), Ok(false)));
+            assert!(opened.pcm.next_chunk_info().is_none());
+            assert_eq!(opened.pcm.media_origin(), None);
+            self.returned
+                .send(())
+                .expect("the test observes the real open");
+            Ok((opened, lane, latency))
+        }
+    }
+
+    pub(super) async fn fixture(
+        spec: AudioSpec,
+        target: Duration,
+    ) -> (TestServerHelper, CreatedHls, SegmentGateHandle) {
+        let rate = spec.sample_rate;
+        let expected_frame = spec.frame_at(target).expect("raw target frame");
+        let packet_frames = frame_samples(AudioCodec::AacLc).expect("prepared AAC frame size");
+        let segment_frames = packaged_content_frames(4 * 44_100, packet_frames, 1)
+            .expect("packet-aligned segment frames");
+        let package = load_variant(
+            &VariantInput::builder()
+                .codec(AudioCodec::AacLc)
+                .sample_rate(rate.get())
+                .channels(2)
+                .content_frames(segment_frames * 3)
+                .packets_per_segment(segment_frames / packet_frames)
+                .signal(Wave::Sawtooth)
+                .start_frame(0)
+                .bit_rate(128_000)
+                .timescale(rate.get())
+                .encoder_delay(0)
+                .trailing_delay(0)
+                .gapless_encoding(GaplessEncoding::None)
+                .build(),
+        )
+        .expect("the same prepared package served by packaged_ladder");
+        let segment_start = Duration::from_secs_f64(package.segment_durations_secs[0]);
+        let segment_end =
+            segment_start + Duration::from_secs_f64(package.segment_durations_secs[1]);
+        assert!(segment_start < target && target < segment_end);
+        assert!(expected_frame > u64::try_from(segment_frames).expect("segment frames fit u64"));
+        assert!(expected_frame < u64::try_from(segment_frames * 2).expect("two segments fit u64"));
+
+        let helper = TestServerHelper::new().await;
+        let hls = helper
+            .create_hls(packaged_ladder())
+            .await
+            .expect("packaged HLS");
+        let gate = helper.register_segment_gate(hls.token(), 0, 1);
+        let headers = create_test_net()
+            .head(hls.segment_url(0, 1), None)
+            .await
+            .expect("the held segment still publishes its true size");
+        let served_size: usize = headers
+            .get("content-length")
+            .expect("segment Content-Length")
+            .parse()
+            .expect("segment byte length");
+        assert_eq!(served_size, package.media_segments[1].len());
+        assert!(served_size > 0);
+        assert_eq!(gate.head_requested(), 1);
+        assert_eq!(gate.requested(), 0);
+
+        (helper, hls, gate)
+    }
+
+    pub(super) fn resource(
+        worker: &PlayWorker<TestPools>,
+        hls: &CreatedHls,
+        path: &Path,
+        rate: NonZeroU32,
+        bus: EventBus,
+    ) -> ResourceLoad<TestPools> {
+        let config: ResourceConfig<TestPools> = ResourceConfig::for_src(
+            ResourceSrc::parse(hls.master_url().as_str()).expect("HLS master URL"),
+        )
+        .store(kithara_integration_tests::disk_asset_store(path))
+        .downloader(create_test_downloader())
+        .initial_abr_mode(AbrMode::manual(0))
+        .worker(worker.clone())
+        .host_sample_rate(rate)
+        .events(bus)
+        .decoder(
+            AudioDecoderConfig::builder()
+                .backend(DecoderBackend::Symphonia)
+                .gapless_mode(GaplessMode::Disabled)
+                .build(),
+        )
+        .build();
+        ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay()))
+    }
+
+    pub(super) fn assert_held_events(events: &mut EventReceiver<AudioEvent>) {
+        let mut requests = 0;
+        while let Ok(envelope) = events.try_recv() {
+            match envelope.event {
+                AudioEvent::SeekLifecycle {
+                    stage: SeekLifecycleStage::SeekRequest,
+                    ..
+                } => requests += 1,
+                AudioEvent::SeekLifecycle {
+                    stage: SeekLifecycleStage::SeekApplied,
+                    ..
+                }
+                | AudioEvent::SeekComplete { .. }
+                | AudioEvent::SeekRejected { .. }
+                | AudioEvent::TrackFailed { .. }
+                | AudioEvent::EndOfStream => {
+                    panic!("the held seek cannot settle: {:?}", envelope.event)
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(requests, 1);
+    }
+
+    pub(super) fn assert_applied_events(events: &mut EventReceiver<AudioEvent>) {
+        let mut applied = 0;
+        while let Ok(envelope) = events.try_recv() {
+            match envelope.event {
+                AudioEvent::SeekLifecycle {
+                    stage: SeekLifecycleStage::SeekApplied,
+                    ..
+                } => applied += 1,
+                AudioEvent::SeekRejected { .. } | AudioEvent::TrackFailed { .. } => {
+                    panic!("released initial seek failed: {:?}", envelope.event);
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(applied, 1);
+    }
+
+    pub(super) fn assert_settled_events(events: &mut EventReceiver<AudioEvent>) {
+        while let Ok(envelope) = events.try_recv() {
+            assert!(
+                !matches!(
+                    envelope.event,
+                    AudioEvent::SeekLifecycle {
+                        stage: SeekLifecycleStage::SeekApplied,
+                        ..
+                    } | AudioEvent::SeekRejected { .. }
+                        | AudioEvent::TrackFailed { .. }
+                ),
+                "settled initial seek cannot settle again: {:?}",
+                envelope.event
+            );
+        }
+    }
+
+    pub(super) fn assert_pcm(
+        worker: &PlayWorker<TestPools>,
+        opened: OpenedTrack,
+        spec: AudioSpec,
+        target: Duration,
+    ) {
+        let rate = spec.sample_rate;
+        let expected_frame = spec.frame_at(target).expect("raw target frame");
+        let first = opened.pcm.next_chunk_info().expect("actual first PCM");
+        assert_eq!(first.spec, spec);
+        assert_eq!(first.timestamp, target);
+        assert_eq!(first.frame_offset, expected_frame);
+        assert_eq!(first.media_origin, Some(Duration::ZERO));
+        assert_eq!(first.segment_index, Some(1));
+        assert_eq!(first.variant_index, Some(0));
+        assert_eq!(first.segment, SegmentId::FIRST);
+        assert_eq!(first.lane_frame, 0);
+        assert_eq!(
+            first.source_span.and_then(|span| span.position_at(0)),
+            Some(target)
+        );
+        let shape = StreamShape::new(NonZeroU32::new(64).expect("host block"), rate);
+        let mut mixer = mock::MixerRig::new(DeckMixerConfig::default(), shape, worker.pools())
+            .expect("real mixer");
+        let slot = kithara::play::Slot::new(0);
+        mixer
+            .send(
+                When::Next,
+                DeckPart::Attach {
+                    item_id: TrackId::allocate(),
+                    slot,
+                    pcm: opened.pcm,
+                    segment: SegmentId::FIRST,
+                },
+            )
+            .expect("attach actual HLS receiver");
+        let mut left = [0.0; 64];
+        let mut right = [0.0; 64];
+        mixer
+            .block(SessionFrame::new(0), [&mut left, &mut right])
+            .expect("attach block");
+        let attached = mixer.ends.snapshot.read().slots[0];
+        let mark = attached.mark.expect("first current-segment raw mark");
+        let source = attached.source.expect("actual source metadata");
+        assert_eq!(mark.lane.segment, first.segment);
+        assert_eq!(mark.lane.frame, 0);
+        assert_eq!(mark.position, target);
+        assert_eq!(source.segment_index, Some(1));
+        assert_eq!(source.variant_index, Some(0));
+        assert_eq!(source.media_origin, Some(Duration::ZERO));
+        assert_eq!(source.segment, mark.lane.segment);
+        mixer
+            .send(
+                When::Next,
+                DeckPart::Start {
+                    slot,
+                    fade: Fade::Declick,
+                },
+            )
+            .expect("start actual HLS PCM");
+        mixer
+            .block(SessionFrame::new(64), [&mut left, &mut right])
+            .expect("consume HLS PCM");
+        assert!(left.iter().chain(&right).all(|sample| sample.is_finite()));
+        assert!(left.iter().chain(&right).any(|sample| sample.abs() > 0.0));
+        let consumed = mixer.ends.snapshot.read().slots[0];
+        let mark = consumed.mark.expect("consumed current-segment mark");
+        assert_eq!(mark.lane.segment, first.segment);
+        assert_eq!(mark.lane.frame, 64);
+        assert_eq!(
+            spec.frame_at(mark.position).expect("consumed raw frame"),
+            expected_frame + 64
+        );
+        assert_eq!(
+            consumed
+                .source
+                .expect("consumed source metadata")
+                .segment_index,
+            Some(1)
+        );
+    }
+}

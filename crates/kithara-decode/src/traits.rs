@@ -43,6 +43,9 @@ pub enum InputReadOutcome {
 /// without rounding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecoderSeekOutcome {
+    /// Accepted seek with no landing coordinate yet. Drive [`Decoder::prepare_seek`]
+    /// before consuming prepared PCM.
+    Pending(PendingReason),
     /// Successful seek coordinates from one decoder state, all naming the same landing point.
     /// `landed_byte` is the absolute next-packet body offset; the pipeline uses it without
     /// frame/byte heuristics. If unavailable (such as an unbuilt streaming MP3 seek table),
@@ -283,13 +286,25 @@ pub trait Decoder: Send + 'static {
     /// authoritative landed position (often a granule boundary near
     /// the requested target — never assume `landed_at == pos`), or
     /// [`DecoderSeekOutcome::PastEof`] when the target is beyond the
-    /// decoder's known duration.
+    /// decoder's known duration. [`DecoderSeekOutcome::Pending`] carries no landing
+    /// coordinate; use [`Self::prepare_seek`] to continue that operation.
     ///
     /// # Errors
     ///
     /// Returns [`crate::error::DecodeError::SeekFailed`] if seeking is not supported
     /// or the position is invalid for reasons other than past-EOF.
     fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome>;
+
+    /// Continue an unresolved seek without starting it again.
+    ///
+    /// `None` means no unresolved seek. A terminal outcome settles the operation once;
+    /// later calls return `None`. Ordinary PCM preparation does not settle a seek.
+    ///
+    /// # Errors
+    /// Returns source or decoder failures from the same seek operation.
+    fn prepare_seek(&mut self) -> DecodeResult<Option<DecoderSeekOutcome>> {
+        Ok(None)
+    }
 
     /// Seeks while retaining the native sample at or before `pos` for later rendering.
     ///

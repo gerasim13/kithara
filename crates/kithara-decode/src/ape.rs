@@ -210,6 +210,7 @@ where
                     preroll,
                 },
                 DecoderSeekOutcome::PastEof { .. } => ReaderSeekSignal::PastEof,
+                DecoderSeekOutcome::Pending(_) => return Ok(outcome),
             });
         }
         Ok(outcome)

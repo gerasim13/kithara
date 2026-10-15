@@ -180,7 +180,7 @@ pub(super) async fn capture_references(
         };
         drain_reference_events(&mut deck.reference_events);
         let seek_ready = match deck.reference.seek(target) {
-            Ok(SeekOutcome::Landed { .. }) => true,
+            Ok(SeekOutcome::Landed { .. } | SeekOutcome::Pending { .. }) => true,
             Ok(SeekOutcome::PastEof { duration, .. }) => {
                 failures.push(format!(
                     "{} deck {deck_index} reference start {start:.9}s is past EOF at {:.9}s",

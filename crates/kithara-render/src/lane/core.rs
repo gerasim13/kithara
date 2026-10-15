@@ -3,7 +3,6 @@ use std::{
     cmp::Ordering,
     convert::Infallible,
     num::{NonZeroU32, NonZeroU128, NonZeroUsize},
-    task::{Context, Poll},
 };
 
 use kithara_audio::{AudioSource, TrackFailureKind};
@@ -14,6 +13,9 @@ use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, SegmentId, SourceSpan};
 use kithara_warp::{SpeedCurve, StretchKind, WarpRenderError, WarpRenderer};
 use num_traits::ToPrimitive;
+
+#[path = "commands.rs"]
+mod commands;
 
 /// Commands and receipts of one producer lane.
 #[derive(Debug)]
@@ -186,7 +188,7 @@ pub(crate) struct Lane {
     pending: Option<Preparation>,
     deferred: Option<Seq>,
     ended: bool,
-    parked: Option<(LaneFrame, Duration)>,
+    parked: Option<(LaneFrame, Option<Duration>)>,
     jump: Option<Jump>,
 }
 
@@ -222,10 +224,6 @@ impl Lane {
 
     pub(crate) fn declick_frames(&self, sample_rate: NonZeroU32) -> FrameCount {
         crate::rt::declick_frame_count(self.declick, sample_rate)
-    }
-
-    pub(crate) fn poll_commands(&mut self, context: &mut Context<'_>) -> Poll<()> {
-        self.inbox.poll_drain(context)
     }
 
     pub(crate) fn is_preloaded(&self) -> bool {
@@ -315,213 +313,6 @@ impl Lane {
         self.ended = true;
     }
 
-    fn drain_commands(&mut self) -> Result<(), TrackFailureKind> {
-        self.inbox.drain();
-        loop {
-            let next = match self.inbox.next_deferred() {
-                Some(deferred) => deferred.park(),
-                None => break,
-            };
-            let previous = self.deferred.replace(next.ok_or(TrackFailureKind::Render)?);
-            if let Some(previous) = previous {
-                drop(self.inbox.resume(previous, self.cursor, self.cursor));
-            }
-        }
-        Ok(())
-    }
-
-    pub(crate) fn execute_due<T, S>(
-        &mut self,
-        source: &mut T,
-        warp: &mut WarpRenderer<S>,
-        spec: AudioSpec,
-    ) -> Result<LaneChange, TrackFailureKind>
-    where
-        T: AudioSource<Chunk = AudioChunk>,
-        S: HasPool<f32>,
-    {
-        self.drain_commands()?;
-        let mut changed = LaneChange::None;
-        let declick_frames = self.declick_frames(spec.sample_rate).get();
-        loop {
-            let deferred = self.ended
-                && self
-                    .inbox
-                    .frames_until_due(self.cursor)
-                    .is_none_or(|frames| frames > 0);
-            let Some(due) = (if deferred && self.deferred.is_some() {
-                let seq = self.deferred.take().ok_or(TrackFailureKind::Render)?;
-                self.inbox.resume(seq, self.cursor, self.cursor)
-            } else {
-                self.inbox.next_due(self.cursor, 1)
-            }) else {
-                break;
-            };
-            if changed == LaneChange::None {
-                changed = LaneChange::Controls;
-            }
-            let revision = due.seq().get();
-            let at = due.at();
-            let mut segment = None;
-            let mut requested_entry = None;
-            let mut restored_same = false;
-            let mut cancelled_deferred = None;
-            for command in due.commands() {
-                tracing::debug!(
-                    seq = revision,
-                    actual_apply_segment = at.segment.get(),
-                    actual_apply_frame = at.frame,
-                    current_segment = self.cursor.segment.get(),
-                    prepared_frontier = self.cursor.frame,
-                    command = ?command,
-                    "lane command executing"
-                );
-                match command {
-                    LaneCommand::SetSpeed(curve) => warp
-                        .set_speed(curve.clone(), revision)
-                        .map_err(|_| TrackFailureKind::Render)?,
-                    LaneCommand::SetKeylock(on) => warp.set_keylock(*on),
-                    LaneCommand::SetBackend(kind) => warp.set_backend(*kind),
-                    LaneCommand::Jump { to } => {
-                        let gain = self.jump.map_or(1.0, |jump| jump.gain(self.cursor.frame));
-                        self.jump = Some(Jump::Down {
-                            to: *to,
-                            start: self.cursor.frame,
-                            frames: declick_frames,
-                            gain,
-                        });
-                    }
-                    LaneCommand::Segment { id, from, speed } => {
-                        if *id == self.cursor.segment && self.deferred.is_some() {
-                            restored_same = true;
-                            cancelled_deferred = self.deferred.take();
-                            continue;
-                        }
-                        let restored = self.parked.filter(|(cursor, _)| cursor.segment == *id);
-                        if deferred {
-                            self.parked = Some((self.cursor, self.position.unwrap_or(*from)));
-                        } else {
-                            self.parked = None;
-                        }
-                        cancelled_deferred = self.deferred.take();
-                        self.cursor = restored.map_or(
-                            LaneFrame {
-                                segment: *id,
-                                frame: 0,
-                            },
-                            |(cursor, _)| cursor,
-                        );
-                        let from = restored.map_or(*from, |(_, position)| position);
-                        requested_entry = Some(from);
-                        self.position = Some(landing_position(
-                            source
-                                .seek_for_render(from)
-                                .map_err(|error| TrackFailureKind::from(&error))?,
-                        ));
-                        warp.reset();
-                        warp.set_speed(speed.clone(), revision)
-                            .map_err(|_| TrackFailureKind::Render)?;
-                        self.jump = None;
-                        self.ended = false;
-                        segment = Some(*id);
-                        changed = LaneChange::Source;
-                    }
-                    LaneCommand::SetHostRate { id, rate } => {
-                        cancelled_deferred = self.deferred.take();
-                        self.parked = None;
-                        source.set_host_sample_rate(*rate);
-                        warp.reset();
-                        self.cursor = LaneFrame {
-                            segment: *id,
-                            frame: 0,
-                        };
-                        self.jump = None;
-                        self.ended = false;
-                        segment = Some(*id);
-                        changed = LaneChange::Source;
-                    }
-                }
-            }
-            let next_spec = source.prepare_deferred().unwrap_or(spec);
-            let latency = warp
-                .prepare_engine_latency(next_spec)
-                .map_err(|_| TrackFailureKind::Render)?;
-            if segment.is_some() {
-                let seq = due.defer();
-                self.finish_pending(None);
-                self.preload = Preload::Filling(0);
-                self.pending = Some(Preparation {
-                    seq,
-                    at,
-                    entry: self.cursor,
-                    source: None,
-                    requested_entry,
-                    render_revision: warp.render_revision(),
-                    latency,
-                });
-            } else {
-                if matches!(self.preload, Preload::Filling(0))
-                    && let Some(pending) = &mut self.pending
-                    && pending.entry == self.cursor
-                {
-                    pending.render_revision = warp.render_revision();
-                    pending.latency = latency;
-                }
-                due.apply(LaneApplied {
-                    source_basis: None,
-                    engine_latency: latency,
-                    ready: restored_same.then_some(self.cursor.segment),
-                });
-            }
-            if let Some(seq) = cancelled_deferred {
-                drop(self.inbox.resume(seq, self.cursor, self.cursor));
-            }
-        }
-        if self.land_jump(source, warp, spec)? {
-            changed = LaneChange::Source;
-        }
-        Ok(changed)
-    }
-
-    fn land_jump<T, S>(
-        &mut self,
-        source: &mut T,
-        warp: &mut WarpRenderer<S>,
-        spec: AudioSpec,
-    ) -> Result<bool, TrackFailureKind>
-    where
-        T: AudioSource<Chunk = AudioChunk>,
-        S: HasPool<f32>,
-    {
-        let Some(Jump::Down {
-            to, start, frames, ..
-        }) = self.jump
-        else {
-            return Ok(false);
-        };
-        let frames = u64::try_from(frames).map_or(u64::MAX, |frames| frames);
-        if self.cursor.frame.saturating_sub(start) < frames {
-            return Ok(false);
-        }
-        let visible_origin = source.visible_origin();
-        let to = visible_origin.map_or(to, |origin| origin.max(to));
-        self.position = Some(landing_position(
-            source
-                .seek_for_render(to)
-                .map_err(|error| TrackFailureKind::from(&error))?,
-        ));
-        warp.reset();
-        let next_spec = source.prepare_deferred().unwrap_or(spec);
-        warp.prepare_engine_latency(next_spec)
-            .map_err(|_| TrackFailureKind::Render)?;
-        self.jump = Some(Jump::Up {
-            to: Some(to),
-            start: self.cursor.frame,
-            frames: usize::try_from(frames).map_or(usize::MAX, |frames| frames),
-        });
-        Ok(true)
-    }
-
     pub(crate) fn prepare_quantum<S: HasPool<f32>>(
         &mut self,
         warp: &mut WarpRenderer<S>,
@@ -586,6 +377,41 @@ impl Lane {
             self.jump = None;
         }
     }
+
+    fn land_jump<T, S>(
+        &mut self,
+        source: &mut T,
+        warp: &mut WarpRenderer<S>,
+        spec: AudioSpec,
+    ) -> Result<bool, TrackFailureKind>
+    where
+        T: AudioSource<Chunk = AudioChunk>,
+        S: HasPool<f32>,
+    {
+        let Some(Jump::Down {
+            to, start, frames, ..
+        }) = self.jump
+        else {
+            return Ok(false);
+        };
+        let frames = u64::try_from(frames).map_or(u64::MAX, |frames| frames);
+        if self.cursor.frame.saturating_sub(start) < frames {
+            return Ok(false);
+        }
+        let visible_origin = source.visible_origin();
+        let to = visible_origin.map_or(to, |origin| origin.max(to));
+        self.position = landing_position(source.seek_for_render(to))?;
+        warp.reset();
+        let next_spec = source.prepare_deferred().unwrap_or(spec);
+        warp.prepare_engine_latency(next_spec)
+            .map_err(|_| TrackFailureKind::Render)?;
+        self.jump = Some(Jump::Up {
+            to: Some(to),
+            start: self.cursor.frame,
+            frames: usize::try_from(frames).map_or(usize::MAX, |frames| frames),
+        });
+        Ok(true)
+    }
 }
 
 fn source_entry(
@@ -648,11 +474,16 @@ fn reanchor_source<S: HasPool<f32>>(
     Ok(to)
 }
 
-fn landing_position(outcome: kithara_audio::SeekOutcome) -> Duration {
-    match outcome {
-        kithara_audio::SeekOutcome::Landed { landed_at, .. } => landed_at,
-        kithara_audio::SeekOutcome::PastEof { duration, .. } => duration,
-    }
+fn landing_position(
+    outcome: Result<kithara_audio::SeekOutcome, kithara_audio::AudioReadError>,
+) -> Result<Option<Duration>, TrackFailureKind> {
+    Ok(
+        match outcome.map_err(|error| TrackFailureKind::from(&error))? {
+            kithara_audio::SeekOutcome::Pending { .. } => None,
+            kithara_audio::SeekOutcome::Landed { landed_at, .. } => Some(landed_at),
+            kithara_audio::SeekOutcome::PastEof { duration, .. } => Some(duration),
+        },
+    )
 }
 
 #[cfg(test)]
@@ -923,6 +754,12 @@ mod tests {
             }
         );
         assert!(lane.deferred.is_none());
+        if pending_repeat {
+            let receipts: Vec<_> = sender.receipts().collect();
+            assert!(receipts.iter().any(|receipt| matches!(receipt.outcome(),
+                kithara_command::Outcome::Applied { data, .. } if data.ready.is_none())));
+            assert!(!lane.is_preloaded());
+        }
     }
 
     #[kithara::test]

@@ -15,12 +15,23 @@ use crate::{
 
 struct ReadySource {
     position: Duration,
+    pending: bool,
+    seeks: Vec<Duration>,
 }
 
 impl AudioSource for ReadySource {
     type Chunk = AudioChunk;
 
     fn seek(&mut self, target: Duration) -> Result<SeekOutcome, AudioReadError> {
+        self.seeks.push(target);
+        if self.pending {
+            return Ok(SeekOutcome::Pending {
+                target,
+                reason: kithara_stream::PendingReason::NotReady(
+                    kithara_stream::NotReadyCause::SourcePending,
+                ),
+            });
+        }
         self.position = target;
         Ok(SeekOutcome::Landed {
             target,
@@ -80,6 +91,8 @@ impl LaneFixture {
             sender,
             source: ReadySource {
                 position: Duration::ZERO,
+                pending: false,
+                seeks: Vec::new(),
             },
             renderer: warp.renderer(spec, pools()),
             spec,
@@ -285,6 +298,203 @@ fn a_prepared_segment_receipt_keeps_its_actual_apply_point(#[case] when: When<La
         .expect("unchanged segment receipt");
     assert!(matches!(receipt.outcome(), Outcome::Applied { data, .. }
         if data.ready == Some(segment) && data.source_basis.is_none()));
+
+    let send = |fixture: &mut LaneFixture, when, id, from| {
+        fixture
+            .sender
+            .send(
+                when,
+                Batch {
+                    basis: Vec::new(),
+                    commands: vec![LaneCommand::Segment {
+                        id,
+                        from,
+                        speed: SpeedCurve::Constant(1.0),
+                    }],
+                },
+            )
+            .expect("segment credit")
+    };
+    let original_target = Duration::from_secs(2);
+    let repeat_target = Duration::from_secs(7);
+    let restore_target = Duration::from_secs(9);
+    let current = SegmentId::FIRST.next();
+    let repeat = current.next();
+
+    let mut waiting = LaneFixture::new();
+    waiting.source.pending = true;
+    let original = waiting.begin_at(current, original_target);
+    let revision = waiting.renderer.render_revision();
+    assert_eq!(revision, original.get());
+    assert_eq!(waiting.lane.position(), None);
+    assert!(!waiting.lane.is_preloaded());
+    send(&mut waiting, When::Deferred, repeat, repeat_target);
+    waiting
+        .lane
+        .execute_due(&mut waiting.source, &mut waiting.renderer, waiting.spec)
+        .expect("repeat waits for unresolved original");
+    let cancelled = send(&mut waiting, When::Next, current, restore_target);
+    waiting
+        .lane
+        .execute_due(&mut waiting.source, &mut waiting.renderer, waiting.spec)
+        .expect("cancel queued repeat");
+    assert_eq!(waiting.source.seeks, [original_target]);
+    assert_eq!(waiting.renderer.render_revision(), revision);
+    assert_eq!(waiting.lane.position(), None);
+    assert!(!waiting.lane.is_preloaded());
+    let mut cancellation = 0;
+    for receipt in waiting.sender.receipts() {
+        assert_ne!(
+            receipt.seq(),
+            original,
+            "unresolved original has no receipt"
+        );
+        if receipt.seq() == cancelled {
+            assert!(matches!(receipt.outcome(), Outcome::Applied { data, .. }
+                if data.ready.is_none() && data.source_basis.is_none()));
+            cancellation += 1;
+        }
+    }
+    assert_eq!(cancellation, 1);
+    waiting.admit_preload();
+    assert!(waiting.lane.is_preloaded());
+    let receipt = waiting
+        .sender
+        .receipts()
+        .next()
+        .expect("original PCM admission");
+    assert_eq!(receipt.seq(), original);
+    assert!(matches!(receipt.outcome(), Outcome::Applied { data, .. }
+        if data.ready == Some(current) && data.source_basis.is_some_and(|meta|
+            meta.render_revision == revision &&
+            meta.source_span.and_then(|span| span.position_at(0)) == Some(original_target))));
+    assert!(waiting.sender.receipts().next().is_none());
+    assert_eq!(waiting.source.seeks, [original_target]);
+
+    for known_position in [true, false] {
+        let mut repeated = LaneFixture::new();
+        let old = if known_position {
+            let seq = repeated.begin_at(current, original_target);
+            repeated.admit_preload();
+            assert_eq!(
+                repeated
+                    .sender
+                    .receipts()
+                    .next()
+                    .expect("old preparation")
+                    .seq(),
+                seq
+            );
+            let start = repeated
+                .spec
+                .frame_at(original_target)
+                .expect("actual source start");
+            let mut pcm = AudioChunk::new(
+                AudioChunkInfo {
+                    segment: current,
+                    frames: 48,
+                    source_span: SourceSpan::new(start, start + 48, repeated.spec.sample_rate, 48)
+                        .map(|span| span.with_render_revision(seq.get())),
+                    ..entering(repeated.spec, seq, original_target)
+                },
+                sample_buffer(&pools(), &[0.25; 96]),
+            );
+            repeated.lane.stamp(&mut pcm);
+            assert_eq!(pcm.samples.as_ref(), &[0.25; 96]);
+            assert_eq!(
+                repeated.lane.position(),
+                Some(original_target + Duration::from_millis(1))
+            );
+            current
+        } else {
+            SegmentId::FIRST
+        };
+        let actual = repeated.lane.position();
+        let old_cursor = repeated.lane.cursor();
+        assert_eq!(actual.is_some(), known_position);
+        if let Some(actual) = actual {
+            assert_ne!(actual, repeat_target);
+            assert_ne!(actual, restore_target);
+            assert_ne!(actual, Duration::ZERO);
+        }
+        repeated.lane.finish_preload();
+        repeated.lane.finish_segment();
+        repeated.source.pending = true;
+        let executing_repeat = send(&mut repeated, When::Deferred, repeat, repeat_target);
+        repeated
+            .lane
+            .execute_due(&mut repeated.source, &mut repeated.renderer, repeated.spec)
+            .expect("deferred repeat executes after terminal admission");
+        assert_eq!(repeated.lane.cursor().segment, repeat);
+        assert_eq!(repeated.lane.position(), None);
+        let before_restore = repeated.source.seeks.len();
+        let restore = send(&mut repeated, When::Next, old, restore_target);
+        let result =
+            repeated
+                .lane
+                .execute_due(&mut repeated.source, &mut repeated.renderer, repeated.spec);
+        if let Some(actual) = actual {
+            result.expect("known outgoing coordinate restores");
+            assert_eq!(repeated.lane.cursor(), old_cursor);
+            assert_eq!(repeated.source.seeks.len(), before_restore + 1);
+            assert_eq!(repeated.source.seeks.last(), Some(&actual));
+            assert_eq!(repeated.lane.position(), None);
+            assert!(!repeated.lane.is_preloaded());
+            let receipt = repeated
+                .sender
+                .receipts()
+                .next()
+                .expect("superseded repeat receipt");
+            assert_eq!(receipt.seq(), executing_repeat);
+            assert!(
+                matches!(receipt.outcome(), Outcome::Applied { data, .. } if data.ready.is_none())
+            );
+            assert!(repeated.sender.receipts().next().is_none());
+            repeated.entry = AudioChunkInfo {
+                lane_frame: old_cursor.frame,
+                ..entering(repeated.spec, restore, actual)
+            };
+            repeated.admit_preload();
+            assert!(repeated.lane.is_preloaded());
+            let receipt = repeated
+                .sender
+                .receipts()
+                .next()
+                .expect("restored PCM admission");
+            assert_eq!(receipt.seq(), restore);
+            assert!(matches!(receipt.outcome(), Outcome::Applied { data, .. }
+                if data.ready == Some(old) && data.source_basis.is_some_and(|meta|
+                    meta.source_span.and_then(|span| span.position_at(0)) == Some(actual))));
+            assert!(repeated.sender.receipts().next().is_none());
+        } else {
+            assert!(matches!(result, Err(TrackFailureKind::Render)));
+            assert_eq!(repeated.source.seeks.len(), before_restore);
+            assert_eq!(repeated.lane.cursor().segment, repeat);
+            repeated.lane.reject_preparation(TrackFailureKind::Render);
+            let receipts: Vec<_> = repeated.sender.receipts().collect();
+            assert_eq!(receipts.len(), 2);
+            for seq in [restore, executing_repeat] {
+                assert_eq!(
+                    receipts
+                        .iter()
+                        .filter(|receipt| receipt.seq() == seq
+                            && matches!(
+                                receipt.outcome(),
+                                Outcome::Rejected(Rejection::Refused(TrackFailureKind::Render))
+                            ))
+                        .count(),
+                    1
+                );
+            }
+            repeated.lane.reject_preparation(TrackFailureKind::Render);
+            repeated
+                .lane
+                .execute_due(&mut repeated.source, &mut repeated.renderer, repeated.spec)
+                .expect("refused commands cannot run again");
+            assert!(repeated.sender.receipts().next().is_none());
+            assert_eq!(repeated.source.seeks.len(), before_restore);
+        }
+    }
 }
 
 #[kithara::test]

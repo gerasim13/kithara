@@ -60,6 +60,9 @@ fn mp3_universal_decoder_seeks_back_to_start_after_pulling_chunks(tone_mp3: &'st
                 "seek to ZERO should land near 0, got {landed_at:?}"
             );
         }
+        DecoderSeekOutcome::Pending(reason) => {
+            panic!("in-memory MP3 seek must resolve synchronously: {reason:?}")
+        }
         DecoderSeekOutcome::PastEof { .. } => {
             panic!("seek(0) on a real MP3 must not be PastEof")
         }

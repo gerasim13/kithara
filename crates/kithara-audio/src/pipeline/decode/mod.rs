@@ -4,6 +4,7 @@ pub(crate) mod format;
 pub(crate) mod generation;
 mod generation_holdback;
 #[cfg(test)]
+#[path = "../tests/origin.rs"]
 mod generation_origin_tests;
 pub(crate) mod output;
 pub(crate) mod resume;

@@ -176,7 +176,7 @@ impl<S> PlayWorker<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    /// Open once, position synchronously, and assemble the worker-owned lane.
+    /// Open once, accept initial positioning, and assemble the worker-owned lane.
     ///
     /// # Errors
     /// Returns cancellation, source/decoder, invalid ring geometry, or pool failures.
@@ -245,6 +245,7 @@ where
                     AudioReadError::Decode(error) => decode_refusal(error),
                     error => LoadRefusal::Source(TrackFailureKind::from(&error)),
                 })? {
+                    SeekOutcome::Pending { .. } => audio.position(),
                     SeekOutcome::Landed { landed_at, .. } => landed_at,
                     SeekOutcome::PastEof { duration, .. } => duration,
                 }

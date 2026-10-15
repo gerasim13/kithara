@@ -19,6 +19,13 @@ pub(in crate::pipeline::source) struct TestDecoder {
     pub(in crate::pipeline::source) drops: Arc<Mutex<Vec<u64>>>,
     pub(in crate::pipeline::source) preparations: Arc<AtomicU64>,
     pub(in crate::pipeline::source) id: u64,
+    pub(in crate::pipeline::source) defer_seek: bool,
+    pub(in crate::pipeline::source) pending_reason: kithara_stream::PendingReason,
+    pending_seek: bool,
+    pub(in crate::pipeline::source) seek_calls: Arc<AtomicU64>,
+    pub(in crate::pipeline::source) seek_preparations: Arc<AtomicU64>,
+    pub(in crate::pipeline::source) settlement:
+        Arc<Mutex<Option<DecodeResult<DecoderSeekOutcome>>>>,
     #[field(with, option_set_some, vis = "pub(in crate::pipeline::source)")]
     pub(in crate::pipeline::source) seek_error: Option<DecodeError>,
 }
@@ -30,6 +37,14 @@ impl TestDecoder {
             id,
             preparations: Arc::new(AtomicU64::new(0)),
             seek_error: None,
+            defer_seek: false,
+            pending_reason: kithara_stream::PendingReason::NotReady(
+                kithara_stream::NotReadyCause::SourcePending,
+            ),
+            pending_seek: false,
+            seek_calls: Arc::new(AtomicU64::new(0)),
+            seek_preparations: Arc::new(AtomicU64::new(0)),
+            settlement: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -56,8 +71,15 @@ impl Decoder for TestDecoder {
     }
 
     fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
+        self.seek_calls.fetch_add(1, Ordering::Relaxed);
+        self.pending_seek = false;
+        drop(self.settlement.lock().take());
         if let Some(error) = self.seek_error.take() {
             return Err(error);
+        }
+        if self.defer_seek {
+            self.pending_seek = true;
+            return Ok(DecoderSeekOutcome::Pending(self.pending_reason));
         }
         Ok(DecoderSeekOutcome::Landed {
             landed_at: pos,
@@ -65,6 +87,26 @@ impl Decoder for TestDecoder {
             landed_byte: None,
             preroll: PrerollHint::NotNeeded,
         })
+    }
+
+    fn prepare_seek(&mut self) -> DecodeResult<Option<DecoderSeekOutcome>> {
+        if !self.pending_seek {
+            return Ok(None);
+        }
+        self.seek_preparations.fetch_add(1, Ordering::Relaxed);
+        let result = self
+            .settlement
+            .lock()
+            .take()
+            .unwrap_or(Ok(DecoderSeekOutcome::Pending(self.pending_reason)));
+        if !matches!(&result, Ok(DecoderSeekOutcome::Pending(_))) {
+            self.pending_seek = false;
+        }
+        result.map(Some)
+    }
+
+    fn seek_prefix(&mut self, position: Duration) -> DecodeResult<DecoderSeekOutcome> {
+        self.seek(position)
     }
 
     fn spec(&self) -> AudioSpec {
@@ -152,6 +194,7 @@ pub(in crate::pipeline::source) struct RouteSignalDecoder {
     pub(in crate::pipeline::source) sample_rate: u32,
     pub(in crate::pipeline::source) id: u64,
     pub(in crate::pipeline::source) next_frame: u64,
+    pub(in crate::pipeline::source) seek_landing: Option<u64>,
     #[field(with, vis = "pub(in crate::pipeline::source)")]
     pub(in crate::pipeline::source) timeline_gap: u64,
     pub(in crate::pipeline::source) phase: Option<Arc<Mutex<SourcePhase>>>,
@@ -181,6 +224,7 @@ impl RouteSignalDecoder {
             sample_rate,
             pcm: route_pcm[index].clone(),
             next_frame: 0,
+            seek_landing: None,
             timeline_gap: 0,
             phase: None,
         }
@@ -262,6 +306,7 @@ impl Decoder for RouteSignalDecoder {
                 .get(),
         )
         .unwrap_or(u64::MAX);
+        let frame = self.seek_landing.unwrap_or(frame);
         self.next_frame = frame;
         Ok(DecoderSeekOutcome::Landed {
             landed_at: self
@@ -274,8 +319,13 @@ impl Decoder for RouteSignalDecoder {
         })
     }
 
-    fn spec(&self) -> AudioSpec {
-        self.audio_spec()
+    delegate::delegate! {
+        to self {
+            #[call(seek)]
+            fn seek_prefix(&mut self, position: Duration) -> DecodeResult<DecoderSeekOutcome>;
+            #[call(audio_spec)]
+            fn spec(&self) -> AudioSpec;
+        }
     }
 
     fn timeline_gap_frames(&self) -> u64 {

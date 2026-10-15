@@ -115,14 +115,20 @@ where
         if !pos.is_zero() {
             self.observing_initial_pcm = false;
         }
-        self.prepared = None;
         let outcome = if prefix {
             self.decoder.seek_prefix(pos)?
         } else {
             self.decoder.seek(pos)?
         };
+        self.prepared = None;
         self.reset_resampler_state();
+        self.reanchor_output_on_next_chunk = true;
+        Ok(self.map_seek_outcome(outcome))
+    }
+
+    fn map_seek_outcome(&mut self, outcome: DecoderSeekOutcome) -> DecoderSeekOutcome {
         match outcome {
+            DecoderSeekOutcome::Pending(reason) => DecoderSeekOutcome::Pending(reason),
             DecoderSeekOutcome::Landed {
                 landed_at,
                 landed_byte,
@@ -130,17 +136,14 @@ where
                 ..
             } => {
                 self.output_frame_offset = self.target_spec.frame_at(landed_at).unwrap_or(u64::MAX);
-                self.reanchor_output_on_next_chunk = true;
-                Ok(DecoderSeekOutcome::Landed {
+                DecoderSeekOutcome::Landed {
                     landed_at,
                     landed_byte,
                     preroll,
                     landed_frame: self.output_frame_offset,
-                })
+                }
             }
-            DecoderSeekOutcome::PastEof { duration } => {
-                Ok(DecoderSeekOutcome::PastEof { duration })
-            }
+            DecoderSeekOutcome::PastEof { duration } => DecoderSeekOutcome::PastEof { duration },
         }
     }
 
@@ -571,6 +574,13 @@ where
 
     fn seek_prefix(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
         self.seek_selected(pos, true)
+    }
+
+    fn prepare_seek(&mut self) -> DecodeResult<Option<DecoderSeekOutcome>> {
+        Ok(self
+            .decoder
+            .prepare_seek()?
+            .map(|outcome| self.map_seek_outcome(outcome)))
     }
 
     fn spec(&self) -> AudioSpec {
@@ -1410,6 +1420,7 @@ mod tests {
         prepares: usize,
         signals: Vec<&'static str>,
         flushes: usize,
+        seek_script: VecDeque<DecoderSeekOutcome>,
     }
 
     struct Hooks(Arc<Mutex<Calls>>);
@@ -1439,6 +1450,30 @@ mod tests {
         after_seek: Option<Vec<DecodeResult<DecoderChunkOutcome>>>,
         calls: Arc<Mutex<Calls>>,
         hooks: BoxedEventSink,
+        seeking: Option<PendingReason>,
+    }
+
+    impl ScriptedDecoder {
+        fn seek_outcome(&mut self, outcome: DecoderSeekOutcome) -> DecoderSeekOutcome {
+            let signal = match outcome {
+                DecoderSeekOutcome::Pending(reason) => {
+                    self.seeking = Some(reason);
+                    return outcome;
+                }
+                DecoderSeekOutcome::Landed {
+                    landed_byte,
+                    preroll,
+                    ..
+                } => ReaderSeekSignal::Landed {
+                    landed_byte,
+                    preroll,
+                },
+                DecoderSeekOutcome::PastEof { .. } => ReaderSeekSignal::PastEof,
+            };
+            self.seeking = None;
+            self.hooks.on_seek(signal);
+            outcome
+        }
     }
 
     impl Decoder for ScriptedDecoder {
@@ -1447,6 +1482,9 @@ mod tests {
         }
 
         fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
+            if let Some(reason) = self.seeking {
+                return Ok(DecoderChunkOutcome::Pending(reason));
+            }
             self.calls.lock().expect("calls").reads += 1;
             let result = self.outcomes.pop_front().expect("bounded source script");
             if let Ok(outcome) = &result {
@@ -1465,16 +1503,28 @@ mod tests {
 
         fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
             self.outcomes = self.after_seek.take().expect("seek script").into();
-            self.hooks.on_seek(ReaderSeekSignal::Landed {
-                landed_byte: Some(0),
-                preroll: PrerollHint::NotNeeded,
-            });
-            Ok(DecoderSeekOutcome::Landed {
+            let scripted = self.calls.lock().expect("calls").seek_script.pop_front();
+            let outcome = scripted.unwrap_or_else(|| DecoderSeekOutcome::Landed {
                 landed_at: pos,
                 landed_frame: source_spec().frame_at(pos).expect("source frame"),
                 landed_byte: Some(0),
                 preroll: PrerollHint::NotNeeded,
-            })
+            });
+            Ok(self.seek_outcome(outcome))
+        }
+
+        fn prepare_seek(&mut self) -> DecodeResult<Option<DecoderSeekOutcome>> {
+            if self.seeking.is_none() {
+                return Ok(None);
+            }
+            let outcome = self
+                .calls
+                .lock()
+                .expect("calls")
+                .seek_script
+                .pop_front()
+                .expect("bounded seek continuation script");
+            Ok(Some(self.seek_outcome(outcome)))
         }
 
         fn spec(&self) -> AudioSpec {
@@ -1533,6 +1583,7 @@ mod tests {
         let inner = ScriptedDecoder {
             outcomes: outcomes.into(),
             after_seek,
+            seeking: None,
             calls: Arc::clone(&calls),
             hooks: Box::new(Hooks(Arc::clone(&calls))),
         };
@@ -1659,10 +1710,16 @@ mod tests {
     }
 
     #[kithara::test]
-    #[case::chunk(Completion::Chunk)]
-    #[case::error(Completion::Error)]
-    #[case::eof(Completion::Eof)]
-    fn seek_discards_a_completed_preparation(#[case] completion: Completion) {
+    #[case::chunk(Completion::Chunk, false)]
+    #[case::error(Completion::Error, false)]
+    #[case::eof(Completion::Eof, false)]
+    #[case::pending_chunk(Completion::Chunk, true)]
+    #[case::pending_error(Completion::Error, true)]
+    #[case::pending_eof(Completion::Eof, true)]
+    fn seek_discards_a_completed_preparation(
+        #[case] completion: Completion,
+        #[case] pending: bool,
+    ) {
         let pools = pools();
         let (mut decoder, calls) = scripted_resampled(
             &pools,
@@ -1671,7 +1728,61 @@ mod tests {
         );
         decoder.prepare_next_chunk();
         assert!(decoder.has_prepared_result());
-        decoder.seek(Duration::from_secs(1)).expect("seek");
+        let target = Duration::from_secs(1);
+        if pending {
+            calls.lock().expect("calls").seek_script = vec![
+                DecoderSeekOutcome::Pending(PendingReason::Retry),
+                DecoderSeekOutcome::Pending(PendingReason::Retry),
+                DecoderSeekOutcome::Landed {
+                    landed_at: target,
+                    landed_frame: 44_100,
+                    landed_byte: Some(1_234),
+                    preroll: PrerollHint::Required(1_000),
+                },
+            ]
+            .into();
+        }
+        let outcome = decoder.seek(target).expect("seek");
+        if pending {
+            assert_eq!(outcome, DecoderSeekOutcome::Pending(PendingReason::Retry));
+            assert!(decoder.reanchor_output_on_next_chunk);
+            assert_eq!(
+                calls
+                    .lock()
+                    .expect("calls")
+                    .signals
+                    .iter()
+                    .filter(|s| **s == "seek")
+                    .count(),
+                0
+            );
+            decoder.prepare_next_chunk();
+            assert!(matches!(
+                consume_prepared(&mut decoder).expect("unresolved seek blocks output"),
+                DecoderChunkOutcome::Pending(PendingReason::Retry)
+            ));
+            assert_eq!(calls.lock().expect("calls").reads, 1);
+            assert_eq!(decoder.emitted_frames, 0);
+            assert_eq!(decoder.source_frames_seen, 0);
+            assert_eq!(
+                decoder.prepare_seek().expect("pending continuation"),
+                Some(outcome)
+            );
+            assert!(decoder.reanchor_output_on_next_chunk);
+            assert_eq!(
+                decoder.prepare_seek().expect("terminal continuation"),
+                Some(DecoderSeekOutcome::Landed {
+                    landed_at: target,
+                    landed_frame: 48_000,
+                    landed_byte: Some(1_234),
+                    preroll: PrerollHint::Required(1_000),
+                })
+            );
+            assert!(decoder.reanchor_output_on_next_chunk);
+            assert_eq!(decoder.prepare_seek().expect("settled continuation"), None);
+            assert_eq!(decoder.emitted_frames, 0);
+            assert_eq!(decoder.source_frames_seen, 0);
+        }
         assert!(!decoder.has_prepared_result());
         assert!(matches!(
             consume_prepared(&mut decoder),

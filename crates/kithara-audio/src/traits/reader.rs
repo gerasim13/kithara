@@ -119,10 +119,9 @@ pub trait AudioControl {
 
     /// Seek to the given position.
     ///
-    /// Returns [`SeekOutcome::Landed`] when the reader is now parked
-    /// at the requested position, [`SeekOutcome::PastEof`] when the
-    /// target was beyond `duration()`. The search is synchronous and never
-    /// rebuilds a decoder merely because seeking failed.
+    /// [`SeekOutcome::Landed`] carries the actual landing; [`SeekOutcome::PastEof`]
+    /// means the target exceeds the duration. [`SeekOutcome::Pending`] retains
+    /// the operation for the next owning-thread preparation pass.
     ///
     /// # Errors
     ///

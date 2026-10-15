@@ -25,6 +25,26 @@ impl ConstructionGate {
         self.armed.store(false, Ordering::Release);
     }
 
+    /// Keep source probes non-blocking until drop restores the previous mode.
+    #[must_use = "keep the scope alive while probing source bytes"]
+    pub fn nonblocking(&self) -> impl Drop + '_ {
+        struct Restore<'a> {
+            armed: &'a AtomicBool,
+            previous: bool,
+        }
+
+        impl Drop for Restore<'_> {
+            fn drop(&mut self) {
+                self.armed.store(self.previous, Ordering::Release);
+            }
+        }
+
+        Restore {
+            armed: self.armed.as_ref(),
+            previous: self.armed.swap(false, Ordering::AcqRel),
+        }
+    }
+
     /// Whether construction reads should wait for source bytes.
     #[must_use]
     pub fn is_armed(&self) -> bool {

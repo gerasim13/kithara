@@ -6,8 +6,8 @@ use std::{
 };
 
 use kithara_decode::{
-    BlenderProfile, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome,
-    GaplessMode, GaplessProfile, PcmOrigin,
+    BlenderProfile, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, GaplessMode,
+    GaplessProfile, PcmOrigin,
 };
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
@@ -20,6 +20,9 @@ use crate::pipeline::{
     gapless::GaplessStage,
     seek::{ResumeState, ResumeTarget},
 };
+
+#[path = "seek.rs"]
+mod seek;
 
 #[derive(Clone, Copy)]
 pub(super) struct Holdback {
@@ -317,6 +320,9 @@ impl DecoderGeneration {
 
     #[kithara::measure(label = "audio.decoder.next")]
     pub(crate) fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
+        if self.finished {
+            return Ok(DecoderChunkOutcome::Eof);
+        }
         match catch_unwind(AssertUnwindSafe(|| self.decoder.next_chunk_prepared())) {
             Ok(result) => result,
             Err(payload) => {
@@ -328,107 +334,8 @@ impl DecoderGeneration {
         }
     }
 
-    pub(crate) fn notify_seek(&mut self) {
-        self.finished = false;
-        self.source_exhausted = false;
-        self.exhaustion_observed = false;
-        self.holdback = None;
-        self.gapless.notify_seek();
-        self.pending_head_skip = None;
-        self.staged.clear();
-    }
-
     pub(crate) const fn observe_exhaustion(&mut self) {
         self.exhaustion_observed = true;
-    }
-    pub(crate) const fn pending_head_skip_mut(&mut self) -> Option<&mut ResumeState> {
-        self.pending_head_skip.as_mut()
-    }
-
-    pub(crate) fn seek(
-        &mut self,
-        position: Duration,
-        gapless_mode: GaplessMode,
-    ) -> DecodeResult<DecoderSeekOutcome> {
-        self.seek_selected(position, gapless_mode, false)
-    }
-
-    pub(crate) fn seek_for_render(
-        &mut self,
-        position: Duration,
-        gapless_mode: GaplessMode,
-    ) -> DecodeResult<DecoderSeekOutcome> {
-        self.seek_selected(position, gapless_mode, true)
-    }
-
-    fn seek_selected(
-        &mut self,
-        position: Duration,
-        gapless_mode: GaplessMode,
-        for_render: bool,
-    ) -> DecodeResult<DecoderSeekOutcome> {
-        if !position.is_zero() {
-            self.seal_visible_origin(gapless_mode);
-        }
-        if let Some(gate) = &self.construction_gate {
-            gate.arm();
-        }
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            if for_render {
-                self.decoder.seek_prefix(position)
-            } else {
-                self.decoder.seek(position)
-            }
-        }));
-        if let Some(gate) = &self.construction_gate {
-            gate.disarm();
-        }
-        match result {
-            Ok(result) => {
-                let at_original_head = match &result {
-                    Ok(DecoderSeekOutcome::Landed { landed_frame, .. }) => {
-                        let at_known_head =
-                            self.decoder.initial_pcm_origin().is_some_and(|origin| {
-                                let origin = origin.position();
-                                let spec = self.decoder.spec();
-                                let (Ok(origin_frame), Ok(requested_frame)) =
-                                    (spec.frame_at(origin), spec.frame_at(position))
-                                else {
-                                    return false;
-                                };
-                                requested_frame <= origin_frame && *landed_frame == origin_frame
-                            });
-                        (position.is_zero() && *landed_frame == 0) || at_known_head
-                    }
-                    _ => false,
-                };
-                if at_original_head {
-                    let codec = self.media_info.as_ref().and_then(|info| info.codec);
-                    self.gapless = GaplessStage::build(self.gapless_profile, gapless_mode, codec);
-                }
-                result
-            }
-            Err(payload) => {
-                warn!(panic = %panic_message(payload), "decoder panicked during seek");
-                Err(DecodeError::InvalidData {
-                    detail: "decoder panicked during seek",
-                })
-            }
-        }
-    }
-
-    pub(crate) fn trim_to(&mut self, target: ResumeTarget) {
-        self.pending_head_skip = Some(ResumeState {
-            target,
-            trim_head: true,
-        });
-    }
-
-    pub(crate) fn prepare_deferred(&mut self, prepare_input: bool) {
-        self.gapless.prepare_deferred();
-        if prepare_input {
-            self.decoder.prepare_next_chunk();
-        }
     }
 
     pub(crate) fn push(&mut self, chunk: AudioChunk) -> DecodeResult<()> {
@@ -510,13 +417,17 @@ pub(super) fn stage_failure(chunk: AudioChunk, detail: &'static str) -> StageFai
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, num::NonZeroU32};
+    use std::{
+        cell::Cell,
+        num::NonZeroU32,
+        sync::atomic::{AtomicU64, Ordering},
+    };
 
     use kithara_decode::{
         DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, GaplessInfo,
         GaplessMode, GaplessProfile, GaplessTailCompensation, PcmOrigin,
     };
-    use kithara_platform::time::Duration;
+    use kithara_platform::{sync::Arc, time::Duration};
     use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
     use kithara_stream::{MediaInfo, PrerollHint};
     use kithara_test_fixtures::unit_fixtures::decode_quarter;
@@ -1046,7 +957,9 @@ mod tests {
             Ok(DecoderSeekOutcome::Landed { landed_at, .. }) if landed_at == second
         ));
         assert!(!generation.has_output());
-        generation.prepare_deferred(false);
+        generation
+            .prepare_deferred(false, GaplessMode::MediaOnly)
+            .expect("gapless cleanup does not continue input");
         assert!(!generation.has_output());
         assert!(!generation.is_finished());
         assert!(matches!(
@@ -1074,6 +987,10 @@ mod tests {
         origin: Option<Duration>,
         landed_at: Duration,
         landed_frame: u64,
+        defer_seek: bool,
+        pending_seek: bool,
+        seek_preparations: Arc<AtomicU64>,
+        pcm_preparations: Arc<AtomicU64>,
     }
 
     impl Decoder for HeadSeekDecoder {
@@ -1095,12 +1012,37 @@ mod tests {
         }
 
         fn seek(&mut self, _position: Duration) -> DecodeResult<DecoderSeekOutcome> {
+            if self.defer_seek {
+                self.pending_seek = true;
+                return Ok(DecoderSeekOutcome::Pending(
+                    kithara_stream::PendingReason::NotReady(
+                        kithara_stream::NotReadyCause::SourcePending,
+                    ),
+                ));
+            }
             Ok(DecoderSeekOutcome::Landed {
                 landed_at: self.landed_at,
                 landed_frame: self.landed_frame,
                 landed_byte: None,
                 preroll: PrerollHint::NotNeeded,
             })
+        }
+
+        fn prepare_seek(&mut self) -> DecodeResult<Option<DecoderSeekOutcome>> {
+            if !std::mem::take(&mut self.pending_seek) {
+                return Ok(None);
+            }
+            self.seek_preparations.fetch_add(1, Ordering::Relaxed);
+            Ok(Some(DecoderSeekOutcome::Landed {
+                landed_at: self.landed_at,
+                landed_frame: self.landed_frame,
+                landed_byte: None,
+                preroll: PrerollHint::NotNeeded,
+            }))
+        }
+
+        fn prepare_next_chunk(&mut self) {
+            self.pcm_preparations.fetch_add(1, Ordering::Relaxed);
         }
 
         fn spec(&self) -> AudioSpec {
@@ -1125,56 +1067,95 @@ mod tests {
         #[case] output_start: u64,
         #[case] trimmed: u64,
     ) {
-        let spec = spec(2, 1_500);
-        let pools = pools();
-        let mut generation = DecoderGeneration::new(
-            Box::new(HeadSeekDecoder {
-                spec,
-                origin: origin_nanos.map(Duration::from_nanos),
-                landed_at: Duration::from_nanos(landing_nanos),
-                landed_frame: landing_frame,
-            }),
-            None,
-            0,
-            None,
-            None,
-            GaplessMode::CodecPriming,
-        );
-        generation.notify_seek();
-        generation
-            .seek(
-                Duration::from_nanos(requested_nanos),
+        for defer_seek in [false, true] {
+            let spec = spec(2, 1_500);
+            let pools = pools();
+            let seek_preparations = Arc::new(AtomicU64::new(0));
+            let pcm_preparations = Arc::new(AtomicU64::new(0));
+            let mut generation = DecoderGeneration::new(
+                Box::new(HeadSeekDecoder {
+                    spec,
+                    origin: origin_nanos.map(Duration::from_nanos),
+                    landed_at: Duration::from_nanos(landing_nanos),
+                    landed_frame: landing_frame,
+                    defer_seek,
+                    pending_seek: false,
+                    seek_preparations: seek_preparations.clone(),
+                    pcm_preparations: pcm_preparations.clone(),
+                }),
+                None,
+                0,
+                None,
+                None,
                 GaplessMode::CodecPriming,
-            )
-            .expect("physical seek");
-        let mut input = chunk(&pools, &vec![0.25; 4_096], spec, output_start, 2_048, 2_048);
-        input.meta.timestamp = spec
-            .duration_for(output_start)
-            .expect("actual output start");
-        input.meta.end_timestamp = spec
-            .duration_for(output_start + 2_048)
-            .expect("actual output end");
-        generation.push(input).expect("valid gapless PCM");
-        let output = generation.next().expect("seek output");
-        assert_eq!(output.meta.frame_offset, output_start + trimmed);
-        assert_eq!(output.frames() as u64, 2_048 - trimmed);
-        assert_eq!(output.samples.len() as u64, 2 * (2_048 - trimmed));
-        if trimmed == 0 {
-            assert!(output.samples.iter().all(|value| *value == 0.25));
-        } else {
-            const FADE_FRAMES: usize = 4;
-            assert_eq!(&output.samples[..2], &[0.0; 2]);
-            let mut previous = 0.0;
-            for frame in output.samples[..FADE_FRAMES * 2].chunks_exact(2) {
-                assert_eq!(frame[0], frame[1]);
-                assert!(frame[0] >= previous && frame[0] < 0.25);
-                previous = frame[0];
-            }
-            assert!(
-                output.samples[FADE_FRAMES * 2..]
-                    .iter()
-                    .all(|value| *value == 0.25)
             );
+            generation.notify_seek();
+            let target = Duration::from_nanos(requested_nanos);
+            let outcome = generation
+                .seek(target, GaplessMode::CodecPriming)
+                .expect("physical seek");
+            if defer_seek {
+                assert!(matches!(outcome, DecoderSeekOutcome::Pending(_)));
+                generation.trim_to(ResumeTarget::Position(target));
+                assert!(
+                    generation
+                        .prepare_deferred(false, GaplessMode::CodecPriming)
+                        .expect("cleanup preserves unresolved seek")
+                        .is_none()
+                );
+                assert_eq!(seek_preparations.load(Ordering::Relaxed), 0);
+                assert_eq!(pcm_preparations.load(Ordering::Relaxed), 0);
+                assert!(!generation.has_output());
+                assert!(
+                    matches!(generation.prepare_deferred(true, GaplessMode::CodecPriming)
+                    .expect("deferred physical seek"),
+                    Some(DecoderSeekOutcome::Landed { landed_at, landed_frame: actual_frame, .. })
+                        if landed_at == Duration::from_nanos(landing_nanos) && actual_frame == landing_frame)
+                );
+                assert_eq!(seek_preparations.load(Ordering::Relaxed), 1);
+                assert_eq!(pcm_preparations.load(Ordering::Relaxed), 1);
+                assert!(
+                    generation
+                        .prepare_deferred(true, GaplessMode::CodecPriming)
+                        .expect("completed seek remains settled")
+                        .is_none()
+                );
+                assert_eq!(seek_preparations.load(Ordering::Relaxed), 1);
+                assert_eq!(pcm_preparations.load(Ordering::Relaxed), 2);
+            } else {
+                assert!(matches!(outcome, DecoderSeekOutcome::Landed { .. }));
+                assert_eq!(seek_preparations.load(Ordering::Relaxed), 0);
+                assert_eq!(pcm_preparations.load(Ordering::Relaxed), 0);
+            }
+            let mut input = chunk(&pools, &vec![0.25; 4_096], spec, output_start, 2_048, 2_048);
+            input.meta.timestamp = spec
+                .duration_for(output_start)
+                .expect("actual output start");
+            input.meta.end_timestamp = spec
+                .duration_for(output_start + 2_048)
+                .expect("actual output end");
+            generation.push(input).expect("valid gapless PCM");
+            let output = generation.next().expect("seek output");
+            assert_eq!(output.meta.frame_offset, output_start + trimmed);
+            assert_eq!(output.frames() as u64, 2_048 - trimmed);
+            assert_eq!(output.samples.len() as u64, 2 * (2_048 - trimmed));
+            if trimmed == 0 {
+                assert!(output.samples.iter().all(|value| *value == 0.25));
+            } else {
+                const FADE_FRAMES: usize = 4;
+                assert_eq!(&output.samples[..2], &[0.0; 2]);
+                let mut previous = 0.0;
+                for frame in output.samples[..FADE_FRAMES * 2].chunks_exact(2) {
+                    assert_eq!(frame[0], frame[1]);
+                    assert!(frame[0] >= previous && frame[0] < 0.25);
+                    previous = frame[0];
+                }
+                assert!(
+                    output.samples[FADE_FRAMES * 2..]
+                        .iter()
+                        .all(|value| *value == 0.25)
+                );
+            }
         }
     }
 }

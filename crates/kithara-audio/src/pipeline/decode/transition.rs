@@ -1,6 +1,6 @@
 use std::num::NonZeroU32;
 
-use kithara_decode::DecoderChunkOutcome;
+use kithara_decode::{DecodeResult, DecoderChunkOutcome, DecoderSeekOutcome};
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioSpec, FrameCount};
 use kithara_stream::{PendingReason, VariantTransition};
@@ -367,9 +367,7 @@ impl super::core::ActiveDecode {
         match readiness {
             PromotionReadiness::Ready(_) => return IncomingPrime::Ready,
             PromotionReadiness::AwaitingOutgoingFrontier
-            | PromotionReadiness::AwaitingOutgoingPcm => {
-                return IncomingPrime::Pending;
-            }
+            | PromotionReadiness::AwaitingOutgoingPcm => return IncomingPrime::Pending,
             PromotionReadiness::NeedIncoming => {}
         }
         let incoming_readiness = |generation: &DecoderGeneration| {
@@ -378,7 +376,15 @@ impl super::core::ActiveDecode {
         };
         let mut outcome = IncomingPrime::Pending;
         for _ in 0..consts::PRIME_STEPS_PER_PASS {
-            generation.decoder_mut().prepare_next_chunk();
+            if let Some(preparation) =
+                classify_incoming_preparation(&generation.prepare_deferred(true, gapless_mode))
+            {
+                outcome = preparation;
+                if outcome == IncomingPrime::Advanced {
+                    continue;
+                }
+                break;
+            }
             outcome = match generation.next_chunk() {
                 Ok(DecoderChunkOutcome::Chunk(chunk)) => {
                     match apply_skip(*chunk, generation.pending_head_skip_mut()) {
@@ -411,9 +417,10 @@ impl super::core::ActiveDecode {
                         }
                     }
                 }
-                Ok(DecoderChunkOutcome::Pending(PendingReason::VariantChange)) => {
-                    IncomingPrime::Failed
-                }
+                Ok(DecoderChunkOutcome::Pending(
+                    PendingReason::VariantChange | PendingReason::SessionRetired,
+                ))
+                | Err(_) => IncomingPrime::Failed,
                 Ok(DecoderChunkOutcome::Pending(PendingReason::Retry)) => {
                     outcome = IncomingPrime::Advanced;
                     continue;
@@ -437,7 +444,6 @@ impl super::core::ActiveDecode {
                         incoming_origin,
                     )
                 }
-                Err(_) => IncomingPrime::Failed,
             };
             break;
         }
@@ -470,6 +476,23 @@ impl super::core::ActiveDecode {
             #[call(as_ref)]
             pub(crate) fn incoming_transition(&self) -> Option<VariantTransition>;
         }
+    }
+}
+
+fn classify_incoming_preparation(
+    outcome: &DecodeResult<Option<DecoderSeekOutcome>>,
+) -> Option<IncomingPrime> {
+    match outcome {
+        Ok(Some(DecoderSeekOutcome::Pending(
+            PendingReason::VariantChange | PendingReason::SessionRetired,
+        )))
+        | Err(_) => Some(IncomingPrime::Failed),
+        Ok(Some(DecoderSeekOutcome::Pending(PendingReason::Retry))) => {
+            Some(IncomingPrime::Advanced)
+        }
+        Ok(Some(DecoderSeekOutcome::Pending(_))) => Some(IncomingPrime::Pending),
+        Ok(Some(DecoderSeekOutcome::Landed { .. } | DecoderSeekOutcome::PastEof { .. }))
+        | Ok(None) => None,
     }
 }
 
@@ -789,7 +812,7 @@ fn timeline_spec(sample_rate: u32) -> Option<AudioSpec> {
 pub(super) fn trim_staged_head(
     generation: &mut DecoderGeneration,
     overlap: OverlapSpan,
-) -> kithara_decode::DecodeResult<bool> {
+) -> DecodeResult<bool> {
     let mut remaining = overlap.incoming_next.saturating_sub(overlap.incoming_first);
     if remaining == 0 {
         return Ok(generation.has_output());

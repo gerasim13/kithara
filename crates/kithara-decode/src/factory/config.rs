@@ -4,7 +4,7 @@ use kithara_bufpool::PoolRegion;
 use kithara_config::Config;
 use kithara_platform::sync::Arc;
 use kithara_resampler::{NoResamplerBackend, ResamplerBackend, ResamplerOptions, ResamplerQuality};
-use kithara_stream::{BoxedEventSink, ByteMap};
+use kithara_stream::{BoxedEventSink, ByteMap, ConstructionGate};
 
 use super::inner::DecoderBackend;
 
@@ -42,6 +42,9 @@ pub struct DecoderConfig<B, S> {
     /// Optional byte-map handle over the underlying source.
     #[config(skip = "transferred to the decoder")]
     pub(crate) byte_map: Option<Arc<dyn ByteMap>>,
+    /// Reader-owned I/O mode shared with resumable segment operations.
+    #[config(skip = "transferred to the segment reader")]
+    pub(crate) construction_gate: Option<ConstructionGate>,
     /// File extension hint for Symphonia probe (e.g., "mp3", "aac").
     #[cfg(feature = "symphonia")]
     #[config(skip = "consumed by the decoder probe", builder(into))]
@@ -91,6 +94,7 @@ mod tests {
         let expected = DecoderBackend::Symphonia;
         assert_eq!(config.backend, expected);
         assert!(config.byte_len_handle.is_none());
+        assert!(config.construction_gate.is_none());
     }
 
     #[cfg(apple_backend)]

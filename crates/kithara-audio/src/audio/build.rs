@@ -213,6 +213,7 @@ where
                 .byte_len_handle(Arc::new(AtomicU64::new(byte_len)))
                 .pools(deps.pools.clone())
                 .maybe_byte_map(reader.byte_map())
+                .maybe_construction_gate(reader.construction_gate())
                 .maybe_hooks(reader.take_event_sink())
                 .maybe_resampler(deps.resampler_config(rate))
                 .build();

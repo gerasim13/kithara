@@ -356,7 +356,7 @@ where
             return TickResult::Progress;
         };
         match self.reader.seek(position) {
-            Ok(SeekOutcome::Landed { .. }) => {
+            Ok(SeekOutcome::Landed { .. } | SeekOutcome::Pending { .. }) => {
                 debug!(at, "analysis: run scheduled");
                 self.frontier = at;
                 self.run = Some(Run {

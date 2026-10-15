@@ -9,7 +9,7 @@ use kithara_events::DeferredBus;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::AudioChunk;
 use kithara_stream::{
-    ByteMap, MediaInfo, OpenedReader, PlayheadWrite, ReaderProfile, StreamType, VariantTransition,
+    ByteMap, MediaInfo, OpenedReader, ReaderProfile, StreamType, VariantTransition,
 };
 use tracing::debug;
 
@@ -26,7 +26,6 @@ use crate::{
         },
         fetch::Fetch,
         rebuild::RecreateState,
-        seek::emit::commit_outcome,
         stream::shared::SharedStream,
         track::WaitingReason,
     },
@@ -115,6 +114,7 @@ pub(crate) struct DecodeCtx<'a, T: StreamType> {
 }
 
 pub(crate) enum DecodeAction {
+    ReaderRetired,
     Progress,
     Produced(Box<Fetch<AudioChunk>>),
     Pending(WaitingReason),
@@ -250,10 +250,16 @@ impl ActiveDecode {
         self.active.blender_profile().spec()
     }
 
-    pub(crate) fn prepare_deferred(&mut self, prepare_input: bool) {
-        self.active.prepare_deferred(prepare_input);
+    pub(crate) fn prepare_deferred(
+        &mut self,
+        prepare_input: bool,
+    ) -> DecodeResult<Option<DecoderSeekOutcome>> {
+        let result = self
+            .active
+            .prepare_deferred(prepare_input, self.gapless_mode);
         self.active.decoder_mut().flush_reader_signals();
         self.flush_incoming_reader_signals();
+        result
     }
 
     pub(crate) fn prepare_incoming_profile(&mut self, profile: BlenderProfile) {
@@ -318,57 +324,43 @@ impl ActiveDecode {
         self.reset();
         self.discard_incoming()
     }
-    pub(crate) fn seek<T: StreamType>(
-        &mut self,
-        stream: &SharedStream<T>,
-        playhead: &dyn PlayheadWrite,
-        position: Duration,
-    ) -> DecodeResult<DecoderSeekOutcome> {
-        self.seek_selected(stream, playhead, position, false)
+    pub(crate) fn seek(&mut self, position: Duration) -> DecodeResult<DecoderSeekOutcome> {
+        self.seek_selected(position, false)
     }
 
-    pub(crate) fn seek_for_render<T: StreamType>(
+    pub(crate) fn seek_for_render(
         &mut self,
-        stream: &SharedStream<T>,
-        playhead: &dyn PlayheadWrite,
         position: Duration,
     ) -> DecodeResult<DecoderSeekOutcome> {
-        self.seek_selected(stream, playhead, position, true)
+        self.seek_selected(position, true)
     }
 
-    fn seek_selected<T: StreamType>(
+    fn seek_selected(
         &mut self,
-        stream: &SharedStream<T>,
-        playhead: &dyn PlayheadWrite,
         position: Duration,
         for_render: bool,
     ) -> DecodeResult<DecoderSeekOutcome> {
         self.active.notify_seek();
         self.reset();
-        let before = stream.position();
         let outcome = if for_render {
             self.active.seek_for_render(position, self.gapless_mode)
         } else {
             self.active.seek(position, self.gapless_mode)
         };
-        if let Ok(ref outcome) = outcome {
-            commit_outcome(&self.active, stream, playhead, outcome);
-            if matches!(outcome, DecoderSeekOutcome::Landed { .. }) {
-                let target = if for_render {
-                    crate::pipeline::seek::ResumeTarget::Render(position)
-                } else {
-                    crate::pipeline::seek::ResumeTarget::Position(position)
-                };
-                self.active.trim_to(target);
-            }
+        if let Ok(ref outcome) = outcome
+            && matches!(
+                outcome,
+                DecoderSeekOutcome::Landed { .. } | DecoderSeekOutcome::Pending(_)
+            )
+        {
+            let target = if for_render {
+                crate::pipeline::seek::ResumeTarget::Render(position)
+            } else {
+                crate::pipeline::seek::ResumeTarget::Position(position)
+            };
+            self.active.trim_to(target);
         }
-        debug!(
-            ?position,
-            before,
-            after = stream.position(),
-            ?outcome,
-            "decoder seek completed"
-        );
+        debug!(?position, ?outcome, "decoder seek outcome");
         outcome
     }
 

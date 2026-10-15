@@ -151,6 +151,7 @@ where
 
     fn emit_seek_signal(&mut self, outcome: &DecoderSeekOutcome) {
         let signal = match outcome {
+            DecoderSeekOutcome::Pending(_) => return,
             DecoderSeekOutcome::Landed {
                 landed_byte,
                 preroll,
@@ -370,48 +371,51 @@ where
         if !pos.is_zero() && matches!(self.origin, PcmOriginState::Observing(_)) {
             self.origin = PcmOriginState::Sealed;
         }
-        let outcome = self.seek_inner(pos, prefix)?;
-        self.prefill = Prefill::Needed;
+        let priming = self.codec.priming(self.demuxer.track_info().codec);
+        let outcome = self.demuxer.seek(pos, priming)?;
+        self.codec.flush()?;
+        self.head_strip = HeadStrip::default();
+        self.zero_frame_count = 0;
+        self.pending_seek_target = Some(if prefix {
+            SeekTrim::Prefix(pos)
+        } else {
+            SeekTrim::Nearest(pos)
+        });
         if matches!(self.output, Some(Err(_))) {
             self.output = None;
         }
-        self.emit_seek_signal(&outcome);
-        Ok(outcome)
+        Ok(self.apply_seek_outcome(outcome))
     }
 
-    fn seek_inner(&mut self, pos: Duration, prefix: bool) -> DecodeResult<DecoderSeekOutcome> {
-        let priming = self.codec.priming(self.demuxer.track_info().codec);
-        match self.demuxer.seek(pos, priming)? {
+    fn apply_seek_outcome(&mut self, outcome: DemuxSeekOutcome) -> DecoderSeekOutcome {
+        self.prefill = match outcome {
+            DemuxSeekOutcome::Pending(reason) => Prefill::Seeking(reason),
+            DemuxSeekOutcome::Landed { .. } | DemuxSeekOutcome::PastEof { .. } => Prefill::Needed,
+        };
+        let outcome = match outcome {
+            DemuxSeekOutcome::Pending(reason) => DecoderSeekOutcome::Pending(reason),
             DemuxSeekOutcome::Landed {
                 landed_at,
                 landed_byte,
                 preroll,
             } => {
-                self.codec.flush()?;
-                self.head_strip = HeadStrip::default();
-                self.zero_frame_count = 0;
-                self.pending_seek_target = Some(if prefix {
-                    SeekTrim::Prefix(pos)
-                } else {
-                    SeekTrim::Nearest(pos)
-                });
                 self.frame_offset = self.spec.frame_at(landed_at).unwrap_or(u64::MAX);
                 self.resync_frame_offset_to_pts = true;
                 self.timeline_gap_frames = 0;
-                Ok(DecoderSeekOutcome::Landed {
+                DecoderSeekOutcome::Landed {
                     landed_byte,
                     landed_at,
                     preroll,
                     landed_frame: self.frame_offset,
-                })
+                }
             }
             DemuxSeekOutcome::PastEof { duration } => {
-                self.codec.flush()?;
-                self.head_strip = HeadStrip::default();
-                self.zero_frame_count = 0;
-                Ok(DecoderSeekOutcome::PastEof { duration })
+                self.pending_seek_target = None;
+                DecoderSeekOutcome::PastEof { duration }
             }
-        }
+        };
+        self.emit_seek_signal(&outcome);
+        outcome
     }
 }
 
@@ -451,6 +455,9 @@ where
     }
 
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
+        if matches!(self.prefill, Prefill::Seeking(_)) {
+            return self.next_chunk_prepared();
+        }
         loop {
             self.prepare_next_chunk();
             match self.next_chunk_prepared()? {
@@ -461,6 +468,11 @@ where
     }
 
     fn next_chunk_prepared(&mut self) -> DecodeResult<DecoderChunkOutcome> {
+        if let Prefill::Seeking(reason) = self.prefill {
+            let outcome = DecoderChunkOutcome::Pending(reason);
+            self.emit_chunk_signal(&outcome);
+            return Ok(outcome);
+        }
         if matches!(self.prefill, Prefill::Buffered(_)) {
             let Prefill::Buffered(result) = std::mem::replace(&mut self.prefill, Prefill::Complete)
             else {
@@ -491,7 +503,7 @@ where
     }
 
     fn prepare_next_chunk(&mut self) {
-        if self.has_prepared_result() {
+        if self.has_prepared_result() || matches!(self.prefill, Prefill::Seeking(_)) {
             return;
         }
         if matches!(self.prefill, Prefill::Buffered(_)) {
@@ -518,6 +530,13 @@ where
 
     fn seek_prefix(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
         self.seek_selected(pos, true)
+    }
+
+    fn prepare_seek(&mut self) -> DecodeResult<Option<DecoderSeekOutcome>> {
+        Ok(self
+            .demuxer
+            .prepare_seek()?
+            .map(|outcome| self.apply_seek_outcome(outcome)))
     }
 
     fn spec(&self) -> AudioSpec {

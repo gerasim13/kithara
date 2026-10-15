@@ -1,4 +1,4 @@
-use kithara_decode::DecoderSeekOutcome;
+use kithara_decode::{DecodeError, DecodeResult, DecoderSeekOutcome};
 use kithara_stream::{PlayheadWrite, StreamType};
 use num_traits::cast::ToPrimitive;
 
@@ -9,9 +9,14 @@ pub(crate) fn commit_outcome<T: StreamType>(
     stream: &SharedStream<T>,
     playhead: &dyn PlayheadWrite,
     outcome: &DecoderSeekOutcome,
-) {
+) -> DecodeResult<()> {
     let sample_rate = active.decoder().spec().sample_rate.get();
     let (frame_offset, end_position, landed_byte) = match *outcome {
+        DecoderSeekOutcome::Pending(_) => {
+            return Err(DecodeError::InvalidData {
+                detail: "cannot commit an unresolved seek",
+            });
+        }
         DecoderSeekOutcome::Landed {
             landed_frame,
             landed_at,
@@ -35,4 +40,5 @@ pub(crate) fn commit_outcome<T: StreamType>(
     if let Some(byte) = landed_byte {
         stream.set_position(byte);
     }
+    Ok(())
 }

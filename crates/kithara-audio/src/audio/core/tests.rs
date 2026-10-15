@@ -1,4 +1,8 @@
-use std::{collections::VecDeque, num::NonZeroU32};
+use std::{
+    collections::VecDeque,
+    num::NonZeroU32,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use kithara_abr::{Abr, AbrController, AbrSettings, AbrState};
 use kithara_decode::TrackMetadata;
@@ -20,11 +24,21 @@ struct StagedSource {
     chunks: VecDeque<AudioChunk>,
     spec: AudioSpec,
     failure: Option<crate::TrackFailureKind>,
+    pending_seek: bool,
+    preparations: Option<Arc<AtomicU64>>,
 }
 impl AudioSource for StagedSource {
     type Chunk = AudioChunk;
     fn seek(&mut self, target: Duration) -> Result<SeekOutcome, crate::AudioReadError> {
         self.chunks.clear();
+        if self.pending_seek {
+            return Ok(SeekOutcome::Pending {
+                target,
+                reason: kithara_stream::PendingReason::NotReady(
+                    kithara_stream::NotReadyCause::SourcePending,
+                ),
+            });
+        }
         Ok(SeekOutcome::Landed {
             target,
             landed_at: target,
@@ -35,6 +49,12 @@ impl AudioSource for StagedSource {
     }
     fn host_sample_rate(&self) -> Option<NonZeroU32> {
         Some(self.spec.sample_rate)
+    }
+    fn prepare_deferred(&mut self) -> Option<AudioSpec> {
+        if let Some(preparations) = &self.preparations {
+            preparations.fetch_add(1, Ordering::Relaxed);
+        }
+        None
     }
     fn step_track(&mut self) -> TrackStep<AudioChunk> {
         if let Some(failure) = self.failure.take() {
@@ -53,6 +73,8 @@ fn fixture(spec: AudioSpec, chunks: Vec<AudioChunk>) -> Audio<()> {
             chunks: chunks.into(),
             spec,
             failure: None,
+            pending_seek: false,
+            preparations: None,
         }),
         context(),
         spec,
@@ -238,92 +260,136 @@ fn seek_owns_one_abr_lock_until_post_seek_consumption(
     #[case] completion: u8,
     cursor_half: Vec<f32>,
 ) {
-    let cancel = CancelScope::new(None).token();
-    let state = Arc::new(AbrState::new(kithara_abr::AbrMode::Auto(None)));
-    let peer: Arc<dyn Abr> = Arc::new(SeekAbr {
-        state: state.clone(),
-        cancel: cancel.clone(),
-    });
-    let controller = AbrController::new(AbrSettings::builder().cancel(cancel).build());
-    let handle = controller.register(&peer);
-    handle.lock();
-    let spec = AudioSpec::new(1, NonZeroU32::new(10).expect("test rate"));
-    let mut context = context();
-    context.abr = Some(handle.clone());
-    let mut audio = Audio::<()>::new(
-        Box::new(StagedSource {
-            chunks: VecDeque::new(),
+    for pending_seek in [false, true] {
+        let cancel = CancelScope::new(None).token();
+        let state = Arc::new(AbrState::new(kithara_abr::AbrMode::Auto(None)));
+        let peer: Arc<dyn Abr> = Arc::new(SeekAbr {
+            state: state.clone(),
+            cancel: cancel.clone(),
+        });
+        let controller = AbrController::new(AbrSettings::builder().cancel(cancel).build());
+        let handle = controller.register(&peer);
+        handle.lock();
+        let spec = AudioSpec::new(1, NonZeroU32::new(10).expect("test rate"));
+        let mut context = context();
+        context.abr = Some(handle.clone());
+        let emit = context.emit.clone();
+        let preparations = Arc::new(AtomicU64::new(0));
+        let mut audio = Audio::<()>::new(
+            Box::new(StagedSource {
+                chunks: VecDeque::new(),
+                spec,
+                failure: (completion == 5).then_some(crate::TrackFailureKind::SourceCancelled),
+                pending_seek,
+                preparations: Some(preparations.clone()),
+            }),
+            context,
             spec,
-            failure: (completion == 5).then_some(crate::TrackFailureKind::SourceCancelled),
-        }),
-        context,
-        spec,
-    );
-    audio.seek(Duration::ZERO).expect("opening seek");
-    assert_eq!(state.lock_count(), 1, "opening leaves ABR available");
-    crate::AudioControl::seek(&mut audio, Duration::ZERO).expect("seek");
-    assert_eq!(state.lock_count(), 2, "the seek owns one lock level");
-    if completion == 5 {
-        assert!(audio.preload().is_err());
+        );
+        let mut events = audio.event_bus().subscribe::<crate::AudioEvent>();
+        let accepted = if pending_seek {
+            SeekOutcome::Pending {
+                target: Duration::ZERO,
+                reason: kithara_stream::PendingReason::NotReady(
+                    kithara_stream::NotReadyCause::SourcePending,
+                ),
+            }
+        } else {
+            SeekOutcome::Landed {
+                target: Duration::ZERO,
+                landed_at: Duration::ZERO,
+            }
+        };
+        assert_eq!(audio.seek(Duration::ZERO).expect("opening seek"), accepted);
+        assert_eq!(
+            preparations.load(Ordering::Relaxed),
+            u64::from(!pending_seek),
+            "only a synchronous landing prepares eagerly"
+        );
+        assert_eq!(state.lock_count(), 1, "opening leaves ABR available");
+        assert_eq!(
+            crate::AudioControl::seek(&mut audio, Duration::ZERO).expect("seek"),
+            accepted
+        );
+        assert_eq!(
+            preparations.load(Ordering::Relaxed),
+            2 * u64::from(!pending_seek)
+        );
+        assert_eq!(state.lock_count(), 2, "the seek owns one lock level");
+        assert!(seek_completions(&mut events).is_empty());
+        if completion == 5 {
+            assert!(audio.preload().is_err());
+            assert_eq!(
+                state.lock_count(),
+                1,
+                "source failure releases the seek lock"
+            );
+            assert!(crate::AudioControl::seek(&mut audio, Duration::ZERO).is_err());
+            assert_eq!(state.lock_count(), 1, "failed seek releases its lock");
+        } else {
+            audio.preload().expect("pending preload");
+            assert_eq!(
+                state.lock_count(),
+                2,
+                "pending output keeps the seek locked"
+            );
+            let prepared = preparations.load(Ordering::Relaxed);
+            assert_eq!(
+                crate::AudioControl::seek(&mut audio, Duration::ZERO).expect("superseding seek"),
+                accepted
+            );
+            assert_eq!(
+                preparations.load(Ordering::Relaxed),
+                prepared + u64::from(!pending_seek)
+            );
+            assert!(seek_completions(&mut events).is_empty());
+            assert_eq!(
+                state.lock_count(),
+                2,
+                "supersession does not nest seek locks"
+            );
+        }
+        if completion < 4 {
+            let chunk = timed_chunk(
+                &pools(),
+                &cursor_half,
+                spec,
+                2,
+                Duration::ZERO,
+                Duration::from_millis(200),
+            );
+            audio.cursor.begin_chunk(&chunk);
+            audio.current_chunk = Some(chunk);
+            match completion {
+                0 => {
+                    audio.read(&mut [0.0]).expect("interleaved output");
+                }
+                1 => {
+                    audio.read_planar(&mut [&mut [0.0]]).expect("planar output");
+                }
+                2 => {
+                    audio.next_chunk().expect("chunk output");
+                }
+                _ => {
+                    let chunk = audio.current_chunk.take().expect("prepared output");
+                    let end = source_end(&chunk.meta, u64::from(chunk.meta.frames))
+                        .expect("source boundary");
+                    audio.commit_source_end(end, chunk.meta);
+                }
+            }
+            assert_eq!(state.lock_count(), 1, "only the caller's lock remains");
+            emit.flush();
+            assert_eq!(seek_completions(&mut events), vec![Duration::ZERO]);
+        }
+        drop(audio);
         assert_eq!(
             state.lock_count(),
             1,
-            "source failure releases the seek lock"
+            "dropping releases only the seek lock"
         );
-        assert!(crate::AudioControl::seek(&mut audio, Duration::ZERO).is_err());
-        assert_eq!(state.lock_count(), 1, "failed seek releases its lock");
-    } else {
-        audio.preload().expect("pending preload");
-        assert_eq!(
-            state.lock_count(),
-            2,
-            "pending output keeps the seek locked"
-        );
-        crate::AudioControl::seek(&mut audio, Duration::ZERO).expect("superseding seek");
-        assert_eq!(
-            state.lock_count(),
-            2,
-            "supersession does not nest seek locks"
-        );
+        handle.unlock();
+        assert!(!handle.is_locked());
     }
-    if completion < 4 {
-        let chunk = timed_chunk(
-            &pools(),
-            &cursor_half,
-            spec,
-            2,
-            Duration::ZERO,
-            Duration::from_millis(200),
-        );
-        audio.cursor.begin_chunk(&chunk);
-        audio.current_chunk = Some(chunk);
-        match completion {
-            0 => {
-                audio.read(&mut [0.0]).expect("interleaved output");
-            }
-            1 => {
-                audio.read_planar(&mut [&mut [0.0]]).expect("planar output");
-            }
-            2 => {
-                audio.next_chunk().expect("chunk output");
-            }
-            _ => {
-                let chunk = audio.current_chunk.take().expect("prepared output");
-                let end =
-                    source_end(&chunk.meta, u64::from(chunk.meta.frames)).expect("source boundary");
-                audio.commit_source_end(end, chunk.meta);
-            }
-        }
-        assert_eq!(state.lock_count(), 1, "only the caller's lock remains");
-    }
-    drop(audio);
-    assert_eq!(
-        state.lock_count(),
-        1,
-        "dropping releases only the seek lock"
-    );
-    handle.unlock();
-    assert!(!handle.is_locked());
 }
 #[kithara::test]
 fn reads_preserve_consecutive_rendered_source_spans_and_revisions(cursor_half: Vec<f32>) {
@@ -554,6 +620,8 @@ fn audio_cache_read_view_follows_the_source_coverage_and_duration() {
             chunks: VecDeque::new(),
             spec,
             failure: None,
+            pending_seek: false,
+            preparations: None,
         }),
         metadata,
         spec,

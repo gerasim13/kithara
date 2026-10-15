@@ -5,7 +5,7 @@ use std::{
     ops::Range,
     sync::{
         Mutex,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
 };
 
@@ -16,7 +16,7 @@ use kithara_resampler::{ResamplerOptions, rubato::RubatoBackend};
 use kithara_signal::AudioChunk;
 #[cfg(feature = "symphonia")]
 use kithara_stream::AudioCodec;
-use kithara_stream::{ByteMap, NotReadyCause, PendingReason, SegmentDescriptor};
+use kithara_stream::{ByteMap, ConstructionGate, NotReadyCause, PendingReason, SegmentDescriptor};
 #[cfg(feature = "symphonia")]
 use kithara_test_fixtures::unit_fixtures::{aac_init, aac_segment};
 use kithara_test_utils::kithara;
@@ -34,7 +34,10 @@ use crate::{
     codec::CodecPriming,
     composed::{ComposedDecoder, DecoderRuntime},
     demuxer::{DemuxOutcome, Demuxer},
-    fmp4::Fmp4SegmentDemuxer,
+    fmp4::{
+        Fmp4SegmentDemuxer,
+        parsing::{parse_init, parse_segment_frames},
+    },
     test_pools::{TestPools, pools},
     traits::{BoxedSource, Decoder, DecoderChunkOutcome, DecoderSeekOutcome},
 };
@@ -42,7 +45,6 @@ use crate::{
 use crate::{
     codec::{FrameCodec, access_unit_frames},
     demuxer::TrackInfo,
-    fmp4::parsing::{parse_init, parse_segment_frames},
     symphonia::{SymphoniaCodec, SymphoniaConfig},
 };
 
@@ -53,13 +55,27 @@ struct InstrumentedSource {
     reads: Arc<Mutex<Vec<Range<u64>>>>,
     record: Arc<AtomicBool>,
     inner: Cursor<Vec<u8>>,
-    available_end: Option<u64>,
+    available_end: Option<Arc<AtomicU64>>,
+    construction: Option<(ConstructionGate, Arc<AtomicBool>)>,
+}
+
+impl InstrumentedSource {
+    fn check_io_mode(&self) {
+        if let Some((gate, expected)) = &self.construction {
+            assert_eq!(gate.is_armed(), expected.load(Ordering::Acquire));
+        }
+    }
 }
 
 impl io::Read for InstrumentedSource {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.check_io_mode();
         let pos = self.inner.position();
-        let result = match self.available_end {
+        let available_end = self
+            .available_end
+            .as_ref()
+            .map(|end| end.load(Ordering::Acquire));
+        let result = match available_end {
             Some(end) if pos >= end && !buf.is_empty() => Err(io::Error::new(
                 ErrorKind::Interrupted,
                 PendingReason::NotReady(NotReadyCause::WaitBudgetExhausted),
@@ -84,10 +100,9 @@ impl io::Read for InstrumentedSource {
 }
 
 impl Seek for InstrumentedSource {
-    delegate::delegate! {
-        to self.inner {
-            fn seek(&mut self, pos: SeekFrom) -> io::Result<u64>;
-        }
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        self.check_io_mode();
+        self.inner.seek(pos)
     }
 }
 
@@ -98,12 +113,99 @@ type DecoderHarness = (
 );
 
 #[kithara::test]
-fn prepared_frames_do_not_read_container_bytes(aac_three: (Vec<u8>, FakeSegmented)) {
+#[case::ready(false, false)]
+#[case::partial(true, false)]
+#[case::same_target_supersedes_partial(true, true)]
+fn prepared_frames_do_not_read_container_bytes(
+    aac_three: (Vec<u8>, FakeSegmented),
+    #[case] partial: bool,
+    #[case] supersede: bool,
+) {
     let (blob, segmented) = aac_three;
-    let (mut decoder, reads, record) = make_decoder(blob, segmented);
-    record.store(true, Ordering::Release);
+    let segment = segmented.segment_at_index(0).expect("first segment");
+    let prefix_end = segment.byte_range.start + 32;
+    let reads = Arc::new(Mutex::new(Vec::new()));
+    let available = Arc::new(AtomicU64::new(u64::MAX));
+    let gate = ConstructionGate::default();
+    gate.arm();
+    let expected_blocking = Arc::new(AtomicBool::new(true));
+    let source: BoxedSource = Box::new(InstrumentedSource {
+        inner: Cursor::new(blob),
+        reads: Arc::clone(&reads),
+        record: Arc::new(AtomicBool::new(true)),
+        available_end: Some(Arc::clone(&available)),
+        construction: Some((gate.clone(), Arc::clone(&expected_blocking))),
+    });
+    let mut decoder =
+        make_decoder_from_source(source, Arc::new(segmented), pools(), Some(gate.clone()));
+    assert!(gate.is_armed(), "cold construction retains its I/O mode");
+    expected_blocking.store(false, Ordering::Release);
+    let reason = PendingReason::NotReady(NotReadyCause::WaitBudgetExhausted);
     for target in [Duration::ZERO, Duration::from_secs(1), Duration::ZERO] {
-        decoder.seek(target).expect("seek");
+        gate.arm();
+        reads.lock().expect("read log").clear();
+        if partial {
+            available.store(prefix_end, Ordering::Release);
+        }
+        let outcome = decoder.seek(target).expect("seek");
+        assert!(gate.is_armed(), "seek restores the caller's blocking mode");
+        if partial {
+            assert_eq!(outcome, DecoderSeekOutcome::Pending(reason));
+            assert_eq!(
+                reads.lock().expect("read log").as_slice(),
+                &[segment.byte_range.start..prefix_end, prefix_end..prefix_end]
+            );
+            if supersede {
+                reads.lock().expect("read log").clear();
+                assert_eq!(decoder.seek(target).expect("replacement seek"), outcome);
+                assert!(
+                    gate.is_armed(),
+                    "replacement seek restores the caller's mode"
+                );
+                assert_eq!(
+                    reads.lock().expect("read log").as_slice(),
+                    &[segment.byte_range.start..prefix_end, prefix_end..prefix_end],
+                    "a new seek replaces the old read prefix even at the same target"
+                );
+            }
+            gate.disarm();
+            reads.lock().expect("read log").clear();
+            decoder.prepare_next_chunk();
+            assert!(matches!(
+                decoder.next_chunk_prepared().expect("unresolved PCM"),
+                DecoderChunkOutcome::Pending(actual) if actual == reason
+            ));
+            assert!(reads.lock().expect("read log").is_empty());
+            assert_eq!(
+                decoder.prepare_seek().expect("continue seek"),
+                Some(outcome)
+            );
+            assert!(!gate.is_armed(), "pending continuation retains probe mode");
+            assert_eq!(
+                reads.lock().expect("read log").as_slice(),
+                std::slice::from_ref(&(prefix_end..prefix_end)),
+                "continuation must retain the accumulated prefix"
+            );
+            reads.lock().expect("read log").clear();
+            available.store(u64::MAX, Ordering::Release);
+            let outcome = decoder.prepare_seek().expect("resolve seek");
+            assert!(matches!(outcome, Some(DecoderSeekOutcome::Landed { .. })));
+            assert!(!gate.is_armed(), "landing continuation retains probe mode");
+            assert!(
+                reads
+                    .lock()
+                    .expect("read log")
+                    .iter()
+                    .all(|read| read.start >= prefix_end),
+                "resolving the same operation must not reread its prefix"
+            );
+        } else {
+            assert!(matches!(outcome, DecoderSeekOutcome::Landed { .. }));
+        }
+        gate.disarm();
+        reads.lock().expect("read log").clear();
+        assert_eq!(decoder.prepare_seek().expect("settled seek"), None);
+        assert!(reads.lock().expect("read log").is_empty());
         let mut chunks = 0;
         for _ in 0..128 {
             decoder.prepare_next_chunk();
@@ -128,9 +230,10 @@ fn make_decoder(blob: Vec<u8>, segmented: FakeSegmented) -> DecoderHarness {
         reads: Arc::clone(&reads),
         record: Arc::clone(&record),
         available_end: None,
+        construction: None,
     });
     let layout: Arc<dyn ByteMap> = Arc::new(segmented);
-    let decoder = make_decoder_from_source(source, layout, pools());
+    let decoder = make_decoder_from_source(source, layout, pools(), None);
     (decoder, reads, record)
 }
 
@@ -138,9 +241,10 @@ fn make_decoder_from_source(
     source: BoxedSource,
     layout: Arc<dyn ByteMap>,
     pools: PoolRegion<TestPools>,
+    construction_gate: Option<ConstructionGate>,
 ) -> ComposedDecoder<Fmp4SegmentDemuxer<TestPools>, TestCodec, TestPools> {
-    let demuxer =
-        Fmp4SegmentDemuxer::open(source, layout, pools.clone()).expect("BUG: build demuxer");
+    let demuxer = Fmp4SegmentDemuxer::open(source, layout, pools.clone(), construction_gate)
+        .expect("BUG: build demuxer");
     #[cfg(feature = "symphonia")]
     let codec = SymphoniaCodec::open_with_config(demuxer.track_info(), &SymphoniaConfig::default())
         .expect("BUG: open codec");
@@ -196,7 +300,8 @@ fn assert_pending_preparation_recovers_after_shrink(
         inner: Cursor::new(blob),
         reads: Arc::clone(&reads),
         record: Arc::new(AtomicBool::new(true)),
-        available_end: Some(current_end),
+        available_end: Some(Arc::new(AtomicU64::new(current_end))),
+        construction: None,
     });
     let layout = Arc::new(EstimatedSegmentLayout {
         inner: segmented,
@@ -204,7 +309,7 @@ fn assert_pending_preparation_recovers_after_shrink(
     });
     let byte_map: Arc<dyn ByteMap> = layout.clone();
     let pools = pools();
-    let decoder = make_decoder_from_source(source, byte_map, pools.clone());
+    let decoder = make_decoder_from_source(source, byte_map, pools.clone(), None);
     let mut decoder = wrap(Box::new(decoder), &pools);
     let reason = PendingReason::NotReady(NotReadyCause::WaitBudgetExhausted);
 
@@ -404,7 +509,7 @@ fn an_undescribed_segment_is_not_the_end_of_the_stream(aac_three: (Vec<u8>, Fake
         lookups: AtomicUsize::new(0),
     });
     let mut demuxer =
-        Fmp4SegmentDemuxer::open(source, layout, pools()).expect("BUG: build demuxer");
+        Fmp4SegmentDemuxer::open(source, layout, pools(), None).expect("BUG: build demuxer");
 
     let outcome = demuxer.next_frame().expect("BUG: demux a described layout");
 
@@ -426,7 +531,8 @@ fn assert_undescribed_segment_preparation_is_bounded(
     });
     let byte_map: Arc<dyn ByteMap> = layout.clone();
     let pools = pools();
-    let decoder = make_decoder_from_source(Box::new(Cursor::new(blob)), byte_map, pools.clone());
+    let decoder =
+        make_decoder_from_source(Box::new(Cursor::new(blob)), byte_map, pools.clone(), None);
     let mut decoder = wrap(Box::new(decoder), &pools);
     for _ in 0..2 {
         let before = layout.lookups.load(Ordering::Relaxed);
@@ -600,7 +706,7 @@ fn seek_emits_notneeded_for_first_segment_flac(flac_three: (Vec<u8>, FakeSegment
     let source: BoxedSource = Box::new(Cursor::new(blob));
     let layout: Arc<dyn ByteMap> = Arc::new(segmented);
     let mut demuxer =
-        Fmp4SegmentDemuxer::open(source, layout, pools()).expect("BUG: build FLAC demuxer");
+        Fmp4SegmentDemuxer::open(source, layout, pools(), None).expect("BUG: build FLAC demuxer");
 
     let outcome = demuxer
         .seek(Duration::ZERO, CodecPriming::default())
@@ -627,7 +733,8 @@ fn seek_starts_just_ahead_of_the_target(aac_five: (Vec<u8>, FakeSegmented)) {
     let (blob, segmented) = aac_five;
     let source: BoxedSource = Box::new(Cursor::new(blob));
     let layout: Arc<dyn ByteMap> = Arc::new(segmented);
-    let mut demuxer = Fmp4SegmentDemuxer::open(source, layout, pools()).expect("BUG: demuxer");
+    let mut demuxer =
+        Fmp4SegmentDemuxer::open(source, layout, pools(), None).expect("BUG: demuxer");
 
     // WHY: 16s sits inside seg-2 (12s..18s), four seconds past its first frame.
     let target = Duration::from_secs(16);
@@ -667,28 +774,75 @@ fn seek_into_a_segment_the_playlist_places_early_keeps_the_target(
     #[case] target: Duration,
 ) {
     let (blob, segmented) = flac_three;
-    // WHY: 5.9s EXTINF puts seg-2 at 11.8s while its own frames start near 12s.
-    let (mut decoder, _reads, _record) =
-        make_decoder(blob, segmented.with_extinf(Duration::from_millis(5_900)));
-
-    let outcome = decoder.seek(target).expect("BUG: seek");
+    let segmented = segmented.with_extinf(Duration::from_millis(5_900));
+    let selected = segmented.segment_at_time(target).expect("playlist target");
+    assert_eq!(selected.segment_index, 2);
+    let earlier = segmented
+        .segment_at_index(1)
+        .expect("predecessor descriptor");
+    let init_end = usize::try_from(segmented.init_segment_range().end).expect("init end");
+    let init = parse_init(&blob[..init_end], &pools()).expect("parse init");
+    let selected_start = usize::try_from(selected.byte_range.start).expect("selected start");
+    let selected_end = usize::try_from(selected.byte_range.end).expect("selected end");
+    let frames = parse_segment_frames(&init, &blob[selected_start..selected_end])
+        .expect("selected segment frames");
+    let first_frame = frames.first().expect("selected segment has media");
     assert!(
-        matches!(outcome, DecoderSeekOutcome::Landed { landed_at, .. } if landed_at <= target),
-        "seek must land at or before {target:?}, got {outcome:?}"
+        u128::from(first_frame.decode_time) * 1_000_000_000
+            > target.as_nanos() * u128::from(init.timescale),
+        "the playlist-selected segment must start after the requested target"
     );
-    let first = (0..64)
-        .find_map(
-            |_| match decoder.next_chunk().expect("BUG: decode after seek") {
-                DecoderChunkOutcome::Chunk(chunk) => Some(chunk.meta.timestamp),
-                DecoderChunkOutcome::Pending(_) => None,
-                DecoderChunkOutcome::Eof => panic!("seek into seg-1/seg-2 must not report EOF"),
-            },
-        )
-        .expect("BUG: no PCM after seek");
+    let (mut decoder, reads, record) = make_decoder(blob, segmented);
+    record.store(true, Ordering::Release);
+
+    let outcome = decoder.seek(target).expect("seek");
+    let DecoderSeekOutcome::Landed {
+        landed_at,
+        landed_byte,
+        preroll,
+        ..
+    } = outcome
+    else {
+        panic!("expected resolved landing, got {outcome:?}");
+    };
     assert_eq!(
-        first, target,
+        landed_byte,
+        Some(earlier.byte_range.start),
+        "the returned seek destination must name the segment used after late-start descent"
+    );
+    assert!(
+        landed_at >= earlier.decode_time && landed_at < selected.decode_time,
+        "landing time must describe the earlier segment: {landed_at:?}"
+    );
+    assert_eq!(preroll, kithara_stream::PrerollHint::NotNeeded);
+    let first = (0..64)
+        .find_map(|_| match decoder.next_chunk().expect("decode after seek") {
+            DecoderChunkOutcome::Chunk(chunk) => Some(chunk.meta),
+            DecoderChunkOutcome::Pending(_) => None,
+            DecoderChunkOutcome::Eof => panic!("seek into seg-1/seg-2 must not report EOF"),
+        })
+        .expect("no PCM after seek");
+    assert_eq!(
+        first.timestamp, target,
         "the first PCM after a seek starts at the target"
     );
+    assert_eq!(first.segment_index, Some(earlier.segment_index));
+    let reads = reads.lock().expect("read ledger");
+    for segment in [&selected, &earlier] {
+        assert!(
+            reads
+                .iter()
+                .any(|read| read.start == segment.byte_range.start),
+            "late-start descent must inspect segment {}: {reads:?}",
+            segment.segment_index
+        );
+    }
+    assert!(
+        reads
+            .iter()
+            .all(|read| read.start >= earlier.byte_range.start)
+    );
+    drop(reads);
 }
 
 #[cfg(feature = "symphonia")]

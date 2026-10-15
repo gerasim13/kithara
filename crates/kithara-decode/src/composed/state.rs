@@ -3,7 +3,7 @@ use std::sync::atomic::AtomicU64;
 use kithara_bufpool::{PoolRegion, SampleBuffer};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::AudioSpec;
-use kithara_stream::BoxedEventSink;
+use kithara_stream::{BoxedEventSink, PendingReason};
 
 use crate::{
     PcmOrigin, codec::FrameCodec, demuxer::Demuxer, error::DecodeResult,
@@ -86,6 +86,7 @@ pub(super) enum PcmOriginState {
 }
 
 pub(super) enum Prefill {
+    Seeking(PendingReason),
     Needed,
     Buffered(DecodeResult<DecoderChunkOutcome>),
     Complete,

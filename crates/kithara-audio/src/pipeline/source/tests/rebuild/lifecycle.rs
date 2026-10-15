@@ -1,3 +1,5 @@
+use std::panic::catch_unwind;
+
 use super::*;
 use crate::pipeline::stream::shared::SharedStream;
 
@@ -104,6 +106,56 @@ async fn decoder_readers_have_isolated_construction_gates() {
 
     assert!(initial_gate.is_armed());
     assert!(!rebuild_gate.is_armed());
+
+    for armed in [false, true] {
+        if armed {
+            initial_gate.arm();
+        } else {
+            initial_gate.disarm();
+        }
+        for other_armed in [false, true] {
+            if other_armed {
+                rebuild_gate.arm();
+            } else {
+                rebuild_gate.disarm();
+            }
+            assert_eq!(initial_gate.is_armed(), armed);
+            assert_eq!(rebuild_gate.is_armed(), other_armed);
+            {
+                let _scope = initial_gate.nonblocking();
+                assert!(!initial_gate.is_armed());
+                assert_eq!(rebuild_gate.is_armed(), other_armed);
+                {
+                    let _nested = initial_gate.nonblocking();
+                    assert!(!initial_gate.is_armed());
+                    assert_eq!(rebuild_gate.is_armed(), other_armed);
+                }
+                assert!(!initial_gate.is_armed());
+                assert_eq!(rebuild_gate.is_armed(), other_armed);
+                let nested_unwind = catch_unwind(|| {
+                    let _nested = initial_gate.nonblocking();
+                    assert!(!initial_gate.is_armed());
+                    assert_eq!(rebuild_gate.is_armed(), other_armed);
+                    panic!("nested probe unwinds inside an active scope");
+                });
+                assert!(nested_unwind.is_err());
+                assert!(!initial_gate.is_armed());
+                assert_eq!(rebuild_gate.is_armed(), other_armed);
+            }
+            assert_eq!(initial_gate.is_armed(), armed);
+            assert_eq!(rebuild_gate.is_armed(), other_armed);
+            let unwind = catch_unwind(|| {
+                let _scope = initial_gate.nonblocking();
+                let _nested = initial_gate.nonblocking();
+                assert!(!initial_gate.is_armed());
+                assert_eq!(rebuild_gate.is_armed(), other_armed);
+                panic!("nested probe scopes unwind together");
+            });
+            assert!(unwind.is_err());
+            assert_eq!(initial_gate.is_armed(), armed);
+            assert_eq!(rebuild_gate.is_armed(), other_armed);
+        }
+    }
 }
 
 #[kithara::test(tokio)]

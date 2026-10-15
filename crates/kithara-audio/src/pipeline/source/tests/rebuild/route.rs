@@ -1,4 +1,5 @@
 use super::*;
+use crate::pipeline::{seek::ResumeTarget, source::StreamAudioSource};
 
 #[kithara::test(tokio)]
 async fn route_change_host_rate_delta_starts_decoder_recreate(route_pcm: RoutePcm) {
@@ -302,10 +303,82 @@ async fn rebuilding_decoder_seek_epoch_supersedes_completion() {
         source.phase,
         crate::pipeline::source::core::OwnerPhase::Decoding
     ));
+
+    let mut decoder = TestDecoder::new(3, drops);
+    decoder.defer_seek = true;
+    let seek_calls = decoder.seek_calls.clone();
+    let seek_preparations = decoder.seek_preparations.clone();
+    let preparations = decoder.preparations.clone();
+    let settlement = decoder.settlement.clone();
+    drop(source.decode.replace_active(DecoderGeneration::new(
+        Box::new(decoder),
+        Some(media_info(1)),
+        0,
+        None,
+        None,
+        GaplessMode::Disabled,
+    )));
+    let mut events = source.emit.bus().subscribe::<AudioEvent>();
+    let committed = source.playhead.position();
+    let committed_byte = source.shared_stream.position();
+    assert!(
+        matches!(source.seek(target), Ok(crate::SeekOutcome::Pending { target: actual, .. }) if actual == target)
+    );
+    *settlement.lock() = Some(Ok(kithara_decode::DecoderSeekOutcome::Landed {
+        landed_at: Duration::from_secs(1),
+        landed_frame: 1,
+        landed_byte: Some(17),
+        preroll: kithara_stream::PrerollHint::NotNeeded,
+    }));
+    assert!(
+        matches!(source.seek(target), Ok(crate::SeekOutcome::Pending { target: actual, .. }) if actual == target)
+    );
+    assert!(
+        settlement.lock().is_none(),
+        "same-target supersession drops the old completion"
+    );
+    source.prepare_deferred();
+    assert_eq!(seek_calls.load(Ordering::Relaxed), 2);
+    assert_eq!(seek_preparations.load(Ordering::Relaxed), 1);
+    assert_eq!(preparations.load(Ordering::Relaxed), 0);
+    assert_eq!(source.playhead.position(), committed);
+    assert_eq!(source.shared_stream.position(), committed_byte);
+    assert!(matches!(
+        source.phase,
+        crate::pipeline::source::core::OwnerPhase::Seeking { .. }
+    ));
+    let landed = Duration::from_secs(2);
+    *settlement.lock() = Some(Ok(kithara_decode::DecoderSeekOutcome::Landed {
+        landed_at: landed,
+        landed_frame: 2,
+        landed_byte: Some(29),
+        preroll: kithara_stream::PrerollHint::NotNeeded,
+    }));
+    source.prepare_deferred();
+    assert_eq!(source.shared_stream.position(), 29);
+    assert_eq!(source.playhead.position(), landed);
+    source.prepare_deferred();
+    assert_eq!(seek_calls.load(Ordering::Relaxed), 2);
+    assert_eq!(seek_preparations.load(Ordering::Relaxed), 2);
+    source.finish_deferred();
+    let mut stages = Vec::new();
+    while let Ok(envelope) = events.try_recv() {
+        if let AudioEvent::SeekLifecycle { stage, .. } = envelope.event {
+            stages.push(stage);
+        }
+    }
+    assert_eq!(
+        stages,
+        [
+            crate::SeekLifecycleStage::SeekRequest,
+            crate::SeekLifecycleStage::SeekRequest,
+            crate::SeekLifecycleStage::SeekApplied,
+        ]
+    );
 }
 
 #[kithara::test(tokio)]
-async fn deferred_preparation_does_not_read_before_seek_is_applied() {
+async fn deferred_preparation_does_not_read_before_seek_is_applied(route_pcm: RoutePcm) {
     let RebuildFixture {
         mut source, drops, ..
     } = test_source(0).await;
@@ -329,6 +402,129 @@ async fn deferred_preparation_does_not_read_before_seek_is_applied() {
     );
     assert_eq!(source.playhead.position(), target);
     assert_eq!(preparations.load(Ordering::Relaxed), 0);
+
+    for cancelled in [false, true] {
+        let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
+        let mut decoder = TestDecoder::new(2, fixture.drops.clone());
+        decoder.defer_seek = true;
+        let seek_calls = decoder.seek_calls.clone();
+        let seek_preparations = decoder.seek_preparations.clone();
+        let preparations = decoder.preparations.clone();
+        let settlement = decoder.settlement.clone();
+        drop(fixture.source.decode.replace_active(DecoderGeneration::new(
+            Box::new(decoder),
+            Some(media_info(0)),
+            0,
+            None,
+            None,
+            GaplessMode::Disabled,
+        )));
+        let committed = fixture.source.playhead.position();
+        let mut events = fixture.source.emit.bus().subscribe::<AudioEvent>();
+        assert!(
+            matches!(fixture.source.seek(target), Ok(crate::SeekOutcome::Pending { target: actual, .. }) if actual == target)
+        );
+        assert_eq!(seek_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(seek_preparations.load(Ordering::Relaxed), 0);
+        assert_eq!(preparations.load(Ordering::Relaxed), 0);
+        fixture.source.finish_deferred();
+        assert!(matches!(
+            events.try_recv().expect("seek request").event,
+            AudioEvent::SeekLifecycle {
+                stage: crate::SeekLifecycleStage::SeekRequest,
+                ..
+            }
+        ));
+        assert!(
+            events.try_recv().is_err(),
+            "pending cannot publish a landing"
+        );
+        for expected in 1..=2 {
+            fixture.source.prepare_deferred();
+            assert!(matches!(
+                fixture.source.step_track(),
+                TrackStep::Blocked(_) | TrackStep::StateChanged
+            ));
+            assert_eq!(seek_calls.load(Ordering::Relaxed), 1);
+            assert_eq!(seek_preparations.load(Ordering::Relaxed), expected);
+            assert_eq!(preparations.load(Ordering::Relaxed), 0);
+            assert_eq!(fixture.source.playhead.position(), committed);
+            fixture.source.finish_deferred();
+            assert!(events.try_recv().is_err());
+        }
+        if cancelled {
+            *settlement.lock() = Some(Ok(kithara_decode::DecoderSeekOutcome::Landed {
+                landed_at: target,
+                landed_frame: 3,
+                landed_byte: Some(29),
+                preroll: kithara_stream::PrerollHint::NotNeeded,
+            }));
+            *fixture.phase.lock() = SourcePhase::Cancelled;
+        } else {
+            *settlement.lock() = Some(Err(DecodeError::InvalidData {
+                detail: "pending seek parse failure",
+            }));
+        }
+        fixture.source.prepare_deferred();
+        assert!(matches!(fixture.source.step_track(), TrackStep::Failed(_)));
+        assert_eq!(fixture.source.playhead.position(), committed);
+        assert_eq!(preparations.load(Ordering::Relaxed), 0);
+        if cancelled {
+            assert_eq!(
+                seek_preparations.load(Ordering::Relaxed),
+                2,
+                "cancel preempts a ready landing"
+            );
+            assert!(matches!(
+                fixture.source.phase,
+                crate::pipeline::source::core::OwnerPhase::Failed {
+                    failure: TrackFailureKind::SourceCancelled,
+                    ..
+                }
+            ));
+        } else {
+            assert_eq!(seek_preparations.load(Ordering::Relaxed), 3);
+            assert!(matches!(
+                fixture.source.phase,
+                crate::pipeline::source::core::OwnerPhase::Failed {
+                    failure: TrackFailureKind::Decode {
+                        kind: crate::DecodeErrorKind::InvalidData
+                    },
+                    error: Some(DecodeError::InvalidData {
+                        detail: "pending seek parse failure"
+                    }),
+                }
+            ));
+        }
+        fixture.source.finish_deferred();
+        let mut rejected = 0;
+        while let Ok(envelope) = events.try_recv() {
+            match envelope.event {
+                AudioEvent::SeekRejected { target: actual } => {
+                    assert_eq!(actual, target);
+                    rejected += 1;
+                }
+                AudioEvent::SeekLifecycle {
+                    stage: crate::SeekLifecycleStage::SeekApplied,
+                    ..
+                }
+                | AudioEvent::SeekComplete { .. } => panic!("terminal pending seek cannot land"),
+                _ => {}
+            }
+        }
+        assert_eq!(rejected, 1);
+        fixture.source.prepare_deferred();
+        assert!(matches!(fixture.source.step_track(), TrackStep::Failed(_)));
+        fixture.source.finish_deferred();
+        assert!(
+            events.try_recv().is_err(),
+            "terminal reentry cannot repeat rejection"
+        );
+        assert_eq!(
+            seek_preparations.load(Ordering::Relaxed),
+            if cancelled { 2 } else { 3 }
+        );
+    }
 }
 
 #[kithara::test(tokio)]
@@ -380,7 +576,7 @@ async fn rebuilding_decoder_variant_change_supersedes_completion() {
 }
 
 #[kithara::test(tokio)]
-async fn rebuilding_decoder_variant_change_preserves_inflight_seek() {
+async fn rebuilding_decoder_variant_change_preserves_inflight_seek(route_pcm: RoutePcm) {
     let RebuildFixture {
         control,
         drops,
@@ -411,6 +607,9 @@ async fn rebuilding_decoder_variant_change_preserves_inflight_seek() {
         source.phase,
         crate::pipeline::source::core::OwnerPhase::Decoding
     ));
+    for for_render in [false, true] {
+        assert_retired_active_rebind(&route_pcm, for_render).await;
+    }
 }
 
 #[kithara::test(tokio)]
@@ -508,4 +707,258 @@ fn a_seek_releases_its_buffered_chunks_off_rt(route_pcm: RoutePcm) {
     generation.notify_seek();
 
     assert!(!generation.has_output());
+}
+
+fn assert_retained_retired_target(
+    source: &StreamAudioSource<TestStream>,
+    target: Duration,
+    for_render: bool,
+) {
+    assert!(matches!(
+        (source.decode.active().resume_target(), for_render),
+        (Some(ResumeTarget::Position(actual)), false)
+            | (Some(ResumeTarget::Render(actual)), true) if actual == target
+    ));
+}
+
+async fn assert_retired_active_rebind(route_pcm: &RoutePcm, for_render: bool) {
+    let RebuildFixture {
+        control,
+        drops,
+        pools,
+        mut source,
+    } = test_source(0).await;
+    let mut retired = TestDecoder::new(7, drops.clone());
+    retired.defer_seek = true;
+    retired.pending_reason = kithara_stream::PendingReason::SessionRetired;
+    let stale_seek_calls = retired.seek_calls.clone();
+    let stale_seek_preparations = retired.seek_preparations.clone();
+    let stale_preparations = retired.preparations.clone();
+    drop(source.decode.replace_active(DecoderGeneration::new(
+        Box::new(retired),
+        Some(media_info(0)),
+        0,
+        None,
+        None,
+        GaplessMode::Disabled,
+    )));
+    assert_eq!(drops.lock().as_slice(), &[1]);
+    assert_eq!(
+        source.decode.active().media_info(),
+        control.media_info.lock().as_ref()
+    );
+    *control.format_range.lock() = Some(64..96);
+    let builds = Arc::new(AtomicU64::new(0));
+    let factory_builds = builds.clone();
+    let factory_drops = drops.clone();
+    let factory_pools = pools.clone();
+    let factory_pcm = route_pcm.clone();
+    source.factory = DecoderFactory::new(
+        move |reader, info, _rate| {
+            factory_builds.fetch_add(1, Ordering::Relaxed);
+            assert_eq!(
+                info,
+                Some(media_info(0)),
+                "metadata equality cannot suppress rebind"
+            );
+            assert_eq!(
+                reader.byte_len(),
+                Some(4096 - 64),
+                "replacement uses the current header"
+            );
+            let mut decoder = RouteSignalDecoder::new(
+                &factory_pcm,
+                8,
+                consts::SAMPLE_RATE,
+                None,
+                None,
+                factory_drops.clone(),
+                factory_pools.clone(),
+            );
+            decoder.seek_landing = Some(800);
+            Ok(Box::new(decoder))
+        },
+        None,
+    );
+    let target = Duration::from_millis(20);
+    let outcome = if for_render {
+        source.seek_for_render(target)
+    } else {
+        source.seek(target)
+    };
+    assert!(matches!(outcome, Ok(crate::SeekOutcome::Pending {
+        target: actual, reason: kithara_stream::PendingReason::SessionRetired,
+    }) if actual == target));
+    assert!(matches!(
+        source.phase,
+        crate::pipeline::source::core::OwnerPhase::Seeking { .. }
+    ));
+    assert_retained_retired_target(&source, target, for_render);
+    assert_eq!(stale_seek_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(stale_seek_preparations.load(Ordering::Relaxed), 0);
+    assert_eq!(stale_preparations.load(Ordering::Relaxed), 0);
+    assert!(matches!(source.step_track(), TrackStep::Blocked(_)));
+    source.prepare_deferred();
+    assert!(matches!(
+        source.phase,
+        crate::pipeline::source::core::OwnerPhase::Decoding
+    ));
+    assert_eq!(source.decode.active().base_offset(), 64);
+    assert_eq!(
+        source.decode.active().media_info(),
+        control.media_info.lock().as_ref()
+    );
+    assert_retained_retired_target(&source, target, for_render);
+    assert_eq!(builds.load(Ordering::Relaxed), 1);
+    assert_eq!(drops.lock().as_slice(), &[1, 7]);
+    assert_eq!(stale_seek_preparations.load(Ordering::Relaxed), 0);
+    assert_eq!(stale_preparations.load(Ordering::Relaxed), 0);
+    source.prepare_deferred();
+    let TrackStep::Produced(fetch) = source.step_track() else {
+        panic!("replacement must produce its real trimmed PCM");
+    };
+    let chunk = produced_data(fetch);
+    let expected_frame = if for_render { 881 } else { 882 };
+    let expected_end = 800 + consts::ROUTE_CHUNK_FRAMES;
+    assert_eq!(
+        chunk.meta.frame_offset,
+        u64::try_from(expected_frame).expect("target frame")
+    );
+    assert_eq!(chunk.frames(), expected_end - expected_frame);
+    assert_eq!(
+        chunk.meta.timestamp,
+        spec(consts::SAMPLE_RATE)
+            .duration_for(u64::try_from(expected_frame).expect("target frame"))
+            .expect("trimmed source position")
+    );
+    assert_eq!(
+        &*chunk.samples,
+        &route_pcm[0][expected_frame * 2..expected_end * 2]
+    );
+    assert!(
+        source.decode.active().resume_target().is_none(),
+        "trim intent is consumed once"
+    );
+    source.prepare_deferred();
+    source.finish_deferred();
+    assert_eq!(builds.load(Ordering::Relaxed), 1);
+    assert_eq!(stale_seek_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(stale_seek_preparations.load(Ordering::Relaxed), 0);
+    assert_eq!(stale_preparations.load(Ordering::Relaxed), 0);
+    assert_eq!(drops.lock().as_slice(), &[1, 7]);
+}
+
+#[kithara::test(tokio)]
+async fn incoming_retired_seek_fails_only_its_slot_before_publication(route_pcm: RoutePcm) {
+    let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
+    let plan = exact_incoming_plan();
+    let transition = plan.transition();
+    fixture.control.set_exact_plan(plan);
+    let revision = fixture.source.decode.discontinuity().revision();
+    let builds = Arc::new(AtomicU64::new(0));
+    let factory_builds = builds.clone();
+    fixture.source.factory = DecoderFactory::new(
+        move |_reader, _info, _rate| {
+            factory_builds.fetch_add(1, Ordering::Relaxed);
+            Err(DecodeError::InvalidData {
+                detail: "retired incoming cannot reopen active",
+            })
+        },
+        None,
+    );
+    let mut retired = TestDecoder::new(77, fixture.drops.clone());
+    retired.defer_seek = true;
+    retired.pending_reason = kithara_stream::PendingReason::SessionRetired;
+    let seek_calls = retired.seek_calls.clone();
+    let seek_preparations = retired.seek_preparations.clone();
+    let preparations = retired.preparations.clone();
+    let mut incoming = DecoderGeneration::new(
+        Box::new(retired),
+        Some(media_info(1)),
+        0,
+        None,
+        None,
+        GaplessMode::Disabled,
+    );
+    assert!(matches!(
+        incoming.seek(Duration::ZERO, GaplessMode::Disabled),
+        Ok(kithara_decode::DecoderSeekOutcome::Pending(
+            kithara_stream::PendingReason::SessionRetired
+        ))
+    ));
+    incoming.trim_to(ResumeTarget::Position(Duration::ZERO));
+    assert!(
+        fixture
+            .source
+            .decode
+            .begin_incoming(
+                transition,
+                OutgoingFrontier::Exact {
+                    frame: 0,
+                    rate: consts::SAMPLE_RATE,
+                }
+            )
+            .is_none()
+    );
+    assert!(
+        fixture
+            .source
+            .decode
+            .install_incoming(transition, incoming)
+            .is_none()
+    );
+    let mut events = fixture.source.emit.bus().subscribe::<AudioEvent>();
+    fixture.source.prepare_deferred();
+    assert_eq!(seek_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(seek_preparations.load(Ordering::Relaxed), 1);
+    assert_eq!(preparations.load(Ordering::Relaxed), 0);
+    assert!(!fixture.source.decode.incoming_is_priming(transition));
+    assert_eq!(
+        fixture.source.decode.incoming_transition(),
+        Some(transition)
+    );
+    assert!(fixture.source.decode.incoming_staged_span().is_none());
+    assert_eq!(fixture.control.promote_calls(), 0);
+    assert_eq!(fixture.control.aborted_transition(), None);
+    assert!(fixture.drops.lock().is_empty());
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
+    assert_eq!(fixture.control.aborted_transition(), Some(transition));
+    assert!(fixture.source.decode.incoming_transition().is_none());
+    assert_eq!(fixture.drops.lock().as_slice(), &[77]);
+    assert_eq!(
+        fixture.source.decode.active().media_info(),
+        Some(&media_info(0))
+    );
+    assert_eq!(fixture.source.decode.discontinuity().revision(), revision);
+    assert!(matches!(
+        fixture.source.phase,
+        crate::pipeline::source::core::OwnerPhase::Decoding
+    ));
+    assert_eq!(builds.load(Ordering::Relaxed), 0);
+    let TrackStep::Produced(fetch) = fixture.source.step_track() else {
+        panic!("active PCM survives incoming retirement");
+    };
+    let chunk = produced_data(fetch);
+    assert_eq!(chunk.meta.frame_offset, 0);
+    assert_eq!(chunk.meta.source_revision, revision);
+    assert_eq!(
+        &*chunk.samples,
+        &route_pcm[0][..consts::ROUTE_CHUNK_FRAMES * 2]
+    );
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
+    assert_eq!(builds.load(Ordering::Relaxed), 0);
+    assert_eq!(seek_preparations.load(Ordering::Relaxed), 1);
+    assert_eq!(preparations.load(Ordering::Relaxed), 0);
+    assert_eq!(fixture.control.promote_calls(), 0);
+    assert_eq!(fixture.drops.lock().as_slice(), &[77]);
+    while let Ok(envelope) = events.try_recv() {
+        assert!(!matches!(
+            envelope.event,
+            AudioEvent::SeekLifecycle { .. }
+                | AudioEvent::SeekComplete { .. }
+                | AudioEvent::TrackFailed { .. }
+        ));
+    }
 }

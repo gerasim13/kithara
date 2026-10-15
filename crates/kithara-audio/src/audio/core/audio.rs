@@ -147,7 +147,8 @@ impl<S> Audio<S> {
         }
         Ok(())
     }
-    /// Seek synchronously inside the open source, discarding locally buffered PCM.
+    /// Seek inside the open source, discarding locally buffered PCM.
+    /// Pending input is continued by deferred preparation on the owning lane.
     ///
     /// # Errors
     /// Returns a source or decoder failure without rebuilding for a seek failure.
@@ -178,7 +179,9 @@ impl<S> Audio<S> {
         if let Err(error) = &result {
             self.failure = Some(crate::TrackFailureKind::from(error));
         }
-        if let Some(spec) = self.source.prepare_deferred() {
+        if !matches!(result, Ok(SeekOutcome::Pending { .. }))
+            && let Some(spec) = self.source.prepare_deferred()
+        {
             self.cursor.set_spec(spec);
         }
         self.source.finish_deferred();
@@ -196,8 +199,11 @@ impl<S> Audio<S> {
             self.seek_lock = Some(abr.clone());
         }
         let result = self.seek_selected(position, for_render);
-        self.seek_pending = matches!(result, Ok(SeekOutcome::Landed { .. }));
-        if !matches!(result, Ok(SeekOutcome::Landed { .. })) {
+        self.seek_pending = matches!(
+            result,
+            Ok(SeekOutcome::Landed { .. } | SeekOutcome::Pending { .. })
+        );
+        if !self.seek_pending {
             self.release_seek_lock();
         }
         result
@@ -234,6 +240,7 @@ impl<S> Audio<S> {
                 Ok(ChunkOutcome::Chunk(Box::new(data)))
             }
             TrackStep::Produced(Fetch::NaturalEof) | TrackStep::Eof => {
+                self.seek_pending = false;
                 self.release_seek_lock();
                 self.publish_final_progress();
                 self.emit.flush();

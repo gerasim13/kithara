@@ -63,6 +63,14 @@ pub(crate) trait Demuxer: Send {
     /// Surfaces parser-level seek failures verbatim.
     fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome>;
 
+    /// Continue an unresolved seek, returning its settlement once.
+    ///
+    /// # Errors
+    /// Returns source or parser failures from the same seek operation.
+    fn prepare_seek(&mut self) -> DecodeResult<Option<DemuxSeekOutcome>> {
+        Ok(None)
+    }
+
     /// Raw packet coordinate of native media zero; absent when the translation is unknown.
     fn media_origin(&self) -> Option<Duration> {
         None
@@ -142,6 +150,8 @@ pub(crate) enum DemuxOutcome<'a> {
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub(crate) enum DemuxSeekOutcome {
+    /// Accepted seek with no landing coordinate yet; continue through `prepare_seek`.
+    Pending(PendingReason),
     /// Successfully landed inside the stream. `landed_at` is the
     /// authoritative target (≤ requested target). `landed_byte` is the
     /// optional byte-level cursor where playback continues.

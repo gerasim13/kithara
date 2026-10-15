@@ -85,6 +85,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     pub(super) fn progress_variant_transition(&mut self) {
         match &self.phase {
             OwnerPhase::Decoding => {}
+            OwnerPhase::Seeking { .. } => return,
             OwnerPhase::AtEof | OwnerPhase::Failed { .. } => {
                 if let (Some(control), Some(transition)) = (
                     self.variant_control.clone(),

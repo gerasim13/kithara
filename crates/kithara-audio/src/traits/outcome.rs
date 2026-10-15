@@ -56,9 +56,8 @@ pub enum ReadOutcome {
     Eof { position: Duration },
 }
 
-/// Result of a seek — either the reader landed at a known position or
-/// the target was past the known duration. Failures surface as
-/// `Err(DecodeError)`.
+/// Result of a seek: accepted pending input, a known landing, or a target
+/// past the known duration. Failures surface as `Err(DecodeError)`.
 ///
 /// `Landed` carries both the requested `target` and the actual
 /// `landed_at`. The two may differ when the underlying decoder
@@ -66,6 +65,12 @@ pub enum ReadOutcome {
 /// a "post-seek" position should use `landed_at`, not `target`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SeekOutcome {
+    /// Seek accepted without a landing coordinate. Deferred preparation continues
+    /// the same operation; no source position is committed until it settles.
+    Pending {
+        target: Duration,
+        reason: kithara_stream::PendingReason,
+    },
     /// Seek completed; reader is now parked at `landed_at`.
     Landed {
         target: Duration,

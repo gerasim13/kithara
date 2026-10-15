@@ -1,4 +1,5 @@
 mod core;
+mod seek;
 mod variant;
 
 pub(crate) use core::{SourceDecoderConfig, StreamAudioSource};

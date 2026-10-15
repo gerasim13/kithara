@@ -71,6 +71,9 @@ pub(crate) fn tick<T: StreamType>(core: &mut ActiveDecode, ctx: DecodeCtx<'_, T>
         decoded = true;
         kithara::probe_event!(decode_step);
         match core.next_chunk(ctx.stream.position()) {
+            Ok(DecoderChunkOutcome::Pending(PendingReason::SessionRetired)) => {
+                return DecodeAction::ReaderRetired;
+            }
             Ok(DecoderChunkOutcome::Pending(PendingReason::VariantChange)) => {
                 return variant_change(core, &ctx);
             }
