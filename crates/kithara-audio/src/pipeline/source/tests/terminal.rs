@@ -261,7 +261,7 @@ async fn real_terminal_transitions_wait_for_the_diagnostic_shell(
             drop(fixture.source.decode.replace_active(replacement));
             let error = fixture
                 .source
-                .seek_owned(Duration::from_millis(20))
+                .seek_owned(Duration::from_millis(20), false)
                 .expect_err("real failed seek");
             let crate::AudioReadError::Decode(error) = error else {
                 panic!("decoder seek must preserve its direct decode error");

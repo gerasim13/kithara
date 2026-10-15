@@ -6,43 +6,6 @@ use kithara_stream::ChunkPosition;
 
 use crate::consts;
 
-/// Returns the canonical exact source geometry without changing packet metadata.
-///
-/// # Errors
-/// Returns an error when native packet geometry is unrepresentable.
-pub fn source_geometry(info: &AudioChunkInfo) -> DecodeResult<SourceSpan> {
-    if let Some(span) = info.source_span {
-        return Ok(span);
-    }
-    let frames = u64::from(info.frames);
-    info.frame_offset
-        .checked_add(frames)
-        .ok_or_else(geometry_error)?;
-    let rate = u128::from(info.spec.sample_rate.get());
-    let phase = u128::from(info.frame_offset)
-        .checked_mul(consts::NANOS_PER_SEC)
-        .and_then(|value| value.checked_rem(rate))
-        .ok_or_else(geometry_error)?;
-    let numerator = info
-        .timestamp
-        .as_nanos()
-        .checked_mul(rate)
-        .and_then(|value| value.checked_add(phase))
-        .ok_or_else(geometry_error)?;
-    let denominator = NonZeroU128::new(consts::NANOS_PER_SEC).ok_or_else(geometry_error)?;
-    let span = SourceSpan::try_from((
-        numerator,
-        consts::NANOS_PER_SEC,
-        denominator,
-        info.spec.sample_rate,
-        frames,
-    ))
-    .map_err(|()| geometry_error())?
-    .with_render_revision(info.render_revision)
-    .with_mapping_revision(info.mapping_revision);
-    Ok(span)
-}
-
 /// Quantizes a raw position on the packet's stable physical PCM lattice.
 ///
 /// The inherited source clock is scaled to the actual PCM rate before rounding.
@@ -54,7 +17,7 @@ pub fn source_lattice_position(
     info: &AudioChunkInfo,
     position: kithara_platform::time::Duration,
 ) -> DecodeResult<(u128, NonZeroU128)> {
-    let span = source_geometry(info)?;
+    let span = info.source_geometry().ok_or_else(geometry_error)?;
     let pcm = span
         .scaled_from(
             (0, NonZeroU128::MIN),
@@ -98,7 +61,7 @@ pub fn source_lattice_position(
 }
 
 pub(crate) fn normalize_geometry(info: &mut AudioChunkInfo) -> DecodeResult<SourceSpan> {
-    let span = source_geometry(info)?;
+    let span = info.source_geometry().ok_or_else(geometry_error)?;
     if info.source_span.is_none() {
         info.timestamp = span.position_at(0).ok_or_else(geometry_error)?;
         info.end_timestamp = span
@@ -162,7 +125,7 @@ mod tests {
         let mut info = metadata(1_000, 42, 4, origin);
         info.visible_origin = Some(origin);
         let original = info;
-        let projected = source_geometry(&info).expect("read-only native geometry");
+        let projected = info.source_geometry().expect("read-only native geometry");
         assert_eq!(info, original);
         let span = normalize_geometry(&mut info).expect("native geometry");
         assert_eq!(projected, span);

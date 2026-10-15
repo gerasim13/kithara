@@ -1,4 +1,4 @@
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::{NonZeroU32, NonZeroU128, NonZeroUsize};
 
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_platform::{sync::Arc, time::Duration};
@@ -348,6 +348,21 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         self.pending_unity_meta = None;
     }
 
+    /// Reanchors physical render phase after applying any source discontinuity.
+    ///
+    /// # Errors
+    /// Returns an error when the retained trajectory cannot represent the phase.
+    pub fn reanchor_source(
+        &mut self,
+        meta: AudioChunkInfo,
+        position: (u128, NonZeroU128),
+    ) -> Result<(), WarpRenderError> {
+        self.rebase_source(meta);
+        self.trajectory
+            .reanchor(meta.frame_offset, meta.spec.sample_rate, position)?;
+        Ok(())
+    }
+
     pub(in crate::render) fn rebase_source(&mut self, meta: AudioChunkInfo) {
         if self
             .residency
@@ -535,7 +550,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     pub(in crate::render) fn meta_at_frame(
         meta: AudioChunkInfo,
         frame_offset: u64,
-    ) -> AudioChunkInfo {
+    ) -> Result<AudioChunkInfo, ElasticError> {
         let mut start = meta;
         let delta = frame_offset.abs_diff(meta.frame_offset);
         let span = meta
@@ -548,11 +563,23 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         } else {
             meta.timestamp.saturating_add(span)
         };
+        if let Some(basis) = meta.source_span {
+            let basis = basis.rebase_output(meta.frame_offset, frame_offset).ok_or(
+                ElasticError::EnginePreparation("input source geometry cannot be rebased"),
+            )?;
+            start.timestamp = basis
+                .position_at(0)
+                .ok_or(ElasticError::SampleCountOverflow)?;
+            start.end_timestamp = basis
+                .position_at(basis.output_frames())
+                .ok_or(ElasticError::SampleCountOverflow)?;
+            start.source_span = Some(basis);
+        }
         if delta > 0 {
             start.source_byte_offset = None;
             start.source_bytes = 0;
         }
-        start
+        Ok(start)
     }
 
     pub(super) fn next_render_snapshot(
@@ -615,14 +642,23 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             ))?
             .with_render_revision(output.meta.render_revision)
             .with_mapping_revision(output.meta.mapping_revision);
-        output.meta.frame_offset = span.start();
-        output.meta.timestamp = span
+        let published = if let Some(input) = self.last_input_meta
+            && let Some(basis) = input.source_span
+        {
+            basis.map_output_span(input.frame_offset, span).ok_or(
+                ElasticError::EnginePreparation("input source geometry cannot map rendered PCM"),
+            )?
+        } else {
+            span
+        };
+        output.meta.frame_offset = published.start();
+        output.meta.timestamp = published
             .position_at(0)
             .ok_or(ElasticError::SampleCountOverflow)?;
-        output.meta.end_timestamp = span
-            .position_at(span.output_frames())
+        output.meta.end_timestamp = published
+            .position_at(published.output_frames())
             .ok_or(ElasticError::SampleCountOverflow)?;
-        output.meta.source_span = Some(span);
+        output.meta.source_span = Some(published);
         self.record_mapping(span)
     }
 

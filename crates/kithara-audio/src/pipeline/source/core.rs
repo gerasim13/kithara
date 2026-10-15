@@ -139,33 +139,13 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
         Some(self.decode.discontinuity())
     }
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, crate::AudioReadError> {
-        if self.shared_stream.phase() == SourcePhase::Cancelled {
-            self.fail(TrackFailureKind::SourceCancelled, None);
-        }
-        if let OwnerPhase::Failed { failure, .. } = self.phase {
-            return Err(crate::AudioReadError::Stream {
-                what: "seek decoded source",
-                source: crate::FailureSource::ProducerAfterSeek { failure },
-            });
-        }
-        self.emit.enqueue(AudioEvent::SeekLifecycle {
-            stage: crate::SeekLifecycleStage::SeekRequest,
-            location: crate::SegmentLocation::default(),
-        });
-        let result = self.seek_owned(position);
-        match &result {
-            Ok(_) => self.emit.enqueue(AudioEvent::SeekLifecycle {
-                stage: crate::SeekLifecycleStage::SeekApplied,
-                location: crate::SegmentLocation::default(),
-            }),
-            Err(error) => {
-                let failure = TrackFailureKind::from(error);
-                self.fail(failure, None);
-                self.emit
-                    .enqueue(AudioEvent::SeekRejected { target: position });
-            }
-        }
-        result
+        self.seek_selected(position, false)
+    }
+    fn seek_for_render(
+        &mut self,
+        position: Duration,
+    ) -> Result<SeekOutcome, crate::AudioReadError> {
+        self.seek_selected(position, true)
     }
     fn host_sample_rate(&self) -> Option<NonZeroU32> {
         self.host_rate
@@ -496,7 +476,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                     self.decode.gapless_mode(),
                 )? {
                     DecoderSeekOutcome::Landed { .. } => generation.trim_to(target),
-                    DecoderSeekOutcome::PastEof { .. } => generation.finish(),
+                    DecoderSeekOutcome::PastEof { .. } => generation.finish()?,
                 }
             }
             Ok(generation)
@@ -585,9 +565,44 @@ impl<T: StreamType> StreamAudioSource<T> {
         );
     }
 
+    fn seek_selected(
+        &mut self,
+        position: Duration,
+        for_render: bool,
+    ) -> Result<SeekOutcome, crate::AudioReadError> {
+        if self.shared_stream.phase() == SourcePhase::Cancelled {
+            self.fail(TrackFailureKind::SourceCancelled, None);
+        }
+        if let OwnerPhase::Failed { failure, .. } = self.phase {
+            return Err(crate::AudioReadError::Stream {
+                what: "seek decoded source",
+                source: crate::FailureSource::ProducerAfterSeek { failure },
+            });
+        }
+        self.emit.enqueue(AudioEvent::SeekLifecycle {
+            stage: crate::SeekLifecycleStage::SeekRequest,
+            location: crate::SegmentLocation::default(),
+        });
+        let result = self.seek_owned(position, for_render);
+        match &result {
+            Ok(_) => self.emit.enqueue(AudioEvent::SeekLifecycle {
+                stage: crate::SeekLifecycleStage::SeekApplied,
+                location: crate::SegmentLocation::default(),
+            }),
+            Err(error) => {
+                let failure = TrackFailureKind::from(error);
+                self.fail(failure, None);
+                self.emit
+                    .enqueue(AudioEvent::SeekRejected { target: position });
+            }
+        }
+        result
+    }
+
     pub(super) fn seek_owned(
         &mut self,
         position: Duration,
+        for_render: bool,
     ) -> Result<SeekOutcome, crate::AudioReadError> {
         if !position.is_zero() {
             self.decode.seal_visible_origin();
@@ -647,9 +662,13 @@ impl<T: StreamType> StreamAudioSource<T> {
             self.decode
                 .update_len(len.saturating_sub(self.decode.active().base_offset()));
         }
-        let outcome = self
-            .decode
-            .seek(&self.shared_stream, self.playhead.as_ref(), position)?;
+        let outcome = if for_render {
+            self.decode
+                .seek_for_render(&self.shared_stream, self.playhead.as_ref(), position)?
+        } else {
+            self.decode
+                .seek(&self.shared_stream, self.playhead.as_ref(), position)?
+        };
         match outcome {
             DecoderSeekOutcome::Landed { landed_at, .. } => {
                 if !matches!(self.phase, OwnerPhase::Failed { .. }) {

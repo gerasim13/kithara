@@ -72,6 +72,37 @@ fn empty_source_mapping_slices_join_without_underflow() {
     let empty = span.for_output_range(3..3).expect("empty slice");
     assert_eq!(empty.followed_by(empty), Some(empty));
     assert_eq!(empty.position_at(0), span.position_at(3));
+    let suffix = span.for_output_range(3..8).expect("suffix");
+    assert_eq!(empty.followed_by(suffix), Some(suffix));
+    assert_eq!(
+        empty.output_ratio_at_source(3, (9, NonZeroU128::new(2).expect("target denominator"))),
+        Some((4, NonZeroU128::MIN))
+    );
+    let physical = SourceSpan::try_from((
+        13,
+        2,
+        NonZeroU128::new(4).expect("physical denominator"),
+        span.sample_rate(),
+        1,
+    ))
+    .expect("one fractional physical output");
+    let published = empty
+        .map_output_span(3, physical)
+        .expect("empty affine input keeps its source advance");
+    assert_eq!(
+        published.source_ratio_at(0),
+        Some((15, NonZeroU128::new(4).expect("published denominator")))
+    );
+    assert_eq!(
+        published.source_ratio_at(1),
+        Some((17, NonZeroU128::new(4).expect("published denominator")))
+    );
+    let declining = SourceSpan::try_from((0, 1, -2, NonZeroU128::MIN, span.sample_rate(), 1))
+        .expect("one valid declining source advance");
+    let endpoint = declining
+        .for_output_range(1..1)
+        .expect("empty ramp endpoint");
+    assert_eq!(endpoint.position_at(0), declining.position_at(1));
 }
 
 #[kithara::test]

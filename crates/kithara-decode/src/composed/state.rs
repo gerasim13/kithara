@@ -25,6 +25,12 @@ pub(super) struct HeadStrip {
     pub(super) frames: u64,
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum SeekTrim {
+    Nearest(Duration),
+    Prefix(Duration),
+}
+
 /// Generic decoder built by composition: a [`Demuxer`] feeds raw frames
 /// into a [`FrameCodec`] which produces PCM. One implementation, one
 /// dispatch path - no per-backend duplication.
@@ -45,9 +51,9 @@ pub(crate) struct ComposedDecoder<D: Demuxer, C: FrameCodec, S> {
     pub(super) output: Option<DecodeResult<SampleBuffer>>,
     /// When `Some`, frames whose decode-time end is `<= target` are
     /// dropped before the next chunk is emitted. Cleared after the
-    /// first frame past the target is consumed. Lets `seek(target)`
-    /// land precisely at `target` instead of at the granule boundary.
-    pub(super) pending_seek_target: Option<Duration>,
+    /// first frame past the target is consumed. The intent selects nearest
+    /// PCM for ordinary seeks or preserves a native prefix for rendering.
+    pub(super) pending_seek_target: Option<SeekTrim>,
     pub(super) pools: PoolRegion<S>,
     pub(super) prefill: Prefill,
     /// Set on every seek; the next emitted chunk may re-anchor the PCM cursor.

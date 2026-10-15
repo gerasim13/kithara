@@ -12,7 +12,7 @@ use kithara_command::{Inbox, Protocol, Seq};
 use kithara_dsp::param::SmootherConfig;
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, SegmentId};
-use kithara_warp::{SpeedCurve, StretchKind, WarpRenderer};
+use kithara_warp::{SpeedCurve, StretchKind, WarpRenderError, WarpRenderer};
 use num_traits::ToPrimitive;
 
 /// Commands and receipts of one producer lane.
@@ -50,8 +50,8 @@ pub enum LaneCommand {
 /// Latency of the resulting engine and the segment whose preload is admitted.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LaneApplied {
-    /// Current decoder PCM geometry captured before source-coordinate resume translation.
-    pub native_pcm_basis: Option<AudioChunkInfo>,
+    /// First pre-Warp input geometry, present when preparation observed new PCM.
+    pub source_basis: Option<AudioChunkInfo>,
     pub engine_latency: FrameCount,
     pub ready: Option<SegmentId>,
 }
@@ -81,6 +81,7 @@ enum Jump {
         gain: f32,
     },
     Up {
+        to: Option<Duration>,
         start: u64,
         frames: usize,
     },
@@ -89,13 +90,21 @@ enum Jump {
 impl Jump {
     fn gain(self, at: u64) -> f32 {
         let (start, frames) = match self {
-            Self::Down { start, frames, .. } | Self::Up { start, frames } => (start, frames),
+            Self::Down { start, frames, .. } | Self::Up { start, frames, .. } => (start, frames),
         };
         let progress = at.saturating_sub(start).to_f32().unwrap_or(f32::MAX)
             / frames.max(1).to_f32().unwrap_or(f32::MAX);
         match self {
             Self::Down { gain, .. } => gain * (1.0 - progress.min(1.0)),
             Self::Up { .. } => progress.min(1.0),
+        }
+    }
+    fn output_limit(self, at: u64) -> usize {
+        match self {
+            Self::Down { start, frames, .. } => frames.saturating_sub(
+                usize::try_from(at.saturating_sub(start)).map_or(usize::MAX, |frames| frames),
+            ),
+            Self::Up { .. } => usize::MAX,
         }
     }
 }
@@ -124,7 +133,6 @@ struct Preparation {
     at: LaneFrame,
     entry: LaneFrame,
     source: Option<AudioChunkInfo>,
-    native_pcm_basis: Option<AudioChunkInfo>,
     requested_entry: Option<Duration>,
     render_revision: u64,
     latency: FrameCount,
@@ -144,17 +152,47 @@ impl Preparation {
             return false;
         }
         self.source.is_some_and(|source| {
-            self.requested_entry.is_none_or(|requested| {
-                let position = source
-                    .visible_origin
-                    .map_or(requested, |origin| origin.max(requested));
-                source
-                    .spec
-                    .frame_at(position)
-                    .is_ok_and(|frame| frame == source.frame_offset)
-            }) && span.sample_rate() == source.spec.sample_rate
-                && span.source_ratio_at(0)
-                    == Some((u128::from(source.frame_offset), NonZeroU128::MIN))
+            let origin = source
+                .source_geometry()
+                .and_then(|span| {
+                    span.scaled_from(
+                        (0, NonZeroU128::MIN),
+                        (0, NonZeroU128::MIN),
+                        (
+                            u128::from(source.spec.sample_rate.get()),
+                            NonZeroU128::from(span.sample_rate()),
+                        ),
+                    )
+                })
+                .and_then(|span| span.source_ratio_at(0));
+            span.sample_rate() == source.spec.sample_rate
+                && match self.requested_entry {
+                    Some(requested)
+                        if source
+                            .visible_origin
+                            .is_some_and(|origin| origin >= requested) =>
+                    {
+                        span.source_ratio_at(0) == origin
+                    }
+                    Some(requested) => {
+                        let position = source
+                            .visible_origin
+                            .map_or(requested, |origin| origin.max(requested));
+                        position
+                            .as_nanos()
+                            .checked_mul(u128::from(span.sample_rate().get()))
+                            .and_then(|numerator| {
+                                span.scaled_from(
+                                    (numerator, NonZeroU128::new(1_000_000_000)?),
+                                    (0, NonZeroU128::MIN),
+                                    (1, NonZeroU128::MIN),
+                                )
+                            })
+                            .and_then(|relative| relative.source_ratio_at(0))
+                            == Some((0, NonZeroU128::MIN))
+                    }
+                    None => span.source_ratio_at(0) == origin,
+                }
         })
     }
 }
@@ -229,26 +267,30 @@ impl Lane {
                 "lane preparation finished"
             );
             due.apply(LaneApplied {
-                native_pcm_basis: ready.and(pending.native_pcm_basis),
+                source_basis: ready.and(pending.source),
                 engine_latency: pending.latency,
                 ready,
             });
         }
     }
 
-    pub(crate) fn observe_input(
+    pub(crate) fn observe_input<S: HasPool<f32>>(
         &mut self,
+        warp: &mut WarpRenderer<S>,
         meta: AudioChunkInfo,
-        native_pcm_basis: Option<AudioChunkInfo>,
-    ) {
+        visible_origin: Option<Duration>,
+    ) -> Result<(), WarpRenderError> {
         if meta.frames > 0
             && matches!(self.preload, Preload::Filling(0))
             && let Some(pending) = &mut self.pending
             && pending.source.is_none()
         {
+            if let Some(to) = pending.requested_entry {
+                self.position = Some(reanchor_source(warp, meta, to, visible_origin)?);
+            }
             pending.source = Some(meta);
-            pending.native_pcm_basis = native_pcm_basis;
         }
+        Ok(())
     }
 
     pub(crate) fn check_admission(&self, meta: &AudioChunkInfo) -> Result<(), TrackFailureKind> {
@@ -395,7 +437,7 @@ impl Lane {
                         requested_entry = Some(from);
                         self.position = Some(landing_position(
                             source
-                                .seek(from)
+                                .seek_for_render(from)
                                 .map_err(|error| TrackFailureKind::from(&error))?,
                         ));
                         warp.reset();
@@ -435,7 +477,6 @@ impl Lane {
                     at,
                     entry: self.cursor,
                     source: None,
-                    native_pcm_basis: None,
                     requested_entry,
                     render_revision: warp.render_revision(),
                     latency,
@@ -449,11 +490,7 @@ impl Lane {
                     pending.latency = latency;
                 }
                 due.apply(LaneApplied {
-                    native_pcm_basis: if restored_same {
-                        source.native_pcm_basis()
-                    } else {
-                        None
-                    },
+                    source_basis: None,
                     engine_latency: latency,
                     ready: restored_same.then_some(self.cursor.segment),
                 });
@@ -488,9 +525,11 @@ impl Lane {
         if self.cursor.frame.saturating_sub(start) < frames {
             return Ok(false);
         }
+        let visible_origin = source.visible_origin();
+        let to = visible_origin.map_or(to, |origin| origin.max(to));
         self.position = Some(landing_position(
             source
-                .seek(to)
+                .seek_for_render(to)
                 .map_err(|error| TrackFailureKind::from(&error))?,
         ));
         warp.reset();
@@ -498,10 +537,36 @@ impl Lane {
         warp.prepare_engine_latency(next_spec)
             .map_err(|_| TrackFailureKind::Render)?;
         self.jump = Some(Jump::Up {
+            to: Some(to),
             start: self.cursor.frame,
             frames: usize::try_from(frames).map_or(usize::MAX, |frames| frames),
         });
         Ok(true)
+    }
+
+    pub(crate) fn prepare_quantum<S: HasPool<f32>>(
+        &mut self,
+        warp: &mut WarpRenderer<S>,
+        meta: AudioChunkInfo,
+        remaining: usize,
+        visible_origin: Option<Duration>,
+    ) -> Result<FrameCount, WarpRenderError> {
+        let target = match self.jump {
+            Some(Jump::Up { to: Some(to), .. }) => {
+                Some(visible_origin.map_or(to, |origin| origin.max(to)))
+            }
+            _ => None,
+        };
+        if let Some(to) = target {
+            reanchor_source(warp, meta, to, visible_origin)?;
+        }
+        let frames = warp.prepare_source_window(meta, remaining, self.output_limit())?;
+        if let Some(Jump::Up { to, .. }) = &mut self.jump
+            && to.take().is_some()
+        {
+            self.position = target;
+        }
+        Ok(frames)
     }
 
     pub(crate) fn output_limit(&self) -> usize {
@@ -511,14 +576,8 @@ impl Lane {
             .map_or(usize::MAX, |frames| {
                 usize::try_from(frames).map_or(usize::MAX, |frames| frames)
             });
-        let jump = match self.jump {
-            Some(Jump::Down { start, frames, .. }) => frames.saturating_sub(
-                usize::try_from(self.cursor.frame.saturating_sub(start))
-                    .map_or(usize::MAX, |frames| frames),
-            ),
-            _ => usize::MAX,
-        };
-        due.min(jump)
+        self.jump
+            .map_or(due, |jump| due.min(jump.output_limit(self.cursor.frame)))
     }
 
     pub(crate) fn stamp(&mut self, chunk: &mut AudioChunk) {
@@ -543,12 +602,62 @@ impl Lane {
         {
             self.position = Some(position);
         }
-        if matches!(self.jump, Some(Jump::Up { start, frames })
+        if matches!(self.jump, Some(Jump::Up { start, frames, .. })
             if self.cursor.frame.saturating_sub(start) >= u64::try_from(frames).map_or(u64::MAX, |frames| frames))
         {
             self.jump = None;
         }
     }
+}
+
+fn reanchor_source<S: HasPool<f32>>(
+    warp: &mut WarpRenderer<S>,
+    meta: AudioChunkInfo,
+    to: Duration,
+    visible_origin: Option<Duration>,
+) -> Result<Duration, WarpRenderError> {
+    let to = visible_origin.map_or(to, |origin| origin.max(to));
+    let basis = meta
+        .source_geometry()
+        .ok_or(WarpRenderError::InvalidSourceGeometry)?;
+    if !basis.is_affine() {
+        return Err(WarpRenderError::UnsupportedSourceGeometry);
+    }
+    let numerator = to
+        .as_nanos()
+        .checked_mul(u128::from(basis.sample_rate().get()))
+        .ok_or(WarpRenderError::InvalidSourceGeometry)?;
+    let denominator =
+        NonZeroU128::new(1_000_000_000).ok_or(WarpRenderError::InvalidSourceGeometry)?;
+    let position = if visible_origin == Some(to) && basis.position_at(0) == Some(to) {
+        (u128::from(meta.frame_offset), NonZeroU128::MIN)
+    } else {
+        basis
+            .output_ratio_at_source(meta.frame_offset, (numerator, denominator))
+            .ok_or_else(|| {
+                tracing::error!(
+                    ?meta,
+                    ?to,
+                    ?visible_origin,
+                    ?basis,
+                    "source entry cannot be projected to decoded PCM"
+                );
+                WarpRenderError::InvalidSourceGeometry
+            })?
+    };
+    if position.0 / position.1.get() < u128::from(meta.frame_offset) {
+        tracing::error!(
+            ?meta,
+            ?to,
+            ?visible_origin,
+            ?basis,
+            ?position,
+            "source entry precedes retained decoded PCM"
+        );
+        return Err(WarpRenderError::InvalidSourceGeometry);
+    }
+    warp.reanchor_source(meta, position)?;
+    Ok(to)
 }
 
 fn landing_position(outcome: kithara_audio::SeekOutcome) -> Duration {
@@ -578,6 +687,10 @@ mod tests {
                 target,
                 landed_at: target,
             })
+        }
+
+        fn seek_for_render(&mut self, target: Duration) -> Result<SeekOutcome, AudioReadError> {
+            self.seek(target)
         }
 
         fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
@@ -636,6 +749,78 @@ mod tests {
             expected,
             "Jump and mixer must share the configured, rounded declick length"
         );
+        struct TerminalSource {
+            requested: Option<Duration>,
+        }
+        impl AudioSource for TerminalSource {
+            type Chunk = AudioChunk;
+            fn seek(&mut self, target: Duration) -> Result<SeekOutcome, AudioReadError> {
+                self.requested = Some(target);
+                let duration = Duration::from_secs(1);
+                Ok(if target >= duration {
+                    SeekOutcome::PastEof { target, duration }
+                } else {
+                    SeekOutcome::Landed {
+                        target,
+                        landed_at: target,
+                    }
+                })
+            }
+            fn seek_for_render(&mut self, target: Duration) -> Result<SeekOutcome, AudioReadError> {
+                self.seek(target)
+            }
+            fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
+            fn host_sample_rate(&self) -> Option<NonZeroU32> {
+                None
+            }
+            fn step_track(&mut self) -> TrackStep<AudioChunk> {
+                TrackStep::Eof
+            }
+        }
+        let requested = Duration::from_nanos(1_000_005_000);
+        lane.jump = Some(Jump::Down {
+            to: requested,
+            start: lane.cursor.frame,
+            frames: 0,
+            gain: 1.0,
+        });
+        let mut source = TerminalSource { requested: None };
+        assert!(
+            lane.land_jump(&mut source, &mut warp, spec)
+                .expect("unknown-end typed seek")
+        );
+        assert_eq!(source.requested, Some(requested));
+        assert_eq!(lane.position, Some(Duration::from_secs(1)));
+        let first = 44_101;
+        let meta = AudioChunkInfo {
+            spec,
+            frame_offset: first,
+            frames: 16,
+            timestamp: spec.duration_for(first).expect("actual decoded timestamp"),
+            end_timestamp: spec.duration_for(first + 16).expect("actual decoded end"),
+            ..AudioChunkInfo::default()
+        };
+        lane.jump = Some(Jump::Up {
+            to: Some(Duration::from_secs(1)),
+            start: lane.cursor.frame,
+            frames: expected,
+        });
+        assert!(matches!(
+            lane.prepare_quantum(&mut warp, meta, 16, None),
+            Err(WarpRenderError::InvalidSourceGeometry)
+        ));
+        assert!(matches!(lane.jump, Some(Jump::Up { to: Some(_), .. })));
+        lane.jump = Some(Jump::Up {
+            to: Some(Duration::ZERO),
+            start: lane.cursor.frame,
+            frames: expected,
+        });
+        warp.prepare_engine_latency(spec)
+            .expect("initial-head render engine");
+        lane.prepare_quantum(&mut warp, meta, 16, Some(meta.timestamp))
+            .expect("observed original visible head clamps a zero request");
+        assert_eq!(lane.position, Some(meta.timestamp));
+        assert!(matches!(lane.jump, Some(Jump::Up { to: None, .. })));
     }
 
     #[kithara::test]

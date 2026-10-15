@@ -173,6 +173,10 @@ where
         }
     }
 
+    fn seek_prefix(&mut self, position: Duration) -> DecodeResult<DecoderSeekOutcome> {
+        self.seek(position)
+    }
+
     fn seek(&mut self, position: Duration) -> DecodeResult<DecoderSeekOutcome> {
         self.prepared = None;
         self.pcm.clear();

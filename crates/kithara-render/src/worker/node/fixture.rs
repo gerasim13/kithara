@@ -113,6 +113,15 @@ impl AudioSource for ScriptedSource {
             landed_at: self.landing.unwrap_or(target),
         })
     }
+    fn seek_for_render(
+        &mut self,
+        target: Duration,
+    ) -> Result<SeekOutcome, kithara_audio::AudioReadError> {
+        self.seek(target)
+    }
+    fn visible_origin(&self) -> Option<Duration> {
+        self.native_pcm_basis.and_then(|basis| basis.visible_origin)
+    }
     fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
     fn step_track(&mut self) -> TrackStep<AudioChunk> {
         let step = self.steps.pop_front().unwrap_or(TrackStep::Eof);

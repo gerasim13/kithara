@@ -7,5 +7,5 @@ mod position;
 mod seek;
 pub use core::Audio;
 
+pub use position::source_lattice_position;
 pub(crate) use position::{chunk_position, normalize_geometry};
-pub use position::{source_geometry, source_lattice_position};

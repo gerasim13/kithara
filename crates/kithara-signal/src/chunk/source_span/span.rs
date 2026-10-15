@@ -135,6 +135,90 @@ impl SourceSpan {
         Some(Self { mapping, ..self })
     }
 
+    /// Whether this mapping has a constant exact source advance.
+    #[must_use]
+    pub const fn is_affine(self) -> bool {
+        matches!(
+            self.mapping,
+            Mapping::Rational(Rational { step_change: 0, .. })
+        )
+    }
+
+    fn affine_basis(self) -> Option<(Ratio, Ratio)> {
+        let Mapping::Rational(Rational {
+            numerator,
+            denominator,
+            step,
+            step_change: 0,
+        }) = self.mapping
+        else {
+            return None;
+        };
+        Some((
+            Ratio::new(numerator, denominator)?,
+            Ratio::new(step, denominator)?,
+        ))
+    }
+
+    /// Inverts an affine source coordinate around its physical output origin.
+    ///
+    /// Nonlinear mappings, negative output coordinates and overflow return `None`.
+    #[must_use]
+    pub fn output_ratio_at_source(
+        self,
+        output_origin: u64,
+        position: (u128, NonZeroU128),
+    ) -> Option<(u128, NonZeroU128)> {
+        let (origin, step) = self.affine_basis()?;
+        let inverse = Affine::new(
+            origin,
+            Ratio::new(u128::from(output_origin), NonZeroU128::MIN)?,
+            Ratio::new(step.denominator.get(), NonZeroU128::new(step.numerator)?)?,
+        )?;
+        let position = inverse.apply(Ratio::new(position.0, position.1)?)?;
+        Some((position.numerator, position.denominator))
+    }
+
+    /// Publishes a physical span through this affine input's source clock.
+    ///
+    /// The result retains the span's rate and analytic law; source coordinates
+    /// are normalized to that rate. Unsupported or unrepresentable maps return `None`.
+    #[must_use]
+    pub fn map_output_span(self, output_origin: u64, span: Self) -> Option<Self> {
+        let (origin, step) = self.affine_basis()?;
+        let rate = Ratio::new(
+            u128::from(span.sample_rate.get()),
+            NonZeroU128::from(self.sample_rate),
+        )?;
+        let origin = origin.mul(rate)?;
+        let step = step.mul(rate)?;
+        span.scaled_from(
+            (u128::from(output_origin), NonZeroU128::MIN),
+            (origin.numerator, origin.denominator),
+            (step.numerator, step.denominator),
+        )
+    }
+
+    /// Repositions an affine input pivot without rounding its source clock.
+    #[must_use]
+    pub fn rebase_output(self, previous: u64, next: u64) -> Option<Self> {
+        let (origin, step) = self.affine_basis()?;
+        let advance = step.mul(Ratio::new(
+            u128::from(previous.abs_diff(next)),
+            NonZeroU128::MIN,
+        )?)?;
+        let position = if next < previous {
+            origin.sub(advance)?
+        } else {
+            origin.add(advance)?
+        };
+        self.scaled_from(
+            (origin.numerator, origin.denominator),
+            (position.numerator, position.denominator),
+            (1, NonZeroU128::MIN),
+        )
+    }
+
     /// Creates a mapping for a nonempty physical output interval.
     #[must_use]
     pub fn new(start: u64, end: u64, sample_rate: NonZeroU32, output_frames: u64) -> Option<Self> {

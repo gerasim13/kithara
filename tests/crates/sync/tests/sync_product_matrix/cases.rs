@@ -378,8 +378,8 @@ pub(crate) const CROSS_STYLE_SYNC: SyncCase = SyncCase::running(
 .hold(124.0);
 
 pub(crate) const AMBIENT_TRIP_HOP: &[&str] = &[
-    "rhythm_wav_long_ambient_dub_62_aligned",
-    "rhythm_wav_long_trip_hop_74_aligned",
+    "rhythm_wav_16s_ambient_dub_62_aligned",
+    "rhythm_wav_16s_trip_hop_74_aligned",
 ];
 pub(crate) const DOWNTEMPO_HOUSE: &[&str] = &[
     "rhythm_wav_downtempo_96_aligned",
@@ -390,7 +390,7 @@ pub(crate) const TECHNO_BREAKBEAT: &[&str] = &[
     "rhythm_wav_breakbeat_140_aligned",
 ];
 pub(crate) const CROSS_STYLE: &[&str] = &[
-    "rhythm_wav_long_ambient_dub_62_aligned",
+    "rhythm_wav_16s_ambient_dub_62_aligned",
     "rhythm_wav_downtempo_96_aligned",
     "rhythm_wav_house_124_aligned",
     "rhythm_wav_breakbeat_140_aligned",

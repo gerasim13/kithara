@@ -109,6 +109,10 @@ impl AudioSource for RawSource {
         })
     }
 
+    fn seek_for_render(&mut self, target: Duration) -> Result<SeekOutcome, AudioReadError> {
+        self.seek(target)
+    }
+
     fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
 
     fn host_sample_rate(&self) -> Option<NonZeroU32> {

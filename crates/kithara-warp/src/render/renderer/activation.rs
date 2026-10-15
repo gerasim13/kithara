@@ -126,7 +126,7 @@ where
         scratch.clear();
 
         self.clear_pending_source();
-        self.output_start_meta = Some(Self::meta_at_frame(chunk.meta, cue));
+        self.output_start_meta = Some(Self::meta_at_frame(chunk.meta, cue)?);
         self.resident_feed = Some(prefix_end);
         self.source_frames_admitted =
             u64::try_from(prefix_frames).map_err(|_| ElasticError::SampleCountOverflow)?;
@@ -167,6 +167,9 @@ where
     ) -> Result<FrameCount, crate::WarpRenderError> {
         if self.terminal_error.is_some() {
             return Err(crate::WarpRenderError::Terminated);
+        }
+        if meta.source_span.is_some_and(|span| !span.is_affine()) {
+            return Err(crate::WarpRenderError::UnsupportedSourceGeometry);
         }
         if let Some(prepared) = self.prepared_quantum {
             if prepared.source_start != meta.frame_offset {

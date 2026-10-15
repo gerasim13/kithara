@@ -283,23 +283,23 @@ impl DecoderGeneration {
                 .as_ref()
                 .and_then(|resume| match resume.target {
                     ResumeTarget::Source(end) => Some((end.sample_rate(), end.mapping_revision())),
-                    ResumeTarget::Position(_) => None,
+                    ResumeTarget::Position(_) | ResumeTarget::Render(_) => None,
                 })
         };
         self.blender_profile().spec().sample_rate == other.blender_profile().spec().sample_rate
             && retained_source(self) == retained_source(other)
     }
 
-    pub(crate) fn finish(&mut self) {
+    pub(crate) fn finish(&mut self) -> DecodeResult<()> {
         if self.finished {
-            return;
+            return Ok(());
         }
         self.finished = true;
         self.holdback = None;
         let codec = self.media_info.as_ref().and_then(|info| info.codec);
         self.gapless
             .set_tail_compensation(self.decoder.gapless_profile(codec), codec);
-        self.gapless.flush();
+        self.gapless.flush()
     }
 
     pub(crate) const fn mark_source_exhausted(&mut self) {
@@ -350,13 +350,36 @@ impl DecoderGeneration {
         position: Duration,
         gapless_mode: GaplessMode,
     ) -> DecodeResult<DecoderSeekOutcome> {
+        self.seek_selected(position, gapless_mode, false)
+    }
+
+    pub(crate) fn seek_for_render(
+        &mut self,
+        position: Duration,
+        gapless_mode: GaplessMode,
+    ) -> DecodeResult<DecoderSeekOutcome> {
+        self.seek_selected(position, gapless_mode, true)
+    }
+
+    fn seek_selected(
+        &mut self,
+        position: Duration,
+        gapless_mode: GaplessMode,
+        for_render: bool,
+    ) -> DecodeResult<DecoderSeekOutcome> {
         if !position.is_zero() {
             self.seal_visible_origin(gapless_mode);
         }
         if let Some(gate) = &self.construction_gate {
             gate.arm();
         }
-        let result = catch_unwind(AssertUnwindSafe(|| self.decoder.seek(position)));
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            if for_render {
+                self.decoder.seek_prefix(position)
+            } else {
+                self.decoder.seek(position)
+            }
+        }));
         if let Some(gate) = &self.construction_gate {
             gate.disarm();
         }
@@ -408,10 +431,10 @@ impl DecoderGeneration {
         }
     }
 
-    pub(crate) fn push(&mut self, chunk: AudioChunk) {
+    pub(crate) fn push(&mut self, chunk: AudioChunk) -> DecodeResult<()> {
         self.holdback = None;
         self.observe_comparison_base();
-        self.gapless.push(chunk);
+        self.gapless.push(chunk)
     }
 
     pub(crate) fn timeline_gap(&self) -> u64 {
@@ -664,9 +687,11 @@ mod tests {
         );
 
         for frame in 0..pushed_frames {
-            generation.stage(chunk(&pools, &decode_quarter, spec, frame, 1, 1));
+            generation
+                .stage(chunk(&pools, &decode_quarter, spec, frame, 1, 1))
+                .expect("valid gapless PCM");
         }
-        generation.finish_staging();
+        generation.finish_staging().expect("valid gapless PCM");
 
         let mut frames = 0u64;
         while let Some(next) = generation.next() {
@@ -698,7 +723,9 @@ mod tests {
         let _ = generation
             .seek(Duration::ZERO, GaplessMode::CodecPriming)
             .expect("seek to start");
-        generation.push(chunk(&pools, &vec![0.25; 4_096], spec, 0, 2_048, 2_048));
+        generation
+            .push(chunk(&pools, &vec![0.25; 4_096], spec, 0, 2_048, 2_048))
+            .expect("valid gapless PCM");
         let output = generation.next().expect("output after priming trim");
         assert_eq!(output.meta.frame_offset, 1_024);
         assert_eq!(output.frames(), 1_024);
@@ -713,14 +740,16 @@ mod tests {
         let _ = generation
             .seek(Duration::from_secs(1), GaplessMode::CodecPriming)
             .expect("seek into content");
-        generation.push(chunk(
-            &pools,
-            &vec![0.25; 4_096],
-            spec,
-            44_100,
-            2_048,
-            2_048,
-        ));
+        generation
+            .push(chunk(
+                &pools,
+                &vec![0.25; 4_096],
+                spec,
+                44_100,
+                2_048,
+                2_048,
+            ))
+            .expect("valid gapless PCM");
         let output = generation.next().expect("output without priming trim");
         assert_eq!(output.meta.frame_offset, 44_100);
         assert_eq!(output.frames(), 2_048);
@@ -737,11 +766,13 @@ mod tests {
             StageResult::NeedMore
         ));
         assert!(matches!(
-            gap.push_holdback(chunk(&pools, &decode_quarter, active, 0, 4, 4)),
+            gap.push_holdback(chunk(&pools, &decode_quarter, active, 0, 4, 4))
+                .expect("valid gapless PCM"),
             StageResult::NeedMore
         ));
-        let StageResult::Invalid(gap_failure) =
-            gap.push_holdback(chunk(&pools, &decode_quarter, active, 5, 4, 4))
+        let StageResult::Invalid(gap_failure) = gap
+            .push_holdback(chunk(&pools, &decode_quarter, active, 5, 4, 4))
+            .expect("valid gapless PCM")
         else {
             panic!("a discontinuity must return its offending chunk");
         };
@@ -755,9 +786,12 @@ mod tests {
 
         let mut mixed = generation(active);
         let _ = mixed.prepare_holdback(active, 4);
-        let _ = mixed.push_holdback(chunk(&pools, &decode_quarter, active, 0, 4, 4));
-        let StageResult::Invalid(mixed_failure) =
-            mixed.push_holdback(chunk(&pools, &decode_quarter, spec(2, 48_000), 4, 4, 4))
+        let _ = mixed
+            .push_holdback(chunk(&pools, &decode_quarter, active, 0, 4, 4))
+            .expect("valid gapless PCM");
+        let StageResult::Invalid(mixed_failure) = mixed
+            .push_holdback(chunk(&pools, &decode_quarter, spec(2, 48_000), 4, 4, 4))
+            .expect("valid gapless PCM")
         else {
             panic!("mixed PCM must return its offending chunk");
         };
@@ -766,8 +800,9 @@ mod tests {
 
         let mut bad_meta = generation(active);
         let _ = bad_meta.prepare_holdback(active, 4);
-        let StageResult::Invalid(meta_failure) =
-            bad_meta.push_holdback(chunk(&pools, &decode_quarter, active, 0, 3, 4))
+        let StageResult::Invalid(meta_failure) = bad_meta
+            .push_holdback(chunk(&pools, &decode_quarter, active, 0, 3, 4))
+            .expect("valid gapless PCM")
         else {
             panic!("bad metadata must return its offending chunk");
         };
@@ -783,26 +818,31 @@ mod tests {
         let _ = generation.prepare_holdback(spec, 3);
         let capacity = generation.staged.capacity();
         for frame in 0..capacity {
-            let result = generation.push_holdback(chunk(
-                &pools,
-                &decode_quarter,
-                spec,
-                u64::try_from(frame).unwrap_or(u64::MAX),
-                1,
-                1,
-            ));
+            let result = generation
+                .push_holdback(chunk(
+                    &pools,
+                    &decode_quarter,
+                    spec,
+                    u64::try_from(frame).unwrap_or(u64::MAX),
+                    1,
+                    1,
+                ))
+                .expect("valid gapless PCM");
             if frame + 1 == capacity {
                 assert!(matches!(result, StageResult::Ready));
             }
         }
-        let StageResult::Invalid(failure) = generation.push_holdback(chunk(
-            &pools,
-            &decode_quarter,
-            spec,
-            u64::try_from(capacity).unwrap_or(u64::MAX),
-            1,
-            1,
-        )) else {
+        let StageResult::Invalid(failure) = generation
+            .push_holdback(chunk(
+                &pools,
+                &decode_quarter,
+                spec,
+                u64::try_from(capacity).unwrap_or(u64::MAX),
+                1,
+                1,
+            ))
+            .expect("valid gapless PCM")
+        else {
             panic!("full holdback must return the excess chunk");
         };
 
@@ -820,7 +860,9 @@ mod tests {
         let spec = spec(1, 44_100);
         let mut generation = generation(spec);
         let _ = generation.prepare_holdback(spec, 1);
-        let _ = generation.push_holdback(chunk(&pools, &decode_quarter, spec, 0, 1, 1));
+        let _ = generation
+            .push_holdback(chunk(&pools, &decode_quarter, spec, 0, 1, 1))
+            .expect("valid gapless PCM");
         let old_capacity = generation.staged.capacity();
         let slots = old_capacity.checked_add(1).expect("test slot limit");
         let join_frames = u64::try_from(slots - 1).expect("test join frame count");
@@ -837,14 +879,16 @@ mod tests {
         );
 
         for frame in generation.staged.len()..slots {
-            let result = generation.push_holdback(chunk(
-                &pools,
-                &decode_quarter,
-                spec,
-                u64::try_from(frame).expect("test frame offset"),
-                1,
-                1,
-            ));
+            let result = generation
+                .push_holdback(chunk(
+                    &pools,
+                    &decode_quarter,
+                    spec,
+                    u64::try_from(frame).expect("test frame offset"),
+                    1,
+                    1,
+                ))
+                .expect("valid gapless PCM");
             if frame + 1 == slots {
                 assert!(matches!(result, StageResult::Ready));
             }
@@ -873,18 +917,22 @@ mod tests {
 
         for frame in 0..TRAILING_FRAMES {
             assert!(matches!(
-                generation.push_holdback(chunk(&pools, &decode_quarter, spec, frame, 1, 1)),
+                generation
+                    .push_holdback(chunk(&pools, &decode_quarter, spec, frame, 1, 1))
+                    .expect("valid gapless PCM"),
                 StageResult::NeedMore
             ));
         }
-        let release = generation.push_holdback(chunk(
-            &pools,
-            &decode_quarter,
-            spec,
-            TRAILING_FRAMES,
-            u32::try_from(TRAILING_FRAMES).expect("test release frame count"),
-            usize::try_from(TRAILING_FRAMES).expect("test release sample frames"),
-        ));
+        let release = generation
+            .push_holdback(chunk(
+                &pools,
+                &decode_quarter,
+                spec,
+                TRAILING_FRAMES,
+                u32::try_from(TRAILING_FRAMES).expect("test release frame count"),
+                usize::try_from(TRAILING_FRAMES).expect("test release sample frames"),
+            ))
+            .expect("valid gapless PCM");
         assert!(
             matches!(release, StageResult::Ready),
             "the first three valid released chunks make holdback ready; surplus stays pending"
@@ -926,8 +974,9 @@ mod tests {
         let capacity = generation.staged.capacity();
 
         for frame in 0..=JOIN_FRAMES {
-            let result =
-                generation.push_holdback(chunk(&pools, &decode_quarter, spec, frame, 1, 1));
+            let result = generation
+                .push_holdback(chunk(&pools, &decode_quarter, spec, frame, 1, 1))
+                .expect("valid gapless PCM");
             if frame == JOIN_FRAMES {
                 assert!(matches!(result, StageResult::Ready));
             } else {
@@ -951,14 +1000,16 @@ mod tests {
             };
             assert_eq!(next.meta.frame_offset, frame);
             assert!(matches!(
-                generation.push_holdback(chunk(
-                    &pools,
-                    &decode_quarter,
-                    spec,
-                    JOIN_FRAMES + frame + 1,
-                    1,
-                    1,
-                )),
+                generation
+                    .push_holdback(chunk(
+                        &pools,
+                        &decode_quarter,
+                        spec,
+                        JOIN_FRAMES + frame + 1,
+                        1,
+                        1,
+                    ))
+                    .expect("valid gapless PCM"),
                 StageResult::Ready
             ));
             assert_eq!(generation.staged.capacity(), capacity);
@@ -982,10 +1033,12 @@ mod tests {
         ));
         assert!(!generation.has_output());
         let pools = pools();
-        generation.stage(AudioChunk::new(
-            AudioChunkInfo::default(),
-            sample_buffer(&pools, &[0.25, 0.25]),
-        ));
+        generation
+            .stage(AudioChunk::new(
+                AudioChunkInfo::default(),
+                sample_buffer(&pools, &[0.25, 0.25]),
+            ))
+            .expect("valid gapless PCM");
         assert!(generation.has_output());
         generation.notify_seek();
         assert!(matches!(
@@ -1008,8 +1061,8 @@ mod tests {
         let spec = spec(2, 44_100);
         let mut generation = generation(spec);
 
-        generation.finish();
-        generation.finish();
+        generation.finish().expect("valid gapless PCM");
+        generation.finish().expect("valid gapless PCM");
         assert!(generation.is_finished());
 
         generation.notify_seek();
@@ -1101,7 +1154,7 @@ mod tests {
         input.meta.end_timestamp = spec
             .duration_for(output_start + 2_048)
             .expect("actual output end");
-        generation.push(input);
+        generation.push(input).expect("valid gapless PCM");
         let output = generation.next().expect("seek output");
         assert_eq!(output.meta.frame_offset, output_start + trimmed);
         assert_eq!(output.frames() as u64, 2_048 - trimmed);

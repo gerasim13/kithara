@@ -1048,7 +1048,7 @@ fn player_phase_kind_exhaustive() {
             1,
         ) {
             due.apply(kithara_render::LaneApplied {
-                native_pcm_basis: None,
+                source_basis: None,
                 engine_latency: FrameCount::new(0),
                 ready: Some(track.segment),
             });
@@ -1609,7 +1609,7 @@ pub(super) fn lane_commands(inbox: &mut Inbox<LaneProtocol>) -> Vec<LaneCommand>
     ) {
         commands.extend(due.commands().iter().cloned());
         due.apply(kithara_render::LaneApplied {
-            native_pcm_basis: None,
+            source_basis: None,
             engine_latency: FrameCount::new(0),
             ready: None,
         });
@@ -2370,7 +2370,7 @@ fn superseding_a_scheduled_batch_leaves_the_slot_sounding_as_it_was(
                 |command| matches!(command, LaneCommand::Segment { id, .. } if *id == original),
             );
             due.apply(kithara_render::LaneApplied {
-                native_pcm_basis: None,
+                source_basis: None,
                 engine_latency: FrameCount::new(0),
                 ready: Some(original),
             });
@@ -2888,7 +2888,7 @@ fn a_loaded_track_sends_each_change_to_its_lane() {
         "the speed shows once the lane applied it"
     );
     due.apply(kithara_render::LaneApplied {
-        native_pcm_basis: None,
+        source_basis: None,
         engine_latency: FrameCount::new(0),
         ready: Some(segment),
     });
@@ -2947,7 +2947,7 @@ fn a_loaded_track_sends_each_change_to_its_lane() {
         assert_eq!(track.prepared_speed(), Some(&curve));
         assert_eq!(track.snapshot().speed, 1.0);
         due.apply(kithara_render::LaneApplied {
-            native_pcm_basis: None,
+            source_basis: None,
             engine_latency: FrameCount::new(0),
             ready: Some(segment),
         });
@@ -3068,7 +3068,7 @@ fn an_unchanged_speed_target_still_cancels_a_ramp() {
         }
         assert_eq!(track.snapshot().speed, 1.0);
         due.apply(kithara_render::LaneApplied {
-            native_pcm_basis: None,
+            source_basis: None,
             engine_latency: FrameCount::new(0),
             ready: (!sounding).then_some(segment),
         });
@@ -3109,7 +3109,7 @@ fn an_unchanged_speed_target_still_cancels_a_ramp() {
             assert_eq!(track.ready, None);
         }
         due.apply(kithara_render::LaneApplied {
-            native_pcm_basis: None,
+            source_basis: None,
             engine_latency: FrameCount::new(0),
             ready: (!sounding).then_some(replacement),
         });
@@ -3297,7 +3297,7 @@ fn a_change_before_the_load_applies_at_once_and_starts_the_lane_there() {
         if *id == segment && *from == native && *speed == curve)
     );
     due.apply(kithara_render::LaneApplied {
-        native_pcm_basis: None,
+        source_basis: None,
         engine_latency: FrameCount::new(0),
         ready: Some(segment),
     });
@@ -3353,7 +3353,7 @@ fn a_change_before_the_load_applies_at_once_and_starts_the_lane_there() {
         if *id == latest && *from == native)
     );
     due.apply(kithara_render::LaneApplied {
-        native_pcm_basis: None,
+        source_basis: None,
         engine_latency: FrameCount::new(0),
         ready: Some(latest),
     });
@@ -3647,12 +3647,12 @@ fn planned_end_projects_a_raw_jump_through_the_same_original_origin() {
     ))
     .expect("physical quarter-speed prefix");
     for (target, expected) in [
-        (38_249_999, 17),
-        (38_250_000, 13),
-        (38_250_001, 13),
-        (36_249_999, 25),
-        (36_250_000, 21),
-        (36_250_001, 21),
+        (38_249_999, 16),
+        (38_250_000, 15),
+        (38_250_001, 15),
+        (36_249_999, 24),
+        (36_250_000, 23),
+        (36_250_001, 23),
     ] {
         let mut exact = self::track(A);
         exact.media_origin = basis.media_origin;

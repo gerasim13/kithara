@@ -28,6 +28,10 @@ impl AudioSource for ReadySource {
         })
     }
 
+    fn seek_for_render(&mut self, target: Duration) -> Result<SeekOutcome, AudioReadError> {
+        self.seek(target)
+    }
+
     fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
 
     fn host_sample_rate(&self) -> Option<NonZeroU32> {
@@ -114,7 +118,14 @@ impl LaneFixture {
             segment: self.lane.cursor().segment,
             ..self.entry
         };
-        self.lane.observe_input(entry, Some(entry));
+        if self
+            .lane
+            .observe_input(&mut self.renderer, entry, entry.visible_origin)
+            .is_err()
+        {
+            self.lane.reject_preparation(TrackFailureKind::Render);
+            return;
+        }
         if let Err(failure) = self.lane.check_admission(&entry) {
             self.lane.reject_preparation(failure);
             return;
@@ -205,7 +216,10 @@ fn a_prepared_segment_receipt_keeps_its_actual_apply_point(#[case] when: When<La
         segment,
         ..entering(fixture.spec, seq, Duration::from_secs(1))
     };
-    fixture.lane.observe_input(entry, Some(entry));
+    fixture
+        .lane
+        .observe_input(&mut fixture.renderer, entry, entry.visible_origin)
+        .expect("physical entry");
     fixture
         .lane
         .check_admission(&entry)
@@ -221,11 +235,56 @@ fn a_prepared_segment_receipt_keeps_its_actual_apply_point(#[case] when: When<La
     let receipt = fixture.sender.receipts().next().expect("prepared receipt");
     assert_eq!(receipt.seq(), seq);
     assert!(matches!(receipt.outcome(), Outcome::Applied { at, data }
-        if *at == applied_at && data.ready == Some(segment) && data.native_pcm_basis == Some(entry)));
+        if *at == applied_at && data.ready == Some(segment) && data.source_basis == Some(entry)));
     assert_eq!(&chunk.samples[..], &[0.25; 32]);
     assert!(fixture.sender.receipts().next().is_none());
     fixture.lane.admitted();
     assert!(fixture.sender.receipts().next().is_none());
+    fixture
+        .sender
+        .send(
+            When::Deferred,
+            Batch {
+                basis: Vec::new(),
+                commands: vec![LaneCommand::Segment {
+                    id: segment.next(),
+                    from: Duration::ZERO,
+                    speed: SpeedCurve::Constant(1.0),
+                }],
+            },
+        )
+        .expect("deferred repeat");
+    fixture
+        .lane
+        .execute_due(&mut fixture.source, &mut fixture.renderer, fixture.spec)
+        .expect("repeat waits for EOF");
+    let before = fixture.lane.cursor();
+    let restore = fixture
+        .sender
+        .send(
+            When::Next,
+            Batch {
+                basis: Vec::new(),
+                commands: vec![LaneCommand::Segment {
+                    id: segment,
+                    from: Duration::from_secs(1),
+                    speed: SpeedCurve::Constant(1.0),
+                }],
+            },
+        )
+        .expect("cancel the pending repeat");
+    fixture
+        .lane
+        .execute_due(&mut fixture.source, &mut fixture.renderer, fixture.spec)
+        .expect("unchanged segment restored");
+    assert_eq!(fixture.lane.cursor(), before);
+    let receipt = fixture
+        .sender
+        .receipts()
+        .find(|receipt| receipt.seq() == restore)
+        .expect("unchanged segment receipt");
+    assert!(matches!(receipt.outcome(), Outcome::Applied { data, .. }
+        if data.ready == Some(segment) && data.source_basis.is_none()));
 }
 
 #[kithara::test]

@@ -46,6 +46,7 @@ where
     config: DecoderResamplerConfig<B>,
     decoder: Box<dyn Decoder>,
     last_input_meta: Option<AudioChunkInfo>,
+    source_basis: Option<AudioChunkInfo>,
     pending_meta: Option<AudioChunkInfo>,
     input: PlanarBuffer,
     output: PlanarBuffer,
@@ -75,14 +76,7 @@ where
     ) -> DecodeResult<Self> {
         let source_spec = decoder.spec();
         let target_spec = AudioSpec::new(source_spec.channels, config.target_sample_rate);
-        let initial_pcm_origin = decoder
-            .initial_pcm_origin()
-            .map(|origin| {
-                let position =
-                    target_spec.duration_for(target_spec.frame_at(origin.position())?)?;
-                Ok::<_, DecodeError>(PcmOrigin::new(position, origin.comparison_base()))
-            })
-            .transpose()?;
+        let initial_pcm_origin = decoder.initial_pcm_origin();
         let resampler = build_resampler(
             config.backend.clone(),
             source_spec,
@@ -99,6 +93,7 @@ where
             eof_flushed: false,
             input: PlanarBuffer::new(pools, source_spec, empty)?,
             last_input_meta: None,
+            source_basis: None,
             output: PlanarBuffer::new(pools, target_spec, empty)?,
             output_frame_offset: 0,
             initial_pcm_origin,
@@ -116,17 +111,60 @@ where
         })
     }
 
+    fn seek_selected(&mut self, pos: Duration, prefix: bool) -> DecodeResult<DecoderSeekOutcome> {
+        if !pos.is_zero() {
+            self.observing_initial_pcm = false;
+        }
+        self.prepared = None;
+        let outcome = if prefix {
+            self.decoder.seek_prefix(pos)?
+        } else {
+            self.decoder.seek(pos)?
+        };
+        self.reset_resampler_state();
+        match outcome {
+            DecoderSeekOutcome::Landed {
+                landed_at,
+                landed_byte,
+                preroll,
+                ..
+            } => {
+                self.output_frame_offset = self.target_spec.frame_at(landed_at).unwrap_or(u64::MAX);
+                self.reanchor_output_on_next_chunk = true;
+                Ok(DecoderSeekOutcome::Landed {
+                    landed_at,
+                    landed_byte,
+                    preroll,
+                    landed_frame: self.output_frame_offset,
+                })
+            }
+            DecoderSeekOutcome::PastEof { duration } => {
+                Ok(DecoderSeekOutcome::PastEof { duration })
+            }
+        }
+    }
+
     fn append_chunk(&mut self, chunk: &AudioChunk) -> DecodeResult<()> {
         let spec = chunk.spec();
         let source_spec_changed = spec != self.source_spec;
         if source_spec_changed {
             self.rebuild_for_source_spec(spec)?;
+            self.reanchor_output_on_next_chunk = true;
         }
-        if source_spec_changed || self.reanchor_output_on_next_chunk {
+        if chunk.frames() == 0 {
+            return Ok(());
+        }
+        if self.reanchor_output_on_next_chunk {
             self.output_frame_offset = self.target_spec.frame_at(chunk.meta.timestamp)?;
             self.reanchor_output_on_next_chunk = false;
             if self.observing_initial_pcm {
-                let position = self.target_spec.duration_for(self.output_frame_offset)?;
+                let position = chunk
+                    .meta
+                    .source_geometry()
+                    .and_then(|span| span.position_at(0))
+                    .ok_or(DecodeError::InvalidData {
+                        detail: "resampled PCM has invalid native geometry",
+                    })?;
                 self.initial_pcm_origin = self
                     .decoder
                     .initial_pcm_origin()
@@ -134,6 +172,7 @@ where
                 self.observing_initial_pcm = false;
             }
         }
+        self.source_basis.get_or_insert(chunk.meta);
         if self.pending_meta.is_none() {
             self.pending_meta = Some(chunk.meta);
         }
@@ -160,7 +199,13 @@ where
     fn channels(&self) -> usize {
         usize::from(self.source_spec.channels)
     }
+}
 
+impl<B, S> ResampledDecoder<B, S>
+where
+    B: ResamplerBackend,
+    S: HasPool<f32>,
+{
     #[kithara::measure(label = "decode.resampled.next")]
     fn prepare_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         if let Some(output) = self.drain_ready()? {
@@ -238,20 +283,63 @@ where
         meta.spec = self.target_spec;
         meta.frame_offset = self.output_frame_offset;
         meta.frames = u32::try_from(frames.get()).unwrap_or(u32::MAX);
-        meta.timestamp = self
-            .target_spec
-            .duration_for(meta.frame_offset)
-            .unwrap_or(Duration::from_nanos(u64::MAX));
+        let basis = self.source_basis.ok_or(DecodeError::InvalidData {
+            detail: "resampled PCM has no observed native basis",
+        })?;
+        let input = basis.source_geometry().ok_or(DecodeError::InvalidData {
+            detail: "resampled PCM has invalid native geometry",
+        })?;
+        let anchor = self.target_spec.frame_at(basis.timestamp)?;
+        let elapsed = meta
+            .frame_offset
+            .checked_sub(anchor)
+            .ok_or(DecodeError::InvalidData {
+                detail: "resampled PCM precedes its observed native basis",
+            })?;
+        let output_rate = u128::from(self.target_spec.sample_rate.get());
+        let native_rate = u128::from(basis.spec.sample_rate.get());
+        let origin = u128::from(basis.frame_offset)
+            .checked_mul(output_rate)
+            .and_then(|origin| {
+                u128::from(elapsed)
+                    .checked_mul(native_rate)
+                    .and_then(|advance| origin.checked_add(advance))
+            })
+            .ok_or(DecodeError::InvalidData {
+                detail: "resampled native phase overflow",
+            })?;
+        let physical = kithara_signal::SourceSpan::try_from((
+            origin,
+            native_rate,
+            std::num::NonZeroU128::from(self.target_spec.sample_rate),
+            self.target_spec.sample_rate,
+            u64::try_from(frames.get()).map_err(|_| DecodeError::InvalidData {
+                detail: "resampled frame count overflow",
+            })?,
+        ))
+        .map_err(|()| DecodeError::InvalidData {
+            detail: "resampled native phase is invalid",
+        })?;
+        let span = input.map_output_span(basis.frame_offset, physical).ok_or(
+            DecodeError::InvalidData {
+                detail: "resampled input geometry is not affine",
+            },
+        )?;
+        meta.timestamp = span.position_at(0).ok_or(DecodeError::InvalidData {
+            detail: "resampled timestamp overflow",
+        })?;
+        meta.source_span = Some(span);
         self.output_frame_offset = self
             .output_frame_offset
             .saturating_add(u64::try_from(frames.get()).unwrap_or(u64::MAX));
         self.emitted_frames = self
             .emitted_frames
             .saturating_add(u64::try_from(frames.get()).unwrap_or(u64::MAX));
-        meta.end_timestamp = self
-            .target_spec
-            .duration_for(self.output_frame_offset)
-            .unwrap_or(Duration::from_nanos(u64::MAX));
+        meta.end_timestamp =
+            span.position_at(span.output_frames())
+                .ok_or(DecodeError::InvalidData {
+                    detail: "resampled endpoint overflow",
+                })?;
         self.output.clear();
         Ok(Some(AudioChunk::new(meta, samples)))
     }
@@ -359,6 +447,7 @@ where
         self.source_spec = source_spec;
         self.target_spec = target_spec;
         self.input = input;
+        self.source_basis = None;
         self.output = output;
         self.output_skip_frames = resampler.output_delay();
         self.scratch = scratch;
@@ -374,6 +463,7 @@ where
         self.pending_meta = None;
         self.reanchor_output_on_next_chunk = false;
         self.last_input_meta = None;
+        self.source_basis = None;
         self.emitted_frames = 0;
         self.eof_flushed = false;
         self.output_skip_frames = self.resampler.output_delay();
@@ -424,11 +514,7 @@ where
             ),
             crate::DecoderDuration::MediaEnd(_) => {
                 let origin = self.initial_pcm_origin?.position();
-                let first = self.target_spec.frame_at(origin).ok()?;
-                let end = self
-                    .target_spec
-                    .duration_for(first.checked_add(output_frames)?)
-                    .ok()?;
+                let end = origin.checked_add(self.target_spec.duration_for(output_frames).ok()?)?;
                 crate::DecoderDuration::MediaEnd(end.checked_sub(self.decoder.media_origin()?)?)
             }
         })
@@ -480,32 +566,11 @@ where
     }
 
     fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
-        if !pos.is_zero() {
-            self.observing_initial_pcm = false;
-        }
-        self.prepared = None;
-        let outcome = self.decoder.seek(pos)?;
-        self.reset_resampler_state();
-        match outcome {
-            DecoderSeekOutcome::Landed {
-                landed_at,
-                landed_byte,
-                preroll,
-                ..
-            } => {
-                self.output_frame_offset = self.target_spec.frame_at(landed_at).unwrap_or(u64::MAX);
-                self.reanchor_output_on_next_chunk = true;
-                Ok(DecoderSeekOutcome::Landed {
-                    landed_at,
-                    landed_byte,
-                    preroll,
-                    landed_frame: self.output_frame_offset,
-                })
-            }
-            DecoderSeekOutcome::PastEof { duration } => {
-                Ok(DecoderSeekOutcome::PastEof { duration })
-            }
-        }
+        self.seek_selected(pos, false)
+    }
+
+    fn seek_prefix(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
+        self.seek_selected(pos, true)
     }
 
     fn spec(&self) -> AudioSpec {
@@ -608,14 +673,15 @@ mod origin_tests {
     use crate::test_pools::{Pools, pools, sample_buffer};
 
     #[derive(Clone)]
-    struct DoubleBackend;
+    struct RepeatBackend;
 
-    struct DoubleResampler {
+    struct RepeatResampler {
         mode: ResamplerMode,
+        factor: usize,
     }
 
-    impl ResamplerBackend for DoubleBackend {
-        type Resampler = DoubleResampler;
+    impl ResamplerBackend for RepeatBackend {
+        type Resampler = RepeatResampler;
 
         fn build<S>(
             &self,
@@ -625,22 +691,32 @@ mod origin_tests {
             S: HasPool<f32>,
         {
             assert_eq!(settings.channels, NonZeroUsize::MIN);
-            assert!(matches!(settings.mode, ResamplerMode::FixedRatio {
-                source_sample_rate, target_sample_rate,
-            } if source_sample_rate.get() == 1_000 && target_sample_rate.get() == 2_000));
-            Ok(DoubleResampler {
+            let ResamplerMode::FixedRatio {
+                source_sample_rate,
+                target_sample_rate,
+            } = settings.mode
+            else {
+                panic!("fixed-ratio test backend");
+            };
+            assert!(
+                [(1_000, 2_000), (8_000, 48_000)]
+                    .contains(&(source_sample_rate.get(), target_sample_rate.get()))
+            );
+            Ok(RepeatResampler {
                 mode: settings.mode,
+                factor: usize::try_from(target_sample_rate.get() / source_sample_rate.get())
+                    .expect("small integer rate conversion"),
             })
         }
         fn capabilities(&self) -> ResamplerCapabilities {
             ResamplerCapabilities::FIXED_RATIO | ResamplerCapabilities::STANDALONE
         }
         fn name(&self) -> &'static str {
-            "double-fixture"
+            "repeat-fixture"
         }
     }
 
-    impl Resampler for DoubleResampler {
+    impl Resampler for RepeatResampler {
         fn capabilities(&self) -> ResamplerCapabilities {
             ResamplerCapabilities::FIXED_RATIO | ResamplerCapabilities::STANDALONE
         }
@@ -657,23 +733,23 @@ mod origin_tests {
             self.mode
         }
         fn output_frames_for_input(&self, frames: usize) -> usize {
-            frames * 2
+            frames * self.factor
         }
         fn output_frames_max(&self) -> usize {
-            8
+            4 * self.factor
         }
         fn output_frames_next(&self) -> usize {
-            8
+            4 * self.factor
         }
         fn process_into_buffer(
             &mut self,
             input: &[&[f32]],
             output: &mut [&mut [f32]],
         ) -> Result<ResamplerProcess, ResamplerError> {
-            for (value, pair) in input[0].iter().zip(output[0].chunks_exact_mut(2)) {
+            for (value, pair) in input[0].iter().zip(output[0].chunks_exact_mut(self.factor)) {
                 pair.fill(*value);
             }
-            Ok(ResamplerProcess::new(4, 8))
+            Ok(ResamplerProcess::new(4, 4 * self.factor))
         }
         fn reset(&mut self) {}
     }
@@ -684,10 +760,43 @@ mod origin_tests {
         declared: crate::DecoderDuration,
         media_origin: Option<Duration>,
         origin: u64,
+        phase: Duration,
         next_frame: u64,
         original: Option<PcmOrigin>,
         observing_original: bool,
         pools: Pools,
+    }
+
+    impl OffsetDecoder {
+        fn position(&self, frame: u64) -> DecodeResult<Duration> {
+            Ok(self.spec().duration_for(frame)? + self.phase)
+        }
+
+        fn seek_selected(
+            &mut self,
+            position: Duration,
+            prefix: bool,
+        ) -> DecodeResult<DecoderSeekOutcome> {
+            if !position.is_zero() {
+                self.observing_original = false;
+            }
+            let native = position.saturating_sub(self.phase);
+            let frame = if prefix {
+                u64::try_from(native.as_nanos() * u128::from(self.rate.get()) / 1_000_000_000)
+                    .expect("bounded native prefix")
+            } else {
+                self.spec().frame_at(native)?
+            }
+            .max(self.origin);
+            assert!((self.origin..self.origin + self.length).contains(&frame));
+            self.next_frame = frame;
+            Ok(DecoderSeekOutcome::Landed {
+                landed_at: self.position(frame)?,
+                landed_frame: frame,
+                landed_byte: None,
+                preroll: PrerollHint::NotNeeded,
+            })
+        }
     }
 
     impl Decoder for OffsetDecoder {
@@ -710,7 +819,7 @@ mod origin_tests {
             }
             let start = self.next_frame;
             if self.observing_original {
-                let position = self.spec().duration_for(start)?;
+                let position = self.position(start)?;
                 self.original = Some(PcmOrigin::new(position, position));
                 self.observing_original = false;
             }
@@ -727,26 +836,18 @@ mod origin_tests {
                     spec: self.spec(),
                     frames: u32::try_from(frames).expect("bounded physical PCM"),
                     frame_offset: start,
-                    timestamp: self.spec().duration_for(start)?,
-                    end_timestamp: self.spec().duration_for(self.next_frame)?,
+                    timestamp: self.position(start)?,
+                    end_timestamp: self.position(self.next_frame)?,
                     ..AudioChunkInfo::default()
                 },
                 sample_buffer(&self.pools, &samples),
             ))))
         }
         fn seek(&mut self, position: Duration) -> DecodeResult<DecoderSeekOutcome> {
-            if !position.is_zero() {
-                self.observing_original = false;
-            }
-            let frame = self.spec().frame_at(position)?.max(self.origin);
-            assert!((self.origin..self.origin + self.length).contains(&frame));
-            self.next_frame = frame;
-            Ok(DecoderSeekOutcome::Landed {
-                landed_at: self.spec().duration_for(frame)?,
-                landed_frame: frame,
-                landed_byte: None,
-                preroll: PrerollHint::NotNeeded,
-            })
+            self.seek_selected(position, false)
+        }
+        fn seek_prefix(&mut self, position: Duration) -> DecodeResult<DecoderSeekOutcome> {
+            self.seek_selected(position, true)
         }
         fn update_byte_len(&self, _len: u64) {}
     }
@@ -769,7 +870,24 @@ mod origin_tests {
                 .duration_for(chunk.meta.frame_range().end)
                 .expect("output endpoint")
         );
-        assert!(chunk.meta.source_span.is_none());
+        let span = chunk
+            .meta
+            .source_span
+            .expect("exact resampled source geometry");
+        assert_eq!(span.sample_rate(), chunk.spec().sample_rate);
+        assert_eq!(span.position_at(0), Some(chunk.meta.timestamp));
+        assert_eq!(
+            span.position_at(span.output_frames()),
+            Some(chunk.meta.end_timestamp)
+        );
+        assert_eq!(
+            span.source_ratio_at(0),
+            Some((
+                u128::from(chunk.meta.frame_offset),
+                std::num::NonZeroU128::MIN
+            ))
+        );
+
         for (offset, value) in chunk.samples.iter().enumerate() {
             let source_frame = (chunk.meta.frame_offset + offset as u64) / 2;
             assert_eq!(
@@ -801,7 +919,7 @@ mod origin_tests {
         let source = crate::composed::origin_tests::head_gap_fixture(vec![0.25, -0.5], zero_packet);
         let config = DecoderResamplerConfig::builder()
             .target_sample_rate(NonZeroU32::new(2_000).expect("target rate"))
-            .backend(DoubleBackend)
+            .backend(RepeatBackend)
             .build();
         let mut decoder = ResampledDecoder::new(source, config, &pools).expect("resampled decoder");
         assert_eq!(decoder.initial_pcm_origin(), None);
@@ -816,6 +934,159 @@ mod origin_tests {
         assert_eq!(decoder.timeline_gap_frames(), 62);
         assert_eq!(origin.position(), Duration::from_millis(59));
         assert_eq!(origin.comparison_base(), Duration::from_millis(42));
+        for (native_rate, output_rate, physical_origin, requested_ns) in [
+            (1_000, 2_000, 42, 43_300_000),
+            (8_000, 48_000, 338, 42_350_000),
+        ] {
+            let native_rate = NonZeroU32::new(native_rate).expect("native rate");
+            let output_rate = NonZeroU32::new(output_rate).expect("output rate");
+            let raw_origin = Duration::from_nanos(42_250_000);
+            let native_spec = AudioSpec::new(1, native_rate);
+            let source = OffsetDecoder {
+                rate: native_rate,
+                length: 128,
+                declared: crate::DecoderDuration::RawLength(Duration::from_secs(1)),
+                media_origin: Some(raw_origin),
+                origin: physical_origin,
+                phase: raw_origin
+                    - native_spec
+                        .duration_for(physical_origin)
+                        .expect("physical native origin"),
+                next_frame: physical_origin,
+                original: Some(PcmOrigin::new(raw_origin, raw_origin)),
+                observing_original: false,
+                pools: pools.clone(),
+            };
+            let config = DecoderResamplerConfig::builder()
+                .target_sample_rate(output_rate)
+                .backend(RepeatBackend)
+                .build();
+            let mut decoder = ResampledDecoder::new(Box::new(source), config, &pools)
+                .expect("actual SRC wrapper");
+            let first = first_pcm(&mut decoder);
+            let factor =
+                usize::try_from(output_rate.get() / native_rate.get()).expect("integer SRC ratio");
+            let anchor = decoder
+                .spec()
+                .frame_at(raw_origin)
+                .expect("integral physical output anchor");
+            assert_eq!(first.meta.frame_offset, anchor);
+            assert_eq!(first.meta.timestamp, raw_origin);
+            assert_eq!(first.frames(), 64 * factor);
+            let expected = (0..64_u16)
+                .flat_map(|index| std::iter::repeat_n(f32::from(index) / 2_000.0, factor))
+                .collect::<Vec<_>>();
+            assert_eq!(first.samples.as_ref(), expected.as_slice());
+            let span = first.meta.source_span.expect("exact native SRC basis");
+            assert_eq!(span.position_at(0), Some(raw_origin));
+            assert_eq!(span.sample_rate(), output_rate);
+            assert_eq!(
+                span.output_ratio_at_source(
+                    anchor,
+                    (
+                        raw_origin.as_nanos() * u128::from(output_rate.get()),
+                        std::num::NonZeroU128::new(1_000_000_000).expect("raw nanoseconds")
+                    )
+                ),
+                Some((u128::from(anchor), std::num::NonZeroU128::MIN))
+            );
+            if native_rate.get() == 1_000 {
+                assert_eq!(anchor, 85);
+                assert_eq!(
+                    span.source_ratio_at(0),
+                    Some((
+                        169,
+                        std::num::NonZeroU128::new(2).expect("subsample raw origin")
+                    ))
+                );
+                assert_ne!(
+                    first.meta.timestamp,
+                    decoder.spec().duration_for(anchor).expect("physical label")
+                );
+            }
+            let next = first_pcm(&mut decoder);
+            assert_eq!(
+                next.meta.frame_offset,
+                anchor + u64::try_from(first.frames()).expect("output extent")
+            );
+            assert_eq!(
+                next.meta.timestamp,
+                raw_origin + native_spec.duration_for(64).expect("first native extent")
+            );
+            assert_eq!(next.samples[0], 64.0 / 2_000.0);
+            assert_eq!(
+                next.meta
+                    .source_span
+                    .expect("same immutable SRC basis")
+                    .source_ratio_at(0),
+                span.source_ratio_at(span.output_frames())
+            );
+            let mut trimmer = crate::GaplessTrimmer::from(GaplessInfo {
+                leading_frames: 2,
+                trailing_frames: 2,
+            });
+            let output_frames = u64::try_from(first.frames()).expect("actual SRC extent");
+            let expected_span = span
+                .for_output_range(2..output_frames - 2)
+                .expect("mapped PCM trim");
+            assert!(trimmer.push(*first).expect("valid gapless PCM").is_empty());
+            let mut trimmed = trimmer.flush().expect("valid gapless PCM");
+            assert_eq!(trimmed.len(), 1);
+            let trimmed = trimmed.remove(0);
+            assert_eq!(trimmed.meta.frame_offset, anchor + 2);
+            assert_eq!(trimmed.samples.as_ref(), &expected[2..expected.len() - 2]);
+            assert_eq!(trimmed.meta.source_span, Some(expected_span));
+            assert_eq!(
+                u64::from(trimmed.meta.frames),
+                expected_span.output_frames()
+            );
+            assert_eq!(
+                trimmed.meta.timestamp,
+                expected_span.position_at(0).expect("trimmed raw start")
+            );
+            assert_eq!(
+                trimmed.meta.end_timestamp,
+                expected_span
+                    .position_at(expected_span.output_frames())
+                    .expect("trimmed raw endpoint")
+            );
+            let requested = Duration::from_nanos(requested_ns);
+            let prefix_bound = requested.saturating_sub(Duration::from_nanos(
+                1_000_000_000u64.div_ceil(u64::from(output_rate.get())),
+            ));
+            decoder.seek(prefix_bound).expect("ordinary nearest seek");
+            let nearest = first_pcm(&mut decoder);
+            assert_eq!(nearest.samples[0], 1.0 / 2_000.0);
+            assert_eq!(
+                nearest.meta.timestamp,
+                raw_origin + native_spec.duration_for(1).expect("next native sample")
+            );
+            decoder
+                .seek_prefix(requested)
+                .expect("owned native prefix seek");
+            let prefix = first_pcm(&mut decoder);
+            assert_eq!(
+                prefix.samples[0],
+                if native_rate.get() == 1_000 {
+                    1.0 / 2_000.0
+                } else {
+                    0.0
+                }
+            );
+            assert!(prefix.meta.timestamp <= requested);
+            assert_eq!(
+                prefix
+                    .meta
+                    .source_span
+                    .expect("postseek actual basis")
+                    .position_at(0),
+                Some(prefix.meta.timestamp)
+            );
+            assert_eq!(
+                decoder.initial_pcm_origin().map(PcmOrigin::position),
+                Some(raw_origin)
+            );
+        }
         assert_eq!(
             decoder
                 .spec()
@@ -843,6 +1114,7 @@ mod origin_tests {
             length: 1_000,
             declared: crate::DecoderDuration::RawLength(Duration::from_secs(60)),
             media_origin: None,
+            phase: Duration::ZERO,
             origin,
             next_frame: origin,
             original: reports_origin.then(|| {
@@ -854,7 +1126,7 @@ mod origin_tests {
         };
         let config = DecoderResamplerConfig::builder()
             .target_sample_rate(NonZeroU32::new(2_000).expect("target rate"))
-            .backend(DoubleBackend)
+            .backend(RepeatBackend)
             .build();
         let mut decoder =
             ResampledDecoder::new(Box::new(source), config, &pools).expect("production wrapper");
@@ -924,6 +1196,7 @@ mod origin_tests {
             length: 1_000,
             declared: crate::DecoderDuration::RawLength(Duration::from_secs(60)),
             media_origin: None,
+            phase: Duration::ZERO,
             origin: 701,
             next_frame: 701,
             original: Some(original),
@@ -939,8 +1212,21 @@ mod origin_tests {
         let before = decoder
             .initial_pcm_origin()
             .expect("known original geometry");
-        assert_eq!(before.position(), Duration::from_nanos(701_333_333));
+        assert_eq!(before.position(), Duration::from_millis(701));
         assert_eq!(before.comparison_base(), Duration::from_millis(701));
+        let head = first_pcm(&mut decoder);
+        assert_eq!(head.meta.frame_offset, 1_052);
+        assert_eq!(head.meta.timestamp, Duration::from_millis(701));
+        assert_eq!(
+            head.meta
+                .source_span
+                .expect("unsnapped raw head")
+                .source_ratio_at(0),
+            Some((
+                2_103,
+                std::num::NonZeroU128::new(2).expect("half output frame")
+            ))
+        );
         decoder
             .seek(Duration::from_millis(900))
             .expect("nonzero seek");
@@ -960,6 +1246,7 @@ mod origin_tests {
                 length: 44_105,
                 declared,
                 media_origin: Some(origin),
+                phase: Duration::ZERO,
                 origin: 1,
                 next_frame: 1,
                 original: Some(PcmOrigin::new(origin, origin)),
@@ -1034,6 +1321,7 @@ mod origin_tests {
             length: 1_000,
             declared: crate::DecoderDuration::RawLength(Duration::from_secs(60)),
             media_origin: None,
+            phase: Duration::ZERO,
             origin: 701,
             next_frame: 701,
             original: Some(PcmOrigin::new(
@@ -1054,7 +1342,7 @@ mod origin_tests {
             .initial_pcm_origin()
             .map(PcmOrigin::position)
             .expect("known original head");
-        assert_eq!(original, Duration::from_nanos(701_333_333));
+        assert_eq!(original, Duration::from_millis(701));
         assert_eq!(spec.frame_at(original).expect("original frame"), 1_052);
         let DecoderSeekOutcome::Landed {
             landed_at,
@@ -1073,7 +1361,7 @@ mod origin_tests {
         );
         if requested_millis == 0 {
             assert_eq!(landed_at, Duration::from_millis(701));
-            assert_ne!(landed_at, original);
+            assert_eq!(landed_at, original);
             assert_eq!(
                 landed_frame,
                 spec.frame_at(original).expect("original frame")
@@ -1086,6 +1374,20 @@ mod origin_tests {
             decoder.initial_pcm_origin().map(PcmOrigin::position),
             Some(original)
         );
+        let output = first_pcm(&mut decoder);
+        assert_eq!(output.meta.frame_offset, expected_frame);
+        assert_eq!(output.meta.timestamp, landed_at);
+        let span = output.meta.source_span.expect("actual native source basis");
+        assert_eq!(span.position_at(0), Some(landed_at));
+        if requested_millis == 0 {
+            assert_eq!(
+                span.source_ratio_at(0),
+                Some((
+                    2_103,
+                    std::num::NonZeroU128::new(2).expect("half output frame")
+                ))
+            );
+        }
     }
 }
 

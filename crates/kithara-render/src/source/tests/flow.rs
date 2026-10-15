@@ -428,12 +428,19 @@ fn live_warp_drain_holds_the_source_and_seek_discards_stale_unity(
 
         let first_active = chunk_with_frames(&pools, spec, 0, ACTIVE_FRAMES, &quarter);
         let first_unity = chunk_with_frames(&pools, spec, first_active_end, UNITY_FRAMES, &half);
-        let sentinel = chunk_with_frames(
+        let mut sentinel = chunk_with_frames(
             &pools,
             spec,
             first_unity_end,
             SENTINEL_FRAMES,
             &three_quarter,
+        );
+        let sentinel_origin = 44_100;
+        sentinel.meta.source_span = SourceSpan::new(
+            sentinel_origin,
+            sentinel_origin + u64::from(SENTINEL_FRAMES),
+            spec.sample_rate,
+            u64::from(SENTINEL_FRAMES),
         );
         let sentinel_ptr = sentinel.samples.as_ptr();
         let sentinel_samples = sentinel.samples.to_vec();

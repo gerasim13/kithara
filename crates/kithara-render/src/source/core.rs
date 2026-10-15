@@ -200,7 +200,8 @@ where
                 }
                 return;
             }
-            Err(_) => {
+            Err(error) => {
+                tracing::error!(%error, "decoded source cannot be prepared for Warp");
                 self.quantum_failed = true;
                 return;
             }
@@ -465,8 +466,12 @@ where
         meta: AudioChunkInfo,
         remaining: usize,
     ) -> Result<FrameCount, WarpRenderError> {
-        self.warp
-            .prepare_source_window(meta, remaining, self.lane.output_limit())
+        self.lane.prepare_quantum(
+            &mut self.warp,
+            meta,
+            remaining,
+            self.source.visible_origin(),
+        )
     }
 
     fn prepare_renderers(&mut self, spec: AudioSpec) {
@@ -631,6 +636,7 @@ where
         to self.source {
             fn commit_source_end(&mut self, source_end: SourceEnd, meta: AudioChunkInfo);
             fn seek(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError>;
+            fn seek_for_render(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError>;
             fn set_host_sample_rate(&mut self, rate: NonZeroU32);
             fn host_sample_rate(&self) -> Option<NonZeroU32>;
             fn media_origin(&self) -> Option<Duration>;
@@ -715,9 +721,24 @@ where
         }
 
         match self.source.step_track() {
-            TrackStep::Produced(Fetch::Data { data, .. }) => {
-                self.lane
-                    .observe_input(data.meta, self.source.native_pcm_basis());
+            TrackStep::Produced(Fetch::Data { mut data, .. }) => {
+                let Some(geometry) = data.meta.source_geometry() else {
+                    tracing::error!("decoded source has invalid PCM geometry");
+                    return self.fail(TrackFailureKind::Render);
+                };
+                if !geometry.is_affine() {
+                    tracing::error!(error = %WarpRenderError::UnsupportedSourceGeometry,
+                        "decoded source cannot enter Warp");
+                    return self.fail(TrackFailureKind::Render);
+                }
+                data.meta.source_span = Some(geometry);
+                if let Err(error) =
+                    self.lane
+                        .observe_input(&mut self.warp, data.meta, self.source.visible_origin())
+                {
+                    tracing::error!(%error, "decoded source misses the segment entry");
+                    return self.fail(TrackFailureKind::Render);
+                }
                 if data.spec() == self.spec
                     && self.prepared_frames.is_none()
                     && self

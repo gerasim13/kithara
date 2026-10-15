@@ -93,6 +93,7 @@ async fn a_chunk_from_another_decode_epoch_proves_nothing() {
         Outcome::Applied { data, .. } if data.ready == Some(positioned)
     ));
     assert!(matches!(node.preload_status(), Ok(true)));
+    fractional_segment_entry().await;
     for control_before_output in [false, true] {
         entry_under_backpressure(control_before_output).await;
     }
@@ -128,7 +129,7 @@ async fn a_chunk_from_another_decode_epoch_proves_nothing() {
             480,
             48_000,
             Some(Duration::from_millis(10)),
-            false,
+            true,
         ),
     ] {
         post_trim_entry(
@@ -402,6 +403,76 @@ fn assert_host_rate_entry(
     assert!(lane.receipts().next().is_none());
 }
 
+async fn fractional_segment_entry() {
+    let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("fractional entry rate"));
+    let first_frame = 769_202;
+    let target = Duration::from_nanos(16_025_056_689);
+    let samples = (0_u16..4_096)
+        .flat_map(|frame| [f32::from(frame), -f32::from(frame)])
+        .collect::<Vec<_>>();
+    let packet = chunk(spec, SegmentId::FIRST, 0, first_frame, &samples);
+    let native = packet.meta;
+    let source = ScriptedSource::new([TrackStep::Produced(Fetch::data(packet))]);
+    let (mut node, mut receiver, mut lane) = prepared_node_with_info(
+        source,
+        4,
+        1,
+        AudioChunkInfo {
+            spec,
+            ..AudioChunkInfo::default()
+        },
+    )
+    .await;
+    let positioned = SegmentId::FIRST.next();
+    let seq = lane
+        .send(
+            When::Next,
+            Batch {
+                basis: Vec::new(),
+                commands: vec![LaneCommand::Segment {
+                    id: positioned,
+                    from: target,
+                    speed: kithara_warp::SpeedCurve::Constant(1.0),
+                }],
+            },
+        )
+        .expect("fractional segment");
+    node.synchronize().expect("prefix seek admitted");
+    let Fetch::Data { data, source_end } = next_rendered(&mut node) else {
+        panic!("fractional physical output");
+    };
+    assert_eq!(data.samples[0], 0.721072_f32);
+    assert_eq!(data.samples[1], -0.721072_f32);
+    let span = data.meta.source_span.expect("exact raw entry span");
+    assert_eq!(span.position_at(0), Some(target));
+    assert_eq!(
+        span.source_ratio_at(0),
+        Some((
+            48_075_170_067,
+            std::num::NonZeroU128::new(62_500).expect("raw ratio")
+        )),
+    );
+    assert_eq!(data.meta.segment, positioned);
+    assert_eq!(data.meta.lane_frame, 0);
+    node.pending = Some(PendingPacket {
+        packet: PcmPacket::Chunk(Box::new(data)),
+        source_end,
+    });
+    assert_eq!(node.tick(), TickResult::Progress);
+    let receipt = lane
+        .receipts()
+        .next()
+        .expect("actual fractional entry ready");
+    assert_eq!(receipt.seq(), seq);
+    assert!(matches!(
+        receipt.outcome(),
+        Outcome::Applied { data, .. }
+            if data.ready == Some(positioned) && data.source_basis == Some(native)
+    ));
+    assert!(receiver.pop().is_some());
+    assert!(lane.receipts().next().is_none());
+}
+
 async fn post_trim_entry(
     target: Duration,
     landing: Duration,
@@ -444,49 +515,56 @@ async fn post_trim_entry(
         )
         .expect("seek before post-trim PCM");
     node.synchronize().expect("raw seek landing");
+    if !accepts_entry {
+        assert!(matches!(
+            node.source.step_track(),
+            TrackStep::Failed(TrackFailureKind::Render)
+        ));
+        assert!(
+            receiver.pop().is_none(),
+            "missed entry PCM was never published"
+        );
+        assert_eq!(node.tick(), TickResult::Progress);
+        let receipt = lane.receipts().next().expect("missed entry verdict");
+        assert_eq!(receipt.seq(), seq);
+        assert!(matches!(
+            receipt.outcome(),
+            Outcome::Rejected(Rejection::Refused(TrackFailureKind::Render))
+        ));
+        assert!(!node.source.is_preloaded());
+        assert!(matches!(
+            node.preload_status(),
+            Err(LoadRefusal::Source(TrackFailureKind::Render))
+        ));
+        assert!(matches!(
+            receiver.pop(),
+            Some(PcmPacket::Failed {
+                segment,
+                failure: TrackFailureKind::Render,
+            }) if segment == positioned
+        ));
+        assert_eq!(node.tick(), TickResult::Backpressured);
+        assert!(receiver.pop().is_none());
+        assert!(lane.receipts().next().is_none());
+        assert!(!node.source.is_preloaded());
+        return;
+    }
+    let expected_entry = visible_origin.map_or(target, |origin| origin.max(target));
+    let mut expected_source_frame = spec.frame_at(expected_entry).expect("entry frame");
     for index in 0..2 {
         let Fetch::Data { data, source_end } = next_rendered(&mut node) else {
             panic!("post-trim mapped output");
         };
         let span = data.meta.source_span.expect("post-trim mapping");
         assert_eq!(span.sample_rate(), spec.sample_rate);
-        assert_eq!(span.start(), first_frame + index * 1_024);
+        assert_eq!(span.start(), expected_source_frame);
+        expected_source_frame = span.end();
         assert_eq!(data.meta.render_revision, seq.get());
         node.pending = Some(PendingPacket {
             packet: PcmPacket::Chunk(Box::new(data)),
             source_end,
         });
         assert_eq!(node.tick(), TickResult::Progress);
-        if !accepts_entry {
-            let receipt = lane.receipts().next().expect("missed entry verdict");
-            assert_eq!(receipt.seq(), seq);
-            assert!(matches!(
-                receipt.outcome(),
-                Outcome::Rejected(Rejection::Refused(TrackFailureKind::Render))
-            ));
-            assert!(
-                receiver.pop().is_none(),
-                "missed entry PCM was never published"
-            );
-            assert!(!node.source.is_preloaded());
-            assert!(matches!(
-                node.preload_status(),
-                Err(LoadRefusal::Source(TrackFailureKind::Render))
-            ));
-            assert_eq!(node.tick(), TickResult::Progress);
-            assert!(matches!(
-                receiver.pop(),
-                Some(PcmPacket::Failed {
-                    segment,
-                    failure: TrackFailureKind::Render,
-                }) if segment == positioned
-            ));
-            assert_eq!(node.tick(), TickResult::Backpressured);
-            assert!(receiver.pop().is_none());
-            assert!(lane.receipts().next().is_none());
-            assert!(!node.source.is_preloaded());
-            return;
-        }
         assert!(receiver.pop().is_some());
         assert_eq!(node.source.is_preloaded(), index == 1);
         if index == 0 {

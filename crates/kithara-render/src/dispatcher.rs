@@ -233,7 +233,11 @@ where
                                 .item
                                 .open(request.position, request.start, request.inbox)
                                 .await;
-                            tracing::debug!(opened = result.is_ok(), "source open finished");
+                            tracing::debug!(
+                                opened = result.is_ok(),
+                                error = ?result.as_ref().err(),
+                                "source open finished"
+                            );
                             (seq, lane, request.class, result)
                         }
                         .instrument(span)

@@ -18,6 +18,7 @@ mod consts {
     pub(super) const RHYTHM_LISTENING_FRAMES: u64 = 48_000 * 45;
     pub(super) const RHYTHM_LISTENING_LONG_FRAMES: u64 = 48_000 * 55;
     pub(super) const RHYTHM_LONG_FRAMES: u64 = 48_000 * 15;
+    pub(super) const SLOW_RHYTHM_FRAMES: u64 = 48_000 * 16;
 }
 
 #[kithara::asset(ext = "wav", content_type = "audio/wav")]
@@ -52,13 +53,13 @@ fn rhythm_wav(style: Style, control: Control) -> Vec<u8> {
 #[kithara::asset(ext = "wav", content_type = "audio/wav")]
 #[case::ambient_dub_62_aligned(Style::AmbientDub)]
 #[case::trip_hop_74_aligned(Style::TripHop)]
-fn rhythm_wav_long(style: Style) -> Vec<u8> {
+fn rhythm_wav_16s(style: Style) -> Vec<u8> {
     score::wav_with_layout_at_origin_for_frames(
         style,
         Control::Aligned,
         ChannelLayout::Stereo,
         Origin::Pickup,
-        consts::RHYTHM_LONG_FRAMES,
+        consts::SLOW_RHYTHM_FRAMES,
     )
 }
 
@@ -192,19 +193,19 @@ fn rhythm_expected_analysis(_inputs: &[&[u8]], style: Style, control: Control) -
     ext = "analysis",
     content_type = "application/x-kithara-analysis",
     format = analysis_format,
-    depends_on = ["rhythm_wav_long_{case}"]
+    depends_on = ["rhythm_wav_16s_{case}"]
 )]
 #[case::ambient_dub_62_aligned(Style::AmbientDub)]
 #[case::trip_hop_74_aligned(Style::TripHop)]
-fn rhythm_expected_analysis_long(_inputs: &[&[u8]], style: Style) -> Vec<u8> {
+fn rhythm_expected_analysis_16s(_inputs: &[&[u8]], style: Style) -> Vec<u8> {
     analysis_file(
         Some(BeatArtifact::from(score::truth_at_origin_for_frames(
             style,
             Control::Aligned,
             Origin::Pickup,
-            consts::RHYTHM_LONG_FRAMES,
+            consts::SLOW_RHYTHM_FRAMES,
         ))),
-        consts::RHYTHM_LONG_FRAMES,
+        consts::SLOW_RHYTHM_FRAMES,
         truth_rate(),
     )
 }

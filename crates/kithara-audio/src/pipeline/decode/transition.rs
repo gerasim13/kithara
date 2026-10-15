@@ -84,6 +84,40 @@ pub(super) enum PromotionReadiness {
     AwaitingOutgoingPcm,
 }
 
+impl PromotionReadiness {
+    fn after_incoming_eof(
+        self,
+        generation: &DecoderGeneration,
+        latched_frontier: OutgoingFrontier,
+        outgoing_rate: u32,
+        outgoing_origin: u64,
+        incoming_origin: u64,
+    ) -> IncomingPrime {
+        match self {
+            Self::Ready(_) => IncomingPrime::Ready,
+            Self::AwaitingOutgoingFrontier | Self::AwaitingOutgoingPcm => IncomingPrime::Pending,
+            Self::NeedIncoming => {
+                if staged_ahead(
+                    generation,
+                    latched_frontier,
+                    outgoing_rate,
+                    outgoing_origin,
+                    incoming_origin,
+                ) {
+                    IncomingPrime::Pending
+                } else {
+                    debug!(
+                        outgoing_frontier = ?latched_frontier,
+                        outgoing_origin,
+                        "incoming generation reached EOF before the outgoing frontier"
+                    );
+                    IncomingPrime::Failed
+                }
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(super) enum PromotionJoin {
     HardCut,
@@ -348,7 +382,13 @@ impl super::core::ActiveDecode {
             outcome = match generation.next_chunk() {
                 Ok(DecoderChunkOutcome::Chunk(chunk)) => {
                     match apply_skip(*chunk, generation.pending_head_skip_mut()) {
-                        Ok(Some(chunk)) if !chunk.samples.is_empty() => generation.stage(chunk),
+                        Ok(Some(chunk)) if !chunk.samples.is_empty() => {
+                            if let Err(error) = generation.stage(chunk) {
+                                self.stage_error = Some(error);
+                                outcome = IncomingPrime::Failed;
+                                break;
+                            }
+                        }
                         Ok(Some(_)) => {}
                         Ok(None) => continue,
                         Err(error) => {
@@ -380,34 +420,22 @@ impl super::core::ActiveDecode {
                 }
                 Ok(DecoderChunkOutcome::Pending(_)) => IncomingPrime::Pending,
                 Ok(DecoderChunkOutcome::Eof) => {
-                    generation.finish_staging();
+                    if let Err(error) = generation.finish_staging() {
+                        self.stage_error = Some(error);
+                        outcome = IncomingPrime::Failed;
+                        break;
+                    }
                     let Some((incoming_origin, readiness)) = incoming_readiness(generation) else {
                         outcome = IncomingPrime::Failed;
                         break;
                     };
-                    match readiness {
-                        PromotionReadiness::Ready(_) => IncomingPrime::Ready,
-                        PromotionReadiness::AwaitingOutgoingFrontier
-                        | PromotionReadiness::AwaitingOutgoingPcm => IncomingPrime::Pending,
-                        PromotionReadiness::NeedIncoming => {
-                            if staged_ahead(
-                                generation,
-                                latched_frontier,
-                                outgoing_rate,
-                                outgoing_origin,
-                                incoming_origin,
-                            ) {
-                                IncomingPrime::Pending
-                            } else {
-                                debug!(
-                                    outgoing_frontier = ?latched_frontier,
-                                    outgoing_origin,
-                                    "incoming generation reached EOF before the outgoing frontier"
-                                );
-                                IncomingPrime::Failed
-                            }
-                        }
-                    }
+                    readiness.after_incoming_eof(
+                        generation,
+                        latched_frontier,
+                        outgoing_rate,
+                        outgoing_origin,
+                        incoming_origin,
+                    )
                 }
                 Err(_) => IncomingPrime::Failed,
             };

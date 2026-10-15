@@ -1,6 +1,6 @@
 use kithara_decode::{
-    DecoderDuration, GaplessMode, GaplessOutput, GaplessProfile, GaplessTailCompensation,
-    GaplessTrimmer,
+    DecodeResult, DecoderDuration, GaplessMode, GaplessOutput, GaplessProfile,
+    GaplessTailCompensation, GaplessTrimmer,
 };
 use kithara_platform::time::Duration;
 use kithara_signal::AudioChunk;
@@ -58,9 +58,10 @@ impl GaplessStage {
     }
 
     /// Release any trimmer-held tail at decoder EOF.
-    pub(crate) fn flush(&mut self) {
-        let output = self.trimmer.flush();
+    pub(crate) fn flush(&mut self) -> DecodeResult<()> {
+        let output = self.trimmer.flush()?;
         self.replace_pending(output);
+        Ok(())
     }
 
     #[must_use]
@@ -90,9 +91,10 @@ impl GaplessStage {
     }
 
     /// Feed one decoded chunk into the trimmer.
-    pub(crate) fn push(&mut self, chunk: AudioChunk) {
-        let output = self.trimmer.push(chunk);
+    pub(crate) fn push(&mut self, chunk: AudioChunk) -> DecodeResult<()> {
+        let output = self.trimmer.push(chunk)?;
         self.replace_pending(output);
+        Ok(())
     }
 
     /// Install a new trimmer output batch after the previous one is drained.

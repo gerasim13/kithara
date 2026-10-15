@@ -1,5 +1,5 @@
 use std::{
-    num::{NonZeroU32, NonZeroU64},
+    num::{NonZeroU32, NonZeroU64, NonZeroU128},
     ops::Range,
 };
 
@@ -52,6 +52,39 @@ pub struct AudioChunkInfo {
 }
 
 impl AudioChunkInfo {
+    /// Exact raw source geometry of this physical PCM interval.
+    ///
+    /// Existing mappings are preserved. Invalid or overflowing native clocks return `None`.
+    #[must_use]
+    pub fn source_geometry(&self) -> Option<SourceSpan> {
+        if let Some(span) = self.source_span {
+            return Some(span);
+        }
+        let frames = u64::from(self.frames);
+        self.frame_offset.checked_add(frames)?;
+        let rate = u128::from(self.spec.sample_rate.get());
+        let phase = u128::from(self.frame_offset)
+            .checked_mul(crate::consts::NANOS_PER_SECOND)?
+            .checked_rem(rate)?;
+        let numerator = self
+            .timestamp
+            .as_nanos()
+            .checked_mul(rate)?
+            .checked_add(phase)?;
+        Some(
+            SourceSpan::try_from((
+                numerator,
+                crate::consts::NANOS_PER_SECOND,
+                NonZeroU128::new(crate::consts::NANOS_PER_SECOND)?,
+                self.spec.sample_rate,
+                frames,
+            ))
+            .ok()?
+            .with_render_revision(self.render_revision)
+            .with_mapping_revision(self.mapping_revision),
+        )
+    }
+
     /// The decoded source frames this chunk carries, `[start, end)`.
     ///
     /// Read off the chunk's own metadata: `frame_offset` is absolute from the

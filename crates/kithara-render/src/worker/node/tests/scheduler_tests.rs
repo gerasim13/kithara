@@ -62,6 +62,12 @@ impl AudioSource for MockSource {
             landed_at: target,
         })
     }
+    fn seek_for_render(
+        &mut self,
+        target: Duration,
+    ) -> Result<SeekOutcome, kithara_audio::AudioReadError> {
+        self.seek(target)
+    }
     fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
     fn host_sample_rate(&self) -> Option<NonZeroU32> {
         None

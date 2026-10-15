@@ -240,7 +240,8 @@ where
                 meta,
                 meta.frame_offset
                     .checked_add(u64::try_from(output_limit).ok()?)?,
-            );
+            )
+            .ok()?;
             next.frames = u32::try_from(frames - output_limit).ok()?;
             self.pending_unity_meta = Some(next);
             meta.frames = u32::try_from(output_limit).ok()?;
@@ -323,7 +324,7 @@ where
             self.defer_scratch(Some(samples));
             return None;
         }
-        let mut input = Self::meta_at_frame(meta, feed);
+        let mut input = Self::meta_at_frame(meta, feed).ok()?;
         input.frames = u32::try_from(frames).unwrap_or(u32::MAX);
         self.last_input_meta = Some(input);
         let landing = prepared.and_then(|quantum| quantum.landing_frames);
@@ -657,7 +658,13 @@ where
             && let Some(output) = output.as_mut()
             && let Err(error) = self.map_output(output)
         {
-            warn!(%error, "source mapping failed");
+            warn!(
+                %error,
+                input = ?self.last_input_meta,
+                physical_span = ?output.meta.source_span,
+                "source mapping failed"
+            );
+            self.terminal_error = Some(error);
             return None;
         }
         if let Some(output) = output.as_ref() {

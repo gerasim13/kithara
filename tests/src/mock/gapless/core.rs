@@ -230,8 +230,12 @@ pub fn synthetic_tail_trimmed_first_frames(tail_compensation: bool, stereo: &[f3
         );
 
     let mut output = Vec::new();
-    output.extend(left_frames_from_chunks(trimmer.push(source)));
-    output.extend(left_frames_from_chunks(trimmer.flush()));
+    output.extend(left_frames_from_chunks(
+        trimmer.push(source).expect("valid gapless PCM"),
+    ));
+    output.extend(left_frames_from_chunks(
+        trimmer.flush().expect("valid gapless PCM"),
+    ));
     output
 }
 

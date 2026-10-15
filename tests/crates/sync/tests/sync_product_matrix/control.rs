@@ -519,13 +519,12 @@ fn source_sample(
                 format!("native source does not cover frame {source}+{offset}, channel {channel}")
             })
     };
-    mapped_sample(position, f64::from(speed), Some(0), sample)
+    mapped_sample(position, f64::from(speed), sample)
 }
 
 fn mapped_sample(
     position: (u128, u128),
     speed: f64,
-    source_head: Option<u64>,
     sample: impl Fn(i64) -> Result<f32, String>,
 ) -> Result<f32, String> {
     let fraction = (position.0 % position.1)
@@ -537,20 +536,13 @@ fn mapped_sample(
         if fraction == 0.0 {
             return sample(0);
         }
-        let current = sample(0)?;
-        let next = sample(1)?;
-        if source_head.is_some_and(|head| position.0 / position.1 == u128::from(head)) {
-            return Ok((next - current).mul_add(
-                fraction
-                    .to_f32()
-                    .ok_or_else(|| "source fraction is not finite f32".to_owned())?,
-                current,
-            ));
-        }
-        return Ok(kithara::dsp::interp::quadratic(
-            [sample(-1)?, current, next],
-            fraction,
-        ));
+        let current = f64::from(sample(0)?);
+        let next = f64::from(sample(1)?);
+        return (next - current)
+            .mul_add(fraction, current)
+            .to_f32()
+            .filter(|sample| sample.is_finite())
+            .ok_or_else(|| "control source sample is not finite f32".to_owned());
     }
     let cutoff = speed.recip();
     let mut total = 0.0;
@@ -1015,28 +1007,41 @@ impl DecodedCapture {
             .collect()
     }
 
-    fn jump_source_head(
+    fn physical_basis(
         &self,
-        intervals: &std::collections::BTreeMap<i64, kithara::signal::AudioChunkInfo>,
-        jump: Option<(SessionFrame, SessionFrame)>,
-    ) -> Result<Option<(i64, u64)>, String> {
-        let Some((_, landing)) = jump else {
-            return Ok(None);
-        };
-        let info = intervals
-            .get(&i64::from(landing))
-            .ok_or_else(|| "commanded Jump landing has no actual source interval".to_owned())?;
-        let (head, denominator) = info
-            .source_span
-            .and_then(|span| span.source_ratio_at(0))
-            .ok_or_else(|| "commanded Jump landing has no source head".to_owned())?;
-        let head = u64::try_from(head / denominator.get()).map_err(|error| error.to_string())?;
-        self.sample(
-            *info,
-            i64::try_from(head).map_err(|error| error.to_string())?,
-            0,
-        )?;
-        Ok(Some((i64::from(landing), head)))
+        info: kithara::signal::AudioChunkInfo,
+        position: (u128, std::num::NonZeroU128),
+    ) -> Result<(u64, kithara::signal::SourceSpan), String> {
+        for (decoded, _) in self.chunks.values().filter(|(decoded, _)| {
+            decoded.source_revision == info.source_revision
+                && decoded.spec == info.spec
+                && decoded.media_origin == info.media_origin
+        }) {
+            let basis = decoded
+                .source_geometry()
+                .ok_or_else(|| "decoded PCM has no source geometry".to_owned())?;
+            let basis = basis
+                .scaled_from(
+                    (0, std::num::NonZeroU128::MIN),
+                    (0, std::num::NonZeroU128::MIN),
+                    (
+                        u128::from(info.spec.sample_rate.get()),
+                        std::num::NonZeroU128::from(basis.sample_rate()),
+                    ),
+                )
+                .ok_or_else(|| "decoded PCM source clock cannot be normalized".to_owned())?;
+            let Some((frame, denominator)) =
+                basis.output_ratio_at_source(decoded.frame_offset, position)
+            else {
+                continue;
+            };
+            let frame =
+                u64::try_from(frame / denominator.get()).map_err(|error| error.to_string())?;
+            if decoded.frame_range().contains(&frame) {
+                return Ok((decoded.frame_offset, basis));
+            }
+        }
+        Err("decoder observer has no physical basis for the raw source position".to_owned())
     }
 
     fn physical_capture_clock(
@@ -1075,7 +1080,22 @@ impl DecodedCapture {
     ) -> Result<(), String> {
         let (capture_start, frames) = self.physical_capture_clock(pcm, marks)?;
         let intervals = physical_intervals(marks, sample_rate)?;
-        let source_head = self.jump_source_head(&intervals, jump)?;
+        if let Some((_, landing)) = jump
+            && !intervals.contains_key(&i64::from(landing))
+        {
+            return Err("commanded Jump landing has no actual source interval".to_owned());
+        }
+        let physical_bases = intervals
+            .iter()
+            .map(|(&start, &info)| {
+                let position = info
+                    .source_span
+                    .and_then(|span| span.source_ratio_at(0))
+                    .ok_or_else(|| "physical source interval has no raw origin".to_owned())?;
+                self.physical_basis(info, position)
+                    .map(|basis| (start, basis))
+            })
+            .collect::<Result<std::collections::BTreeMap<_, _>, String>>()?;
         let mut expected = Vec::with_capacity(pcm.len());
         let mut wrong_cue = Vec::with_capacity(pcm.len());
         let mut wrong_tempo = Vec::with_capacity(pcm.len());
@@ -1084,7 +1104,6 @@ impl DecodedCapture {
         for frame in 0..frames {
             let session = i64::from(capture_start) + frame as i64;
             let gain = physical_jump_gain(SessionFrame::new(session), jump);
-            let head = source_head.and_then(|(at, head)| (session >= at).then_some(head));
             if !gain.is_finite() || !(0.0..=1.0).contains(&gain) {
                 return Err("physical capture has an invalid commanded lane gain".to_owned());
             }
@@ -1106,18 +1125,28 @@ impl DecodedCapture {
             let (next, next_denominator) = span
                 .source_ratio_at(offset + 1)
                 .ok_or_else(|| "physical capture has an unmapped source endpoint".to_owned())?;
-            let speed = physical_source_speed((numerator, denominator), (next, next_denominator))?;
+            let raw_position = (numerator, denominator);
+            let raw_next = (next, next_denominator);
+            let &(origin, basis) = physical_bases
+                .get(&start)
+                .ok_or_else(|| "physical source interval lost its decoded basis".to_owned())?;
+            let (numerator, denominator) = basis
+                .output_ratio_at_source(origin, raw_position)
+                .ok_or_else(|| "raw source coordinate has no physical PCM position".to_owned())?;
+            let physical_next = basis
+                .output_ratio_at_source(origin, raw_next)
+                .ok_or_else(|| "raw source endpoint has no physical PCM position".to_owned())?;
+            let speed = physical_source_speed((numerator, denominator), physical_next)?;
             let source =
                 i64::try_from(numerator / denominator.get()).map_err(|error| error.to_string())?;
             for channel in 0..usize::from(CHANNELS) {
-                let sample =
-                    mapped_sample((numerator, denominator.get()), speed, head, |offset| {
-                        let source = source
-                            .checked_add(offset)
-                            .ok_or_else(|| "physical sample coordinate overflows".to_owned())?;
-                        self.sample(info, source, channel)
-                    })? * gain
-                        * CONTROL_GAIN;
+                let sample = mapped_sample((numerator, denominator.get()), speed, |offset| {
+                    let source = source
+                        .checked_add(offset)
+                        .ok_or_else(|| "physical sample coordinate overflows".to_owned())?;
+                    self.sample(info, source, channel)
+                })? * gain
+                    * CONTROL_GAIN;
                 if !sample.is_finite() || sample.abs() >= LimiterConfig::default().ceiling() {
                     return Err(format!(
                         "physical reference has no limiter headroom at frame {session}"
@@ -1130,7 +1159,7 @@ impl DecodedCapture {
                 let wrong_frame = i64::try_from(wrong_position / denominator.get())
                     .map_err(|error| error.to_string())?;
                 wrong_cue.push(
-                    mapped_sample((wrong_position, denominator.get()), speed, head, |offset| {
+                    mapped_sample((wrong_position, denominator.get()), speed, |offset| {
                         self.sample(
                             info,
                             wrong_frame
@@ -1143,7 +1172,8 @@ impl DecodedCapture {
                 );
                 let first = span
                     .source_ratio_at(0)
-                    .ok_or_else(|| "wrong-tempo negative has no origin".to_owned())?;
+                    .and_then(|position| basis.output_ratio_at_source(origin, position))
+                    .ok_or_else(|| "wrong-tempo negative has no physical origin".to_owned())?;
                 let wrong_denominator = denominator
                     .get()
                     .checked_mul(first.1.get())
@@ -1159,7 +1189,6 @@ impl DecodedCapture {
                     mapped_sample(
                         (wrong_numerator, wrong_denominator),
                         speed * 0.5,
-                        head,
                         |offset| {
                             self.sample(
                                 info,
@@ -1180,29 +1209,15 @@ impl DecodedCapture {
                         * CONTROL_GAIN,
                 );
             }
-            let media_origin = info
-                .media_origin
-                .ok_or_else(|| "physical capture lost media zero".to_owned())?;
-            let source_start = numerator
-                .to_f64()
-                .zip(denominator.get().to_f64())
-                .map(|(n, d)| n / d)
-                .ok_or_else(|| "supplied beat has no source coordinate".to_owned())?;
-            let source_end = next
-                .to_f64()
-                .zip(next_denominator.get().to_f64())
-                .map(|(n, d)| n / d)
-                .ok_or_else(|| "supplied beat has no source endpoint".to_owned())?;
-            let beats = &grid.as_raw().beats;
-            let first = beats.partition_point(|beat| {
-                (beat.at + media_origin.as_secs_f64()) * f64::from(sample_rate) < source_start
-            });
-            for beat in &beats[first..] {
-                if (beat.at + media_origin.as_secs_f64()) * f64::from(sample_rate) >= source_end {
-                    break;
-                }
-                supplied_beats.push((beat.ordinal, frame));
-            }
+            physical_supplied_beats(
+                &mut supplied_beats,
+                info,
+                raw_position,
+                raw_next,
+                grid,
+                sample_rate,
+                frame,
+            )?;
         }
         PhysicalReference {
             expected,
@@ -1213,6 +1228,43 @@ impl DecodedCapture {
         }
         .check(pcm, sample_rate, frames)
     }
+}
+
+fn physical_supplied_beats(
+    supplied_beats: &mut Vec<(i64, usize)>,
+    info: kithara::signal::AudioChunkInfo,
+    raw_position: (u128, std::num::NonZeroU128),
+    raw_next: (u128, std::num::NonZeroU128),
+    grid: &BeatGridModel,
+    sample_rate: u32,
+    frame: usize,
+) -> Result<(), String> {
+    let media_origin = info
+        .media_origin
+        .ok_or_else(|| "physical capture lost media zero".to_owned())?;
+    let source_start = raw_position
+        .0
+        .to_f64()
+        .zip(raw_position.1.get().to_f64())
+        .map(|(n, d)| n / d)
+        .ok_or_else(|| "supplied beat has no source coordinate".to_owned())?;
+    let source_end = raw_next
+        .0
+        .to_f64()
+        .zip(raw_next.1.get().to_f64())
+        .map(|(n, d)| n / d)
+        .ok_or_else(|| "supplied beat has no source endpoint".to_owned())?;
+    let beats = &grid.as_raw().beats;
+    let first = beats.partition_point(|beat| {
+        (beat.at + media_origin.as_secs_f64()) * f64::from(sample_rate) < source_start
+    });
+    for beat in &beats[first..] {
+        if (beat.at + media_origin.as_secs_f64()) * f64::from(sample_rate) >= source_end {
+            break;
+        }
+        supplied_beats.push((beat.ordinal, frame));
+    }
+    Ok(())
 }
 
 fn physical_jump_gain(frame: SessionFrame, jump: Option<(SessionFrame, SessionFrame)>) -> f32 {

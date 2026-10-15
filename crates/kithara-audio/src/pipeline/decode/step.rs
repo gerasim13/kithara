@@ -48,7 +48,9 @@ pub(crate) fn tick<T: StreamType>(core: &mut ActiveDecode, ctx: DecodeCtx<'_, T>
                 core.observe_source_exhaustion();
                 return DecodeAction::Progress;
             }
-            core.finish_active();
+            if let Err(error) = core.finish_active() {
+                return decode_failed(core, error, &ctx);
+            }
             match core.next_output_unheld(
                 &mut *ctx.cursor,
                 ctx.physical_duration,

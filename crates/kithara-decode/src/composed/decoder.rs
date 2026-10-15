@@ -8,7 +8,10 @@ use kithara_stream::{
 };
 use kithara_test_utils::kithara;
 
-use super::{ComposedDecoder, DecoderRuntime, HeadStrip, PcmOriginState, Prefill, frames_to_trim};
+use super::{
+    ComposedDecoder, DecoderRuntime, HeadStrip, PcmOriginState, Prefill, frames_to_trim,
+    state::SeekTrim, trim::frames_to_trim_prefix,
+};
 use crate::{
     BlenderProfile, PcmOrigin,
     codec::FrameCodec,
@@ -271,14 +274,21 @@ where
                         .unwrap_or(Duration::MAX),
                 )
             };
-            if let Some(target) = self.pending_seek_target {
+            if let Some(intent) = self.pending_seek_target {
+                let target = match intent {
+                    SeekTrim::Nearest(target) | SeekTrim::Prefix(target) => target,
+                };
                 let decoded_end = chunk_pts.saturating_add(
                     self.codec
                         .spec()
                         .duration_for(u64::from(frames))
                         .unwrap_or(Duration::from_nanos(u64::MAX)),
                 );
-                if (frames == 0 && frame_end <= target) || (frames > 0 && decoded_end <= target) {
+                if (frames == 0 && frame_end <= target)
+                    || (frames > 0
+                        && matches!(intent, SeekTrim::Nearest(_))
+                        && decoded_end <= target)
+                {
                     self.output = Some(Ok(buf));
                     if zero_frame_budget_reached {
                         return Ok(DecoderChunkOutcome::Pending(PendingReason::NotReady(
@@ -289,9 +299,15 @@ where
                 }
                 if frames > 0 && chunk_pts < target {
                     let live_spec = self.codec.spec();
-                    let trim_frames_u64 =
-                        frames_to_trim(chunk_pts, target, live_spec.sample_rate.get())
-                            .min(u64::from(frames));
+                    let trim_frames_u64 = match intent {
+                        SeekTrim::Nearest(_) => {
+                            frames_to_trim(chunk_pts, target, live_spec.sample_rate.get())
+                        }
+                        SeekTrim::Prefix(_) => {
+                            frames_to_trim_prefix(chunk_pts, target, live_spec.sample_rate)?
+                        }
+                    }
+                    .min(u64::from(frames));
                     let trim_frames = u32::try_from(trim_frames_u64).unwrap_or(frames);
                     if trim_frames >= frames {
                         self.output = Some(Ok(buf));
@@ -309,7 +325,26 @@ where
                             buf.copy_within(trim_samples..total_samples, 0);
                             buf.truncate(total_samples - trim_samples);
                             frames = frames.saturating_sub(trim_frames);
-                            chunk_pts = target;
+                            let origin = live_spec.frame_at(chunk_pts)?;
+                            let position = origin.checked_add(u64::from(trim_frames)).ok_or(
+                                DecodeError::InvalidData {
+                                    detail: "trimmed PCM position overflow",
+                                },
+                            )?;
+                            let elapsed = live_spec
+                                .duration_for(position)?
+                                .checked_sub(live_spec.duration_for(origin)?)
+                                .ok_or(DecodeError::InvalidData {
+                                    detail: "trimmed PCM clock moved backward",
+                                })?;
+                            chunk_pts =
+                                chunk_pts
+                                    .checked_add(elapsed)
+                                    .ok_or(DecodeError::InvalidData {
+                                        detail: "trimmed PCM timestamp overflow",
+                                    })?;
+                            self.frame_offset = position;
+                            self.resync_frame_offset_to_pts = false;
                         }
                     }
                 }
@@ -331,7 +366,20 @@ where
         }
     }
 
-    fn seek_inner(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
+    fn seek_selected(&mut self, pos: Duration, prefix: bool) -> DecodeResult<DecoderSeekOutcome> {
+        if !pos.is_zero() && matches!(self.origin, PcmOriginState::Observing(_)) {
+            self.origin = PcmOriginState::Sealed;
+        }
+        let outcome = self.seek_inner(pos, prefix)?;
+        self.prefill = Prefill::Needed;
+        if matches!(self.output, Some(Err(_))) {
+            self.output = None;
+        }
+        self.emit_seek_signal(&outcome);
+        Ok(outcome)
+    }
+
+    fn seek_inner(&mut self, pos: Duration, prefix: bool) -> DecodeResult<DecoderSeekOutcome> {
         let priming = self.codec.priming(self.demuxer.track_info().codec);
         match self.demuxer.seek(pos, priming)? {
             DemuxSeekOutcome::Landed {
@@ -342,7 +390,11 @@ where
                 self.codec.flush()?;
                 self.head_strip = HeadStrip::default();
                 self.zero_frame_count = 0;
-                self.pending_seek_target = Some(pos);
+                self.pending_seek_target = Some(if prefix {
+                    SeekTrim::Prefix(pos)
+                } else {
+                    SeekTrim::Nearest(pos)
+                });
                 self.frame_offset = self.spec.frame_at(landed_at).unwrap_or(u64::MAX);
                 self.resync_frame_offset_to_pts = true;
                 self.timeline_gap_frames = 0;
@@ -461,16 +513,11 @@ where
     }
 
     fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
-        if !pos.is_zero() && matches!(self.origin, PcmOriginState::Observing(_)) {
-            self.origin = PcmOriginState::Sealed;
-        }
-        let outcome = self.seek_inner(pos)?;
-        self.prefill = Prefill::Needed;
-        if matches!(self.output, Some(Err(_))) {
-            self.output = None;
-        }
-        self.emit_seek_signal(&outcome);
-        Ok(outcome)
+        self.seek_selected(pos, false)
+    }
+
+    fn seek_prefix(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
+        self.seek_selected(pos, true)
     }
 
     fn spec(&self) -> AudioSpec {

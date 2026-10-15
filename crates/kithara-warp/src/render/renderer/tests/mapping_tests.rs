@@ -1,8 +1,9 @@
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU128, NonZeroUsize};
 
 use kithara_platform::sync::Arc;
 use kithara_signal::{AudioChunkInfo, ExponentialApproach, FrameCount};
 use kithara_test_utils::kithara;
+use num_traits::ToPrimitive;
 
 use super::*;
 use crate::{GridSegment, RegionPlan, SpeedCurve, test_pools::TestPools};
@@ -39,6 +40,134 @@ fn a_renderer_without_an_entered_plan_names_no_entry_source() {
         .expect("ordinary source mapping");
     assert_eq!(span.start(), 0);
     assert_eq!(span.end(), 16);
+    let nonlinear = kithara_signal::SourceSpan::approaching(
+        0,
+        NonZeroU128::MIN,
+        ExponentialApproach::new(1.0, 0.9, 220.5).expect("nonlinear input law"),
+        0,
+        meta.spec.sample_rate,
+        16,
+    )
+    .expect("valid nonlinear input map");
+    assert!(matches!(
+        renderer.prepare_source_window(
+            AudioChunkInfo {
+                source_span: Some(nonlinear),
+                ..meta
+            },
+            16,
+            16
+        ),
+        Err(crate::WarpRenderError::UnsupportedSourceGeometry)
+    ));
+    #[cfg(feature = "stretch-signalsmith")]
+    for (pcm_rate, source_rate, first, origin, step, denominator, requested_ns, expected) in [
+        (1_000, 1_000, 37, 151, 4, 4, 38_300_000, 0.55_f64),
+        (1_000, 1_000, 36, 147, 4, 4, 37_300_000, 0.55),
+        (2_000, 1_000, 500, 200, 3, 2, 101_250_000, 5.0 / 6.0),
+        (
+            48_000,
+            44_100,
+            48_000,
+            2_116_800_000,
+            44_100,
+            48_000,
+            1_000_011_458,
+            0.549984,
+        ),
+    ] {
+        let rate = NonZeroU32::new(pcm_rate).expect("actual PCM rate");
+        let spec = AudioSpec::new(2, rate);
+        let basis = kithara_signal::SourceSpan::try_from((
+            origin,
+            step,
+            NonZeroU128::new(denominator).expect("native ratio"),
+            NonZeroU32::new(source_rate).expect("raw clock"),
+            4096,
+        ))
+        .expect("actual affine input");
+        let mut renderer = crate::Warp::new(
+            (),
+            &WarpConfig::builder()
+                .backend(StretchKind::Signalsmith)
+                .build(),
+        )
+        .renderer(spec, crate::test_pools::pools());
+        renderer.prepare(spec);
+        let meta = AudioChunkInfo {
+            spec,
+            frame_offset: first,
+            frames: 4096,
+            source_span: Some(basis),
+            ..Default::default()
+        };
+        let position = basis
+            .output_ratio_at_source(
+                first,
+                (
+                    u128::from(requested_ns) * u128::from(source_rate),
+                    NonZeroU128::new(1_000_000_000).expect("raw nanosecond clock"),
+                ),
+            )
+            .expect("exact physical phase");
+        renderer
+            .reanchor_source(meta, position)
+            .expect("physical reanchor");
+        let frames = renderer
+            .prepare_source_window(meta, 4096, 1)
+            .expect("real PCM prefix")
+            .get();
+        let physical = renderer
+            .prepared_quantum
+            .expect("prepared physical quantum")
+            .source_span
+            .expect("physical mapping");
+        let samples = (0..frames)
+            .flat_map(|offset| {
+                let sample = offset.to_f32().expect("physical PCM index");
+                [sample, -sample]
+            })
+            .collect::<Vec<_>>();
+        let input = AudioChunk::new(
+            AudioChunkInfo {
+                frames: u32::try_from(frames).expect("input extent"),
+                source_span: Some(
+                    basis
+                        .for_output_range(0..u64::try_from(frames).expect("input extent"))
+                        .expect("actual PCM slice"),
+                ),
+                ..meta
+            },
+            crate::test_pools::sample_buffer(&renderer.pools, &samples),
+        );
+        let output = renderer
+            .render_quantum(input)
+            .continue_value()
+            .expect("prepared input")
+            .expect("real output");
+        assert_eq!(
+            output.samples[0],
+            expected.to_f32().expect("expected interpolated PCM")
+        );
+        assert_eq!(
+            output.samples[1],
+            -expected.to_f32().expect("expected interpolated PCM")
+        );
+        let published = output.meta.source_span.expect("raw publication");
+        assert_eq!(published.sample_rate(), rate);
+        assert_eq!(
+            published.position_at(0),
+            Some(kithara_platform::time::Duration::from_nanos(requested_ns))
+        );
+        assert_eq!(
+            renderer
+                .trajectory
+                .span(first, rate, 1)
+                .expect("physical continuation")
+                .source_ratio_at(0),
+            physical.source_ratio_at(1)
+        );
+    }
 }
 
 #[cfg(any(

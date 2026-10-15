@@ -417,7 +417,7 @@ fn timed_media_target_is_translated_once_before_the_raw_lane_batch(#[case] align
         matches!(command, LaneCommand::Jump { to } if *to == Duration::from_millis(2_576))
     }));
     due.apply(kithara_render::LaneApplied {
-        native_pcm_basis: None,
+        source_basis: None,
         engine_latency: FrameCount::new(0),
         ready: None,
     });
@@ -732,8 +732,7 @@ fn host_rate_change_keeps_raw_resume_custody_without_a_media_seek(
                 When::At(LaneFrame { segment, frame: 1 }),
             )
             .expect("future Jump on the new native lattice");
-        let expected =
-            i64::try_from(landing + (1_000 - 2) * 4).expect("physical projected boundary");
+        let expected = i64::try_from(landing + 3_991).expect("exact raw Jump boundary");
         assert_eq!(
             track.planned_end(rate).expect("new native Jump projection"),
             Some(frame(expected))
@@ -824,6 +823,11 @@ fn assert_source_end_resume_endpoint() {
 
     let (mut track, inbox) = prepared_track();
     track.source_basis = Some(old.meta);
+    track.media_origin = audio.media_origin();
+    track.duration = audio
+        .media_end()
+        .zip(track.media_origin)
+        .map(|(end, origin)| end.checked_sub(origin).expect("actual old media extent"));
     track.status = TrackStatus::Playing { since: frame(0) };
     track.mark = Some(SlotMark {
         session: frame(0),
@@ -846,6 +850,9 @@ fn assert_source_end_resume_endpoint() {
     command_at_zero(&mut track, &mut rig, TrackCommand::SetHostRate { rate })
         .expect("actual source recreation command");
     let segment = track.segment;
+    assert!(track.observed_source.is_none());
+    assert!(track.mark.is_none());
+    assert!(matches!(track.planned_end(rate), Err(PlayError::Untimed)));
     let backend = *StretchKind::all()
         .iter()
         .find(|backend| {
@@ -877,10 +884,12 @@ fn assert_source_end_resume_endpoint() {
     let first = next_curve_chunk(&mut source);
     rig.with_outbox(|out| track.tick(frame(0), out))
         .expect("real prepared receipt");
-    let basis = track.source_basis.expect("new native PCM basis");
-    assert_eq!(basis.spec.sample_rate, rate);
+    let native = source
+        .native_pcm_basis()
+        .expect("Audio-owned native PCM basis");
+    assert_eq!(native.spec.sample_rate, rate);
     let (landing, denominator) = kithara_audio::source_lattice_position(
-        &basis,
+        &native,
         old_spec.duration_for(1).expect("retained old source end"),
     )
     .expect("native PCM landing");
@@ -889,16 +898,37 @@ fn assert_source_end_resume_endpoint() {
         denominator.get(),
         "the nearest new native frame is one"
     );
-    assert_eq!(basis.frame_offset, 1);
+    assert_eq!(native.frame_offset, 1);
     assert_eq!(
-        basis.timestamp,
+        native.timestamp,
         native_spec.duration_for(1).expect("new native frame one")
+    );
+    let basis = track.source_basis.expect("actual pre-Warp input basis");
+    let input = basis
+        .source_geometry()
+        .expect("retained source-clock input");
+    assert_eq!(input.sample_rate(), old_rate);
+    assert_eq!(
+        input.source_ratio_at(0),
+        Some((1, std::num::NonZeroU128::MIN))
+    );
+    assert_eq!(basis.frame_offset, native.frame_offset);
+    assert_eq!(
+        kithara_audio::source_lattice_position(&basis, Duration::from_millis(20))
+            .expect("physical EOF on the retained input lattice"),
+        (
+            141_107,
+            std::num::NonZeroU128::new(160).expect("retained endpoint phase")
+        ),
     );
     let first_span = first.meta.source_span.expect("actual Warp source law");
     assert_eq!(first_span.sample_rate(), rate);
     assert_eq!(
         first_span.source_ratio_at(0),
-        Some((1, std::num::NonZeroU128::MIN))
+        Some((
+            147,
+            std::num::NonZeroU128::new(160).expect("retained raw phase")
+        ))
     );
     assert_eq!(source.media_end(), Some(Duration::from_millis(20)));
     track.observed_source = Some(first.meta);
@@ -948,7 +978,10 @@ fn assert_source_end_resume_endpoint() {
     assert_eq!(final_span.sample_rate(), rate);
     assert_eq!(
         (endpoint, endpoint_denominator),
-        (882, std::num::NonZeroU128::MIN)
+        (
+            141_107,
+            std::num::NonZeroU128::new(160).expect("retained endpoint phase")
+        )
     );
     let endpoint_denominator =
         endpoint_denominator.get() * u128::from(final_span.sample_rate().get());
@@ -1161,7 +1194,7 @@ fn stopped_raw_mark_stays_raw_while_pause_and_resume_publish_media_position(
                 if *id == sought && *from == raw_target
         ));
         due.apply(kithara_render::LaneApplied {
-            native_pcm_basis: None,
+            source_basis: None,
             engine_latency: FrameCount::new(0),
             ready: Some(sought),
         });
@@ -1206,6 +1239,7 @@ fn cancelled_parked_repeat_restores_the_raw_coordinate_without_reapplying_media_
     let mut started = rig.block(frame(0), 0.0);
     settle(&mut track, &mut rig, &mut started);
     let original = track.segment;
+    let original_basis = track.source_basis.expect("original prepared input basis");
     track.media_origin = Some(Duration::from_millis(576));
     track.position = Duration::from_millis(media_ms);
     let mark = mark_ms.map(|raw_ms| SlotMark {
@@ -1273,7 +1307,7 @@ fn cancelled_parked_repeat_restores_the_raw_coordinate_without_reapplying_media_
             )
         });
         due.apply(kithara_render::LaneApplied {
-            native_pcm_basis: None,
+            source_basis: None,
             engine_latency: FrameCount::new(0),
             ready: Some(original),
         });
@@ -1284,6 +1318,7 @@ fn cancelled_parked_repeat_restores_the_raw_coordinate_without_reapplying_media_
         "the cancelled adoption restores its actual raw segment position"
     );
     track.settle_lane();
+    assert_eq!(track.source_basis, Some(original_basis));
     assert_eq!(track.snapshot().position, Duration::from_millis(media_ms));
     assert_eq!(rig.mixer.held(A), Some("media-parked-repeat"));
 }

@@ -24,6 +24,19 @@ pub trait AudioSource: Send + 'static {
     /// Returns [`AudioReadError`] when the source cannot reposition to
     /// `position`.
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError>;
+    /// Seeks for rendering while retaining native PCM before any rate conversion.
+    ///
+    /// The original position owns seek admission, including `PastEof`. Decoding
+    /// sources retain a native predecessor before rate conversion and final trimming.
+    ///
+    /// # Errors
+    /// Returns the source's repositioning failure.
+    fn seek_for_render(&mut self, _position: Duration) -> Result<SeekOutcome, AudioReadError> {
+        Err(kithara_decode::DecodeError::SeekFailed {
+            detail: "render-prefix seeking is unsupported",
+        }
+        .into())
+    }
     /// Rebuild for a host-rate change on the owning thread.
     fn set_host_sample_rate(&mut self, rate: NonZeroU32);
     /// Current host-rate value owned by the open source.

@@ -102,7 +102,7 @@ pub(crate) struct ActiveDecode {
     #[field(get, vis = "pub(crate)", copy)]
     gapless_mode: GaplessMode,
     observer: Option<Box<dyn AudioObserver>>,
-    stage_error: Option<DecodeError>,
+    pub(super) stage_error: Option<DecodeError>,
     pub(super) discontinuity_revision: u64,
 }
 
@@ -281,10 +281,9 @@ impl ActiveDecode {
 
     pub(crate) fn push(&mut self, chunk: AudioChunk) -> DecodeResult<()> {
         if !self.outgoing_holdback_is_active() {
-            self.active.push(chunk);
-            return Ok(());
+            return self.active.push(chunk);
         }
-        match self.active.push_holdback(chunk) {
+        match self.active.push_holdback(chunk)? {
             StageResult::Ready | StageResult::NeedMore => Ok(()),
             StageResult::Invalid(failure) => Err(Self::reject_stage(*failure)),
         }
@@ -325,15 +324,42 @@ impl ActiveDecode {
         playhead: &dyn PlayheadWrite,
         position: Duration,
     ) -> DecodeResult<DecoderSeekOutcome> {
+        self.seek_selected(stream, playhead, position, false)
+    }
+
+    pub(crate) fn seek_for_render<T: StreamType>(
+        &mut self,
+        stream: &SharedStream<T>,
+        playhead: &dyn PlayheadWrite,
+        position: Duration,
+    ) -> DecodeResult<DecoderSeekOutcome> {
+        self.seek_selected(stream, playhead, position, true)
+    }
+
+    fn seek_selected<T: StreamType>(
+        &mut self,
+        stream: &SharedStream<T>,
+        playhead: &dyn PlayheadWrite,
+        position: Duration,
+        for_render: bool,
+    ) -> DecodeResult<DecoderSeekOutcome> {
         self.active.notify_seek();
         self.reset();
         let before = stream.position();
-        let outcome = self.active.seek(position, self.gapless_mode);
+        let outcome = if for_render {
+            self.active.seek_for_render(position, self.gapless_mode)
+        } else {
+            self.active.seek(position, self.gapless_mode)
+        };
         if let Ok(ref outcome) = outcome {
             commit_outcome(&self.active, stream, playhead, outcome);
             if matches!(outcome, DecoderSeekOutcome::Landed { .. }) {
-                self.active
-                    .trim_to(crate::pipeline::seek::ResumeTarget::Position(position));
+                let target = if for_render {
+                    crate::pipeline::seek::ResumeTarget::Render(position)
+                } else {
+                    crate::pipeline::seek::ResumeTarget::Position(position)
+                };
+                self.active.trim_to(target);
             }
         }
         debug!(
@@ -357,7 +383,7 @@ impl ActiveDecode {
     delegate::delegate! {
         to self.active {
             #[call(finish)]
-            pub(crate) fn finish_active(&mut self);
+            pub(crate) fn finish_active(&mut self) -> DecodeResult<()>;
             pub(crate) fn mark_source_exhausted(&mut self);
         }
         to self.output {
@@ -647,14 +673,16 @@ mod tests {
         let pools = crate::test_pools::pools_with(1024 * 1024, config, config);
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
         let mut active = generation(spec);
-        active.stage(AudioChunk::new(
-            AudioChunkInfo {
-                spec,
-                frames: 4,
-                ..Default::default()
-            },
-            sample_buffer(&pools, &decode_quarter[..4 * usize::from(spec.channels)]),
-        ));
+        active
+            .stage(AudioChunk::new(
+                AudioChunkInfo {
+                    spec,
+                    frames: 4,
+                    ..Default::default()
+                },
+                sample_buffer(&pools, &decode_quarter[..4 * usize::from(spec.channels)]),
+            ))
+            .expect("valid gapless PCM");
         let rejected = AudioChunk::new(
             AudioChunkInfo {
                 spec,
@@ -665,7 +693,7 @@ mod tests {
             sample_buffer(&pools, &cursor_half[..4 * usize::from(spec.channels)]),
         );
         let rejected_bytes = rejected.samples.capacity() * size_of::<f32>();
-        active.stage(rejected);
+        active.stage(rejected).expect("valid gapless PCM");
 
         let incoming = generation(spec);
         let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
@@ -788,22 +816,24 @@ mod tests {
             VariantIndex::new(1),
         );
         let mut incoming = generation(spec);
-        incoming.stage(AudioChunk::new(
-            AudioChunkInfo {
-                spec,
-                frames: INCOMING_FRAMES,
-                ..Default::default()
-            },
-            sample_buffer(
-                &pools,
-                &vec![
-                    0.5;
-                    usize::try_from(INCOMING_FRAMES)
-                        .expect("test frames fit usize")
-                        .saturating_mul(usize::from(spec.channels))
-                ],
-            ),
-        ));
+        incoming
+            .stage(AudioChunk::new(
+                AudioChunkInfo {
+                    spec,
+                    frames: INCOMING_FRAMES,
+                    ..Default::default()
+                },
+                sample_buffer(
+                    &pools,
+                    &vec![
+                        0.5;
+                        usize::try_from(INCOMING_FRAMES)
+                            .expect("test frames fit usize")
+                            .saturating_mul(usize::from(spec.channels))
+                    ],
+                ),
+            ))
+            .expect("valid gapless PCM");
         let mut decode = active_decode(&pools, generation(spec), GaplessMode::Disabled);
         decode.incoming = Some(IncomingDecode::Priming {
             transition,
@@ -878,9 +908,11 @@ mod tests {
             )
         };
         let mut active = generation(spec);
-        active.stage(make_chunk(0));
+        active.stage(make_chunk(0)).expect("valid gapless PCM");
         let mut incoming = generation(spec);
-        incoming.stage(make_chunk(LANDED));
+        incoming
+            .stage(make_chunk(LANDED))
+            .expect("valid gapless PCM");
         let mut decode = active_decode(&pools, active, GaplessMode::Disabled);
         decode.incoming = Some(IncomingDecode::Priming {
             transition,
@@ -956,9 +988,9 @@ mod tests {
             )
         };
         let mut active = aac_generation();
-        active.stage(head_chunk());
+        active.stage(head_chunk()).expect("valid gapless PCM");
         let mut incoming = aac_generation();
-        incoming.stage(head_chunk());
+        incoming.stage(head_chunk()).expect("valid gapless PCM");
         let mut decode = active_decode(&pools, active, GaplessMode::MediaOnly);
         let frontier = OutgoingFrontier::Exact {
             frame: FRONTIER,
@@ -1050,14 +1082,17 @@ mod tests {
             .cycle()
             .take(samples)
             .collect::<Vec<_>>();
-        decode.active.stage(AudioChunk::new(
-            AudioChunkInfo {
-                spec,
-                frames,
-                ..Default::default()
-            },
-            sample_buffer(&pools, &active_samples),
-        ));
+        decode
+            .active
+            .stage(AudioChunk::new(
+                AudioChunkInfo {
+                    spec,
+                    frames,
+                    ..Default::default()
+                },
+                sample_buffer(&pools, &active_samples),
+            ))
+            .expect("valid gapless PCM");
         decode
             .blender
             .prepare_active(BlenderProfile::new(spec))
@@ -1151,14 +1186,17 @@ mod tests {
             VariantIndex::new(1),
         );
         let mut decode = active_decode(&pools, generation(spec), GaplessMode::Disabled);
-        decode.active.stage(AudioChunk::new(
-            AudioChunkInfo {
-                spec,
-                frames: 64,
-                ..Default::default()
-            },
-            sample_buffer(&pools, &decode_quarter[..64 * usize::from(spec.channels)]),
-        ));
+        decode
+            .active
+            .stage(AudioChunk::new(
+                AudioChunkInfo {
+                    spec,
+                    frames: 64,
+                    ..Default::default()
+                },
+                sample_buffer(&pools, &decode_quarter[..64 * usize::from(spec.channels)]),
+            ))
+            .expect("valid gapless PCM");
         decode.incoming = Some(IncomingDecode::Preparing {
             transition,
             frontier: OutgoingFrontier::Exact {

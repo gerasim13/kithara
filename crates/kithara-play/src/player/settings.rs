@@ -129,7 +129,7 @@ mod tests {
         ) {
             commands.extend(due.commands().iter().cloned());
             due.apply(LaneApplied {
-                native_pcm_basis: None,
+                source_basis: None,
                 engine_latency: FrameCount::new(0),
                 ready: None,
             });

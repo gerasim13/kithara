@@ -99,8 +99,9 @@ where
             .ensure_len(end)
             .map_err(|_| ElasticError::PoolCapacity)?;
         pending[start..end].copy_from_slice(source);
-        self.pending_meta
-            .get_or_insert_with(|| Self::meta_at_frame(meta, frame_offset));
+        if self.pending_meta.is_none() {
+            self.pending_meta = Some(Self::meta_at_frame(meta, frame_offset)?);
+        }
         Ok(())
     }
 
@@ -356,7 +357,7 @@ where
                 self.output_start_meta = if pending_frames > 0 {
                     self.pending_meta
                 } else {
-                    Some(Self::meta_at_frame(meta, frame))
+                    Some(Self::meta_at_frame(meta, frame)?)
                 };
             }
             let scratch = self
@@ -477,7 +478,7 @@ where
                         .map_err(|_| ElasticError::SampleCountOverflow)?,
                 )
                 .ok_or(ElasticError::SampleCountOverflow)?;
-            Some(Self::meta_at_frame(meta, next))
+            Some(Self::meta_at_frame(meta, next)?)
         };
         let output_samples = output_frames
             .get()

@@ -389,8 +389,10 @@ impl<S> PlayerImpl<S> {
                     && !matches!(self.status, TrackStatus::Failed { .. })
                 {
                     self.ready = Some(ready);
-                    if ready == self.segment {
-                        self.source_basis = data.native_pcm_basis;
+                    if ready == self.segment
+                        && let Some(basis) = data.source_basis
+                    {
+                        self.source_basis = Some(basis);
                     }
                 }
             } else if let Outcome::Rejected(reason) = receipt.outcome() {

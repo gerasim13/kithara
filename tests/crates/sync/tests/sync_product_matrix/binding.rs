@@ -1,4 +1,4 @@
-use std::num::NonZeroU16;
+use std::num::{NonZeroU16, NonZeroU128};
 
 use kithara::{
     beat::BeatGridModel,
@@ -1637,8 +1637,14 @@ pub(super) fn commanded_span_failures(
                     .ok_or_else(|| "jump law has no immutable media origin".to_owned())?,
             )
             .ok_or_else(|| "jump raw coordinate overflows".to_owned())?;
-        let position = kithara::audio::source_lattice_position(&info, raw)
-            .map_err(|error| error.to_string())?;
+        let numerator = raw
+            .as_nanos()
+            .checked_mul(u128::from(rate.get()))
+            .ok_or_else(|| "jump raw source coordinate overflows".to_owned())?;
+        let position = (
+            numerator,
+            NonZeroU128::new(1_000_000_000).expect("nanosecond source clock"),
+        );
         events.push((landing, law, Some(position)));
     }
     events.sort_by_key(|(frame, _, _)| *frame);

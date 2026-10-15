@@ -270,6 +270,15 @@ impl<P> Linked<P> {
         let Ok(value) = self.curve(&source, position, at, None) else {
             return;
         };
+        tracing::debug!(
+            item = u64::from(self.inner.snapshot().as_ref().item),
+            load = ?self.load,
+            ?required,
+            ?position,
+            entry = i64::from(at),
+            speed = ?value,
+            "preparing synchronized load cue"
+        );
         match self.cue(position, value, out) {
             Ok(_) => {
                 self.cue = None;
@@ -636,6 +645,15 @@ impl<S, P: Track<S>> Track<S> for Linked<P> {
         if !ended && self.inner.prepared_speed() == Some(&curve) {
             return Ok(true);
         }
+        tracing::debug!(
+            item = u64::from(track.item),
+            load = ?self.load,
+            ?position,
+            entry = i64::from(at),
+            prepared = ?self.inner.prepared_speed(),
+            speed = ?curve,
+            "repreparing silent linked entry"
+        );
         self.cue(position, curve, out)?;
         Ok(false)
     }

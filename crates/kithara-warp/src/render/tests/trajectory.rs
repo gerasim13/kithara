@@ -251,17 +251,27 @@ fn a_source_discontinuity_rebases_an_approach_at_its_reached_rate() {
     let reached = trajectory.speed().expect("reached speed");
     trajectory.reset();
     assert_eq!(trajectory.speed().expect("rebased speed"), reached);
+    let position = (203, NonZeroU128::new(4).expect("fractional source phase"));
+    trajectory
+        .reanchor(50, rate, position)
+        .expect("exact postseek phase");
     let after = trajectory.span(50, rate, 128).expect("after backward seek");
-    assert_eq!(after.source_ratio_at(0), Some((50, NonZeroU128::MIN)));
+    assert_eq!(after.source_ratio_at(0), Some(position));
     let expected_curve = ExponentialApproach::new(
         first.rate_at(97.0).expect("independent reached rate"),
         first.target(),
         first.time_constant(),
     )
     .expect("remaining approach");
-    let expected =
-        kithara_signal::SourceSpan::approaching(50, NonZeroU128::MIN, expected_curve, 0, rate, 256)
-            .expect("expected rebased mapping");
+    let expected = kithara_signal::SourceSpan::approaching(
+        position.0,
+        position.1,
+        expected_curve,
+        0,
+        rate,
+        256,
+    )
+    .expect("expected rebased mapping");
     trajectory.advance(after).expect("rebased prefix");
     let next = trajectory.span(50, rate, 128).expect("rebased suffix");
     assert_eq!(after.followed_by(next), Some(expected));
@@ -378,10 +388,14 @@ fn a_source_discontinuity_preserves_future_analytic_correction_boundaries() {
             .expect("source rebase retains tempo clock"),
         reached
     );
+    let position = (203, NonZeroU128::new(4).expect("fractional source phase"));
+    trajectory
+        .reanchor(50, rate, position)
+        .expect("exact postseek phase");
     let after = trajectory
         .span(50, rate, 128)
         .expect("new source waits for the original boundary");
-    assert_eq!(after.source_ratio_at(0), Some((50, NonZeroU128::MIN)));
+    assert_eq!(after.source_ratio_at(0), Some(position));
     assert_eq!(after.output_frames(), 33);
     trajectory
         .advance(after)

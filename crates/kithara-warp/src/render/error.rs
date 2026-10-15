@@ -14,6 +14,12 @@ pub enum WarpRenderError {
     /// This target has no renderer capable of applying a region plan.
     #[error("region plan rendering is unavailable on this target")]
     UnsupportedRegionPlan,
+    /// Decoded input already has a nonlinear source law from another render stage.
+    #[error("Warp requires affine decoded PCM geometry; nonlinear input is unsupported")]
+    UnsupportedSourceGeometry,
+    /// A source clock cannot represent the requested physical coordinate.
+    #[error("decoded PCM source geometry is unrepresentable")]
+    InvalidSourceGeometry,
     /// An operation contains no source frames.
     #[error("source quantum is empty")]
     EmptySource,

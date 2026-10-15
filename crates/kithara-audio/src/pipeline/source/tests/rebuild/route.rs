@@ -501,7 +501,7 @@ fn a_seek_releases_its_buffered_chunks_off_rt(route_pcm: RoutePcm) {
         else {
             panic!("the route-signal fixture produces chunks");
         };
-        generation.stage(*chunk);
+        generation.stage(*chunk).expect("valid gapless PCM");
     }
     assert!(generation.has_output(), "fixture staged nothing to flush");
 

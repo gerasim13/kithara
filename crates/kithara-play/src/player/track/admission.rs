@@ -228,8 +228,9 @@ impl<S> Track<S> for PlayerImpl<S> {
         if mark.lane.segment != self.segment || source.segment != self.segment {
             return Err(PlayError::Untimed);
         }
-        let span = kithara_audio::source_geometry(&source)
-            .map_err(|error| PlayError::Internal(error.to_string()))?;
+        let span = source
+            .source_geometry()
+            .ok_or_else(|| PlayError::Internal("invalid PCM source geometry".into()))?;
         let offset = mark
             .lane
             .frame
@@ -252,7 +253,7 @@ impl<S> Track<S> for PlayerImpl<S> {
                 .advance_by(0, sample_rate, at - cursor)
                 .map_err(|error| PlayError::Internal(error.to_string()))?;
             cursor = *at;
-            project_change(&mut trajectory, change, basis, sample_rate)?;
+            project_change(&mut trajectory, change, sample_rate)?;
         }
         trajectory
             .advance_by(0, sample_rate, mark.lane.frame - cursor)
@@ -281,7 +282,7 @@ impl<S> Track<S> for PlayerImpl<S> {
                 .advance_by(0, sample_rate, at - cursor)
                 .map_err(|error| PlayError::Internal(error.to_string()))?;
             cursor = *at;
-            project_change(&mut trajectory, change, basis, sample_rate)?;
+            project_change(&mut trajectory, change, sample_rate)?;
         }
         let offset = trajectory
             .first_at_or_after(0, sample_rate, endpoint, None)
@@ -383,7 +384,6 @@ fn source_endpoint(
 fn project_change(
     trajectory: &mut SourceTrajectory,
     change: &PlannedChange<'_>,
-    basis: AudioChunkInfo,
     sample_rate: NonZeroU32,
 ) -> Result<(), PlayError> {
     match change {
@@ -394,8 +394,13 @@ fn project_change(
         }
         PlannedChange::Jump(to) => {
             trajectory.reset();
+            let numerator = to
+                .as_nanos()
+                .checked_mul(u128::from(sample_rate.get()))
+                .ok_or(PlayError::Untimed)?;
+            let denominator = NonZeroU128::new(1_000_000_000).ok_or(PlayError::Untimed)?;
             trajectory
-                .reanchor(0, sample_rate, source_endpoint(basis, *to, sample_rate)?)
+                .reanchor(0, sample_rate, (numerator, denominator))
                 .map_err(|error| PlayError::Internal(error.to_string()))?;
         }
     }

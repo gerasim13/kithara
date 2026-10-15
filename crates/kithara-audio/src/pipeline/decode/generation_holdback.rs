@@ -1,3 +1,4 @@
+use kithara_decode::DecodeResult;
 use kithara_signal::{AudioChunk, AudioSpec};
 use kithara_test_utils::kithara;
 
@@ -86,22 +87,22 @@ impl DecoderGeneration {
         }
     }
 
-    pub(crate) fn push_holdback(&mut self, chunk: AudioChunk) -> StageResult {
+    pub(crate) fn push_holdback(&mut self, chunk: AudioChunk) -> DecodeResult<StageResult> {
         if self.gapless.has_output() {
-            return StageResult::Invalid(Box::new(stage_failure(
+            return Ok(StageResult::Invalid(Box::new(stage_failure(
                 chunk,
                 "transition holdback has undrained gapless output",
-            )));
+            ))));
         }
         if matches!(self.holdback_progress(), StageProgress::Ready) {
-            return StageResult::Invalid(Box::new(stage_failure(
+            return Ok(StageResult::Invalid(Box::new(stage_failure(
                 chunk,
                 "transition holdback is already ready",
-            )));
+            ))));
         }
         self.observe_comparison_base();
-        self.gapless.push(chunk);
-        self.drain_holdback()
+        self.gapless.push(chunk)?;
+        Ok(self.drain_holdback())
     }
 
     fn push_holdback_chunk(&mut self, chunk: AudioChunk) -> Option<StageFailure> {
@@ -237,14 +238,15 @@ impl DecoderGeneration {
     }
 
     #[kithara::hang_watchdog]
-    pub(crate) fn finish_staging(&mut self) {
-        self.finish();
+    pub(crate) fn finish_staging(&mut self) -> DecodeResult<()> {
+        self.finish()?;
         while let Some(chunk) = self.gapless.next() {
             hang_tick!();
             self.observe_visible_origin(&chunk);
             self.staged.push_back(chunk);
             hang_reset!();
         }
+        Ok(())
     }
 
     pub(crate) fn has_output(&self) -> bool {
@@ -262,16 +264,17 @@ impl DecoderGeneration {
     }
 
     #[kithara::hang_watchdog]
-    pub(crate) fn stage(&mut self, chunk: AudioChunk) {
+    pub(crate) fn stage(&mut self, chunk: AudioChunk) -> DecodeResult<()> {
         self.holdback = None;
         self.observe_comparison_base();
-        self.gapless.push(chunk);
+        self.gapless.push(chunk)?;
         while let Some(chunk) = self.gapless.next() {
             hang_tick!();
             self.observe_visible_origin(&chunk);
             self.staged.push_back(chunk);
             hang_reset!();
         }
+        Ok(())
     }
 
     pub(crate) fn staged_covers(&self, spec: AudioSpec, start: u64, frames: u64) -> bool {

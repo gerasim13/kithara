@@ -291,6 +291,19 @@ pub trait Decoder: Send + 'static {
     /// or the position is invalid for reasons other than past-EOF.
     fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome>;
 
+    /// Seeks while retaining the native sample at or before `pos` for later rendering.
+    ///
+    /// Rate adapters forward this operation before converting PCM. The ordinary
+    /// seek operation retains its nearest-sample behavior.
+    ///
+    /// # Errors
+    /// Returns an error when native-prefix seeking is unsupported or repositioning fails.
+    fn seek_prefix(&mut self, _pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
+        Err(crate::DecodeError::SeekFailed {
+            detail: "native-prefix seeking is unsupported",
+        })
+    }
+
     /// Get the decoded audio output specification.
     fn spec(&self) -> AudioSpec;
 

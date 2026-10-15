@@ -22,7 +22,14 @@ pub(crate) fn apply(
         return Ok(None);
     }
     let drop_frames = match resume.target {
-        ResumeTarget::Position(target) => {
+        ResumeTarget::Position(target) | ResumeTarget::Render(target) => {
+            let target = if matches!(resume.target, ResumeTarget::Render(_)) {
+                target.saturating_sub(kithara_platform::time::Duration::from_nanos(
+                    1_000_000_000u64.div_ceil(u64::from(spec.sample_rate.get())),
+                ))
+            } else {
+                target
+            };
             let (target, target_denominator) = crate::source_lattice_position(&chunk.meta, target)?;
             let (start, start_denominator) =
                 crate::source_lattice_position(&chunk.meta, chunk.meta.timestamp)?;
@@ -270,6 +277,44 @@ mod tests {
                 .expect("PCM suffix"))
         );
         assert!(!resume.trim_head);
+        for (target_ns, expected_drop) in [(target_ns, 0_usize), (39_300_000, 1)] {
+            let chunk = AudioChunk::new(
+                AudioChunkInfo {
+                    spec: AudioSpec::new(2, rate),
+                    frame_offset: 37,
+                    timestamp: Duration::from_nanos(37_750_000),
+                    end_timestamp: Duration::from_nanos(41_750_000),
+                    frames: 4,
+                    source_span: mapped.then_some(span),
+                    ..AudioChunkInfo::default()
+                },
+                sample_buffer(&pools, &pcm),
+            );
+            let mut resume = ResumeState {
+                target: ResumeTarget::Render(Duration::from_nanos(target_ns)),
+                trim_head: true,
+            };
+            let retained = apply(chunk, Some(&mut resume))
+                .expect("render prefix trim")
+                .expect("native predecessor retained");
+            assert_eq!(retained.samples.as_ref(), &pcm[expected_drop * 2..]);
+            assert_eq!(
+                retained.meta.frame_offset,
+                37 + u64::try_from(expected_drop).expect("prefix drop")
+            );
+            assert_eq!(
+                retained.meta.timestamp,
+                Duration::from_nanos(
+                    37_750_000 + u64::try_from(expected_drop).expect("prefix extent") * 1_000_000
+                )
+            );
+            assert!(retained.meta.timestamp <= Duration::from_nanos(target_ns));
+            assert_eq!(
+                retained.meta.end_timestamp,
+                Duration::from_nanos(41_750_000)
+            );
+            assert!(!resume.trim_head);
+        }
         for pcm_rate in [44_100, 48_000] {
             let pcm_rate = NonZeroU32::new(pcm_rate).expect("physical PCM rate");
             let spec = AudioSpec::new(2, pcm_rate);

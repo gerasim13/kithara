@@ -43,18 +43,12 @@ pub(super) fn source_sample(
         if fraction == 0.0 {
             return sample(0);
         }
-        let current = sample(0)?;
-        let next = sample(1)?;
-        if source == first {
-            return Ok((next - current).mul_add(
-                fraction.to_f32().ok_or(ElasticError::SampleCountOverflow)?,
-                current,
-            ));
-        }
-        return Ok(kithara_dsp::interp::quadratic(
-            [sample(-1)?, current, next],
-            fraction,
-        ));
+        let current = f64::from(sample(0)?);
+        let next = f64::from(sample(1)?);
+        return (next - current)
+            .mul_add(fraction, current)
+            .to_f32()
+            .ok_or(ElasticError::SampleCountOverflow);
     }
     let radius = i64::try_from(crate::consts::SOURCE_RADIUS)
         .map_err(|_| ElasticError::SampleCountOverflow)?;
@@ -139,14 +133,77 @@ mod tests {
             1,
             0,
         )
-        .expect("quadratic sample below the next source frame");
-        let expected = (1.0 - fraction - fraction * fraction)
+        .expect("fractional sample below the next source frame");
+        let expected_quadratic = (1.0 - fraction - fraction * fraction)
             .to_f32()
             .expect("quadratic value");
+        assert_eq!(
+            kithara_dsp::interp::quadratic([1.0, 1.0, -1.0], fraction),
+            expected_quadratic,
+        );
+        let expected = (1.0 - 2.0 * fraction)
+            .to_f32()
+            .expect("convex interpolation at the exact fraction");
         assert_eq!(actual, expected);
         assert!(
             actual > -1.0,
             "the fraction must not advance to the next sample"
         );
+        let phase_denominator = NonZeroU128::new(10_000_000).expect("seek phase clock");
+        for taps in [
+            [-1.0, 32_767.0 / 32_768.0, 32_766.0 / 32_768.0],
+            [32_767.0 / 32_768.0, -1.0, -32_767.0 / 32_768.0],
+            [0.0, 0.25, 0.5],
+            [0.25, 0.25, 0.25],
+        ] {
+            let mut resident = SourceResidency::prepare(&pools, None, 0, 3, 0, 1)
+                .expect("three bounded PCM frames");
+            resident
+                .append(
+                    AudioChunkInfo {
+                        spec: AudioSpec::new(1, NonZeroU32::new(44_100).expect("sample rate")),
+                        frames: 3,
+                        ..AudioChunkInfo::default()
+                    },
+                    &taps,
+                )
+                .expect("actual bounded PCM");
+            for speed in [0.25, 1.0] {
+                for (index, expected) in taps.iter().enumerate() {
+                    let actual = source_sample(
+                        &resident,
+                        (
+                            u128::try_from(index).expect("source frame"),
+                            NonZeroU128::MIN,
+                        ),
+                        speed,
+                        None,
+                        1,
+                        0,
+                    )
+                    .expect("integer PCM sample");
+                    assert_eq!(actual.to_bits(), expected.to_bits());
+                }
+                for numerator in [1_u128, 2_500_000, 5_315_897, 9_999_999] {
+                    let fraction = numerator.to_f64().expect("phase numerator") / 10_000_000.0;
+                    let actual = source_sample(
+                        &resident,
+                        (phase_denominator.get() + numerator, phase_denominator),
+                        speed,
+                        None,
+                        1,
+                        0,
+                    )
+                    .expect("fractional bounded PCM sample");
+                    let expected = (f64::from(taps[2]) - f64::from(taps[1]))
+                        .mul_add(fraction, f64::from(taps[1]))
+                        .to_f32()
+                        .expect("convex PCM value at its exact phase");
+                    assert_eq!(actual, expected);
+                    assert!(actual.is_finite() && (-1.0..=1.0).contains(&actual));
+                    assert!((taps[1].min(taps[2])..=taps[1].max(taps[2])).contains(&actual));
+                }
+            }
+        }
     }
 }

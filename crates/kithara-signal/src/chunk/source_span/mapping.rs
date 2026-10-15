@@ -44,7 +44,11 @@ impl Rational {
     fn sliced(self, start: u64, frames: u64) -> Option<Self> {
         Some(Self {
             numerator: self.numerator_at(start)?,
-            step: if frames == 0 { 0 } else { self.step_at(start)? },
+            step: if frames == 0 && self.step_change != 0 {
+                0
+            } else {
+                self.step_at(start)?
+            },
             ..self
         })
     }

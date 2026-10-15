@@ -55,10 +55,12 @@ async fn checked_seek_defers_more_than_64_pcm_chunks_without_leaking() {
         GaplessMode::Disabled,
     );
     for _ in 0..65 {
-        generation.stage(AudioChunk::new(
-            AudioChunkInfo::default(),
-            sample_buffer(&pools, &[0.0, 0.0]),
-        ));
+        generation
+            .stage(AudioChunk::new(
+                AudioChunkInfo::default(),
+                sample_buffer(&pools, &[0.0, 0.0]),
+            ))
+            .expect("valid gapless PCM");
     }
     assert!(generation.has_output());
     let old = source.decode.replace_active(generation);

@@ -480,12 +480,14 @@ mod apple_factory_tests {
         loop {
             match decoder.next_chunk().expect("BUG: next chunk") {
                 DecoderChunkOutcome::Chunk(chunk) => {
-                    trimmed_frames =
-                        trimmed_frames.saturating_add(output_frames(trimmer.push(*chunk)));
+                    trimmed_frames = trimmed_frames.saturating_add(output_frames(
+                        trimmer.push(*chunk).expect("valid gapless PCM"),
+                    ));
                 }
                 DecoderChunkOutcome::Pending(reason) => panic!("unexpected Pending: {reason:?}"),
                 DecoderChunkOutcome::Eof => {
-                    trimmed_frames = trimmed_frames.saturating_add(output_frames(trimmer.flush()));
+                    trimmed_frames = trimmed_frames
+                        .saturating_add(output_frames(trimmer.flush().expect("valid gapless PCM")));
                     break;
                 }
             }

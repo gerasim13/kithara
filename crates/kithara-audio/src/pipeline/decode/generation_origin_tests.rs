@@ -140,7 +140,7 @@ fn visible_pcm_origin_and_content_comparison_apply_each_leading_contract_once(
     let mut generation = generation(decoder, mode);
     let input = chunk(&pools, spec, 700);
     let tail = input.samples[input.samples.len() - 32..].to_vec();
-    generation.stage(input);
+    generation.stage(input).expect("valid gapless PCM");
     let output = generation.pop_staged().expect("original PCM survives trim");
 
     assert_eq!(output.meta.frame_offset, 700 + trim);
@@ -191,7 +191,7 @@ fn first_original_pcm_keeps_its_comparison_basis_past_a_sought_suffix() {
     else {
         panic!("original decoder PCM");
     };
-    generation.stage(*input);
+    generation.stage(*input).expect("valid gapless PCM");
     let original = generation.pop_staged().expect("original PCM");
 
     assert_eq!(original.meta.timestamp, Duration::from_millis(42));
@@ -204,7 +204,9 @@ fn first_original_pcm_keeps_its_comparison_basis_past_a_sought_suffix() {
     generation
         .seek(Duration::from_millis(500), GaplessMode::MediaOnly)
         .expect("sought suffix");
-    generation.stage(chunk(&pools, spec, 500));
+    generation
+        .stage(chunk(&pools, spec, 500))
+        .expect("valid gapless PCM");
     let suffix = generation.pop_staged().expect("sought PCM");
     assert_eq!(suffix.meta.frame_offset, 500);
     assert_eq!(suffix.meta.frames, 64);

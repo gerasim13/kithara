@@ -130,7 +130,9 @@ impl<S> Audio<S> {
     pub fn spec(&self) -> AudioSpec {
         self.cursor.spec()
     }
+}
 
+impl<S> Audio<S> {
     /// Prepare one initial chunk without moving work to another thread.
     ///
     /// # Errors
@@ -150,6 +152,14 @@ impl<S> Audio<S> {
     /// # Errors
     /// Returns a source or decoder failure without rebuilding for a seek failure.
     pub fn seek(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError> {
+        self.seek_selected(position, false)
+    }
+
+    fn seek_selected(
+        &mut self,
+        position: Duration,
+        for_render: bool,
+    ) -> Result<SeekOutcome, AudioReadError> {
         self.seek_pending = false;
         self.last_progress_emit = None;
         if let Some(failure) = self.failure {
@@ -160,7 +170,11 @@ impl<S> Audio<S> {
         }
         self.current_chunk = None;
         self.cursor.clear();
-        let result = self.source.seek(position);
+        let result = if for_render {
+            self.source.seek_for_render(position)
+        } else {
+            self.source.seek(position)
+        };
         if let Err(error) = &result {
             self.failure = Some(crate::TrackFailureKind::from(error));
         }
@@ -170,6 +184,25 @@ impl<S> Audio<S> {
         self.source.finish_deferred();
         result
     }
+    fn seek_controlled(
+        &mut self,
+        position: Duration,
+        for_render: bool,
+    ) -> Result<SeekOutcome, AudioReadError> {
+        if self.seek_lock.is_none()
+            && let Some(abr) = &self.abr
+        {
+            abr.lock();
+            self.seek_lock = Some(abr.clone());
+        }
+        let result = self.seek_selected(position, for_render);
+        self.seek_pending = matches!(result, Ok(SeekOutcome::Landed { .. }));
+        if !matches!(result, Ok(SeekOutcome::Landed { .. })) {
+            self.release_seek_lock();
+        }
+        result
+    }
+
     /// Rebuild the decoder at a host-rate change on the owning thread.
     /// A rebuild error becomes the source's terminal read failure.
     pub fn set_host_sample_rate(&mut self, rate: NonZeroU32) {
@@ -496,18 +529,7 @@ impl<S> AudioControl for Audio<S> {
     }
 
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError> {
-        if self.seek_lock.is_none()
-            && let Some(abr) = &self.abr
-        {
-            abr.lock();
-            self.seek_lock = Some(abr.clone());
-        }
-        let result = self.seek(position);
-        self.seek_pending = matches!(result, Ok(SeekOutcome::Landed { .. }));
-        if !matches!(result, Ok(SeekOutcome::Landed { .. })) {
-            self.release_seek_lock();
-        }
-        result
+        self.seek_controlled(position, false)
     }
 }
 impl<S: 'static> AudioSource for Audio<S> {
@@ -515,6 +537,10 @@ impl<S: 'static> AudioSource for Audio<S> {
 
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError> {
         AudioControl::seek(self, position)
+    }
+
+    fn seek_for_render(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError> {
+        self.seek_controlled(position, true)
     }
 
     fn commit_source_end(&mut self, end: SourceEnd, meta: AudioChunkInfo) {
