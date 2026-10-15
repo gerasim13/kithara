@@ -19,19 +19,40 @@ use super::{
 };
 use crate::PlayError;
 
+impl TryFrom<(&DeckPart, Slot)> for PlaybackAction {
+    type Error = ();
+
+    fn try_from((part, slot): (&DeckPart, Slot)) -> Result<Self, Self::Error> {
+        match part {
+            DeckPart::Start { slot: started, .. } if *started == slot => Ok(Self::Start),
+            DeckPart::Chain { to, .. } if *to == slot => Ok(Self::Start),
+            DeckPart::Stop { slot: stopped, .. } if *stopped == slot => Ok(Self::Stop),
+            DeckPart::Detach { slot: detached } if *detached == slot => Ok(Self::Detach),
+            _ => Err(()),
+        }
+    }
+}
+
 impl<S> PlayerImpl<S> {
     pub(super) fn release_track(
         &mut self,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
         self.play = None;
-        self.playback_commands.clear();
         if let Some(loading) = self.loading.as_mut() {
             loading.speed = None;
         }
         if let Some(attaching) = self.attaching.as_mut() {
             attaching.play = None;
         }
+        if let Some(seq) = self.playback_commands.iter().rev().find_map(|operation| {
+            operation
+                .seq
+                .filter(|_| operation.action == Some(PlaybackAction::Detach))
+        }) {
+            return Ok(Some(seq));
+        }
+        self.playback_commands.clear();
         if self.status == TrackStatus::Released {
             self.release_lane(out)?;
             return Ok(None);
@@ -151,14 +172,10 @@ impl<S> PlayerImpl<S> {
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
         let slot = self.seat()?;
-        let action = parts.iter().rev().find_map(|part| match part {
-            DeckPart::Start { slot: started, .. } if *started == slot => {
-                Some(PlaybackAction::Start)
-            }
-            DeckPart::Chain { to, .. } if *to == slot => Some(PlaybackAction::Start),
-            DeckPart::Stop { slot: stopped, .. } if *stopped == slot => Some(PlaybackAction::Stop),
-            _ => None,
-        });
+        let action = parts
+            .iter()
+            .rev()
+            .find_map(|part| PlaybackAction::try_from((part, slot)).ok());
         let basis = parts
             .iter()
             .flat_map(super::super::outbox::slots)

@@ -360,88 +360,98 @@ fn idle_native_worker_publishes_rendered_transport_without_a_deck_tick() {
         .enable_time()
         .build()
         .expect("test wait runtime");
-    let (client, worker, root_view) = deck_session();
-    let (id, deck, _seen) = probe();
-    ask(&client, Command::Host(HostCommand::Register { id, deck })).expect("fixture deck");
-    let _ = render(&client, 0);
-    let mut clock_samples = 512;
-    runtime
-        .block_on(wait_until(
-            Duration::from_secs(2),
-            "native Host delivers graph change",
-            || {
-                hang_tick!(format!(
-                    "native transport grid={:?}; clock={clock_samples}",
-                    root_view.grid().state()
-                ));
-                let _ = render(&client, clock_samples);
-                clock_samples += 512;
-                root_view.grid().state() == BeatGridState::Live
-            },
-        ))
-        .expect("the transport's own tempo reaches the read-only Host view without a command");
-    hang_reset!();
-
-    assert!(matches!(
-        ask(
-            &client,
-            Command::Host(HostCommand::Configure(
-                HostSettingsChange::Metronome(MetronomeConfigChange::Enabled(true)),
-                When::Next
-            ))
-        ),
-        Ok(())
-    ));
-    let mut on_blocks = 0;
-    runtime
-        .block_on(wait_until(
-            Duration::from_secs(3),
-            "idle native metronome sounds",
-            || {
-                let mut sounded = false;
-                for _ in 0..100 {
+    // The test thread drives every render. Inside a participating poll it
+    // holds the virtual clock while it works, so the clock moves only on the
+    // waits' own poll ticks, never while the driver is merely busy or preempted.
+    runtime.block_on(kithara_platform::flash::participate(
+        async {
+            let (client, worker, root_view) = deck_session();
+            let (id, deck, _seen) = probe();
+            ask(&client, Command::Host(HostCommand::Register { id, deck })).expect("fixture deck");
+            let _ = render(&client, 0);
+            let mut clock_samples = 512;
+            wait_until(
+                Duration::from_secs(2),
+                "native Host delivers graph change",
+                || {
                     hang_tick!(format!(
-                        "metronome enabled; blocks={on_blocks}; clock={clock_samples}"
+                        "native transport grid={:?}; clock={clock_samples}",
+                        root_view.grid().state()
                     ));
-                    let pcm = render(&client, clock_samples);
+                    let _ = render(&client, clock_samples);
                     clock_samples += 512;
-                    on_blocks += 1;
-                    sounded |= pcm.iter().any(|sample| sample.abs() > 0.01);
-                }
-                sounded
-            },
-        ))
-        .unwrap_or_else(|error| panic!("metronome on reaches PCM: {error}; blocks={on_blocks}"));
-    hang_reset!();
+                    root_view.grid().state() == BeatGridState::Live
+                },
+            )
+            .await
+            .expect("the transport's own tempo reaches the read-only Host view without a command");
+            hang_reset!();
 
-    assert!(matches!(
-        ask(
-            &client,
-            Command::Host(HostCommand::Configure(
-                HostSettingsChange::Metronome(MetronomeConfigChange::Enabled(false)),
-                When::Next
-            ))
-        ),
-        Ok(())
+            assert!(matches!(
+                ask(
+                    &client,
+                    Command::Host(HostCommand::Configure(
+                        HostSettingsChange::Metronome(MetronomeConfigChange::Enabled(true)),
+                        When::Next
+                    ))
+                ),
+                Ok(())
+            ));
+            let mut on_blocks = 0;
+            wait_until(
+                Duration::from_secs(3),
+                "idle native metronome sounds",
+                || {
+                    let mut sounded = false;
+                    for _ in 0..100 {
+                        hang_tick!(format!(
+                            "metronome enabled; blocks={on_blocks}; clock={clock_samples}"
+                        ));
+                        let pcm = render(&client, clock_samples);
+                        clock_samples += 512;
+                        on_blocks += 1;
+                        sounded |= pcm.iter().any(|sample| sample.abs() > 0.01);
+                    }
+                    sounded
+                },
+            )
+            .await
+            .unwrap_or_else(|error| {
+                panic!("metronome on reaches PCM: {error}; blocks={on_blocks}")
+            });
+            hang_reset!();
+
+            assert!(matches!(
+                ask(
+                    &client,
+                    Command::Host(HostCommand::Configure(
+                        HostSettingsChange::Metronome(MetronomeConfigChange::Enabled(false)),
+                        When::Next
+                    ))
+                ),
+                Ok(())
+            ));
+            wait_until(
+                Duration::from_secs(4),
+                "idle native metronome stays off",
+                || {
+                    let mut silent = true;
+                    for _ in 0..100 {
+                        hang_tick!(format!("metronome disabled; clock={clock_samples}"));
+                        let pcm = render(&client, clock_samples);
+                        clock_samples += 512;
+                        silent &= pcm.iter().all(|sample| sample.abs() < 1e-6);
+                    }
+                    silent
+                },
+            )
+            .await
+            .expect("the muted capture spans more than one beat");
+            hang_reset!();
+            shut_down(&client, worker);
+        },
+        std::panic::Location::caller(),
     ));
-    runtime
-        .block_on(wait_until(
-            Duration::from_secs(4),
-            "idle native metronome stays off",
-            || {
-                let mut silent = true;
-                for _ in 0..100 {
-                    hang_tick!(format!("metronome disabled; clock={clock_samples}"));
-                    let pcm = render(&client, clock_samples);
-                    clock_samples += 512;
-                    silent &= pcm.iter().all(|sample| sample.abs() < 1e-6);
-                }
-                silent
-            },
-        ))
-        .expect("the muted capture spans more than one beat");
-    hang_reset!();
-    shut_down(&client, worker);
 }
 
 #[kithara_test_utils::kithara::hang_watchdog(ctx = String, timeout = kithara_test_utils::hang::default_timeout().min(Duration::from_secs(4)))]

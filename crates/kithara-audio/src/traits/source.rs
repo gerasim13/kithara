@@ -17,6 +17,8 @@ pub trait AudioSource: Send + 'static {
     type Chunk: Send + 'static;
     /// Commit the decoded-source boundary represented by admitted output.
     fn commit_source_end(&mut self, _source_end: SourceEnd, _meta: AudioChunkInfo) {}
+    /// Complete a segment after its final output has been admitted.
+    fn finish_segment(&mut self) {}
     /// Seek within the open source on the owning thread.
     ///
     /// # Errors

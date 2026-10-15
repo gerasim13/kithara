@@ -106,7 +106,6 @@ where
             pub fn admitted(&mut self);
             pub(crate) fn upstream_parked(&mut self);
             pub(crate) fn finish_preload(&mut self);
-            pub(crate) fn finish_segment(&mut self);
             /// Whether admission has made the current segment ready for playback.
             #[must_use]
             pub fn is_preloaded(&self) -> bool;
@@ -631,6 +630,11 @@ where
     S: HasPool<f32> + Send + Sync + 'static,
 {
     type Chunk = AudioChunk;
+
+    fn finish_segment(&mut self) {
+        self.lane.finish_segment();
+        self.source.finish_segment();
+    }
 
     delegate::delegate! {
         to self.source {

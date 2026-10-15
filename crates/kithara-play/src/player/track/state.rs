@@ -193,6 +193,7 @@ impl LaneOperation {
 pub(super) enum PlaybackAction {
     Start,
     Stop,
+    Detach,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

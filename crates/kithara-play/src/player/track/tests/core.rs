@@ -2041,6 +2041,165 @@ fn a_release_frees_the_track_once_the_mixer_let_its_consumer_go() {
 }
 
 #[kithara::test]
+#[case::standalone(false)]
+#[case::admitted_group(true)]
+fn a_repeated_release_answers_with_the_detach_already_in_flight(#[case] grouped: bool) {
+    let mut rig = rig();
+    let (mut track, _lane) = loaded(&mut rig, A, "track");
+
+    let first = rig
+        .with_outbox(|out| {
+            if !grouped {
+                return track.apply(TrackCommand::Release, out);
+            }
+            match out.together_owned(When::Next, |out| {
+                assert_eq!(
+                    track.apply(TrackCommand::Release, out)?,
+                    None,
+                    "the group has not admitted its detach yet"
+                );
+                Ok(())
+            }) {
+                Ok(((), Some(seq))) => {
+                    track.finish_group(Ok(seq));
+                    Ok(Some(seq))
+                }
+                Ok(((), None)) => panic!("the detach group sends one batch"),
+                Err((error, mut parts)) => {
+                    track.finish_group(Err(&mut parts));
+                    Err(error)
+                }
+            }
+        })
+        .expect("live deck scope")
+        .expect("the deck has room");
+    let room = rig
+        .with_outbox(|out| out.deck_available())
+        .expect("live deck scope");
+    let second = rig
+        .with_outbox(|out| track.apply(TrackCommand::Release, out))
+        .expect("live deck scope")
+        .expect("a repeated release is accepted");
+
+    assert_eq!(second, first, "the second release names the same detach");
+    assert_eq!(
+        rig.with_outbox(|out| out.deck_available())
+            .expect("live deck scope"),
+        room,
+        "a repeated release spends no deck credit"
+    );
+    let mut receipts = rig.block(frame(0), 0.0);
+    let detached = receipts
+        .iter()
+        .find(|receipt| Some(receipt.seq) == first)
+        .expect("the admitted detach has a native receipt");
+    assert!(matches!(detached.outcome, Outcome::Applied { .. }));
+    assert!(matches!(
+        detached.batch.commands.as_slice(),
+        [DeckPart::Returned(Returned::Pcm { slot, .. })] if *slot == A
+    ));
+    settle(&mut track, &mut rig, &mut receipts);
+    assert_eq!(track.snapshot().status, TrackStatus::Released);
+    assert!(!track.attached());
+    assert_eq!(rig.deck.mixer.held(A), None);
+    assert_eq!(
+        rig.with_outbox(|out| track.apply(TrackCommand::Release, out))
+            .expect("live deck scope")
+            .expect("a released track accepts Release"),
+        None,
+        "an applied detach is no longer in flight"
+    );
+}
+
+#[kithara::test]
+#[case::refused(false)]
+#[case::stale(true)]
+fn a_rejected_release_can_send_a_new_detach(#[case] stale: bool) {
+    let mut rig = rig();
+    let (mut track, _lane) = loaded(&mut rig, A, "track");
+    let first = rig
+        .with_outbox(|out| track.apply(TrackCommand::Release, out))
+        .expect("live deck scope")
+        .expect("the deck has room")
+        .expect("the detach has a sequence");
+    let mut receipts = if stale {
+        rig.deck.ring.publish().expect("publish the detach");
+        rig.deck.inbox.drain();
+        let basis = {
+            let mut scope = rig.deck.inbox.scope(rig.deck.scope).expect("deck scope");
+            let due = scope.next_due(frame(0), 1).expect("native detach due");
+            assert_eq!(due.seq(), first);
+            assert!(matches!(due.commands(), [DeckPart::Detach { slot }] if *slot == A));
+            let basis = due.basis().to_vec();
+            due.defer();
+            basis
+        };
+        rig.deck
+            .ring
+            .scope(rig.deck.scope)
+            .expect("deck scope")
+            .send(
+                When::Next,
+                Batch {
+                    basis,
+                    commands: Vec::new(),
+                },
+            )
+            .expect("supersede the parked detach from its native basis");
+        rig.block(frame(64), 0.0)
+    } else {
+        vec![Answer::from(answer_next(
+            &mut rig,
+            Err(DeckRefusal::Deferral),
+        ))]
+    };
+    let rejected = receipts
+        .iter()
+        .find(|receipt| receipt.seq == first)
+        .expect("the first detach has a terminal receipt");
+    assert!(match rejected.outcome {
+        Outcome::Rejected(Rejection::Stale) => stale,
+        Outcome::Rejected(Rejection::Refused(DeckRefusal::Deferral)) => !stale,
+        _ => false,
+    });
+    let settled = settle(&mut track, &mut rig, &mut receipts);
+    assert!(
+        settled
+            .iter()
+            .any(|answer| { matches!(answer, Settled::Rejected { seq, .. } if *seq == first) })
+    );
+    assert!(track.attached());
+    assert_eq!(rig.deck.mixer.held(A), Some("track"));
+
+    let retry = rig
+        .with_outbox(|out| track.apply(TrackCommand::Release, out))
+        .expect("live deck scope")
+        .expect("the retry is accepted")
+        .expect("the retry sends a new detach");
+    assert_ne!(retry, first, "a terminal rejection retires the old detach");
+    let room = rig
+        .with_outbox(|out| out.deck_available())
+        .expect("live deck scope");
+    assert_eq!(
+        rig.with_outbox(|out| track.apply(TrackCommand::Release, out))
+            .expect("live deck scope")
+            .expect("the pending retry is accepted"),
+        Some(retry)
+    );
+    assert_eq!(
+        rig.with_outbox(|out| out.deck_available())
+            .expect("live deck scope"),
+        room,
+        "the pending retry spends no second deck credit"
+    );
+    let mut receipts = rig.block(frame(128), 0.0);
+    settle(&mut track, &mut rig, &mut receipts);
+    assert_eq!(track.snapshot().status, TrackStatus::Released);
+    assert!(!track.attached());
+    assert_eq!(rig.deck.mixer.held(A), None);
+}
+
+#[kithara::test]
 #[case::same_segment(false, false)]
 #[case::new_segment(true, false)]
 #[case::settled_then_new_segment(true, true)]

@@ -543,6 +543,11 @@ impl<S: 'static> AudioSource for Audio<S> {
         self.seek_controlled(position, true)
     }
 
+    fn finish_segment(&mut self) {
+        self.source.finish_segment();
+        self.publish_final_progress();
+    }
+
     fn commit_source_end(&mut self, end: SourceEnd, meta: AudioChunkInfo) {
         self.source.commit_source_end(end, meta);
         if meta.frames == 0 {

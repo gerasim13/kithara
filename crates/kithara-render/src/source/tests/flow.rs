@@ -852,3 +852,173 @@ fn every_effect_tail_precedes_the_single_eof(quarter: Vec<f32>) {
     }
     assert!(matches!(source.step_track(), TrackStep::Eof));
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+fn buffered_audio_track(
+    pools: &kithara_bufpool::PoolRegion<TestPools>,
+    bus: kithara_events::EventBus,
+    unmapped_tail: bool,
+) -> crate::TrackConfig<kithara_file::File<TestPools>, kithara_audio::NoResamplerBackend> {
+    use kithara_assets::{AssetStore, StorageBackend};
+    use kithara_audio::{AudioConfig, NoResamplerBackend};
+    use kithara_file::{File, FileConfig, FileSrc};
+
+    let path = kithara_test_fixtures::assets::signal_wav_sine440_120ms()
+        .path()
+        .expect("native WAV fixture");
+    let file = FileConfig::for_src(FileSrc::Local(path.to_owned()))
+        .store(
+            AssetStore::builder(pools.clone())
+                .backend(StorageBackend::Memory)
+                .build(),
+        )
+        .pools(pools.clone())
+        .events(bus)
+        .build();
+    let audio = AudioConfig::<File<TestPools>, NoResamplerBackend>::for_stream(file).build();
+    let mut effects: Vec<Box<dyn AudioEffect>> = vec![Box::<BufferThenHalveFrames>::default()];
+    if unmapped_tail {
+        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("fixture sample rate"));
+        effects.push(Box::new(ResettingTail {
+            resets: Arc::new(AtomicU64::new(0)),
+            tail: Some(chunk(pools, spec, 0, &[0.25; 256])),
+        }));
+    }
+    let warp = kithara_warp::WarpConfig::builder()
+        .render_quantum_frames(NonZeroUsize::new(256).expect("quantum"))
+        .build();
+    crate::TrackConfig::for_audio(audio)
+        .effects(effects)
+        .warp(warp)
+        .preload_chunks(NonZeroUsize::MIN)
+        .audio_buffer_chunks(NonZeroUsize::MIN)
+        .build()
+}
+
+#[kithara::test(native, tokio)]
+#[case::mapped_only(false)]
+#[case::mapped_then_unmapped(true)]
+#[kithara::hang_watchdog]
+async fn final_progress_follows_the_last_admitted_effect_tail(#[case] unmapped_tail: bool) {
+    use kithara_audio::{AudioEvent, NoResamplerBackend};
+    use kithara_events::EventBus;
+    use kithara_file::File;
+    use kithara_worker::{Task, TickResult};
+
+    let pools = pools();
+    let bus = EventBus::default();
+    let mut events = bus.subscribe::<AudioEvent>();
+    let track = buffered_audio_track(&pools, bus, unmapped_tail);
+    let worker = crate::PlayWorker::new(crate::PlayWorkerConfig::builder(pools).build());
+    let (_lane, inbox) = worker.lane_channel();
+    let start = crate::LaneStart {
+        speed: SpeedCurve::Constant(1.0),
+        keylock: false,
+        backend: StretchKind::default(),
+    };
+    let (mut receiver, mut node, _latency) = worker
+        .load::<File<TestPools>, NoResamplerBackend, _>(track, Duration::ZERO, start, inbox)
+        .await
+        .expect("real Audio lane");
+
+    let mut progress = Vec::new();
+    let mut at_decoded_eof = None;
+    let mut frontier = Duration::ZERO;
+    let mut tail_packets = 0;
+    let mut unmapped_tail_packets = 0;
+    let mut backpressured_tail = false;
+    let final_frontier = loop {
+        hang_tick!();
+        node.recycle();
+        node.tick();
+        if receiver.next_chunk_info().is_some_and(|meta| {
+            !meta.end_of_track && Some(meta.end_timestamp) == receiver.duration()
+        }) {
+            assert_eq!(node.tick(), TickResult::Backpressured);
+            backpressured_tail = true;
+        }
+        node.recycle();
+        while let Ok(envelope) = events.try_recv() {
+            match envelope.event {
+                AudioEvent::EndOfStream => at_decoded_eof = Some(frontier),
+                AudioEvent::PlaybackProgress { position_ms, .. } => progress.push((
+                    position_ms,
+                    receiver
+                        .next_chunk_info()
+                        .is_some_and(|meta| meta.end_of_track),
+                )),
+                AudioEvent::TrackFailed { failure } => panic!("real source failed: {failure:?}"),
+                _ => {}
+            }
+        }
+        let previous_frontier = frontier;
+        if let Some(packet) = receiver.pop() {
+            let crate::PcmPacket::Chunk(chunk) = &packet else {
+                panic!("the real source must reach natural EOF")
+            };
+            frontier = receiver.decoded_frontier();
+            let terminal = chunk.meta.end_of_track;
+            if !terminal && chunk.meta.source_span.is_none() {
+                assert!(
+                    unmapped_tail,
+                    "only the configured effect emits unmapped PCM"
+                );
+                assert!(
+                    at_decoded_eof.is_some(),
+                    "the unmapped tail follows decoded EOF"
+                );
+                assert!(tail_packets > 0, "the mapped effect tail is admitted first");
+                assert!(chunk.meta.frames > 0);
+                assert_eq!(
+                    frontier, previous_frontier,
+                    "effect-only PCM preserves the source frontier"
+                );
+                assert_eq!(
+                    Some(frontier),
+                    receiver.duration(),
+                    "the mapped source endpoint was admitted"
+                );
+                unmapped_tail_packets += 1;
+            } else if !terminal && at_decoded_eof.is_some() {
+                assert_eq!(
+                    unmapped_tail_packets, 0,
+                    "mapped PCM precedes the unmapped tail"
+                );
+                assert!(chunk.meta.frames > 0);
+                tail_packets += 1;
+            }
+            receiver.recycle(packet).expect("return admitted packet");
+            hang_reset!();
+            if terminal {
+                break frontier;
+            }
+        }
+        kithara_platform::tokio::task::yield_now().await;
+    };
+    assert_eq!(Some(final_frontier), receiver.duration());
+    let decoded_eof = at_decoded_eof.expect("decoded EOF precedes render completion");
+    let tail = final_frontier - decoded_eof;
+    assert!(tail_packets > 0, "mapped PCM is admitted after decoded EOF");
+    assert_eq!(unmapped_tail_packets, usize::from(unmapped_tail));
+    assert!(
+        (1..100).contains(&tail.as_millis()),
+        "tail stays inside the throttle: {tail:?}"
+    );
+    assert!(
+        decoded_eof.as_millis() < final_frontier.as_millis(),
+        "the mapped tail changes the public millisecond position"
+    );
+    let final_ms = u64::try_from(final_frontier.as_millis()).expect("fixture millis");
+    assert!(backpressured_tail, "the final mapped tail filled the ring");
+    assert_eq!(
+        progress.last(),
+        Some(&(final_ms, true)),
+        "final event follows terminal admission: {progress:?}"
+    );
+    assert!(
+        progress
+            .iter()
+            .all(|(position, terminal)| *position != final_ms || *terminal),
+        "final progress cannot precede its terminal marker: {progress:?}"
+    );
+}

@@ -403,6 +403,31 @@ fn assert_host_rate_entry(
     assert!(lane.receipts().next().is_none());
 }
 
+fn nanosecond_projected_entry(meta: AudioChunkInfo, target: Duration) -> Option<AudioChunkInfo> {
+    let span = meta.source_span.expect("exact raw entry span");
+    let exact_entry = span.source_ratio_at(0).expect("actual source entry");
+    let duration_entry = (
+        target
+            .as_nanos()
+            .checked_mul(u128::from(meta.spec.sample_rate.get()))
+            .expect("duration source coordinate"),
+        std::num::NonZeroU128::new(1_000_000_000).expect("nanosecond source clock"),
+    );
+    let projected = span
+        .scaled_from(exact_entry, duration_entry, (1, std::num::NonZeroU128::MIN))
+        .expect("duration-projected entry geometry");
+    if projected.source_ratio_at(0) == Some(exact_entry) {
+        return None;
+    }
+    assert_eq!(projected.position_at(0), Some(target));
+    assert_eq!(projected.render_revision(), span.render_revision());
+    assert_eq!(projected.mapping_revision(), span.mapping_revision());
+    Some(AudioChunkInfo {
+        source_span: Some(projected),
+        ..meta
+    })
+}
+
 async fn fractional_segment_entry() {
     let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("fractional entry rate"));
     for (first_frame, target, visible_origin, expected_sample, expected_ratio, rejected_frame) in [
@@ -426,6 +451,14 @@ async fn fractional_segment_entry() {
             1_105,
             Duration::from_nanos(23_020_833),
             Some(Duration::from_nanos(23_020_833)),
+            0.0_f32,
+            (1_105, 1),
+            1_104,
+        ),
+        (
+            1_105,
+            Duration::from_nanos(23_020_833),
+            None,
             0.0_f32,
             (1_105, 1),
             1_104,
@@ -505,6 +538,13 @@ async fn fractional_segment_entry() {
                 Err(TrackFailureKind::Render),
                 "retained prefix PCM cannot present the later requested entry"
             );
+            if let Some(projected_entry) = nanosecond_projected_entry(data.meta, target) {
+                assert_eq!(
+                    node.source.check_admission(&projected_entry),
+                    Err(TrackFailureKind::Render),
+                    "equal nanosecond positions cannot replace the exact source entry"
+                );
+            }
             assert_eq!(data.meta.segment, positioned);
             assert_eq!(data.meta.lane_frame, 0);
             node.pending = Some(PendingPacket {

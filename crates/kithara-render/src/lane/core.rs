@@ -596,7 +596,7 @@ fn source_entry(
     let Some(to) = requested.map(|to| visible_origin.map_or(to, |origin| origin.max(to))) else {
         return basis.source_ratio_at(0);
     };
-    if visible_origin == Some(to) && basis.position_at(0) == Some(to) {
+    if basis.position_at(0) == Some(to) {
         return basis.source_ratio_at(0);
     }
     Some((
