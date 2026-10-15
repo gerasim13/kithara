@@ -129,15 +129,21 @@ exit 98
         })
     }
 
-    fn bootstrap(&self) -> Result<Output> {
-        Command::new(env!("CARGO_BIN_EXE_xtask"))
+    fn bootstrap_command(&self) -> Command {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_xtask"));
+        command
             .args(["self-cache", "bootstrap"])
             .current_dir(&self.root)
             .env("CARGO_TARGET_DIR", &self.target)
             .env("CARGO", env!("CARGO"))
             .env("XTASK_SELF_CACHE_CARGO", &self.bootstrap_cargo)
             .env("SELF_CACHE_BOOTSTRAP_ARTIFACT", &self.bootstrap_artifact)
-            .stdin(Stdio::null())
+            .stdin(Stdio::null());
+        command
+    }
+
+    fn bootstrap(&self) -> Result<Output> {
+        self.bootstrap_command()
             .output()
             .context("bootstrap self-cache fixture")
     }
@@ -1021,20 +1027,75 @@ fn an_unnamed_cargo_target_directory_builds_inside_the_checkout() -> Result<()> 
 /// units in a lane's directory. The refresh builds where the bootstrap does.
 #[test]
 fn a_stale_ci_self_cache_refreshes_where_the_bootstrap_builds() -> Result<()> {
+    writeln!(io::stderr(), "self-cache-ci-refresh fixture:start")?;
     let fixture = Fixture::new()?;
-    assert_success(&fixture.bootstrap()?);
+    writeln!(
+        io::stderr(),
+        "self-cache-ci-refresh bootstrap:start root={} target={}",
+        fixture.root.display(),
+        fixture.target.display()
+    )?;
+    let mut bootstrap = fixture
+        .bootstrap_command()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("start self-cache fixture bootstrap")?;
+    writeln!(
+        io::stderr(),
+        "self-cache-ci-refresh bootstrap:spawned pid={}",
+        bootstrap.id()
+    )?;
+    for (stream, line) in stream_lines(&mut bootstrap)? {
+        writeln!(
+            io::stderr(),
+            "self-cache-ci-refresh bootstrap {stream:?}: {line}"
+        )?;
+    }
+    let bootstrap = bootstrap.wait_with_output()?;
+    writeln!(
+        io::stderr(),
+        "self-cache-ci-refresh bootstrap:finished status={}",
+        bootstrap.status
+    )?;
+    assert_success(&bootstrap);
     fs::write(
         fixture.root.join("xtask/src/main.rs"),
         "fn main() { changed(); }\n",
     )?;
     let xtask = fixture._temp.path().join("builds/xtask");
 
-    let output = fixture
+    writeln!(
+        io::stderr(),
+        "self-cache-ci-refresh ready:start target={}",
+        xtask.display()
+    )?;
+    let mut ready = fixture
         .just_command(&fixture.root, &["_xtask-ready"])?
         .env_remove("CARGO_TARGET_DIR")
         .env("KITHARA_XTASK_TARGET", &xtask)
         .env("XTASK_SELF_CACHE_CARGO", fixture.fake_bin.join("cargo"))
-        .output()?;
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("start stale self-cache ready check")?;
+    writeln!(
+        io::stderr(),
+        "self-cache-ci-refresh ready:spawned pid={}",
+        ready.id()
+    )?;
+    for (stream, line) in stream_lines(&mut ready)? {
+        writeln!(
+            io::stderr(),
+            "self-cache-ci-refresh ready {stream:?}: {line}"
+        )?;
+    }
+    let output = ready.wait_with_output()?;
+    writeln!(
+        io::stderr(),
+        "self-cache-ci-refresh ready:finished status={}",
+        output.status
+    )?;
 
     assert!(
         !output.status.success(),

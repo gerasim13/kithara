@@ -197,6 +197,13 @@ audio-artifacts OUTPUT:
       just test run -p kithara-warp-tests --test warp \
         -E 'test(=region::rendered_clicks_follow_the_integral_of_the_tempo_ramp_signalsmith) | test(/^real_track::/)'
 
+    KITHARA_AUDIO_ARTIFACT_DIR="$output" \
+      just test run -p kithara-sync-tests --test sync \
+        -E 'test(/^sync_listening::record_sync_listening_wavs_/)'
+    KITHARA_AUDIO_ARTIFACT_DIR="$output" \
+      just test run -p kithara-queue-tests --test queue \
+        -E 'test(/^next_crossfade_hands_over_transport::a_next_press_hands_the_transport_to_the_track_it_crossfades_in_/)'
+
 # Every UI test target, followed by both hosts drawing the same gallery and
 # shipped studio pages, and the gallery built the other way it ships. This is
 # the UI pipeline's single entrypoint; the general workspace lane deliberately

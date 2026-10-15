@@ -5,19 +5,24 @@
 //! as current, and Pause and Play reach the track that now sounds rather than
 //! the one the fade silenced.
 
+use std::num::NonZeroU32;
+
 use kithara::{
     events::{EventReceiver, TrackId},
+    host::{HostConfig, HostSettings, MetronomeConfig, Tap},
     platform::time::{self, Duration, sleep},
     queue::{QueueControl, QueueEvent, Transition},
 };
 use kithara_integration_tests::{
+    audio_artifact::{AudioArtifactTap, artifact_label},
     kithara,
-    offline::{OfflinePlayer, OfflinePlayerOptions, asset_source},
+    offline::{OfflinePlayer, OfflinePlayerOptions, TapProbe, asset_source},
+    usdt_trace,
 };
 use kithara_test_fixtures::{assets, signal::rms};
 use num_traits::AsPrimitive;
 
-use crate::bufpool_ext::TestPools;
+use crate::bufpool_ext::{TestPools, pools};
 
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
@@ -31,6 +36,7 @@ async fn render(
     harness: &OfflinePlayer,
     queue: &QueueControl<TestPools>,
     blocks: usize,
+    mut capture: Option<&mut (AudioArtifactTap, TapProbe)>,
 ) -> Vec<f32> {
     let mut last = Vec::new();
     for block_index in 0..blocks {
@@ -40,6 +46,16 @@ async fn render(
             .await
             .expect("the queue takes its owner pass");
         last = harness.render(BLOCK_FRAMES).await;
+        if let Some((artifact, master)) = capture.as_deref_mut() {
+            artifact.push(&last);
+            last = master.drain();
+            assert_eq!(master.drops(), 0, "the master tap keeps every frame");
+            assert_eq!(
+                last.len(),
+                BLOCK_FRAMES * 2,
+                "the master tap sees the complete block"
+            );
+        }
         hang_reset!();
     }
     last
@@ -54,6 +70,7 @@ async fn render_until(
     what: &str,
     within: Duration,
     mut done: impl FnMut(&QueueControl<TestPools>) -> bool,
+    mut capture: Option<&mut (AudioArtifactTap, TapProbe)>,
 ) {
     let deadline = time::Instant::now() + within;
     loop {
@@ -61,7 +78,7 @@ async fn render_until(
             "{what}: current={:?}",
             queue.current().map(|track| track.id)
         ));
-        render(harness, queue, 1).await;
+        render(harness, queue, 1, capture.as_deref_mut()).await;
         if done(queue) {
             hang_reset!();
             return;
@@ -96,14 +113,52 @@ async fn a_next_press_hands_the_transport_to_the_track_it_crossfades_in(
     #[case] crossfade_seconds: f32,
     #[case] tempo: Option<f32>,
 ) {
-    let harness = OfflinePlayer::with_sample_rate(
+    let artifact = AudioArtifactTap::from_env(&artifact_label(), SAMPLE_RATE, 2)
+        .expect("crossfade listening artifact");
+    let _trace = artifact.as_ref().map(|_| usdt_trace::scope());
+    let session = HostConfig::offline(pools())
+        .settings(
+            HostSettings::builder()
+                .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate"))
+                .metronome(
+                    MetronomeConfig::builder()
+                        .enabled(artifact.is_some())
+                        .build(),
+                )
+                .build(),
+        )
+        .build();
+    let harness = OfflinePlayer::with_options(
         OfflinePlayerOptions::builder()
             .crossfade_duration(crossfade_seconds)
             .block_on_underrun(true)
             .build(),
-        SAMPLE_RATE,
+        session,
     )
     .await;
+    let mut capture = match artifact {
+        Some(mut artifact) => {
+            artifact.evidence(
+                "capture_origin_session_frame",
+                serde_json::json!(harness.host().position()),
+            );
+            artifact.evidence(
+                "signal",
+                serde_json::json!("constant-level DC transport diagnostic"),
+            );
+            artifact.evidence("crossfade_seconds", serde_json::json!(crossfade_seconds));
+            artifact.evidence("requested_playing_rate", serde_json::json!(tempo));
+            artifact.evidence("listening_tap", serde_json::json!("Host Output"));
+            artifact.evidence("assertion_tap", serde_json::json!("Host Master"));
+            let master = harness
+                .host()
+                .attach_tap(Tap::Master, BLOCK_FRAMES * 2)
+                .await
+                .expect("capture the same pre-metronome PCM as the ordinary scenario");
+            Some((artifact, master))
+        }
+        None => None,
+    };
     let queue = harness.player().clone();
     let quiet = asset_source(&assets::constant_wav_quiet_30s());
     let loud = asset_source(&assets::constant_wav_loud_30s());
@@ -132,11 +187,15 @@ async fn a_next_press_hands_the_transport_to_the_track_it_crossfades_in(
         "the first track plays",
         Duration::from_secs(10),
         |q| q.is_playing() && q.position_seconds().is_some_and(|seconds| seconds > 1.0),
+        capture.as_mut(),
     )
     .await;
     assert_eq!(queue.current().map(|track| track.id), Some(outgoing));
 
     let mut events: EventReceiver<QueueEvent> = queue.subscribe();
+    if let Some((artifact, _)) = capture.as_mut() {
+        artifact.mark("Next requested");
+    }
     harness
         .run(&queue, move |q| q.next(Transition::Crossfade))
         .await
@@ -151,14 +210,32 @@ async fn a_next_press_hands_the_transport_to_the_track_it_crossfades_in(
             handed_over |= current_changed_to(&mut events, incoming);
             handed_over
         },
+        capture.as_mut(),
     )
     .await;
     assert_eq!(queue.current().map(|track| track.id), Some(incoming));
+    if let Some((artifact, _)) = capture.as_mut() {
+        artifact.mark("CurrentTrackChanged observed for incoming track");
+        artifact.evidence(
+            "handover_observed_session_frame",
+            serde_json::json!(harness.host().position()),
+        );
+        artifact.evidence("incoming_track", serde_json::json!(u64::from(incoming)));
+    }
     let fade_seconds: usize = crossfade_seconds.ceil().as_();
-    render(&harness, &queue, (fade_seconds + 1) * BLOCKS_PER_SECOND).await;
+    render(
+        &harness,
+        &queue,
+        (fade_seconds + 1) * BLOCKS_PER_SECOND,
+        capture.as_mut(),
+    )
+    .await;
 
+    if let Some((artifact, _)) = capture.as_mut() {
+        artifact.mark("Pause requested");
+    }
     harness.run(&queue, QueueControl::pause).await;
-    render(&harness, &queue, BLOCKS_PER_SECOND / 2).await;
+    render(&harness, &queue, BLOCKS_PER_SECOND / 2, capture.as_mut()).await;
     assert!(
         !queue.is_playing(),
         "Pause reaches the track that now sounds"
@@ -166,7 +243,7 @@ async fn a_next_press_hands_the_transport_to_the_track_it_crossfades_in(
     let held = queue
         .position_seconds()
         .expect("the paused track keeps a position");
-    let paused = render(&harness, &queue, BLOCKS_PER_SECOND).await;
+    let paused = render(&harness, &queue, BLOCKS_PER_SECOND, capture.as_mut()).await;
     let after = queue
         .position_seconds()
         .expect("the paused track keeps a position");
@@ -180,8 +257,11 @@ async fn a_next_press_hands_the_transport_to_the_track_it_crossfades_in(
         rms(&paused)
     );
 
+    if let Some((artifact, _)) = capture.as_mut() {
+        artifact.mark("Play requested after pause");
+    }
     harness.run(&queue, QueueControl::play).await;
-    let resumed = render(&harness, &queue, BLOCKS_PER_SECOND).await;
+    let resumed = render(&harness, &queue, BLOCKS_PER_SECOND, capture.as_mut()).await;
     assert!(queue.is_playing(), "Play reaches the track that now sounds");
     assert_eq!(queue.current().map(|track| track.id), Some(incoming));
     let moved = queue
@@ -197,6 +277,10 @@ async fn a_next_press_hands_the_transport_to_the_track_it_crossfades_in(
         rms(&resumed)
     );
 
+    if let Some((artifact, _)) = capture.as_mut() {
+        artifact.mark("incoming track resumed; all transport assertions passed");
+    }
+    drop(capture);
     drop(events);
     drop(queue);
     harness.close().await;
@@ -238,6 +322,7 @@ async fn a_track_at_a_set_tempo_keeps_sounding_through_an_offline_render() {
         "the track plays",
         Duration::from_secs(10),
         |q| q.is_playing() && q.position_seconds().is_some_and(|seconds| seconds > 0.0),
+        None,
     )
     .await;
 
@@ -249,7 +334,7 @@ async fn a_track_at_a_set_tempo_keeps_sounding_through_an_offline_render() {
         .expect("the playing track has a position");
     for window in 0..WINDOWS {
         hang_tick!(format!("tempo render window {window}"));
-        let pcm = render(&harness, &queue, window_blocks).await;
+        let pcm = render(&harness, &queue, window_blocks, None).await;
         hang_reset!();
         assert!(
             rms(&pcm) > 0.05,

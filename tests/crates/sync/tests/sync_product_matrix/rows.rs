@@ -78,6 +78,17 @@ async fn provider_tempo_controls_measure_without_sync(
                 || captured.observed_content_failures(&wrong_source, &grid),
                 |reference| captured.source_content_failures(reference, &wrong_source, &grid),
             );
+            if !measured.is_empty() {
+                let diagnostic = serde_json::json!({
+                    "label": label,
+                    "source": source,
+                    "requested_start_seconds": prepared.0.start_seconds(deck, start),
+                    "failures": measured,
+                    "flight_events": kithara_test_utils::flight::tail(),
+                    "flight_probes": kithara_test_utils::flight::probes_tail(),
+                });
+                eprintln!("ORACLE_CONTROL_FAILURE {diagnostic}");
+            }
             let supplemental = if prepared.0.has_score_markers() {
                 marked_synchronization_failures(&label, &[pcm], CHANNELS, 48_000, target)
             } else {

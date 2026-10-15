@@ -1064,6 +1064,29 @@ impl DecodedCapture {
         Err("decoder observer has no physical basis for the raw source position".to_owned())
     }
 
+    fn sample_at(
+        &self,
+        info: kithara::signal::AudioChunkInfo,
+        position: (u128, std::num::NonZeroU128),
+        speed: f64,
+        channel: usize,
+    ) -> Result<f32, String> {
+        if self.rejected {
+            return Err("decoder observer rejected or conflicted while capturing PCM".to_owned());
+        }
+        let source =
+            i64::try_from(position.0 / position.1.get()).map_err(|error| error.to_string())?;
+        mapped_sample((position.0, position.1.get()), speed, |offset| {
+            self.sample(
+                info,
+                source
+                    .checked_add(offset)
+                    .ok_or_else(|| "physical sample coordinate overflows".to_owned())?,
+                channel,
+            )
+        })
+    }
+
     fn physical_capture_clock(
         &self,
         pcm: &[f32],
@@ -1138,8 +1161,13 @@ impl DecodedCapture {
                 .source_span
                 .ok_or_else(|| "physical source span disappeared".to_owned())?;
             if offset >= span.output_frames() {
+                let boundary = marks.partition_point(|(at, _)| i64::from(*at) <= session);
+                let nearby = &marks[boundary.saturating_sub(2)..(boundary + 2).min(marks.len())];
                 return Err(format!(
-                    "physical capture has a SourceSpan hole at output frame {session}"
+                    "physical capture has a SourceSpan hole at output frame {session}; \
+                     capture_start={capture_start:?}; retained_frames={frames}; \
+                     sample_rate={sample_rate}; interval_start={start}; \
+                     interval={info:?}; nearby_points={nearby:?}"
                 ));
             }
             let (numerator, denominator) = span
@@ -1160,15 +1188,9 @@ impl DecodedCapture {
                 .output_ratio_at_source(origin, raw_next)
                 .ok_or_else(|| "raw source endpoint has no physical PCM position".to_owned())?;
             let speed = physical_source_speed((numerator, denominator), physical_next)?;
-            let source =
-                i64::try_from(numerator / denominator.get()).map_err(|error| error.to_string())?;
             for channel in 0..usize::from(CHANNELS) {
-                let sample = mapped_sample((numerator, denominator.get()), speed, |offset| {
-                    let source = source
-                        .checked_add(offset)
-                        .ok_or_else(|| "physical sample coordinate overflows".to_owned())?;
-                    self.sample(info, source, channel)
-                })? * gain
+                let sample = self.sample_at(info, (numerator, denominator), speed, channel)?
+                    * gain
                     * CONTROL_GAIN;
                 if !sample.is_finite() || sample.abs() >= LimiterConfig::default().ceiling() {
                     return Err(format!(
