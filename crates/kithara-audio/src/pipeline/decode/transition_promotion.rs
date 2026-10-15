@@ -22,7 +22,6 @@ impl ActiveDecode {
         let incoming_profile = prepared.generation.blender_profile();
         if self.active.blender_profile().spec() != incoming_profile.spec()
             || !self.active.has_same_source_basis(&prepared.generation)
-            || self.active.visible_origin() != prepared.generation.visible_origin()
             || self.active.media_origin() != prepared.generation.media_origin()
             || self.active.comparison_origin(self.gapless_mode())
                 != incoming_origin(&self.active, &prepared.generation, self.gapless_mode())

@@ -11,7 +11,7 @@ use kithara_bufpool::HasPool;
 use kithara_command::{Inbox, Protocol, Seq};
 use kithara_dsp::param::SmootherConfig;
 use kithara_platform::time::Duration;
-use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, SegmentId};
+use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, SegmentId, SourceSpan};
 use kithara_warp::{SpeedCurve, StretchKind, WarpRenderError, WarpRenderer};
 use num_traits::ToPrimitive;
 
@@ -128,6 +128,7 @@ pub struct LaneSetup {
     pub declick: SmootherConfig,
 }
 
+#[derive(Debug)]
 struct Preparation {
     seq: Seq,
     at: LaneFrame,
@@ -152,47 +153,25 @@ impl Preparation {
             return false;
         }
         self.source.is_some_and(|source| {
-            let origin = source
-                .source_geometry()
-                .and_then(|span| {
-                    span.scaled_from(
-                        (0, NonZeroU128::MIN),
-                        (0, NonZeroU128::MIN),
-                        (
-                            u128::from(source.spec.sample_rate.get()),
-                            NonZeroU128::from(span.sample_rate()),
-                        ),
-                    )
-                })
-                .and_then(|span| span.source_ratio_at(0));
+            let expected = source.source_geometry().and_then(|basis| {
+                let (numerator, denominator) =
+                    source_entry(basis, self.requested_entry, source.visible_origin)?;
+                Some((
+                    numerator.checked_mul(u128::from(source.spec.sample_rate.get()))?,
+                    NonZeroU128::new(
+                        denominator
+                            .get()
+                            .checked_mul(u128::from(basis.sample_rate().get()))?,
+                    )?,
+                ))
+            });
             span.sample_rate() == source.spec.sample_rate
-                && match self.requested_entry {
-                    Some(requested)
-                        if source
-                            .visible_origin
-                            .is_some_and(|origin| origin >= requested) =>
-                    {
-                        span.source_ratio_at(0) == origin
-                    }
-                    Some(requested) => {
-                        let position = source
-                            .visible_origin
-                            .map_or(requested, |origin| origin.max(requested));
-                        position
-                            .as_nanos()
-                            .checked_mul(u128::from(span.sample_rate().get()))
-                            .and_then(|numerator| {
-                                span.scaled_from(
-                                    (numerator, NonZeroU128::new(1_000_000_000)?),
-                                    (0, NonZeroU128::MIN),
-                                    (1, NonZeroU128::MIN),
-                                )
-                            })
-                            .and_then(|relative| relative.source_ratio_at(0))
-                            == Some((0, NonZeroU128::MIN))
-                    }
-                    None => span.source_ratio_at(0) == origin,
-                }
+                && expected
+                    .and_then(|position| {
+                        span.scaled_from(position, (0, NonZeroU128::MIN), (1, NonZeroU128::MIN))
+                    })
+                    .and_then(|relative| relative.source_ratio_at(0))
+                    == Some((0, NonZeroU128::MIN))
         })
     }
 }
@@ -295,11 +274,10 @@ impl Lane {
 
     pub(crate) fn check_admission(&self, meta: &AudioChunkInfo) -> Result<(), TrackFailureKind> {
         if matches!(self.preload, Preload::Filling(0))
-            && self
-                .pending
-                .as_ref()
-                .is_some_and(|pending| !pending.accepts(meta))
+            && let Some(pending) = self.pending.as_ref()
+            && !pending.accepts(meta)
         {
+            tracing::error!(?pending, incoming = ?meta, "prepared PCM violates lane entry");
             return Err(TrackFailureKind::Render);
         }
         Ok(())
@@ -610,6 +588,24 @@ impl Lane {
     }
 }
 
+fn source_entry(
+    basis: SourceSpan,
+    requested: Option<Duration>,
+    visible_origin: Option<Duration>,
+) -> Option<(u128, NonZeroU128)> {
+    let Some(to) = requested.map(|to| visible_origin.map_or(to, |origin| origin.max(to))) else {
+        return basis.source_ratio_at(0);
+    };
+    if visible_origin == Some(to) && basis.position_at(0) == Some(to) {
+        return basis.source_ratio_at(0);
+    }
+    Some((
+        to.as_nanos()
+            .checked_mul(u128::from(basis.sample_rate().get()))?,
+        NonZeroU128::new(1_000_000_000)?,
+    ))
+}
+
 fn reanchor_source<S: HasPool<f32>>(
     warp: &mut WarpRenderer<S>,
     meta: AudioChunkInfo,
@@ -623,28 +619,20 @@ fn reanchor_source<S: HasPool<f32>>(
     if !basis.is_affine() {
         return Err(WarpRenderError::UnsupportedSourceGeometry);
     }
-    let numerator = to
-        .as_nanos()
-        .checked_mul(u128::from(basis.sample_rate().get()))
+    let entry = source_entry(basis, Some(to), visible_origin)
         .ok_or(WarpRenderError::InvalidSourceGeometry)?;
-    let denominator =
-        NonZeroU128::new(1_000_000_000).ok_or(WarpRenderError::InvalidSourceGeometry)?;
-    let position = if visible_origin == Some(to) && basis.position_at(0) == Some(to) {
-        (u128::from(meta.frame_offset), NonZeroU128::MIN)
-    } else {
-        basis
-            .output_ratio_at_source(meta.frame_offset, (numerator, denominator))
-            .ok_or_else(|| {
-                tracing::error!(
-                    ?meta,
-                    ?to,
-                    ?visible_origin,
-                    ?basis,
-                    "source entry cannot be projected to decoded PCM"
-                );
-                WarpRenderError::InvalidSourceGeometry
-            })?
-    };
+    let position = basis
+        .output_ratio_at_source(meta.frame_offset, entry)
+        .ok_or_else(|| {
+            tracing::error!(
+                ?meta,
+                ?to,
+                ?visible_origin,
+                ?basis,
+                "source entry cannot be projected to decoded PCM"
+            );
+            WarpRenderError::InvalidSourceGeometry
+        })?;
     if position.0 / position.1.get() < u128::from(meta.frame_offset) {
         tracing::error!(
             ?meta,

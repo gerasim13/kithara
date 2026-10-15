@@ -182,13 +182,11 @@ async fn run_with_decoder(
             "{} {provider:?}: deck {audible_deck} capture must contain six complete beats",
             case.id,
         );
-        request_failures.extend(harness.physical_failures(
-            case,
-            audible_deck,
-            &pcm,
-            &wrong_source,
-            None,
-        ));
+        request_failures.extend(
+            harness
+                .physical_failures(case, audible_deck, &pcm, &wrong_source, None)
+                .await,
+        );
         request_failures.extend(harness.grid_binding_failures(case).await);
         request_failures.extend(harness.grid_anchor_failures(case, None).await);
         tracks.push(pcm);

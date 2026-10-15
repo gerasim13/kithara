@@ -405,72 +405,127 @@ fn assert_host_rate_entry(
 
 async fn fractional_segment_entry() {
     let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("fractional entry rate"));
-    let first_frame = 769_202;
-    let target = Duration::from_nanos(16_025_056_689);
-    let samples = (0_u16..4_096)
-        .flat_map(|frame| [f32::from(frame), -f32::from(frame)])
-        .collect::<Vec<_>>();
-    let packet = chunk(spec, SegmentId::FIRST, 0, first_frame, &samples);
-    let native = packet.meta;
-    let source = ScriptedSource::new([TrackStep::Produced(Fetch::data(packet))]);
-    let (mut node, mut receiver, mut lane) = prepared_node_with_info(
-        source,
-        4,
-        1,
-        AudioChunkInfo {
-            spec,
-            ..AudioChunkInfo::default()
-        },
-    )
-    .await;
-    let positioned = SegmentId::FIRST.next();
-    let seq = lane
-        .send(
-            When::Next,
-            Batch {
-                basis: Vec::new(),
-                commands: vec![LaneCommand::Segment {
-                    id: positioned,
-                    from: target,
-                    speed: kithara_warp::SpeedCurve::Constant(1.0),
-                }],
-            },
-        )
-        .expect("fractional segment");
-    node.synchronize().expect("prefix seek admitted");
-    let Fetch::Data { data, source_end } = next_rendered(&mut node) else {
-        panic!("fractional physical output");
-    };
-    assert_eq!(data.samples[0], 0.721072_f32);
-    assert_eq!(data.samples[1], -0.721072_f32);
-    let span = data.meta.source_span.expect("exact raw entry span");
-    assert_eq!(span.position_at(0), Some(target));
-    assert_eq!(
-        span.source_ratio_at(0),
-        Some((
-            48_075_170_067,
-            std::num::NonZeroU128::new(62_500).expect("raw ratio")
-        )),
-    );
-    assert_eq!(data.meta.segment, positioned);
-    assert_eq!(data.meta.lane_frame, 0);
-    node.pending = Some(PendingPacket {
-        packet: PcmPacket::Chunk(Box::new(data)),
-        source_end,
-    });
-    assert_eq!(node.tick(), TickResult::Progress);
-    let receipt = lane
-        .receipts()
-        .next()
-        .expect("actual fractional entry ready");
-    assert_eq!(receipt.seq(), seq);
-    assert!(matches!(
-        receipt.outcome(),
-        Outcome::Applied { data, .. }
-            if data.ready == Some(positioned) && data.source_basis == Some(native)
-    ));
-    assert!(receiver.pop().is_some());
-    assert!(lane.receipts().next().is_none());
+    for (first_frame, target, visible_origin, expected_sample, expected_ratio, rejected_frame) in [
+        (
+            769_202,
+            Duration::from_nanos(16_025_056_689),
+            None,
+            0.721072_f32,
+            (48_075_170_067, 62_500),
+            769_202,
+        ),
+        (
+            1_104,
+            Duration::from_nanos(23_020_833),
+            Some(Duration::from_nanos(23_020_833)),
+            0.999984_f32,
+            (69_062_499, 62_500),
+            1_104,
+        ),
+        (
+            1_105,
+            Duration::from_nanos(23_020_833),
+            Some(Duration::from_nanos(23_020_833)),
+            0.0_f32,
+            (1_105, 1),
+            1_104,
+        ),
+    ] {
+        for source_rate in [48_000, 44_100] {
+            let samples = (0_u16..4_096)
+                .flat_map(|frame| [f32::from(frame), -f32::from(frame)])
+                .collect::<Vec<_>>();
+            let mut packet = chunk(spec, SegmentId::FIRST, 0, first_frame, &samples);
+            packet.meta.visible_origin = visible_origin;
+            let source_rate = NonZeroU32::new(source_rate).expect("decoded source rate");
+            packet.meta.source_span = Some(
+                SourceSpan::try_from((
+                    u128::from(first_frame) * u128::from(source_rate.get()),
+                    u128::from(source_rate.get()),
+                    std::num::NonZeroU128::from(spec.sample_rate),
+                    source_rate,
+                    u64::from(packet.meta.frames),
+                ))
+                .expect("exact decoded source geometry"),
+            );
+            let native = packet.meta;
+            let source = ScriptedSource::new([TrackStep::Produced(Fetch::data(packet))]);
+            let (mut node, mut receiver, mut lane) = prepared_node_with_info(
+                source,
+                4,
+                1,
+                AudioChunkInfo {
+                    spec,
+                    ..AudioChunkInfo::default()
+                },
+            )
+            .await;
+            let positioned = SegmentId::FIRST.next();
+            let seq = lane
+                .send(
+                    When::Next,
+                    Batch {
+                        basis: Vec::new(),
+                        commands: vec![LaneCommand::Segment {
+                            id: positioned,
+                            from: target,
+                            speed: kithara_warp::SpeedCurve::Constant(1.0),
+                        }],
+                    },
+                )
+                .expect("fractional segment");
+            node.synchronize().expect("prefix seek admitted");
+            let Fetch::Data { data, source_end } = next_rendered(&mut node) else {
+                panic!("fractional physical output");
+            };
+            assert_eq!(data.samples[0], expected_sample);
+            assert_eq!(data.samples[1], -expected_sample);
+            let span = data.meta.source_span.expect("exact raw entry span");
+            assert_eq!(span.position_at(0), Some(target));
+            assert_eq!(
+                span.source_ratio_at(0),
+                Some((
+                    expected_ratio.0,
+                    std::num::NonZeroU128::new(expected_ratio.1).expect("raw ratio")
+                )),
+            );
+            let mut retained_prefix = data.meta;
+            retained_prefix.source_span = SourceSpan::new(
+                rejected_frame,
+                rejected_frame + span.output_frames(),
+                spec.sample_rate,
+                span.output_frames(),
+            )
+            .map(|span| {
+                span.with_render_revision(data.meta.render_revision)
+                    .with_mapping_revision(data.meta.mapping_revision)
+            });
+            assert_eq!(
+                node.source.check_admission(&retained_prefix),
+                Err(TrackFailureKind::Render),
+                "retained prefix PCM cannot present the later requested entry"
+            );
+            assert_eq!(data.meta.segment, positioned);
+            assert_eq!(data.meta.lane_frame, 0);
+            node.pending = Some(PendingPacket {
+                packet: PcmPacket::Chunk(Box::new(data)),
+                source_end,
+            });
+            assert_eq!(node.tick(), TickResult::Progress);
+            let receipt = lane
+                .receipts()
+                .next()
+                .expect("actual fractional entry ready");
+            assert_eq!(receipt.seq(), seq);
+            assert!(matches!(
+                receipt.outcome(),
+                Outcome::Applied { data, .. }
+                    if data.ready == Some(positioned) && data.source_basis == Some(native)
+            ));
+            assert!(receiver.pop().is_some());
+            assert!(lane.receipts().next().is_none());
+        }
+    }
 }
 
 async fn post_trim_entry(

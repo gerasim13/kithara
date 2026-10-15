@@ -13,7 +13,12 @@ fn curve_source(
 ) -> kithara_render::WarpSource<kithara_render::mock::ScriptedSource, TestPools> {
     let pools = pools();
     let spec = AudioSpec::new(2, rate);
-    let chunks = [origin, origin + 600].map(|start| {
+    let resume = spec
+        .duration_for(origin + 600)
+        .expect("consumed source boundary");
+    let prefix = u64::try_from(spec.frames_for(resume).expect("native render prefix").get())
+        .expect("native prefix frame fits u64");
+    let chunks = [origin, prefix].map(|start| {
         kithara_audio::TrackStep::Produced(kithara_audio::Fetch::data(
             kithara_signal::AudioChunk::new(
                 AudioChunkInfo {

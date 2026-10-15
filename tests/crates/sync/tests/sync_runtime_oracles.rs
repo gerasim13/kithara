@@ -1,6 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU128, NonZeroUsize};
 
 use kithara::{
     platform::time::Duration,
@@ -27,7 +27,7 @@ const LATENCY_CALLBACK_FRAMES: usize = 128;
 struct CommandRun {
     command_index: usize,
     command_lead: usize,
-    source_anchor: Option<u128>,
+    source_anchor: Option<(u128, NonZeroU128)>,
     failures: Vec<String>,
     samples: Vec<f32>,
 }
@@ -80,7 +80,9 @@ async fn tempo_retarget_run(
             .await
     };
     if let Some(wrong) = wrong_source {
-        let failures = harness.physical_failures(case, 0, &samples, wrong, None);
+        let failures = harness
+            .physical_failures(case, 0, &samples, wrong, None)
+            .await;
         harness.failures.extend(failures);
     }
     let command_index = samples.len() / usize::from(CHANNELS);
@@ -107,7 +109,9 @@ async fn tempo_retarget_run(
         harness.failures.extend(failures);
     }
     if let Some(wrong) = wrong_source {
-        let failures = harness.physical_failures(case, 0, &after, wrong, None);
+        let failures = harness
+            .physical_failures(case, 0, &after, wrong, None)
+            .await;
         harness.failures.extend(failures);
         let failures = harness.grid_binding_failures(case).await;
         harness.failures.extend(failures);
@@ -154,7 +158,9 @@ async fn running_sync_run(
     let mut samples = harness
         .capture_source_frames(case, pre_frames, driver_frames)
         .await;
-    let failures = harness.physical_failures(case, 0, &samples, wrong_source, None);
+    let failures = harness
+        .physical_failures(case, 0, &samples, wrong_source, None)
+        .await;
     harness.failures.extend(failures);
     let command_index = samples.len() / usize::from(CHANNELS);
     let command_lead = record_command_lead(&harness, "SYNC", callback_frames);
@@ -169,7 +175,9 @@ async fn running_sync_run(
         .capture_source_frames(case, pre_frames * 2, driver_frames)
         .await;
     let jump = issue_sync.then_some((admitted, landing));
-    let failures = harness.physical_failures(case, 0, &after, wrong_source, jump);
+    let failures = harness
+        .physical_failures(case, 0, &after, wrong_source, jump)
+        .await;
     harness.failures.extend(failures);
     if issue_sync {
         let failures = harness
@@ -211,7 +219,7 @@ fn record_command_lead(harness: &ProductHarness, label: &str, block_frames: usiz
     block_frames + ring
 }
 
-fn capture_source_anchor(harness: &ProductHarness) -> u128 {
+fn capture_source_anchor(harness: &ProductHarness) -> (u128, NonZeroU128) {
     harness.decks[0].observe(|observation| {
         let (_, slot) = observation
             .consumed
@@ -230,12 +238,7 @@ fn capture_source_anchor(harness: &ProductHarness) -> u128 {
             .expect("exact source span")
             .source_ratio_at(offset)
             .expect("mapped capture anchor");
-        assert_eq!(
-            numerator % denominator.get(),
-            0,
-            "unity PCM anchor is integral"
-        );
-        numerator / denominator.get()
+        (numerator, denominator)
     })
 }
 
@@ -252,10 +255,36 @@ async fn wrong_source(prepared: &PreparedSources) -> Audio {
 fn align_source_runs(candidate: &CommandRun, control: &CommandRun) -> AlignedRun {
     let candidate_source = candidate.source_anchor.expect("candidate source anchor");
     let control_source = control.source_anchor.expect("control source anchor");
-    let candidate_start = usize::try_from(control_source.saturating_sub(candidate_source))
-        .expect("candidate source offset");
-    let control_start = usize::try_from(candidate_source.saturating_sub(control_source))
-        .expect("control source offset");
+    let denominator = candidate_source
+        .1
+        .get()
+        .checked_mul(control_source.1.get())
+        .expect("alignment source denominator");
+    let candidate_position = candidate_source
+        .0
+        .checked_mul(control_source.1.get())
+        .expect("candidate source numerator");
+    let control_position = control_source
+        .0
+        .checked_mul(candidate_source.1.get())
+        .expect("control source numerator");
+    let difference = candidate_position.abs_diff(control_position);
+    assert_eq!(
+        difference % denominator,
+        0,
+        "candidate and control must share the same fractional PCM phase",
+    );
+    let distance = usize::try_from(difference / denominator).expect("source alignment offset");
+    let candidate_start = if candidate_position < control_position {
+        distance
+    } else {
+        0
+    };
+    let control_start = if candidate_position > control_position {
+        distance
+    } else {
+        0
+    };
     assert!(candidate_start < candidate.command_index && control_start < control.command_index);
     aligned_slices(candidate, control, candidate_start, control_start)
 }

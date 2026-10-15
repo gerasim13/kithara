@@ -7,6 +7,7 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
     play::{PlayWorker, PlayWorkerConfig},
+    signal::SourceSpan,
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
@@ -25,7 +26,10 @@ use tracing::info;
 
 use crate::{
     common::test_defaults::SawWav,
-    saw_chunk::{channel_mismatches, first_invalid_sample, phase_steps},
+    saw_chunk::{
+        channel_mismatches, check_fractional_saw, check_fractional_saw_controls,
+        first_invalid_sample,
+    },
 };
 
 mod consts {
@@ -334,102 +338,63 @@ type HlsAudio = LaneAudio<Stream<Hls<TestPools>>, TestPools>;
 /// Per-read checks of the random seek loop, and what they found.
 struct SeekCheck {
     channels: usize,
-    sample_rate: u32,
-    segment_count: usize,
     successful_reads: u64,
     total_samples_read: u64,
     channel_mismatches: u64,
-    continuity_errors: u64,
-    position_errors: u64,
-    position_error_details: Vec<String>,
+    content_errors: u64,
+    first_content_error: Option<String>,
 }
 
 impl SeekCheck {
-    const fn new(channels: usize, sample_rate: u32, segment_count: usize) -> Self {
+    const fn new(channels: usize) -> Self {
         Self {
             channels,
-            sample_rate,
-            segment_count,
             successful_reads: 0,
             total_samples_read: 0,
             channel_mismatches: 0,
-            continuity_errors: 0,
-            position_errors: 0,
-            position_error_details: Vec::new(),
+            content_errors: 0,
+            first_content_error: None,
         }
     }
 
-    /// Check the chunk read right after seeking to `pos_secs`: valid samples,
-    /// channels that agree, an ascending saw, and a first frame where the
-    /// seek asked for.
-    fn record(&mut self, iteration: usize, pos_secs: f64, chunk: &[f32]) {
+    /// Check the returned PCM and its exact source law against the requested seek.
+    fn record(
+        &mut self,
+        iteration: usize,
+        requested: Duration,
+        chunk: &[f32],
+        source_span: SourceSpan,
+    ) {
         if let Some((j, sample)) = first_invalid_sample(chunk) {
-            panic!("invalid sample at seek #{iteration} offset {j}: {sample} (pos {pos_secs:.4}s)");
+            panic!(
+                "invalid sample at seek #{iteration} offset {j}: {sample} (requested {requested:?})"
+            );
         }
 
         if self.channels == 2 {
             for (frame, l, r) in channel_mismatches(chunk) {
                 self.channel_mismatches += 1;
                 if self.channel_mismatches <= 3 {
-                    info!(iteration, frame, l, r, pos_secs, "Channel mismatch");
+                    info!(iteration, frame, l, r, ?requested, "Channel mismatch");
                 }
             }
         }
 
-        for (frame, prev_phase, curr_phase) in phase_steps(chunk, self.channels) {
-            if signal::phase::delta(prev_phase, curr_phase) != 1 {
-                self.continuity_errors += 1;
-                if self.continuity_errors <= 3 {
-                    info!(
-                        iteration,
-                        frame, prev_phase, curr_phase, pos_secs, "Continuity break"
-                    );
-                }
-            }
+        if let Err(error) = check_fractional_saw(
+            chunk,
+            self.channels,
+            source_span,
+            signal::Wave::Sawtooth,
+            Some(requested),
+        ) {
+            self.content_errors += 1;
+            self.first_content_error.get_or_insert_with(|| {
+                format!("seek {iteration}, requested={requested:?}, span={source_span:?}: {error}")
+            });
         }
-
-        self.check_landing(iteration, pos_secs, chunk[0]);
 
         self.successful_reads += 1;
         self.total_samples_read += chunk.len() as u64;
-    }
-
-    /// Count a seek whose first frame sits more than 1200 frames of saw away
-    /// from the frame `pos_secs` names.
-    fn check_landing(&mut self, iteration: usize, pos_secs: f64, first_sample: f32) {
-        let expected_frame_idx =
-            num_traits::cast::<f64, usize>((pos_secs * f64::from(self.sample_rate)).round())
-                .unwrap_or(usize::MAX);
-        let expected_phase = expected_frame_idx % signal::SAW_PERIOD;
-        let actual_phase = signal::phase::units(first_sample);
-        let dist = signal::phase::distance(actual_phase, expected_phase);
-        if dist <= 1200 {
-            return;
-        }
-
-        self.position_errors += 1;
-        if self.position_error_details.len() < 10 {
-            let bytes_per_frame = usize::from(consts::D.channels) * 2;
-            let requested_byte = 44 + expected_frame_idx * bytes_per_frame;
-            let segment_index =
-                (requested_byte / consts::D.segment_size).min(self.segment_count - 1);
-            self.position_error_details.push(format!(
-                "#{iteration}: requested={pos_secs:.6}s expected_frame={expected_frame_idx} \
-                 expected_phase={expected_phase} actual_phase={actual_phase} \
-                 delta={dist} segment={segment_index}"
-            ));
-        }
-        if self.position_errors <= 3 {
-            info!(
-                iteration,
-                pos_secs,
-                expected_frame_idx,
-                expected_phase,
-                actual_phase,
-                dist,
-                "Position mismatch"
-            );
-        }
     }
 
     fn log(&self, message: &str) {
@@ -437,44 +402,22 @@ impl SeekCheck {
             successful_reads = self.successful_reads,
             total_samples_read = self.total_samples_read,
             channel_mismatches = self.channel_mismatches,
-            continuity_errors = self.continuity_errors,
-            position_errors = self.position_errors,
+            content_errors = self.content_errors,
             "{message}"
         );
     }
 
-    /// Every seek read back, with channels that never diverge and only a few
-    /// breaks or misplaced landings.
-    fn assert_within_tolerance(&self) {
+    fn assert_valid(&self) {
         assert_eq!(self.successful_reads, consts::SEEK_ITERATIONS as u64);
         assert_eq!(
             self.channel_mismatches, 0,
             "L/R channel data diverged {} times - data corruption",
             self.channel_mismatches
         );
-        if self.continuity_errors > 0 {
-            tracing::warn!(
-                continuity_errors = self.continuity_errors,
-                "continuity breaks detected (within tolerance of 5)"
-            );
-        }
-        assert!(
-            self.continuity_errors <= 5,
-            "{} continuity breaks (>5 tolerance) - decoder returned non-contiguous data",
-            self.continuity_errors
-        );
-        if self.position_errors > 0 {
-            tracing::warn!(
-                position_errors = self.position_errors,
-                "position mismatches detected (within tolerance of 3)"
-            );
-        }
-        assert!(
-            self.position_errors <= 3,
-            "{} position mismatches (>3 tolerance) - seek landed in wrong place. \
-             First mismatches (capped at 10):\n{}",
-            self.position_errors,
-            self.position_error_details.join("\n")
+        assert_eq!(
+            self.content_errors, 0,
+            "fractional saw content or geometry differs: {:?}",
+            self.first_content_error
         );
     }
 }
@@ -489,6 +432,7 @@ fn random_seek_reads(
     check: &mut SeekCheck,
     max_seek_secs: f64,
 ) -> ChurnSnapshot {
+    check_fractional_saw_controls();
     let mut rng = Xorshift64::new(0xDEAD_BEEF_CAFE_1337);
     let seek_positions: Vec<f64> = (0..consts::SEEK_ITERATIONS)
         .map(|_| rng.range_f64(0.001, max_seek_secs))
@@ -502,14 +446,20 @@ fn random_seek_reads(
     let mut warmup_churn = None;
     for (i, &pos_secs) in seek_positions.iter().enumerate() {
         hang_tick!();
+        let requested = Duration::from_secs_f64(pos_secs);
         audio
-            .seek(Duration::from_secs_f64(pos_secs))
+            .seek(requested)
             .unwrap_or_else(|e| panic!("seek #{i} to {pos_secs:.4}s failed: {e}"));
 
-        let n = match audio.read(buf) {
-            Ok(ReadOutcome::Frames { count, .. }) => {
+        let (n, source_span) = match audio.read(buf) {
+            Ok(ReadOutcome::Frames {
+                count, source_span, ..
+            }) => {
                 hang_reset!();
-                count.get()
+                (
+                    count.get(),
+                    source_span.expect("post-seek read has an exact source span"),
+                )
             }
             Ok(ReadOutcome::Pending { .. }) => {
                 panic!("read returned 0 after seek #{i} to {pos_secs:.4}s");
@@ -519,7 +469,7 @@ fn random_seek_reads(
             }
             Err(e) => panic!("read error after seek #{i}: {e}"),
         };
-        check.record(i, pos_secs, &buf[..n]);
+        check.record(i, requested, &buf[..n], source_span);
         hang_reset!();
 
         if i + 1 == WARMUP_K {
@@ -534,7 +484,7 @@ fn random_seek_reads(
         "All {} seek+read iterations done",
         consts::SEEK_ITERATIONS
     ));
-    check.assert_within_tolerance();
+    check.assert_valid();
 
     warmup_churn.expect("warmup churn snapshot captured (WARMUP_K < SEEK_ITERATIONS)")
 }
@@ -812,11 +762,7 @@ async fn stress_seek_audio_hls(
         let max_seek_secs = total_secs - chunk_duration_secs;
         assert!(max_seek_secs > 0.0, "stream too short for chunk size");
 
-        let mut check = SeekCheck::new(
-            usize::from(spec.channels),
-            spec.sample_rate.get(),
-            segment_count,
-        );
+        let mut check = SeekCheck::new(usize::from(spec.channels));
         let warmup_churn = random_seek_reads(&mut audio, &mut buf, &mut check, max_seek_secs);
         drain_tail_to_eof(&mut audio, &mut buf, max_seek_secs);
         resume_after_eof(&mut audio, &mut buf, total_secs);

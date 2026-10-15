@@ -339,7 +339,7 @@ fn scan_rendered_pcm(
     let chan = sine.channels as usize;
     let total_frames = (pcm.len() / chan) as u64;
     let want = READ_FRAMES_AFTER_SEEK;
-    let mut anchor: Option<(u64, f64)> = None;
+    let mut anchor: Option<(f64, f64)> = None;
     let mut drifts: Vec<PhaseDrift> = Vec::new();
     let mut at: u64 = 0;
     while at + want as u64 <= total_frames {
@@ -347,7 +347,8 @@ fn scan_rendered_pcm(
         let end = start + want * chan;
         if let Some(drift) = check_against_previous(
             &mut anchor,
-            at,
+            f64::from(u32::try_from(at).expect("render scan frame fits u32"))
+                / f64::from(sine.sample_rate),
             &pcm[start..end],
             chan,
             sine,

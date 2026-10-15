@@ -1140,14 +1140,25 @@ mod tests {
             VariantIndex::new(0),
             VariantIndex::new(1),
         );
-        let mut decode = active_decode(&pools, generation(spec), GaplessMode::MediaOnly);
+        let mut outgoing = generation(spec);
+        outgoing.retain_visible_origin(Some(Duration::ZERO), None);
+        let mut decode = active_decode(&pools, outgoing, GaplessMode::MediaOnly);
         let initial = decode.discontinuity().revision();
+        let mut incoming = generation(spec);
+        incoming.retain_visible_origin(None, None);
+        assert_eq!(decode.active().visible_origin(), Some(Duration::ZERO));
+        assert_eq!(incoming.visible_origin(), None);
+        assert_eq!(
+            decode.active().comparison_origin(GaplessMode::MediaOnly),
+            incoming.comparison_origin(GaplessMode::MediaOnly),
+        );
         drop(decode.commit_prepared_promotion(PreparedPromotion {
-            generation: generation(spec),
+            generation: incoming,
             transition,
             join: PromotionJoin::HardCut,
             resume_head: crate::SourceEnd::new(0, spec.sample_rate),
         }));
+        assert_eq!(decode.active().visible_origin(), None);
         assert_eq!(decode.discontinuity().revision(), initial);
 
         let mut incoming = generation(spec);

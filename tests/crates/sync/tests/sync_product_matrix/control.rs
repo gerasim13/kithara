@@ -214,35 +214,33 @@ impl ControlCapture {
         if consumption_start < landed {
             return Err("control PCM consumption precedes its actual Adopt receipt".to_owned());
         }
-        let rate = scalar_ratio(self.rate)?;
+        let scalar = scalar_ratio(self.rate)?;
+        let rate = (
+            scalar
+                .0
+                .checked_mul(1_000_000_000)
+                .ok_or("control scalar numerator overflows")?,
+            scalar
+                .1
+                .checked_mul(1_000_000_000)
+                .ok_or("control scalar denominator overflows")?,
+        );
         let source = self
             .requested
             .checked_add(media_origin)
             .ok_or_else(|| "control requested raw cue overflows".to_owned())?
             .as_nanos()
             .checked_mul(u128::from(spec.sample_rate.get()))
-            .and_then(|value| value.checked_add(500_000_000))
-            .map(|value| value / 1_000_000_000)
-            .ok_or_else(|| "control requested source frame overflows".to_owned())?;
+            .and_then(|value| value.checked_mul(scalar.1))
+            .ok_or_else(|| "control requested source numerator overflows".to_owned())?;
         let origin = source
-            .checked_mul(rate.1)
-            .and_then(|value| value.checked_add(u128::from(first_mark.lane.frame) * rate.0))
+            .checked_add(
+                u128::from(first_mark.lane.frame)
+                    .checked_mul(rate.0)
+                    .ok_or("control lane source advance overflows")?,
+            )
             .ok_or_else(|| "control source origin overflows".to_owned())?;
-        for pair in points.windows(2) {
-            if !(1..=CONTROL_CAPTURE_FRAMES).contains(&pair[1].rendered_frames)
-                || pair[0].frame.checked_add(pair[1].rendered_frames) != Some(pair[1].frame)
-            {
-                return Err(
-                    "control capture clock ledger omits or reorders a render block".to_owned(),
-                );
-            }
-        }
-        if points
-            .last()
-            .is_none_or(|point| point.frame < self.pcm.len() / usize::from(CHANNELS))
-        {
-            return Err("control consumed clock ledger does not cover retained PCM".to_owned());
-        }
+        self.check_capture_clock(points)?;
         for point in points {
             if point.deck.sample_rate != spec.sample_rate.get()
                 || point.session != first.session + point.frame as u64
@@ -337,6 +335,25 @@ impl ControlCapture {
         Ok((origin, rate))
     }
 
+    fn check_capture_clock(&self, points: &[ControlPoint]) -> Result<(), String> {
+        for pair in points.windows(2) {
+            if !(1..=CONTROL_CAPTURE_FRAMES).contains(&pair[1].rendered_frames)
+                || pair[0].frame.checked_add(pair[1].rendered_frames) != Some(pair[1].frame)
+            {
+                return Err(
+                    "control capture clock ledger omits or reorders a render block".to_owned(),
+                );
+            }
+        }
+        if points
+            .last()
+            .is_none_or(|point| point.frame < self.pcm.len() / usize::from(CHANNELS))
+        {
+            return Err("control consumed clock ledger does not cover retained PCM".to_owned());
+        }
+        Ok(())
+    }
+
     fn check_packet_law(
         &self,
         info: kithara::signal::AudioChunkInfo,
@@ -352,8 +369,11 @@ impl ControlCapture {
                 .checked_add(u128::from(output))
                 .ok_or_else(|| "control packet lane coordinate overflows".to_owned())?;
             let expected = source
-                .checked_mul(rate.1)
-                .and_then(|origin| origin.checked_add(lane_frame.checked_mul(rate.0)?))
+                .checked_add(
+                    lane_frame
+                        .checked_mul(rate.0)
+                        .ok_or("control packet source advance overflows")?,
+                )
                 .ok_or_else(|| "control requested constant-law coordinate overflows".to_owned())?;
             let actual_cross = actual
                 .checked_mul(rate.1)
@@ -892,7 +912,7 @@ pub(super) async fn capture(
 
 type DecodedChunk = (kithara::signal::AudioChunkInfo, Vec<f32>);
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct DecodedCapture {
     chunks: std::collections::BTreeMap<(u64, u64), DecodedChunk>,
     samples: usize,
@@ -1007,7 +1027,7 @@ impl DecodedCapture {
             .collect()
     }
 
-    fn physical_basis(
+    pub(super) fn physical_basis(
         &self,
         info: kithara::signal::AudioChunkInfo,
         position: (u128, std::num::NonZeroU128),
@@ -1092,8 +1112,11 @@ impl DecodedCapture {
                     .source_span
                     .and_then(|span| span.source_ratio_at(0))
                     .ok_or_else(|| "physical source interval has no raw origin".to_owned())?;
-                self.physical_basis(info, position)
-                    .map(|basis| (start, basis))
+                let (origin, basis) = self.physical_basis(info, position)?;
+                let first = basis
+                    .output_ratio_at_source(origin, position)
+                    .ok_or_else(|| "wrong-tempo negative has no physical origin".to_owned())?;
+                Ok((start, (origin, basis, first)))
             })
             .collect::<Result<std::collections::BTreeMap<_, _>, String>>()?;
         let mut expected = Vec::with_capacity(pcm.len());
@@ -1127,7 +1150,7 @@ impl DecodedCapture {
                 .ok_or_else(|| "physical capture has an unmapped source endpoint".to_owned())?;
             let raw_position = (numerator, denominator);
             let raw_next = (next, next_denominator);
-            let &(origin, basis) = physical_bases
+            let &(origin, basis, first) = physical_bases
                 .get(&start)
                 .ok_or_else(|| "physical source interval lost its decoded basis".to_owned())?;
             let (numerator, denominator) = basis
@@ -1170,10 +1193,6 @@ impl DecodedCapture {
                     })? * gain
                         * CONTROL_GAIN,
                 );
-                let first = span
-                    .source_ratio_at(0)
-                    .and_then(|position| basis.output_ratio_at_source(origin, position))
-                    .ok_or_else(|| "wrong-tempo negative has no physical origin".to_owned())?;
                 let wrong_denominator = denominator
                     .get()
                     .checked_mul(first.1.get())

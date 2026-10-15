@@ -341,28 +341,38 @@ async fn local_track_plays_end_to_end(
     // from before the seek landed.
     let _ = drain_latest_position(&mut rx);
 
-    // Sample the latest progress and cursor together on the render owner.
-    // Receiving an event alone does not keep it fresh while this task waits
-    // to be scheduled again.
-    let start_pos = next_progress_position(&mut rx, Duration::from_secs(10))
+    // Audio progress reports source admission; playback position comes from
+    // the queue's confirmed render snapshot, sampled with the render cursor.
+    next_progress_position(&mut rx, Duration::from_secs(10))
         .await
         .unwrap_or_else(|e| panic!("window start anchor [{label}]: {e}"));
     // Advance while the observer is delayed, as a contended runtime can do
     // between receiving an event and reading the render cursor.
     let observer_delay_frames = u64::from(queue.host().spec().await.sample_rate.get()) / 4;
     queue.host().render_forward(observer_delay_frames).await;
+    let control = queue.control();
     let ((start_pos, mut rx), cursor_start) = queue
         .host()
-        .observe(move || (drain_latest_position(&mut rx).unwrap_or(start_pos), rx))
+        .observe(move || {
+            let _ = drain_latest_position(&mut rx);
+            (
+                control.position_seconds().expect("playing track position"),
+                rx,
+            )
+        })
         .await;
     time::sleep(Duration::from_secs(2)).await;
     let _ = drain_latest_position(&mut rx);
-    let end_pos = next_progress_position(&mut rx, Duration::from_secs(10))
+    next_progress_position(&mut rx, Duration::from_secs(10))
         .await
         .unwrap_or_else(|e| panic!("window end anchor [{label}]: {e}"));
+    let control = queue.control();
     let (end_pos, cursor_end) = queue
         .host()
-        .observe(move || drain_latest_position(&mut rx).unwrap_or(end_pos))
+        .observe(move || {
+            let _ = drain_latest_position(&mut rx);
+            control.position_seconds().expect("playing track position")
+        })
         .await;
     assert_playhead_tracks_renderer(
         end_pos - start_pos,

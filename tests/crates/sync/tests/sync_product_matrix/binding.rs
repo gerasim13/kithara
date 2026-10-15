@@ -1592,6 +1592,7 @@ pub(super) fn commanded_span_failures(
     at: SessionFrame,
     marks: &[(SessionFrame, SlotSnapshot)],
     jump: Option<(Duration, SessionFrame)>,
+    decoded: &super::control::DecodedCapture,
 ) -> Result<Vec<String>, String> {
     let (_, first) = marks
         .first()
@@ -1608,6 +1609,20 @@ pub(super) fn commanded_span_failures(
         .filter(|span| span.sample_rate() == rate)
         .and_then(|span| span.source_ratio_at(mark.lane.frame.checked_sub(info.lane_frame)?))
         .ok_or_else(|| "command law has no exact initial source coordinate".to_owned())?;
+    let (input_origin, input) = decoded.physical_basis(info, initial)?;
+    let initial = input
+        .output_ratio_at_source(input_origin, initial)
+        .ok_or_else(|| "command law cannot invert its decoder input clock".to_owned())?;
+    let native_input = input
+        .scaled_from(
+            (0, NonZeroU128::MIN),
+            (0, NonZeroU128::MIN),
+            (
+                u128::from(input.sample_rate().get()),
+                NonZeroU128::from(rate),
+            ),
+        )
+        .ok_or_else(|| "command law cannot restore its decoder source units".to_owned())?;
     if command.before.speed != 1.0 {
         return Err("latency fixture must issue from settled unity PCM".to_owned());
     }
@@ -1645,6 +1660,9 @@ pub(super) fn commanded_span_failures(
             numerator,
             NonZeroU128::new(1_000_000_000).expect("nanosecond source clock"),
         );
+        let position = input
+            .output_ratio_at_source(input_origin, position)
+            .ok_or_else(|| "jump law cannot invert its decoder input clock".to_owned())?;
         events.push((landing, law, Some(position)));
     }
     events.sort_by_key(|(frame, _, _)| *frame);
@@ -1656,6 +1674,19 @@ pub(super) fn commanded_span_failures(
         }
         if let Some(reset) = reset {
             position = reset;
+        }
+        if start == at {
+            let scale = 1u128 << 32;
+            let scaled = position
+                .0
+                .checked_mul(scale)
+                .ok_or_else(|| "command physical phase overflows Q32".to_owned())?;
+            let denominator = position.1.get();
+            let remainder = scaled % denominator;
+            position = (
+                scaled / denominator + u128::from(remainder >= denominator - remainder),
+                NonZeroU128::new(scale).expect("Q32 source phase"),
+            );
         }
         let stop = events
             .get(index + 1)
@@ -1672,8 +1703,20 @@ pub(super) fn commanded_span_failures(
         position = span
             .source_ratio_at(frames)
             .ok_or_else(|| "declared command law has no source endpoint".to_owned())?;
+        let span = native_input
+            .map_output_span(input_origin, span)
+            .ok_or_else(|| "command law cannot publish its decoder source clock".to_owned())?;
         expected.push((start, span));
     }
+    check_commanded_spans(marks, issued, end, &expected)
+}
+
+fn check_commanded_spans(
+    marks: &[(SessionFrame, SlotSnapshot)],
+    issued: SessionFrame,
+    end: SessionFrame,
+    expected: &[(SessionFrame, kithara::signal::SourceSpan)],
+) -> Result<Vec<String>, String> {
     let mut checked = std::collections::BTreeSet::new();
     for (_, slot) in marks {
         let mark = slot

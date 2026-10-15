@@ -21,7 +21,7 @@ use kithara_integration_tests::{
         GaplessEncoding, PackagedAudioRequest, PackagedAudioSource, PackagedAudioVariantOverride,
         PackagedSignal,
     },
-    offline::OfflinePlayer,
+    offline::{OfflinePlayer, OfflinePlayerOptions},
 };
 use kithara_test_utils::TestTempDir;
 use num_traits::ToPrimitive;
@@ -363,12 +363,14 @@ async fn prepare_player(
             .build(),
     )
     .initial_abr_mode(AbrMode::manual(initial_variant))
-    .block_on_underrun(matches!(consumer, Consumer::Reference))
     .events(bus)
     .build();
     // WHY: The fixture sine peaks at full scale, so its inter-sample reconstruction
     // can exceed a unity ceiling. Keep it below the limiter while measuring playback.
-    let mut player = OfflinePlayer::new(
+    let mut player = OfflinePlayer::with_options(
+        OfflinePlayerOptions::builder()
+            .block_on_underrun(matches!(consumer, Consumer::Reference))
+            .build(),
         HostConfig::offline(pools())
             .settings(
                 HostSettings::builder()
@@ -651,6 +653,7 @@ pub(super) async fn render_no_switch_control(
         .abr
         .set_mode(AbrMode::manual(initial_variant))
         .unwrap_or_else(|error| panic!("request inert {label} control: {error}"));
+    let underruns = prepared.player.metrics().underruns();
     let observation_frames = observation_frames();
     let mut samples = Vec::with_capacity(observation_frames * usize::from(CHANNELS));
     let mut decoder_events = Vec::new();
@@ -686,6 +689,11 @@ pub(super) async fn render_no_switch_control(
     assert!(
         decoder_events.is_empty(),
         "{label} no-switch control must not recreate its decoder after Initial: {decoder_events:?}",
+    );
+    assert_eq!(
+        prepared.player.metrics().underruns(),
+        underruns,
+        "{label} reference capture must wait for decoded PCM instead of zero-filling",
     );
     let result = ControlRender {
         samples,

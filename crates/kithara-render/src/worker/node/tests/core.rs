@@ -384,6 +384,11 @@ async fn source_end_commits_only_after_final_port_admission() {
     assert!(receiver.pop().is_some());
     assert_eq!(node.tick(), TickResult::Progress);
     assert_eq!(commits.lock().as_slice(), &[end]);
+    assert_eq!(
+        receiver.position(),
+        Duration::ZERO,
+        "admitting a source endpoint does not consume its PCM"
+    );
 }
 
 #[kithara::test(tokio)]

@@ -846,7 +846,7 @@ impl ProductHarness {
         }
     }
 
-    pub(crate) fn physical_failures(
+    pub(crate) async fn physical_failures(
         &mut self,
         case: SyncCase,
         deck: usize,
@@ -877,14 +877,22 @@ impl ProductHarness {
             .iter()
             .filter_map(|(frame, owner, slot)| (*owner == item).then_some((*frame, *slot)))
             .collect();
-        let failures = self.decoded[deck].lock().physical_failures(
-            pcm,
-            &marks,
-            case.sample_rate,
-            &grid,
-            wrong_source,
-            jump,
-        );
+        let decoded = self.decoded[deck].lock().clone();
+        #[cfg(not(target_os = "android"))]
+        let frames = pcm.len() / usize::from(CHANNELS);
+        #[cfg(not(target_os = "android"))]
+        let ledger_points = marks.len();
+        let pcm = pcm.to_vec();
+        let wrong_source = kithara_integration_tests::pcm_oracle::Audio {
+            samples: wrong_source.samples.clone(),
+            channels: wrong_source.channels,
+            sample_rate: wrong_source.sample_rate,
+        };
+        let failures = kithara::platform::tokio::task::spawn_blocking(move || {
+            decoded.physical_failures(&pcm, &marks, case.sample_rate, &grid, &wrong_source, jump)
+        })
+        .await
+        .expect("physical PCM reference analysis must join");
         #[cfg(not(target_os = "android"))]
         self.master_tap.evidence(
             "physical_capture",
@@ -892,7 +900,7 @@ impl ProductHarness {
                 "boundary": "postdecoder/SRC PCM through actual Warp SourceSpan to Master",
                 "source": self.source_uris[deck], "item": u64::from(item),
                 "mix_gain": super::control::CONTROL_GAIN,
-                "frames": pcm.len() / usize::from(CHANNELS), "ledger_points": marks.len(),
+                "frames": frames, "ledger_points": ledger_points,
                 "failures": failures,
             }),
         );
@@ -1013,24 +1021,94 @@ impl ProductHarness {
                     Err(error) => failures.push(error),
                 }
             }
-            let marks: Vec<_> = self
-                .capture_marks
-                .iter()
-                .filter_map(|(frame, item, slot)| (*item == speed.item).then_some((*frame, *slot)))
-                .collect();
-            match super::binding::commanded_span_failures(
-                speed,
-                issued,
-                expected,
-                &marks,
-                selected_jump,
-            ) {
-                Ok(errors) => failures.extend(errors),
-                Err(error) => failures.push(error),
-            }
+            self.check_command_law(speed, issued, expected, selected_jump, &mut failures);
             self.check_command_consumption(speed, first.as_ref(), issued, expected, &mut failures);
         });
         failures
+    }
+
+    fn check_command_law(
+        &self,
+        speed: &LinkSpeed,
+        issued: SessionFrame,
+        expected: SessionFrame,
+        selected_jump: Option<(Duration, SessionFrame)>,
+        failures: &mut Vec<String>,
+    ) {
+        let marks: Vec<_> = self
+            .capture_marks
+            .iter()
+            .filter_map(|(frame, item, slot)| (*item == speed.item).then_some((*frame, *slot)))
+            .collect();
+        let decoded = self.decoded[0].lock();
+        match super::binding::commanded_span_failures(
+            speed,
+            issued,
+            expected,
+            &marks,
+            selected_jump,
+            &decoded,
+        ) {
+            Ok(errors) if errors.is_empty() => {
+                let late = super::binding::commanded_span_failures(
+                    speed,
+                    issued,
+                    expected + kithara::signal::FrameCount::new(1),
+                    &marks,
+                    selected_jump.map(|(media, landing)| {
+                        (media, landing + kithara::signal::FrameCount::new(1))
+                    }),
+                    &decoded,
+                );
+                if !matches!(late, Ok(ref errors) if !errors.is_empty()) {
+                    failures.push(format!(
+                        "command source-law late-frame negative did not reject the PCM: {late:?}"
+                    ));
+                }
+                let shifted = marks
+                    .iter()
+                    .map(|&(frame, mut slot)| {
+                        if let Some(mut info) = slot.source
+                            && info.render_revision == speed.seq.get()
+                        {
+                            info.source_span = Some(
+                                info.source_span
+                                    .and_then(|span| {
+                                        span.scaled_from(
+                                            (0, std::num::NonZeroU128::MIN),
+                                            (1, std::num::NonZeroU128::MIN),
+                                            (1, std::num::NonZeroU128::MIN),
+                                        )
+                                    })
+                                    .ok_or_else(|| {
+                                        "command source-law negative has no shifted span".to_owned()
+                                    })?,
+                            );
+                            slot.source = Some(info);
+                        }
+                        Ok((frame, slot))
+                    })
+                    .collect::<Result<Vec<_>, String>>()
+                    .and_then(|shifted| {
+                        super::binding::commanded_span_failures(
+                            speed,
+                            issued,
+                            expected,
+                            &shifted,
+                            selected_jump,
+                            &decoded,
+                        )
+                    });
+                drop(decoded);
+                if !matches!(shifted, Ok(ref errors) if !errors.is_empty()) {
+                    failures.push(format!(
+                        "command source-law offset negative did not reject the PCM: {shifted:?}"
+                    ));
+                }
+            }
+            Ok(errors) => failures.extend(errors),
+            Err(error) => failures.push(error),
+        }
     }
 
     fn check_command_consumption(
