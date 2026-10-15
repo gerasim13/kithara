@@ -41,6 +41,7 @@ syn = { workspace = true, features = ["full", "extra-traits", "visit"] }
 toml = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
+which = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

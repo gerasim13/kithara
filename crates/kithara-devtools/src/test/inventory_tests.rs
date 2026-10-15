@@ -47,9 +47,9 @@ fn fixture(
         "[profile.default]\nretries = 0\n",
     )
     .expect("write nextest configuration");
-    let cargo = root.join("cargo");
+    let nextest = root.join("cargo-nextest");
     fs::write(
-        &cargo,
+        &nextest,
         r#"#!/bin/sh
 printf '%s\n' "$2" >> "$TEST_CHILDREN"
 case "$2" in
@@ -70,8 +70,8 @@ case "$2" in
 esac
 "#,
     )
-    .expect("write cargo fixture");
-    fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).expect("executable fixture");
+    .expect("write nextest fixture");
+    fs::set_permissions(&nextest, fs::Permissions::from_mode(0o755)).expect("executable fixture");
     let mut test = synthetic_project().test;
     test.nextest_config = "nextest.toml".to_owned();
     let lane = test.lanes.get_mut("workspace").expect("workspace lane");

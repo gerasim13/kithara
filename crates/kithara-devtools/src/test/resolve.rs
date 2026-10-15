@@ -65,10 +65,11 @@ impl ResolvedLane {
             TestRunner::Nextest(_) => "cargo-nextest",
             TestRunner::Cargo(_) => "cargo",
         });
-        if matches!(&self.runner, TestRunner::Nextest(_)) {
+        if matches!(&self.runner, TestRunner::Nextest(_)) && !self.env.contains_key("CARGO") {
             command.env(
                 "CARGO",
-                MetadataCommand::new().cargo_command().get_program(),
+                which::which(MetadataCommand::new().cargo_command().get_program())
+                    .context("resolve Cargo for the nextest lane")?,
             );
         }
         command.envs(&self.env);
