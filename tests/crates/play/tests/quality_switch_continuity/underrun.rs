@@ -3,6 +3,7 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioSession},
     hls::{Hls, HlsConfig},
+    platform::tokio::join,
     play::{PlayWorker, PlayWorkerConfig},
 };
 use kithara_integration_tests::{
@@ -16,9 +17,10 @@ const OUTPUT_RING_CHUNKS: usize = 1;
 const TARGET_SEGMENT_DELAY_MS: u64 = 250;
 const SLOW_TARGET_SEGMENT_DELAY_MS: u64 = 600;
 const COLD_TARGET_SEGMENT_DELAY_MS: u64 = 300;
-const OBSERVATION_FRAMES: usize = SAMPLE_RATE as usize * 3;
-const CAPTURE_FRAME: usize = SAMPLE_RATE as usize * 2;
-const TARGET_SWITCH_SEGMENT: usize = 3;
+const OBSERVATION_FRAMES: usize = SAMPLE_RATE as usize * 2;
+const CAPTURE_FRAME: usize = SAMPLE_RATE as usize;
+/// The target segment the switch at [`CAPTURE_FRAME`] lands on.
+const TARGET_SWITCH_SEGMENT: usize = 1;
 const MAX_EXTRA_SILENT_FRAMES: usize = 2;
 
 const AAC_TO_FLAC: Transition = Transition::new("aac-to-flac", AAC_HIGH, FLAC);
@@ -106,11 +108,12 @@ async fn prepare_tiny_ring_player(
     .await;
     player.load_and_fadein(resource_from_reader(audio)).await;
 
+    let mut pacer = Pacer::default();
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut active_blocks = 0usize;
     let mut decoder_events = drain_decoder_events(&mut events, 0);
     loop {
-        let block = render_paced(&mut player, BLOCK_FRAMES).await;
+        let block = render_paced(&mut player, &mut pacer, BLOCK_FRAMES).await;
         decoder_events.extend(drain_decoder_events(&mut events, 0));
         if block
             .iter()
@@ -135,18 +138,19 @@ async fn prepare_tiny_ring_player(
     }
 
     assert_initial_decoder(&decoder_events, initial_variant, backend, label);
-    render_to_capture_frame(&mut player, label).await;
+    render_to_capture_frame(&mut player, &mut pacer, label).await;
     let capture_frame = source_frame(player.position(), label);
     PreparedPlayer {
         _temp: temp,
         player,
         abr,
         events,
+        pacer,
         capture_frame,
     }
 }
 
-async fn render_to_capture_frame(player: &mut OfflinePlayer, label: &str) {
+async fn render_to_capture_frame(player: &mut OfflinePlayer, pacer: &mut Pacer, label: &str) {
     loop {
         let current = usize::try_from(source_frame(player.position(), label))
             .unwrap_or_else(|_| panic!("{label} capture frame must be non-negative"));
@@ -158,7 +162,7 @@ async fn render_to_capture_frame(player: &mut OfflinePlayer, label: &str) {
         if remaining == 0 {
             return;
         }
-        render_paced(player, remaining.min(BLOCK_FRAMES)).await;
+        render_paced(player, pacer, remaining.min(BLOCK_FRAMES)).await;
     }
 }
 
@@ -167,7 +171,9 @@ async fn capture_tiny_ring(prepared: &mut PreparedPlayer) -> (Vec<f32>, Vec<Deco
     let mut decoder_events = Vec::new();
     while samples.len() / usize::from(CHANNELS) < OBSERVATION_FRAMES {
         let frames = (OBSERVATION_FRAMES - samples.len() / usize::from(CHANNELS)).min(BLOCK_FRAMES);
-        samples.extend_from_slice(&render_paced(&mut prepared.player, frames).await);
+        samples.extend_from_slice(
+            &render_paced(&mut prepared.player, &mut prepared.pacer, frames).await,
+        );
         decoder_events.extend(drain_decoder_events(
             &mut prepared.events,
             samples.len() / usize::from(CHANNELS),
@@ -225,6 +231,11 @@ async fn render_tiny_ring_switch(
         "{label} must recreate exactly one decoder: {decoder_events:?}",
     );
     let event = decoder_events[0];
+    assert!(
+        event.frame_end.saturating_add(heard_after_switch_frames()) <= OBSERVATION_FRAMES,
+        "{label} switched too late to be heard: target_event_frame={}, window={OBSERVATION_FRAMES}",
+        event.frame_end,
+    );
     assert_eq!(
         event.cause,
         DecoderChangeCause::VariantSwitch,
@@ -265,7 +276,7 @@ fn cochlea_silent_buckets(samples: &[f32]) -> usize {
     multi_thread,
     native,
     serial,
-    timeout(Duration::from_secs(180)),
+    timeout(Duration::from_secs(8)),
     hang_timeout_secs(3),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_play=debug")
 )]
@@ -314,8 +325,11 @@ async fn target_rebuild_keeps_player_output_continuous(
     let (_server, created) = source;
     let master_url = created.master_url();
 
-    let control = render_tiny_ring_control(&master_url, AAC_TO_FLAC, backend).await;
-    let switched = render_tiny_ring_switch(&master_url, AAC_TO_FLAC, backend).await;
+    // Played side by side, the control hears the same host load the switch does.
+    let (control, switched) = join!(
+        render_tiny_ring_control(&master_url, AAC_TO_FLAC, backend),
+        render_tiny_ring_switch(&master_url, AAC_TO_FLAC, backend),
+    );
     assert_eq!(
         switched.capture_frame, control.capture_frame,
         "switch and no-switch control must start at the same source frame",
@@ -339,7 +353,7 @@ async fn target_rebuild_keeps_player_output_continuous(
     multi_thread,
     native,
     serial,
-    timeout(Duration::from_secs(600)),
+    timeout(Duration::from_secs(30)),
     hang_timeout_secs(3),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_play=debug")
 )]
@@ -353,33 +367,37 @@ async fn cold_target_variant_switch_keeps_playback_uninterrupted(
     #[case] backend: DecoderBackend,
     #[future(awt)] cold_sources: Vec<(TestServerHelper, CreatedHls)>,
 ) {
+    let sources: Vec<(Transition, url::Url)> = TRANSITIONS
+        .into_iter()
+        .zip(&cold_sources)
+        .map(|(transition, (_server, created))| (transition, created.master_url()))
+        .collect();
     let mut failures = Vec::new();
-    for (transition, (_server, created)) in TRANSITIONS.into_iter().zip(cold_sources) {
-        let master_url = created.master_url();
-
-        let control = render_tiny_ring_control(&master_url, transition, backend).await;
-        let switched = render_tiny_ring_switch(&master_url, transition, backend).await;
-        assert_eq!(
-            switched.capture_frame, control.capture_frame,
-            "{} switch and no-switch control must start at the same source frame",
-            transition.label,
+    // A no-switch control depends only on the source variant, and every
+    // fixture serves its source variant undelayed, so each source plays once.
+    // Switches play in pairs, beside any control their sources still lack, so
+    // a control hears the same host load as the switches it is compared with.
+    let mut controls: [Option<Render>; 3] = std::array::from_fn(|_| None);
+    for [(first, first_url), (second, second_url)] in sources.as_chunks::<2>().0 {
+        let first_control = controls[first.from].is_none().then_some(*first);
+        let second_control =
+            (controls[second.from].is_none() && second.from != first.from).then_some(*second);
+        let (first_rendered, second_rendered, first_switched, second_switched) = join!(
+            source_control(first_url, first_control, backend),
+            source_control(second_url, second_control, backend),
+            render_tiny_ring_switch(first_url, *first, backend),
+            render_tiny_ring_switch(second_url, *second, backend),
         );
-
-        let control_silence = longest_silent_run(&control.samples);
-        let switched_silence = longest_silent_run(&switched.samples);
-        if switched_silence > control_silence.saturating_add(MAX_EXTRA_SILENT_FRAMES) {
-            failures.push(format!(
-                "{} inserted an audible silent gap: switched={switched_silence} frames, control={control_silence} frames",
-                transition.label,
-            ));
+        for (transition, rendered) in [(first, first_rendered), (second, second_rendered)] {
+            if let Some(rendered) = rendered {
+                controls[transition.from] = Some(rendered);
+            }
         }
-        let control_buckets = cochlea_silent_buckets(&control.samples);
-        let switched_buckets = cochlea_silent_buckets(&switched.samples);
-        if switched_buckets > control_buckets {
-            failures.push(format!(
-                "{} produced switch-only silent buckets: switched={switched_buckets}, control={control_buckets}",
-                transition.label,
-            ));
+        for (transition, switched) in [(first, first_switched), (second, second_switched)] {
+            let control = controls[transition.from]
+                .as_ref()
+                .expect("every source variant control renders with its first switch");
+            failures.extend(cold_switch_failures(*transition, control, &switched));
         }
     }
     assert!(
@@ -387,6 +405,49 @@ async fn cold_target_variant_switch_keeps_playback_uninterrupted(
         "switching to a cold target variant interrupted playback (delay_ms={COLD_TARGET_SEGMENT_DELAY_MS}): {}",
         failures.join("; "),
     );
+}
+
+/// The no-switch control of `transition`'s source variant, when it still
+/// needs one.
+async fn source_control(
+    master_url: &url::Url,
+    transition: Option<Transition>,
+    backend: DecoderBackend,
+) -> Option<Render> {
+    match transition {
+        Some(transition) => Some(render_tiny_ring_control(master_url, transition, backend).await),
+        None => None,
+    }
+}
+
+fn cold_switch_failures(
+    transition: Transition,
+    control: &Render,
+    switched: &Render,
+) -> Vec<String> {
+    assert_eq!(
+        switched.capture_frame, control.capture_frame,
+        "{} switch and no-switch control must start at the same source frame",
+        transition.label,
+    );
+    let mut failures = Vec::new();
+    let control_silence = longest_silent_run(&control.samples);
+    let switched_silence = longest_silent_run(&switched.samples);
+    if switched_silence > control_silence.saturating_add(MAX_EXTRA_SILENT_FRAMES) {
+        failures.push(format!(
+            "{} inserted an audible silent gap: switched={switched_silence} frames, control={control_silence} frames",
+            transition.label,
+        ));
+    }
+    let control_buckets = cochlea_silent_buckets(&control.samples);
+    let switched_buckets = cochlea_silent_buckets(&switched.samples);
+    if switched_buckets > control_buckets {
+        failures.push(format!(
+            "{} produced switch-only silent buckets: switched={switched_buckets}, control={control_buckets}",
+            transition.label,
+        ));
+    }
+    failures
 }
 
 async fn rebuild_source(delay_ms: u64) -> (TestServerHelper, CreatedHls) {
