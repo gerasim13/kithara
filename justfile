@@ -8,8 +8,19 @@ sccache := if os_family() == "windows" { "" } else { `command -v sccache 2>/dev/
 # sccache keys a Rust compile on its working directory, every `CARGO_*` value
 # and `OUT_DIR`, so two builds share an entry only when they build at the same
 # paths. CI gives every lane the same checkout and build directory path for
-# that reason; nothing here rewrites the key.
-export RUSTC_WRAPPER := sccache
+# that reason; nothing here rewrites the key. kache keys a compile without the
+# checkout's path, so worktrees on one machine reuse what each other built; a
+# machine that has it caches with it and hands sccache what it cannot cache.
+kache := if os_family() == "windows" { "" } else { `command -v kache 2>/dev/null || true` }
+export RUSTC_WRAPPER := if kache == "" { sccache } else { kache }
+export KACHE_FALLBACK := if kache == "" { "" } else { sccache }
+
+# cc-rs hands a build script's C compile to the Rust wrapper only when that is
+# named after sccache, so with kache it reaches the cache through the
+# compiler-name links `kache install-shims` puts in its default directory. They
+# go first on the path of these recipes only, never of the whole machine.
+kache_shims := if kache == "" { "" } else { home_directory() / ".local/lib/kache/shims" }
+export PATH := if kache_shims != "" { if path_exists(kache_shims) == "true" { kache_shims + ":" + env("PATH") } else { env("PATH") } } else { env("PATH") }
 
 # A C compile's cache key includes the absolute paths in its preprocessor
 # output, so the same C source built in two worktrees hashes twice and neither
