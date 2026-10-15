@@ -212,6 +212,7 @@ impl<S> PlayerImpl<S> {
         }
         match out.deck_owned(at, parts) {
             Ok(attach) => {
+                self.detaching = None;
                 self.attaching = Some(Attaching {
                     seq: attach,
                     caller: seq,
@@ -327,6 +328,7 @@ impl<S> PlayerImpl<S> {
         ) {
             Ok(seq) => {
                 self.slot = Some(slot);
+                self.detaching = None;
                 self.attaching = Some(Attaching {
                     seq,
                     caller: seq.map_or(loading.seq, |seq| seq),
