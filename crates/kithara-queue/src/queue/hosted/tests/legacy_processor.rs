@@ -10,7 +10,11 @@ const THRESHOLD_BLOCK: usize = 512;
 
 struct ThresholdRig {
     queue: Queue<TestPools>,
-    mixer: mock::MixerRig,
+    mixer: Option<mock::MixerRig>,
+    fixture_dispatcher: kithara_command::Sender<
+        kithara_render::DispatcherProtocol<kithara_play::ResourceLoad<TestPools>>,
+    >,
+    _fixture_driver: kithara_worker::TaskHandle,
     loads: mock::DeckRig<TestPools>,
     source_packets: Option<kithara_render::mock::PacketRing>,
     _dir: TestTempDir,
@@ -55,6 +59,12 @@ impl ThresholdRig {
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .block_on_underrun(true)
             .build();
+        let (fixture_dispatcher, fixture_inbox) =
+            kithara_command::channel(kithara_command::ChannelConfig::builder().build());
+        let fixture_driver = prep
+            .worker
+            .start_dispatcher(fixture_inbox)
+            .expect("the real worker owns the threshold source dispatcher");
         let settings = crate::QueueSettings::builder()
             .crossfade(crate::CrossfadeSettings {
                 duration: fade,
@@ -76,7 +86,11 @@ impl ThresholdRig {
                     .action_at_item_end(ActionAtItemEnd::None)
                     .build(),
             ),
-            mixer: mock::MixerRig::new(config, shape, &pools()).expect("real threshold mixer"),
+            mixer: Some(
+                mock::MixerRig::new(config, shape, &pools()).expect("real threshold mixer"),
+            ),
+            fixture_dispatcher,
+            _fixture_driver: fixture_driver,
             loads: mock::DeckRig::new(config).expect("threshold dispatcher"),
             source_packets: None,
             _dir: dir,
@@ -111,7 +125,33 @@ impl ThresholdRig {
         };
         let mut loaded = {
             let _real_io = kithara_platform::flash::real_io();
-            let mut opening = std::pin::pin!(rig.loads.load_request_fixture(*request));
+            rig.fixture_dispatcher
+                .send(
+                    When::Next,
+                    kithara_command::Batch {
+                        basis: Vec::new(),
+                        commands: vec![DispatcherCommand::Load(request)],
+                    },
+                )
+                .expect("the actual initial request reaches the worker");
+            let mut opening = std::pin::pin!(std::future::poll_fn(|context| {
+                rig.fixture_dispatcher.hold(context.waker().clone());
+                let receipt = rig.fixture_dispatcher.receipts().next();
+                if let Some(receipt) = receipt {
+                    rig.fixture_dispatcher.release();
+                    let (outcome, _) = receipt.into();
+                    let Outcome::Applied {
+                        data: Dispatched::Loaded(loaded),
+                        ..
+                    } = outcome
+                    else {
+                        panic!("actual queued source must load: {outcome:?}");
+                    };
+                    std::task::Poll::Ready(loaded)
+                } else {
+                    std::task::Poll::Pending
+                }
+            }));
             loop {
                 hang_tick!();
                 if let Ok(loaded) =
@@ -119,7 +159,7 @@ impl ThresholdRig {
                         .await
                 {
                     hang_reset!();
-                    break loaded.expect("actual queued source opens");
+                    break loaded;
                 }
             }
         };
@@ -188,7 +228,14 @@ impl ThresholdRig {
             kithara_platform::time::sleep(Duration::from_millis(1)).await;
         }
         assert_eq!(
-            rig.mixer.ends.snapshot.read().slots[0].position,
+            rig.mixer
+                .as_mut()
+                .expect("returned threshold mixer")
+                .ends
+                .snapshot
+                .read()
+                .slots[0]
+                .position,
             0.0,
             "paused admission must not consume the first read"
         );
@@ -211,7 +258,7 @@ impl ThresholdRig {
     ) -> Value {
         let value = real_outbox(
             &mut self.queue,
-            &mut self.mixer,
+            self.mixer.as_mut().expect("returned threshold mixer"),
             &mut self.loads,
             SessionFrame::new(self.frame),
             u32::try_from(THRESHOLD_BLOCK).expect("threshold block fits u32"),
@@ -293,16 +340,26 @@ impl ThresholdRig {
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     async fn read(&mut self, frames: usize) -> [Vec<f32>; 2] {
         hang_tick!();
+        let mut mixer = self.mixer.take().expect("threshold mixer custody");
+        let at = SessionFrame::new(self.frame);
+        let (mixer, pcm) = kithara_platform::tokio::task::spawn_blocking(move || {
+            let mut pcm = [vec![0.0; frames], vec![0.0; frames]];
+            let [left, right] = &mut pcm;
+            mixer
+                .block_frames(at, [left, right])
+                .expect("threshold read");
+            (mixer, pcm)
+        })
+        .await
+        .expect("threshold render must join");
+        self.mixer = Some(mixer);
+        while let Some(ScopedReceipt::Scope(_, receipt)) = self
+            .mixer
+            .as_mut()
+            .expect("returned threshold mixer")
+            .ring
+            .receipt()
         {
-            let _real_io = kithara_platform::flash::real_io();
-            self.loads.poll_fixture().await;
-        }
-        let mut pcm = [vec![0.0; frames], vec![0.0; frames]];
-        let [left, right] = &mut pcm;
-        self.mixer
-            .block_frames(SessionFrame::new(self.frame), [left, right])
-            .expect("threshold read");
-        while let Some(ScopedReceipt::Scope(_, receipt)) = self.mixer.ring.receipt() {
             hang_tick!();
             let seq = receipt.seq();
             let (outcome, mut batch) = receipt.into();
@@ -319,7 +376,15 @@ impl ThresholdRig {
             });
             hang_reset!();
         }
-        for event in self.mixer.ends.events.drain().collect::<Vec<_>>() {
+        for event in self
+            .mixer
+            .as_mut()
+            .expect("returned threshold mixer")
+            .ends
+            .events
+            .drain()
+            .collect::<Vec<_>>()
+        {
             hang_tick!();
             if let kithara_play::DeckEvent::Ended { slot, .. } = event {
                 let active = self
@@ -542,7 +607,14 @@ async fn prefetch_and_handover_both_fire_when_thresholds_coincide() {
 async fn handover_backstops_eof_when_threshold_was_not_reached_earlier() {
     let mut rig = ThresholdRig::playing(0.01, 0.0, 3.5, None).await;
     rig.read(THRESHOLD_BLOCK).await;
-    let slot = &rig.mixer.ends.snapshot.read().slots[0];
+    let slot = &rig
+        .mixer
+        .as_mut()
+        .expect("returned threshold mixer")
+        .ends
+        .snapshot
+        .read()
+        .slots[0];
     assert_eq!(
         slot.state,
         SlotState::Ended,
@@ -577,7 +649,13 @@ async fn handover_is_not_duplicated_at_eof_after_early_trigger() {
 async fn handover_uses_buffered_eof_when_duration_is_overestimated() {
     let mut rig = ThresholdRig::playing(10.0, 0.0, 3.5, Some(900)).await;
     let pcm = rig.read(THRESHOLD_BLOCK).await;
-    let observed = rig.mixer.ends.snapshot.read();
+    let observed = rig
+        .mixer
+        .as_mut()
+        .expect("returned threshold mixer")
+        .ends
+        .snapshot
+        .read();
     let slot = &observed.slots[0];
     let source = slot.source.expect("consumed source timing");
     assert_eq!(

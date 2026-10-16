@@ -205,7 +205,12 @@ mod flac {
                 .expect("poll FLAC operation");
             let actual = match fault.next_frame_prepared() {
                 Ok(DemuxOutcome::Frame(frame)) => frame,
-                Ok(DemuxOutcome::Pending(kithara_stream::PendingReason::Retry)) => {
+                Ok(DemuxOutcome::Pending(
+                    kithara_stream::PendingReason::Retry
+                    | kithara_stream::PendingReason::NotReady(
+                        kithara_stream::NotReadyCause::OperationPending,
+                    ),
+                )) => {
                     kithara_platform::thread::yield_runnable();
                     continue;
                 }
@@ -627,7 +632,10 @@ fn mpa_packets_preserve_bytes_timestamps_and_interrupted_reads(mpeg_four: &'stat
                         .get_ref()
                         .and_then(|error| error.downcast_ref::<PendingReason>());
                     match reason {
-                        Some(PendingReason::Retry) => {}
+                        Some(
+                            PendingReason::Retry
+                            | PendingReason::NotReady(NotReadyCause::OperationPending),
+                        ) => {}
                         Some(PendingReason::NotReady(NotReadyCause::WaitBudgetExhausted)) => {
                             assert!(!interrupted, "released input must remain ready");
                             for _ in 0..2 {
@@ -848,7 +856,9 @@ mod wav {
                 .prepare_frame_with_wait(crate::PrepareWait::Poll)
                 .expect("poll parser operation");
             match demuxer.next_frame_prepared().expect("poll retained packet") {
-                DemuxOutcome::Pending(PendingReason::Retry) => {
+                DemuxOutcome::Pending(
+                    PendingReason::Retry | PendingReason::NotReady(NotReadyCause::OperationPending),
+                ) => {
                     kithara_platform::thread::yield_runnable();
                 }
                 DemuxOutcome::Pending(reason) => return reason,

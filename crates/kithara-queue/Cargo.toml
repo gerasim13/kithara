@@ -82,6 +82,7 @@ kithara-stream = { workspace = true, default-features = false }
 kithara-sync = { workspace = true }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang", "temp-dir"] }
 kithara-warp = { workspace = true }
+kithara-worker = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 serde_yaml_ng = { workspace = true }

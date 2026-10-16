@@ -732,18 +732,35 @@ mod tests {
 
     use crate::consts::{FILL_TICKS, RATE_RING_PACKETS};
 
-    /// Drives `lane` as the lane dispatcher does, `poll_commands`, `recycle`, then
-    /// `tick`, until it stops making progress.
-    fn fill(lane: &mut impl LaneTask) {
-        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
-        for _ in 0..FILL_TICKS {
-            let _ = lane.poll_commands(&mut context);
-            lane.recycle();
-            if lane.tick() != kithara_worker::TickResult::Progress {
-                return;
+    /// Drives the lane to output backpressure while native preparation completes.
+    #[kithara::hang_watchdog]
+    async fn fill(lane: &mut impl LaneTask) {
+        let _real_io = kithara_platform::flash::real_io();
+        let mut progress = 0;
+        loop {
+            hang_tick!();
+            let result = {
+                let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+                let _ = lane.poll_commands(&mut context);
+                lane.recycle();
+                lane.tick()
+            };
+            lane.preload_status().expect("lane remains available");
+            match result {
+                kithara_worker::TickResult::Progress => {
+                    progress += 1;
+                    assert!(
+                        progress < FILL_TICKS,
+                        "the lane did not stop making progress within {FILL_TICKS} ticks"
+                    );
+                    hang_reset!();
+                }
+                kithara_worker::TickResult::Backpressured | kithara_worker::TickResult::Done => {
+                    return;
+                }
+                _ => kithara_platform::tokio::task::yield_now().await,
             }
         }
-        panic!("the lane did not stop making progress within {FILL_TICKS} ticks");
     }
 
     #[kithara::hang_watchdog(ctx = String)]
@@ -801,7 +818,7 @@ mod tests {
         ring_lead.get() / consts::BLOCK_FRAMES + 2
     }
 
-    fn rate_change_blocks(
+    async fn rate_change_blocks(
         mixer: &mut crate::mock::MixerRig,
         lane: &mut ResourceLane,
         control: &mut Sender<LaneProtocol>,
@@ -818,7 +835,7 @@ mod tests {
         let mut pcm = [[0.0; consts::BLOCK_FRAMES]; 2];
         for _ in 0..blocks {
             let before = mixer.ends.snapshot.read().slots[0].position;
-            fill(lane);
+            fill(lane).await;
             let [left, right] = &mut pcm;
             mixer
                 .block(at, [left, right])
@@ -945,7 +962,7 @@ mod tests {
                 },
             )
             .expect("start warped lane");
-        fill(&mut lane);
+        fill(&mut lane).await;
         let mut pcm = [[0.0; consts::BLOCK_FRAMES]; 2];
         let [left, right] = &mut pcm;
         mixer
@@ -977,7 +994,8 @@ mod tests {
             seq,
             built_frames,
             applied_frames,
-        );
+        )
+        .await;
         if supports_playback_rate() {
             assert_eq!(receipts, [seq]);
         } else {
@@ -1027,7 +1045,7 @@ mod tests {
                 },
             )
             .expect("start first");
-        fill(&mut first_lane);
+        fill(&mut first_lane).await;
         let mut pcm = [[0.0; consts::BLOCK_FRAMES]; 2];
         let [left, right] = &mut pcm;
         mixer
@@ -1062,7 +1080,8 @@ mod tests {
             rate_seq,
             i64::from(block_frames),
             expected_frames,
-        );
+        )
+        .await;
         if supports_playback_rate() {
             assert_eq!(notifications, [rate_seq]);
         } else {
@@ -1091,8 +1110,8 @@ mod tests {
                 },
             )
             .expect("start next");
-        fill(&mut first_lane);
-        fill(&mut next_lane);
+        fill(&mut first_lane).await;
+        fill(&mut next_lane).await;
         let first_position = mixer.ends.snapshot.read().slots[0].position;
         let [left, right] = &mut pcm;
         mixer

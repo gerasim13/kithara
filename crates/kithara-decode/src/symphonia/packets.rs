@@ -4,7 +4,7 @@ use std::{
 };
 
 use kithara_platform::{sync::mpsc, thread};
-use kithara_stream::{PendingReason, ReaderControl};
+use kithara_stream::{NotReadyCause, PendingReason, ReaderControl};
 use symphonia_core::{
     codecs::audio::{
         AudioCodecParameters,
@@ -190,7 +190,7 @@ impl Packets {
     pub(super) fn pending_reason(&self) -> PendingReason {
         self.control
             .pending_reason()
-            .unwrap_or(PendingReason::Retry)
+            .unwrap_or(PendingReason::NotReady(NotReadyCause::OperationPending))
     }
 
     fn submit(&mut self, request: Request, operation: Operation) -> Result<()> {
@@ -228,7 +228,7 @@ impl Packets {
                 self.submit(Request::Read, Operation::Reading)?;
             }
             Operation::Reading => {}
-            Operation::Seeking => return Err(Self::interrupted(PendingReason::Retry)),
+            Operation::Seeking => return Err(Self::interrupted(self.pending_reason())),
             Operation::Retiring | Operation::Retired => {
                 return Err(Self::interrupted(PendingReason::SessionRetired));
             }
@@ -412,6 +412,106 @@ mod tests {
     };
 
     use super::*;
+
+    #[kithara::test]
+    fn native_operations_wait_for_completion_without_resubmitting() {
+        let (requests, requested) = mpsc::channel();
+        let (completed, completion) = mpsc::channel();
+        let control = ReaderControl::new(None);
+        let mut packets = Packets {
+            requests: Some(requests),
+            completion,
+            operation: Operation::Idle,
+            packet: None,
+            control: control.clone(),
+        };
+        let pending = PendingReason::NotReady(NotReadyCause::OperationPending);
+        for reason in [
+            pending,
+            PendingReason::NotReady(NotReadyCause::WaitBudgetExhausted),
+            PendingReason::Retry,
+        ] {
+            if reason != pending {
+                control.set_pending(reason);
+            }
+            let Err(error) = packets.read(PrepareWait::Poll) else {
+                panic!("a retained read has no packet before completion");
+            };
+            assert_eq!(super::super::error::pending_reason(&error), Some(reason));
+        }
+        assert!(matches!(requested.try_recv(), Ok(Request::Read)));
+        assert!(matches!(
+            requested.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        control.notify();
+        assert_eq!(packets.pending_reason(), pending);
+        let packet = Packet::new(7, Timestamp::new(17), Duration::new(3), vec![1, 2, 3]);
+        assert!(completed.send(Reply::Read(Ok(Some(packet)))).is_ok());
+        let read = packets
+            .read(PrepareWait::Poll)
+            .expect("completed read")
+            .expect("one packet");
+        assert_eq!(read.track_id, 7);
+        assert_eq!(read.pts, Timestamp::new(17));
+        assert_eq!(read.dur, Duration::new(3));
+        assert_eq!(packets.data(), [1, 2, 3]);
+        let target = Timestamp::new(19);
+        assert!(
+            packets
+                .seek(
+                    SeekMode::Accurate,
+                    SeekTo::Timestamp {
+                        ts: target,
+                        track_id: 7
+                    },
+                    PrepareWait::Poll,
+                )
+                .expect("pending seek")
+                .is_none()
+        );
+        assert_eq!(packets.pending_reason(), pending);
+        let Err(error) = packets.read(PrepareWait::Poll) else {
+            panic!("a pending seek cannot produce a read");
+        };
+        assert_eq!(super::super::error::pending_reason(&error), Some(pending));
+        assert!(matches!(requested.try_recv(), Ok(Request::Seek { .. })));
+        assert!(
+            packets
+                .prepare_seek(PrepareWait::Poll)
+                .expect("same seek")
+                .is_none()
+        );
+        assert!(matches!(
+            requested.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        let landed = SeekedTo {
+            track_id: 7,
+            required_ts: target,
+            actual_ts: Timestamp::new(17),
+        };
+        assert!(completed.send(Reply::Seek(Ok(landed))).is_ok());
+        let actual = packets
+            .prepare_seek(PrepareWait::Poll)
+            .expect("completed seek")
+            .expect("seek landing");
+        assert_eq!(actual.track_id, landed.track_id);
+        assert_eq!(actual.required_ts, landed.required_ts);
+        assert_eq!(actual.actual_ts, landed.actual_ts);
+        assert!(completed.send(Reply::Read(Ok(None))).is_ok());
+        assert!(
+            packets
+                .read(PrepareWait::Poll)
+                .expect("completed EOF")
+                .is_none()
+        );
+        assert!(matches!(requested.try_recv(), Ok(Request::Read)));
+        assert!(matches!(
+            requested.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+    }
 
     #[kithara::test]
     fn native_pcm_geometry_uses_storage_width_and_preserves_packet_fields() {

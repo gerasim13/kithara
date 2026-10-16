@@ -65,6 +65,9 @@ pub enum PendingReason {
 #[derive(Debug, Clone, Copy, derive_more::Display, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum NotReadyCause {
+    /// An operation is still running; its completion wakes the caller.
+    #[display("operation still in flight")]
+    OperationPending,
     /// `wait_range` returned `WaitBudgetExceeded` for `MAX_WAIT_SPINS`
     /// iterations — the source kept signalling "not yet" past the read
     /// budget. Typical when a fetch is slower than the read deadline.

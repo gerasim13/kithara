@@ -142,7 +142,10 @@ fn packet_retry_preserves_bytes_and_timestamps_after_partial_read(#[case] signal
             .prepare_frame_with_wait(crate::PrepareWait::Poll)
             .expect("poll packet");
         let packet = match actual.next_frame_prepared().expect("packet read") {
-            DemuxOutcome::Pending(PendingReason::Retry) => {
+            DemuxOutcome::Pending(
+                PendingReason::Retry
+                | PendingReason::NotReady(kithara_stream::NotReadyCause::OperationPending),
+            ) => {
                 kithara_platform::thread::yield_runnable();
                 continue;
             }
