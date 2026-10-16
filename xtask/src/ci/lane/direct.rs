@@ -1046,9 +1046,9 @@ cargo.packages = ["tools"]
         let config: toml::Table = toml::from_str(config).expect("kache's configuration parses");
         assert_eq!(
             config["cache"]["remote"]["bucket"].as_str(),
-            Some("kithara-trusted")
+            Some("kithara-review")
         );
-        assert_eq!(config["cache"]["remote_readonly"].as_bool(), Some(true));
+        assert!(config["cache"].get("remote_readonly").is_none());
         let (wrapper, path) = said
             .split_once("\nconfig=")
             .expect("the step said its config");

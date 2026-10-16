@@ -205,8 +205,7 @@ pub(crate) const CACHE_REGION: &str = "us-east-1";
 /// are not read again.
 pub(crate) const SCCACHE_PREFIX: &str = "sccache";
 
-/// Where kache keeps its objects inside the trusted scope's bucket, the one
-/// remote every job reads it from.
+/// Where kache keeps its objects inside a scope's bucket, beside sccache's.
 pub(crate) const KACHE_PREFIX: &str = "kache";
 
 /// Directory every Unix executor reads the installed host profile from.
