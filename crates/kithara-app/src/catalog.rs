@@ -49,7 +49,12 @@ pub fn load_onto(
         }
         queue.append(built)?
     };
-    queue.select(id, Transition::None)
+    let transition = if queue.is_playing() {
+        Transition::Crossfade
+    } else {
+        Transition::None
+    };
+    queue.select(id, transition)
 }
 
 #[cfg(test)]
