@@ -125,6 +125,7 @@ async fn provider_tempo_controls_measure_without_sync(
                     }),
                 );
             }
+            drop(captured);
             eprintln!("ORACLE_CONTROL {label}: {measured:?}");
             failures.extend(measured);
             hang_reset!();

@@ -104,6 +104,14 @@ impl PlayerTrack {
         let valid =
             context.is_some_and(|context| context.for_output_range(range.clone()).is_some());
         if !valid {
+            kithara::probe_event!(
+                pcm_context_refused,
+                track_id = self.item_id.as_u64(),
+                output_base =
+                    context.map(|context| i64::from(context.output().output_frames().start)),
+                range_start = range.start,
+                range_end = range.end
+            );
             return TrackReadOutcome::Full {
                 position: self.position(),
                 frames: 0,

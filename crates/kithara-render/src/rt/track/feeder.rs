@@ -137,6 +137,12 @@ impl PlayerResource {
             }
             Err(packet) => {
                 self.packet = Some(packet);
+                kithara::probe_event!(
+                    pcm_recycle_refused,
+                    segment = self.lane.segment.get(),
+                    lane_frame = self.lane.frame,
+                    offset = self.offset
+                );
                 false
             }
         }
@@ -298,9 +304,21 @@ impl PlayerResource {
             }
             if self.packet.is_none() {
                 let receiver = &mut self.consumer.get_mut().receiver;
-                if !receiver.peek().is_some_and(|packet| {
+                let next = receiver.peek();
+                if !next.is_some_and(|packet| {
                     matches!(packet, PcmPacket::Chunk(chunk) if chunk.meta.segment == self.lane.segment && chunk.frames() > 0)
                 }) {
+                    kithara::probe_event!(
+                        feeder_refill_unavailable,
+                        segment = self.lane.segment.get(),
+                        lane_frame = self.lane.frame,
+                        next_segment = next.map(|packet| packet_segment(packet).get()),
+                        next_frames = next.map(|packet| match packet {
+                            PcmPacket::Chunk(chunk) => chunk.frames(),
+                            PcmPacket::Failed { .. } => 0,
+                        }),
+                        missing = requested - written
+                    );
                     break;
                 }
                 self.packet = receiver.pop();
@@ -313,7 +331,6 @@ impl PlayerResource {
             if chunk.meta.segment != self.lane.segment {
                 break;
             }
-            let channels = usize::from(chunk.spec().channels);
             let count = chunk
                 .frames()
                 .saturating_sub(self.offset)
@@ -321,44 +338,17 @@ impl PlayerResource {
             if count == 0 {
                 break;
             }
-            let presented = context.and_then(|context| {
-                let start = u64::try_from(self.offset).ok()?;
-                let end = start.checked_add(u64::try_from(count).ok()?)?;
-                let source = chunk.meta.source_span?.for_output_range(start..end)?;
-                let offset = i64::try_from(range.start.checked_add(written)?).ok()?;
-                let output_start =
-                    i64::from(context.output().output_frames().start).checked_add(offset)?;
-                let output_end = output_start.checked_add(i64::try_from(count).ok()?)?;
-                if let Some(publisher) = &self.consumer.get().receiver.render_publisher {
-                    publisher.publish(
-                        context,
-                        PresentationFrontier::builder()
-                            .source(source.start())
-                            .output(SessionFrame::new(output_start))
-                            .maybe_warp_map(source.mapping_revision().map(WarpMapRevision::from))
-                            .build(),
-                    );
-                }
-                Some((source, output_start, output_end))
-            });
-            for frame in 0..count {
-                let input = (self.offset + frame) * channels;
-                let output = range.start + written + frame;
-                left[output] = chunk.samples[input];
-                right[output] = chunk.samples[input + usize::from(channels > 1)];
-            }
+            copy_packet(
+                chunk,
+                self.offset,
+                context,
+                &self.consumer.get().receiver,
+                left,
+                right,
+                range.start + written..range.start + written + count,
+            );
             self.offset += count;
             written += count;
-            if let Some((source, output_start, output_end)) = presented {
-                kithara::probe_event!(
-                    pcm_consumed,
-                    render_revision = source.render_revision(),
-                    output_start,
-                    output_end,
-                    source_start = source.start(),
-                    source_end = source.end()
-                );
-            }
             hang_reset!();
             self.observed = Some(chunk.meta);
             self.mapped = if let Some((frame, position)) = chunk
@@ -380,6 +370,95 @@ impl PlayerResource {
             self.consumer.get_mut().receiver.set_position(position);
         }
         ReadOutcome::Full { frames: written }
+    }
+}
+
+fn copy_packet(
+    chunk: &AudioChunk,
+    offset: usize,
+    context: Option<&RenderContext>,
+    receiver: &crate::PcmReceiver,
+    left: &mut [f32],
+    right: &mut [f32],
+    output: Range<usize>,
+) {
+    let count = output.len();
+    let presented = context.and_then(|context| {
+        let start = u64::try_from(offset).ok()?;
+        let end = start.checked_add(u64::try_from(count).ok()?)?;
+        let source = chunk.meta.source_span?.for_output_range(start..end)?;
+        let offset = i64::try_from(output.start).ok()?;
+        let output_start = i64::from(context.output().output_frames().start).checked_add(offset)?;
+        let output_end = output_start.checked_add(i64::try_from(count).ok()?)?;
+        if let Some(publisher) = &receiver.render_publisher {
+            publisher.publish(
+                context,
+                PresentationFrontier::builder()
+                    .source(source.start())
+                    .output(SessionFrame::new(output_start))
+                    .maybe_warp_map(source.mapping_revision().map(WarpMapRevision::from))
+                    .build(),
+            );
+        }
+        Some((source, output_start, output_end))
+    });
+    copy_samples(chunk, offset, left, right, output, presented.as_ref());
+    #[cfg(feature = "usdt")]
+    {
+        let Some((source, _, _)) = presented else {
+            return;
+        };
+        let words: [u64; 24] = source.into();
+        kithara::probe_event!(
+            pcm_consumed_identity,
+            source_revision = chunk.meta.source_revision,
+            sample_rate = chunk.meta.spec.sample_rate.get(),
+            channels = u64::from(chunk.meta.spec.channels),
+            origin_present = chunk.meta.media_origin.is_some()
+        );
+        let origin = chunk.meta.media_origin.unwrap_or_default();
+        kithara::probe_event!(
+            pcm_consumed_origin,
+            seconds = origin.as_secs(),
+            nanos = origin.subsec_nanos()
+        );
+        for (part, words) in words.chunks_exact(4).enumerate() {
+            kithara::probe_event!(
+                pcm_consumed_geometry,
+                part,
+                first = words[0],
+                second = words[1],
+                third = words[2],
+                fourth = words[3]
+            );
+        }
+    }
+}
+
+fn copy_samples(
+    chunk: &AudioChunk,
+    offset: usize,
+    left: &mut [f32],
+    right: &mut [f32],
+    output: Range<usize>,
+    presented: Option<&(SourceSpan, i64, i64)>,
+) {
+    let channels = usize::from(chunk.spec().channels);
+    for frame in 0..output.len() {
+        let input = (offset + frame) * channels;
+        let output = output.start + frame;
+        left[output] = chunk.samples[input];
+        right[output] = chunk.samples[input + usize::from(channels > 1)];
+    }
+    if let Some(&(source, output_start, output_end)) = presented {
+        kithara::probe_event!(
+            pcm_consumed,
+            render_revision = source.render_revision(),
+            output_start,
+            output_end,
+            source_start = source.start(),
+            source_end = source.end()
+        );
     }
 }
 

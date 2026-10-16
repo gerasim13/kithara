@@ -4,12 +4,12 @@ use super::ratio::Ratio;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Affine {
-    scale: Ratio,
-    offset: Offset,
+    pub(super) scale: Ratio,
+    pub(super) offset: Offset,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Offset {
+pub(super) enum Offset {
     Add(Ratio),
     Subtract(Ratio),
 }
