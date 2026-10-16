@@ -150,7 +150,19 @@ struct AppliedCurve<'a> {
     at: SessionFrame,
 }
 
-type PrefixProof = (u64, Option<u64>, Vec<String>);
+struct PrefixPlan {
+    latest: bool,
+    initial_media: Duration,
+    offsets: Vec<(u64, f64)>,
+    terminal: u64,
+    parts: Vec<(u64, ExponentialApproach)>,
+    deadline: Option<u64>,
+    limit: u64,
+    boundaries: Vec<u64>,
+    previous_offset: f64,
+}
+
+type PrefixProof = (u64, Option<u64>, Vec<String>, Vec<serde_json::Value>);
 
 fn applied_curves(
     observation: &LinkObservation,
@@ -1315,15 +1327,14 @@ impl AppliedCurve<'_> {
         Ok(next_beat)
     }
 
-    fn verify_prefix(
+    fn prefix_plan(
         &self,
-        model: &BeatGridModel,
         source: &BeatGridSnapshot,
         host: &TempoTrajectory,
         horizon: std::ops::Bound<SessionFrame>,
         predecessor: f64,
         commanded: bool,
-    ) -> Result<PrefixProof, String> {
+    ) -> Result<PrefixPlan, String> {
         let command = self.command;
         let rate = host.sample_rate();
         let (horizon, latest) = match horizon {
@@ -1333,7 +1344,6 @@ impl AppliedCurve<'_> {
                 return Err("source law proof has no execution horizon".to_owned());
             }
         };
-        let mut failures = Vec::new();
         let initial_media = self.planned_input()?.0;
         let base = host.anchor_at(self.at).tempo_at(self.at)
             * source_slope(source, initial_media.as_secs_f64(), rate)?;
@@ -1366,28 +1376,67 @@ impl AppliedCurve<'_> {
         } else {
             None
         };
-        let correction = deadline.map(|end| terminal..end);
         let limit = horizon
             .frames_since(self.at)
             .ok_or_else(|| "executed replacement precedes Applied".to_owned())?;
         let boundaries =
             self.prefix_boundaries(host, horizon, &parts, &offsets, terminal, deadline)?;
+        let previous_offset = if commanded || !correcting {
+            0.0
+        } else {
+            predecessor - base
+        };
+        Ok(PrefixPlan {
+            latest,
+            initial_media,
+            offsets,
+            terminal,
+            parts,
+            deadline,
+            limit,
+            boundaries,
+            previous_offset,
+        })
+    }
+
+    fn verify_prefix(
+        &self,
+        model: &BeatGridModel,
+        source: &BeatGridSnapshot,
+        host: &TempoTrajectory,
+        horizon: std::ops::Bound<SessionFrame>,
+        predecessor: f64,
+        commanded: bool,
+    ) -> Result<PrefixProof, String> {
+        let command = self.command;
+        let rate = host.sample_rate();
+        let PrefixPlan {
+            latest,
+            initial_media,
+            offsets,
+            terminal,
+            parts,
+            deadline,
+            limit,
+            boundaries,
+            mut previous_offset,
+        } = self.prefix_plan(source, host, horizon, predecessor, commanded)?;
+        let correcting = command.landing.is_none();
+        let correction = deadline.map(|end| terminal..end);
+        let mut failures = Vec::new();
         let mut position = initial_media.as_secs_f64();
         let initial_beat = grid_beat_at(source, media_seconds_position(position, rate)?)?;
         let mut beat = initial_beat;
         let phase = self.source_phase(model, host, initial_beat)?;
         let mut q = None;
-        let mut previous_offset = if commanded || !correcting {
-            0.0
-        } else {
-            predecessor - base
-        };
         let mut prefixes = Vec::new();
+        let mut diagnostics = Vec::new();
         for (boundary_index, &at) in boundaries.iter().enumerate() {
             if !latest && at == limit {
                 break;
             }
             let frame = frame_after(self.at, at)?;
+            let before_failures = failures.len();
             if let Some((landing, landing_at)) = command.landing
                 && frame == landing_at
             {
@@ -1410,6 +1459,9 @@ impl AppliedCurve<'_> {
             }
             let end = boundaries.get(boundary_index + 1).copied().unwrap_or(at);
             let frames = end - at;
+            if frames == 0 {
+                continue;
+            }
             let (law_at, law) = parts
                 .iter()
                 .rev()
@@ -1432,6 +1484,7 @@ impl AppliedCurve<'_> {
                 && law_elapsed == 0
                 && law.time_constant() == 0.0
                 && !ordinary_span_is_local(source, beat, next_beat, rate, true)?;
+            let from_beat = beat;
             if bridge {
                 let (expected, next_beat) =
                     crossing_target(source, host, frame, beat, media_offset, beat_offset, rate)?;
@@ -1468,10 +1521,41 @@ impl AppliedCurve<'_> {
             if correcting {
                 self.check_epsilon(previous_offset, offset, at, &mut failures);
             }
+            if failures.len() > before_failures {
+                let from_position = source_media_for_beat(source, from_beat, rate)
+                    .and_then(|seconds| media_seconds_position(seconds, rate));
+                let to_position = source_media_for_beat(source, beat, rate)
+                    .and_then(|seconds| media_seconds_position(seconds, rate));
+                let from_region = from_position
+                    .as_ref()
+                    .map(|position| source.region_at(MapPoint::new(source.stamp(), *position)));
+                let to_region = to_position
+                    .as_ref()
+                    .map(|position| source.region_at(MapPoint::new(source.stamp(), *position)));
+                diagnostics.push(serde_json::json!({
+                    "at": at, "end": end, "frames": frames, "limit": limit,
+                    "law_at": law_at, "law_elapsed": law_elapsed,
+                    "from_beat": from_beat, "to_beat": beat,
+                    "from_position": format!("{from_position:?}"),
+                    "to_position": format!("{to_position:?}"),
+                    "from_region": format!("{from_region:?}"),
+                    "to_region": format!("{to_region:?}"),
+                    "slope": slope, "media_offset": media_offset, "beat_offset": beat_offset,
+                    "bridge": bridge,
+                    "local_including_endpoints": format!("{:?}", ordinary_span_is_local(source, from_beat, beat, rate, true)),
+                    "local_excluding_endpoints": format!("{:?}", ordinary_span_is_local(source, from_beat, beat, rate, false)),
+                    "checked_prefixes": prefixes,
+                    "emitted_laws": parts.iter().map(|(at, law)| serde_json::json!({
+                        "at": at, "initial": law.initial(), "target": law.target(),
+                        "time_constant": law.time_constant(),
+                    })).collect::<Vec<_>>(),
+                    "failures": &failures[before_failures..],
+                }));
+            }
             previous_offset = offset;
             position += advance;
         }
-        Ok((terminal, deadline, failures))
+        Ok((terminal, deadline, failures, diagnostics))
     }
 
     fn verify_end(
@@ -1602,7 +1686,7 @@ impl AppliedCurve<'_> {
         } else {
             std::ops::Bound::Excluded(horizon)
         };
-        let (terminal, deadline, prefix_failures) =
+        let (terminal, deadline, prefix_failures, prefix_diagnostics) =
             self.verify_prefix(model, &source, host, bound, predecessor, commanded)?;
         failures.extend(prefix_failures);
         if latest {
@@ -1616,7 +1700,7 @@ impl AppliedCurve<'_> {
             )?);
         }
         Ok(
-            serde_json::json!({"seq": command.seq.get(), "applied": i64::from(self.at), "verified_through": i64::from(horizon), "terminal_start": terminal, "terminal_end": deadline, "host_input": command.host_input}),
+            serde_json::json!({"seq": command.seq.get(), "applied": i64::from(self.at), "verified_through": i64::from(horizon), "terminal_start": terminal, "terminal_end": deadline, "host_input": command.host_input, "prefix_diagnostics": prefix_diagnostics}),
         )
     }
 }
@@ -3190,4 +3274,60 @@ fn confirmed_targets_and_consumed_laws_have_separate_clocks() {
     observation.ready_cues.clear();
     observation.speeds.clear();
     assert!(configured_speed_failures(&observation, item, mark.lane.segment, &[], 1.0).is_err());
+
+    let ArtifactSource::Value(model) = synthetic_grid() else {
+        panic!("declared source grid");
+    };
+    let source = source_with_duration(&model, rate, None).expect("declared source geometry");
+    let host = TempoTrajectory::new(
+        TempoStep {
+            frame: SessionFrame::new(0),
+            beat: SessionBeat::default(),
+            tempo: Tempo::new(120.0).expect("Host tempo"),
+        },
+        NonZeroU16::new(4).expect("Host meter"),
+        rate,
+    );
+    let unity = ExponentialApproach::new(1.0, 1.0, 0.0).expect("declared unity law");
+    let wrong = ExponentialApproach::new(2.0, 2.0, 0.0).expect("wrong consumed law");
+    let mut terminal = command(old_seq, 0, 1.0);
+    terminal.planned = Some(Ok((Duration::ZERO, 1.0)));
+    terminal.landing = Some((Duration::ZERO, SessionFrame::new(0)));
+    terminal.curve = SpeedCurve::ApproachSteps(vec![(0, unity), (96, wrong), (97, unity)].into());
+    let applied = AppliedCurve {
+        command: &terminal,
+        at: SessionFrame::new(0),
+    };
+    let verify = |end| {
+        applied
+            .verify_prefix(
+                &model,
+                &source,
+                &host,
+                std::ops::Bound::Included(SessionFrame::new(end)),
+                1.0,
+                false,
+            )
+            .expect("finite consumed source prefix")
+            .2
+    };
+    assert!(
+        verify(96).is_empty(),
+        "a zero-length horizon does not consume the upcoming law"
+    );
+    for end in [97, 98] {
+        let failures = verify(end);
+        assert!(
+            failures
+                .iter()
+                .any(|failure| failure.contains("analytic law")),
+            "the first consumed wrong sample must fail the exact law at horizon {end}: {failures:?}"
+        );
+        assert!(
+            failures
+                .iter()
+                .any(|failure| failure.contains("partial area")),
+            "the last positive interval must fail physical source area at horizon {end}: {failures:?}"
+        );
+    }
 }

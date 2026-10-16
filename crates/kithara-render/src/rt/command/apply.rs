@@ -2,6 +2,8 @@ use kithara_command::{Due, Seq, Target};
 use kithara_config::LiveConfig;
 use kithara_events::TrackId;
 use kithara_signal::{SegmentId, SessionFrame};
+#[cfg(feature = "usdt")]
+use kithara_test_macros as kithara;
 
 use super::{
     super::{
@@ -28,10 +30,21 @@ impl Deck {
                 segment,
             } => {
                 let track = self.track(pcm, segment, item_id);
-                self.tracks
-                    .put(slot, track)
-                    .err()
-                    .map(|resource| returned_pcm(slot, resource))
+                match self.tracks.put(slot, track) {
+                    Ok(()) => {
+                        #[cfg(feature = "usdt")]
+                        {
+                            let track_id = item_id.as_u64();
+                            let slot = u32::from(slot.get());
+                            let segment = segment.get();
+                            let at = i64::from(at);
+                            let seq = seq.get();
+                            kithara::probe_event!(deck_attached, track_id, slot, segment, at, seq);
+                        }
+                        None
+                    }
+                    Err(resource) => Some(returned_pcm(slot, resource)),
+                }
             }
             DeckPart::Detach { slot } => {
                 let mut track = self.tracks.take(slot)?;

@@ -1102,6 +1102,106 @@ impl DecodedCapture {
         })
     }
 
+    pub(super) fn fixture_domain(
+        &self,
+        info: kithara::signal::AudioChunkInfo,
+        reference: &Audio,
+        witnessed_first: u64,
+    ) -> Result<std::ops::Range<u64>, String> {
+        if self.rejected
+            || reference.channels != info.spec.channels
+            || reference.sample_rate != info.spec.sample_rate.get()
+            || info.media_origin != Some(Duration::ZERO)
+        {
+            return Err("source fixture has no exact native PCM identity/spec/origin".to_owned());
+        }
+        let channels = usize::from(reference.channels);
+        let end =
+            u64::try_from(reference.samples.len() / channels).map_err(|error| error.to_string())?;
+        let declared_end = info
+            .media_end
+            .ok_or_else(|| "source has no actual declared EOF".to_owned())?;
+        if info
+            .spec
+            .duration_for(end)
+            .map_err(|error| error.to_string())?
+            != declared_end
+        {
+            return Err("source EOF differs from the independently decoded fixture".to_owned());
+        }
+        let mut witnessed = false;
+        let mut frontier = witnessed_first;
+        for (chunk, samples) in self.chunks.values().filter(|(chunk, _)| {
+            chunk.source_revision == info.source_revision
+                && chunk.spec == info.spec
+                && chunk.media_origin == info.media_origin
+        }) {
+            let range = chunk.frame_range();
+            let geometry = chunk
+                .source_geometry()
+                .filter(|geometry| geometry.is_affine())
+                .ok_or_else(|| "named fixture has no native affine source geometry".to_owned())?;
+            for (offset, expected) in [(0, range.start), (u64::from(chunk.frames), range.end)] {
+                let (numerator, denominator) = geometry
+                    .source_ratio_at(offset)
+                    .ok_or_else(|| "named fixture has invalid source geometry".to_owned())?;
+                if numerator != u128::from(expected) * denominator.get()
+                    || geometry.sample_rate() != chunk.spec.sample_rate
+                {
+                    return Err(
+                        "named fixture source clock differs from its native PCM axis".to_owned(),
+                    );
+                }
+            }
+            witnessed |= range.start == witnessed_first;
+            if range.end > witnessed_first {
+                if range.start > frontier {
+                    return Err(
+                        "fixture identity has an interior decoded PCM hole after its witnessed origin"
+                            .to_owned(),
+                    );
+                }
+                frontier = frontier.max(range.end);
+            }
+            let begin = usize::try_from(range.start).map_err(|error| error.to_string())? * channels;
+            let through = usize::try_from(range.end).map_err(|error| error.to_string())? * channels;
+            let expected = reference.samples.get(begin..through).ok_or_else(|| {
+                "captured source extends past the named native fixture".to_owned()
+            })?;
+            compare_pcm(samples, expected)?;
+        }
+        if !witnessed || frontier <= witnessed_first || frontier > end {
+            return Err(
+                "actual decoded source does not cover its witnessed native fixture origin"
+                    .to_owned(),
+            );
+        }
+        Ok(witnessed_first..end)
+    }
+
+    pub(super) fn sample_at_domain(
+        &self,
+        info: super::consumed::SourceIdentity,
+        position: (u128, std::num::NonZeroU128),
+        speed: f64,
+        channel: usize,
+        domain: &std::ops::Range<u64>,
+    ) -> Result<f32, String> {
+        if self.rejected || domain.is_empty() {
+            return Err("bounded fixture sampler has no accepted source domain".to_owned());
+        }
+        let first = i64::try_from(domain.start).map_err(|error| error.to_string())?;
+        let last = i64::try_from(domain.end - 1).map_err(|error| error.to_string())?;
+        let source =
+            i64::try_from(position.0 / position.1.get()).map_err(|error| error.to_string())?;
+        mapped_sample((position.0, position.1.get()), speed, |offset| {
+            let frame = source
+                .checked_add(offset)
+                .ok_or_else(|| "fixture sample coordinate overflows".to_owned())?;
+            self.sample(info, frame.clamp(first, last), channel)
+        })
+    }
+
     fn physical_capture_clock(
         &self,
         pcm: &[f32],

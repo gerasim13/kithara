@@ -199,7 +199,7 @@ audio-artifacts OUTPUT:
 
     KITHARA_AUDIO_ARTIFACT_DIR="$output" \
       just test run -p kithara-sync-tests --test sync \
-        -E 'test(/^sync_listening::record_sync_listening_wavs_/)'
+        -E 'test(/^sync_listening::record_sync_listening_wavs_/) | test(=sync_product_matrix::queue::one_queue_crossfades_five_music_tracks_and_retargets_host_during_overlap)'
     KITHARA_AUDIO_ARTIFACT_DIR="$output" \
       just test run -p kithara-queue-tests --test queue \
         -E 'test(/^next_crossfade_hands_over_transport::a_next_press_hands_the_transport_to_the_track_it_crossfades_in_/)'

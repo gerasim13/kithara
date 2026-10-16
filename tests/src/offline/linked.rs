@@ -8,7 +8,10 @@ use kithara::{
         GridAnswer, LinkedDeck, LinkedFactory, LinkedHost, LinkedPlayer, LinkedSnapshot,
         TempoTrajectory,
     },
-    platform::sync::{Arc, Mutex},
+    platform::{
+        sync::{Arc, Mutex},
+        tokio::sync::oneshot,
+    },
     play::{
         Bound, DeckPass, HostedDeck, Outbox, PlayError, PlayWorker, Player, PlayerConfig,
         PlayerFactory, PlayerImpl, Position, ResourcePrep, Settled, Track, TrackCommand,
@@ -39,6 +42,9 @@ pub enum LinkVerdict {
 }
 
 pub enum LinkProbeCommand<S: HasPool<u8> + Send + Sync + 'static> {
+    ReadSnapshot {
+        answer: oneshot::Sender<Vec<(LinkedSnapshot<TrackSnapshot>, SlotSnapshot)>>,
+    },
     Track {
         item: TrackId,
         command: TrackCommand<S>,
@@ -57,6 +63,7 @@ struct LinkProbes<S: HasPool<u8> + Send + Sync + 'static> {
 
 #[derive(Default)]
 pub struct LinkObservation {
+    pub capture: Option<LinkCapture>,
     pub tracks: Vec<LinkedSnapshot<TrackSnapshot>>,
     pub consumed: Vec<(TrackId, SlotSnapshot)>,
     pub consumed_rate: Option<NonZeroU32>,
@@ -79,6 +86,39 @@ pub struct LinkObservation {
     pub deck: Vec<(Seq, LinkVerdict)>,
     pub ready_cues: Vec<(TrackId, Seq)>,
     pub timeline: Vec<serde_json::Value>,
+}
+
+#[derive(Default)]
+pub struct LinkCapture {
+    pub consumed: Vec<(
+        SessionFrame,
+        TrackId,
+        kithara_render::bridge::Slot,
+        SlotSnapshot,
+    )>,
+    pub starts: Vec<(
+        TrackId,
+        kithara_render::bridge::Slot,
+        SessionFrame,
+        kithara_render::bridge::Fade,
+    )>,
+    pub fades: Vec<(
+        TrackId,
+        kithara_render::bridge::Slot,
+        SessionFrame,
+        kithara_render::CrossfadeSettings,
+        kithara_render::bridge::FadeDir,
+    )>,
+    pub segments: Vec<(
+        TrackId,
+        kithara_render::bridge::Slot,
+        SessionFrame,
+        u64,
+        u64,
+    )>,
+    pub faded: Vec<(TrackId, kithara_render::bridge::Slot, SessionFrame)>,
+    pub ended: Vec<(TrackId, kithara_render::bridge::Slot, SessionFrame)>,
+    pub faults: Vec<DeckEvent>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -802,6 +842,14 @@ where
     pub fn observe<Value>(&self, read: impl FnOnce(&LinkObservation) -> Value) -> Value {
         read(&self.observation.lock())
     }
+    pub async fn read_snapshot(&self) -> Vec<(LinkedSnapshot<TrackSnapshot>, SlotSnapshot)> {
+        let (answer, reply) = oneshot::channel();
+        self.probe(LinkProbeCommand::ReadSnapshot { answer });
+        reply
+            .await
+            .expect("Linked snapshot query reaches its owner")
+    }
+
     pub fn track_snapshot(&self, item: TrackId) -> Option<LinkedSnapshot<TrackSnapshot>> {
         self.observe(|observation| {
             observation
@@ -846,7 +894,7 @@ where
     }
 
     fn publish_consumed(&self, pass: DeckPass<'_>) {
-        let consumed = self
+        let consumed: Vec<_> = self
             .inner
             .tracks_active()
             .filter_map(|track| {
@@ -856,12 +904,160 @@ where
                     .slots
                     .get(usize::from(slot.get()))
                     .copied()
-                    .map(|slot| (track.item, slot))
+                    .map(|snapshot| (track.item, snapshot))
             })
             .collect();
         let mut observation = self.observation.lock();
         observation.consumed_rate = NonZeroU32::new(pass.deck.sample_rate);
+        let capturing = observation.capture.is_some();
         observation.consumed = consumed;
+        if capturing {
+            let owners: Vec<_> = self
+                .inner
+                .tracks_active()
+                .filter_map(|track| {
+                    let track = track.snapshot().track;
+                    track.slot.map(|slot| (track.item, slot))
+                })
+                .collect();
+            let consumed = observation.consumed.clone();
+            let capture = observation.capture.as_mut().expect("opt-in typed capture");
+            for (item, snapshot) in &consumed {
+                let slot = &owners
+                    .iter()
+                    .find(|(owner, _)| owner == item)
+                    .expect("active owner")
+                    .1;
+                assert_eq!(
+                    owners.iter().filter(|(_, other)| other == slot).count(),
+                    1,
+                    "a consumed slot must have one active Queue owner"
+                );
+                if let (Some(mark), Some(source)) = (snapshot.mark, snapshot.source) {
+                    assert_eq!(
+                        mark.lane.segment, source.segment,
+                        "consumed segment custody"
+                    );
+                }
+                let duplicate = capture
+                    .consumed
+                    .iter()
+                    .rev()
+                    .take_while(|(at, ..)| *at == pass.now)
+                    .any(|(_, owner, seat, prior)| {
+                        owner == item && seat == slot && prior == snapshot
+                    });
+                if !duplicate {
+                    assert!(
+                        capture.consumed.len() < 65_536,
+                        "bounded queue-crossfade capture"
+                    );
+                    capture.consumed.push((pass.now, *item, *slot, *snapshot));
+                }
+            }
+        }
+        drop(observation);
+    }
+
+    fn capture_native(&self, receipt: &TrackReceipt<'_, S>) {
+        if let TrackReceipt::Deck {
+            seq,
+            outcome: Outcome::Applied { at, .. },
+            batch,
+            ..
+        } = receipt
+        {
+            let owners: Vec<_> = self
+                .inner
+                .tracks_active()
+                .filter_map(|track| {
+                    let track = track.snapshot().track;
+                    track.slot.map(|slot| (slot, track.item))
+                })
+                .collect();
+            if let Some(capture) = self.observation.lock().capture.as_mut() {
+                for part in &batch.commands {
+                    let slot = match part {
+                        DeckPart::Adopt { slot, .. }
+                        | DeckPart::Start { slot, .. }
+                        | DeckPart::Fade { slot, .. } => *slot,
+                        DeckPart::Replace { .. } => {
+                            panic!("five-item automatic queue must not replace an occupied slot")
+                        }
+                        _ => continue,
+                    };
+                    let candidates: Vec<_> =
+                        owners.iter().filter(|(seat, _)| *seat == slot).collect();
+                    assert_eq!(candidates.len(), 1, "one native batch owner per slot");
+                    let item = candidates[0].1;
+                    match part {
+                        DeckPart::Adopt { segment, .. } => {
+                            let entry = (item, slot, *at, segment.get(), seq.get());
+                            if !capture.segments.contains(&entry) {
+                                assert!(
+                                    capture.segments.len() < 16,
+                                    "bounded native segment custody"
+                                );
+                                capture.segments.push(entry);
+                            }
+                        }
+                        DeckPart::Start { fade, .. } => {
+                            let entry = (item, slot, *at, *fade);
+                            if !capture.starts.contains(&entry) {
+                                assert!(capture.starts.len() < 5, "five automatic starts");
+                                capture.starts.push(entry);
+                            }
+                        }
+                        DeckPart::Fade { settings, dir, .. } => {
+                            let entry = (item, slot, *at, *settings, *dir);
+                            if !capture.fades.contains(&entry) {
+                                assert!(capture.fades.len() < 8, "four queue fade pairs");
+                                capture.fades.push(entry);
+                            }
+                        }
+                        _ => unreachable!("matched capture part"),
+                    }
+                }
+            }
+        }
+    }
+
+    fn capture_terminal(&self, receipt: &TrackReceipt<'_, S>) {
+        if let TrackReceipt::Event(event) = receipt {
+            let boundary = match event {
+                DeckEvent::Faded { slot, at } => Some((*slot, *at, true)),
+                DeckEvent::Ended { slot, at } => Some((*slot, *at, false)),
+                _ => None,
+            };
+            if let Some((slot, at, faded)) = boundary {
+                let owners: Vec<_> = self
+                    .inner
+                    .tracks_active()
+                    .filter_map(|track| {
+                        let snapshot = track.snapshot().track;
+                        (snapshot.slot == Some(slot)).then_some(snapshot.item)
+                    })
+                    .collect();
+                if let Some(capture) = self.observation.lock().capture.as_mut() {
+                    assert_eq!(owners.len(), 1, "a terminal slot retains one native owner");
+                    let entries = if faded {
+                        &mut capture.faded
+                    } else {
+                        &mut capture.ended
+                    };
+                    let entry = (owners[0], slot, at);
+                    if !entries.contains(&entry) {
+                        assert!(entries.len() < 5, "five native track boundaries");
+                        entries.push(entry);
+                    }
+                }
+            } else if matches!(event, DeckEvent::Failed { .. } | DeckEvent::Underrun { .. })
+                && let Some(capture) = self.observation.lock().capture.as_mut()
+            {
+                assert!(capture.faults.len() < 16, "bounded queue fault evidence");
+                capture.faults.push(*event);
+            }
+        }
     }
 }
 
@@ -890,6 +1086,19 @@ where
         let commands = std::mem::take(&mut self.commands.lock().commands);
         for command in commands {
             match command {
+                LinkProbeCommand::ReadSnapshot { answer } => {
+                    let snapshot = self
+                        .inner
+                        .tracks_active()
+                        .filter_map(|track| {
+                            let snapshot = track.snapshot();
+                            let slot = snapshot.track.slot?;
+                            let consumed = pass.deck.slots.get(usize::from(slot.get())).copied()?;
+                            Some((snapshot, consumed))
+                        })
+                        .collect();
+                    let _ = answer.send(snapshot);
+                }
                 LinkProbeCommand::Track { item, command } => {
                     let track = self
                         .inner
@@ -961,6 +1170,12 @@ where
                 Outcome::Rejected(_) => LinkVerdict::Refused,
             };
             self.observation.lock().deck.push((*seq, verdict));
+        }
+        let capturing = self.observation.lock().capture.is_some();
+        if capturing {
+            self.capture_native(&receipt);
+            self.publish_consumed(pass);
+            self.capture_terminal(&receipt);
         }
         HostedDeck::settle(&mut self.inner, receipt, pass, out);
         self.publish_pass(pass);
