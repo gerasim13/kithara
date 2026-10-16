@@ -289,7 +289,8 @@ impl ActiveDecode {
         if !self.outgoing_holdback_is_active() {
             return self.active.push(chunk);
         }
-        match self.active.push_holdback(chunk)? {
+        let cut = self.outgoing_holdback_cut();
+        match self.active.push_holdback(chunk, cut)? {
             StageResult::Ready | StageResult::NeedMore => Ok(()),
             StageResult::Invalid(failure) => Err(Self::reject_stage(*failure)),
         }
@@ -424,7 +425,10 @@ mod tests {
 
     use super::*;
     use crate::{
-        pipeline::decode::transition::{IncomingPrime, OutgoingFrontier},
+        pipeline::{
+            decode::transition::{IncomingPrime, OutgoingFrontier, PromotionJoin},
+            seek::ResumeTarget,
+        },
         test_pools::{Pools, pools, sample_buffer},
         traits::{AudioObserveError, AudioObserverMock},
     };
@@ -787,6 +791,148 @@ mod tests {
                 .expect("drained output remains valid")
                 .is_none()
         );
+
+        for (
+            old_rate,
+            new_rate,
+            source_frame,
+            first_frame,
+            cut,
+            origin,
+            incoming_cut,
+            timestamp_ns,
+        ) in [
+            (
+                44_100,
+                48_000,
+                44_101,
+                48_001,
+                48_002,
+                0,
+                48_002,
+                1_000_022_675,
+            ),
+            (191_999, 191_997, 3, 2, 3, 1, 2, 15_625),
+        ] {
+            let spec = AudioSpec::new(1, NonZeroU32::new(new_rate).expect("new route rate"));
+            let source_end = crate::SourceEnd::new(
+                source_frame,
+                NonZeroU32::new(old_rate).expect("old route rate"),
+            );
+            let mut active = generation(spec);
+            active.retain_visible_origin(
+                None,
+                Some(
+                    spec.duration_for(origin)
+                        .expect("outgoing comparison origin"),
+                ),
+            );
+            active.trim_to(ResumeTarget::Source(source_end));
+            let mut incoming = generation(spec);
+            incoming.retain_visible_origin(None, None);
+            let mut incoming_samples = vec![0.5; 16_384];
+            incoming_samples[1] = 0.75;
+            incoming
+                .stage(AudioChunk::new(
+                    AudioChunkInfo {
+                        spec,
+                        frame_offset: first_frame,
+                        frames: 16_384,
+                        ..Default::default()
+                    },
+                    sample_buffer(&pools, &incoming_samples),
+                ))
+                .expect("incoming PCM covers the converted cut");
+            let mut cursor = ResumeCursor::default();
+            cursor.rebase(source_end);
+            let (frame, rate) = cursor.decode_head().expect("source resume frontier");
+            let mut decode = active_decode(&pools, active, GaplessMode::Disabled);
+            decode.incoming = Some(IncomingDecode::Priming {
+                transition,
+                generation: incoming,
+                frontier: OutgoingFrontier::Exact { frame, rate },
+            });
+            decode.prepare_incoming_profile(BlenderProfile::new(spec));
+            assert_eq!(decode.outgoing_holdback_cut(), Some(cut));
+            for (frame, marker) in [(first_frame, 0.125), (first_frame + 1, 0.25)] {
+                decode
+                    .push(AudioChunk::new(
+                        AudioChunkInfo {
+                            spec,
+                            frame_offset: frame,
+                            frames: 1,
+                            ..Default::default()
+                        },
+                        sample_buffer(&pools, &[marker]),
+                    ))
+                    .expect("valid resumed PCM enters holdback");
+            }
+            assert!(decode.prepare_promotion().is_none());
+            let incoming = decode
+                .discard_incoming()
+                .expect("the join is still pending");
+            for (frame, marker) in [(first_frame, 0.125), (first_frame + 1, 0.25)] {
+                let output = decode
+                    .next_output(&mut cursor, None, false)
+                    .expect("cancelled promotion keeps resumed PCM valid")
+                    .expect("cancelled promotion must retain the predecessor");
+                assert_eq!(output.meta.frame_offset, frame);
+                assert_eq!(output.samples.as_ref(), &[marker]);
+                if frame == first_frame {
+                    assert_eq!(output.meta.timestamp, Duration::from_nanos(timestamp_ns));
+                }
+            }
+
+            let mut active = generation(spec);
+            active.retain_visible_origin(
+                None,
+                Some(
+                    spec.duration_for(origin)
+                        .expect("outgoing comparison origin"),
+                ),
+            );
+            active
+                .stage(AudioChunk::new(
+                    AudioChunkInfo {
+                        spec,
+                        frame_offset: first_frame,
+                        frames: 16_384,
+                        ..Default::default()
+                    },
+                    sample_buffer(&pools, &vec![0.25; 16_384]),
+                ))
+                .expect("outgoing PCM covers the complete join");
+            let mut decode = active_decode(&pools, active, GaplessMode::Disabled);
+            decode.incoming = Some(IncomingDecode::Priming {
+                transition,
+                generation: incoming,
+                frontier: OutgoingFrontier::Exact { frame, rate },
+            });
+            decode.prepare_incoming_profile(BlenderProfile::new(spec));
+            let prepared = decode
+                .prepare_promotion()
+                .expect("both native sides cover the exact join");
+            assert!(matches!(
+                prepared.join,
+                PromotionJoin::Blend { outgoing_first, .. } if outgoing_first == cut
+            ));
+            let first = prepared
+                .generation
+                .staged
+                .front()
+                .expect("incoming join PCM");
+            assert_eq!(first.meta.frame_offset, incoming_cut);
+            let trimmed = usize::try_from(incoming_cut - first_frame).expect("trim count");
+            assert_eq!(first.samples.as_ref(), &incoming_samples[trimmed..]);
+            let _retired = decode.commit_prepared_promotion(prepared);
+            let output = decode
+                .next_output_unheld(&mut ResumeCursor::default(), None, false)
+                .expect("committed native join remains valid")
+                .expect("committed native join produces audio");
+            assert_eq!(output.meta.frame_offset, incoming_cut);
+            assert_eq!(output.samples.first(), Some(&0.25));
+            assert_eq!(output.samples.last(), Some(&0.5));
+        }
     }
 
     #[kithara::test]
@@ -836,30 +982,58 @@ mod tests {
             },
         });
         decode.prepare_incoming_profile(BlenderProfile::new(spec));
-        decode
-            .push(AudioChunk::new(
-                AudioChunkInfo {
-                    spec,
-                    frames: OUTGOING_FRAMES,
-                    ..Default::default()
-                },
-                sample_buffer(
-                    &pools,
-                    &vec![
-                        0.25;
-                        usize::try_from(OUTGOING_FRAMES)
-                            .expect("test frames fit usize")
-                            .saturating_mul(usize::from(spec.channels))
-                    ],
-                ),
-            ))
-            .expect("valid outgoing PCM enters holdback");
+        let capacity = decode.active().staged_capacity();
+        for (offset, frames) in [(0, 64), (64, OUTGOING_FRAMES - 64)] {
+            decode
+                .push(AudioChunk::new(
+                    AudioChunkInfo {
+                        spec,
+                        frame_offset: offset,
+                        frames,
+                        ..Default::default()
+                    },
+                    sample_buffer(
+                        &pools,
+                        &vec![
+                            0.25;
+                            usize::try_from(frames)
+                                .expect("test frames fit usize")
+                                .saturating_mul(usize::from(spec.channels))
+                        ],
+                    ),
+                ))
+                .expect("valid outgoing PCM enters holdback");
+        }
 
         assert!(decode.transition_holds_output());
         assert!(
             decode.outgoing_holdback_needs_pcm(),
             "PCM that covers the join only from queue-front zero does not cover exact cut {CUT}"
         );
+        decode
+            .push(AudioChunk::new(
+                AudioChunkInfo {
+                    spec,
+                    frame_offset: u64::from(OUTGOING_FRAMES),
+                    frames: 32,
+                    ..Default::default()
+                },
+                sample_buffer(&pools, &vec![0.25; 32 * usize::from(spec.channels)]),
+            ))
+            .expect("outgoing PCM must complete the exact promotion cut");
+        assert!(!decode.outgoing_holdback_needs_pcm());
+        assert_eq!(decode.active().staged_capacity(), capacity);
+        let prepared = decode
+            .prepare_promotion()
+            .expect("the exact join is covered");
+        let _retired = decode.commit_prepared_promotion(prepared);
+        let mut cursor = ResumeCursor::default();
+        let output = decode
+            .next_output_unheld(&mut cursor, None, false)
+            .expect("promoted PCM remains valid")
+            .expect("promotion must produce audio");
+        assert_eq!(output.samples[0], 0.25);
+        assert_eq!(output.samples[output.samples.len() - 1], 0.5);
     }
 
     #[kithara::test]

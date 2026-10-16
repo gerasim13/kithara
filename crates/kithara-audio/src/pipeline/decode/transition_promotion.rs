@@ -36,33 +36,34 @@ impl ActiveDecode {
     }
 
     pub(crate) fn outgoing_holdback_needs_pcm(&self) -> bool {
+        self.outgoing_holdback_cut().is_some()
+    }
+
+    pub(super) fn outgoing_holdback_cut(&self) -> Option<u64> {
         let Some(IncomingDecode::Priming {
             frontier,
             generation,
             ..
         }) = self.incoming.as_ref()
         else {
-            return false;
+            return None;
         };
         let gapless_mode = self.gapless_mode();
-        let Some((outgoing_origin, incoming_origin)) = self
+        let (outgoing_origin, incoming_origin) = self
             .active
             .comparison_origin(gapless_mode)
-            .zip(incoming_origin(&self.active, generation, gapless_mode))
-        else {
-            return false;
-        };
-        matches!(
-            promotion_readiness(
-                &self.active,
-                &self.blender,
-                generation,
-                *frontier,
-                outgoing_origin,
-                incoming_origin,
-            ),
-            PromotionReadiness::AwaitingOutgoingPcm
-        )
+            .zip(incoming_origin(&self.active, generation, gapless_mode))?;
+        match promotion_readiness(
+            &self.active,
+            &self.blender,
+            generation,
+            *frontier,
+            outgoing_origin,
+            incoming_origin,
+        ) {
+            PromotionReadiness::AwaitingOutgoingPcm { first } => Some(first),
+            _ => None,
+        }
     }
 
     /// A finished incoming may trim to an empty tail: the end-of-track hard cut proves nothing

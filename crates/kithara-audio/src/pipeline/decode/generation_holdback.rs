@@ -9,17 +9,17 @@ use super::generation::{
 
 impl DecoderGeneration {
     fn drain_holdback(&mut self) -> StageResult {
-        self.pump_holdback()
+        self.pump_holdback(None)
     }
 
-    fn holdback_progress(&self) -> StageProgress {
+    fn holdback_progress(&self, cut: Option<u64>) -> StageProgress {
         let Some(holdback) = self.holdback else {
             return StageProgress::NeedMore;
         };
         let Some(front) = self.staged.front() else {
             return StageProgress::NeedMore;
         };
-        let Some((_, frontier)) = chunk_range(front, holdback.spec) else {
+        let Some((first, frontier)) = chunk_range(front, holdback.spec) else {
             return StageProgress::NeedMore;
         };
         let Some(back) = self.staged.back() else {
@@ -28,10 +28,11 @@ impl DecoderGeneration {
         let Some((_, staged_end)) = chunk_range(back, holdback.spec) else {
             return StageProgress::NeedMore;
         };
-        let Some(join_end) = frontier.checked_add(holdback.join_frames) else {
+        let join_start = cut.unwrap_or(frontier);
+        let Some(join_end) = join_start.checked_add(holdback.join_frames) else {
             return StageProgress::NeedMore;
         };
-        if join_end <= staged_end {
+        if first <= join_start && join_end <= staged_end {
             StageProgress::Ready
         } else {
             StageProgress::NeedMore
@@ -39,7 +40,7 @@ impl DecoderGeneration {
     }
 
     pub(crate) fn next_with_holdback(&mut self) -> StageOutput {
-        match self.pump_holdback() {
+        match self.pump_holdback(None) {
             StageResult::Ready => StageOutput::Output(self.staged.pop_front()),
             StageResult::NeedMore => StageOutput::Output(None),
             StageResult::Invalid(failure) => StageOutput::Invalid(*failure),
@@ -70,10 +71,19 @@ impl DecoderGeneration {
     }
 
     #[kithara::hang_watchdog]
-    fn pump_holdback(&mut self) -> StageResult {
+    fn pump_holdback(&mut self, cut: Option<u64>) -> StageResult {
         loop {
             hang_tick!();
-            let progress = self.holdback_progress();
+            if let Some(cut) = cut
+                && let Some(holdback) = self.holdback
+            {
+                while self.staged.get(1).is_some_and(|next| {
+                    chunk_range(next, holdback.spec).is_some_and(|(_, end)| end <= cut)
+                }) {
+                    self.staged.pop_front();
+                }
+            }
+            let progress = self.holdback_progress(cut);
             if matches!(progress, StageProgress::Ready) {
                 return StageResult::Ready;
             }
@@ -87,14 +97,18 @@ impl DecoderGeneration {
         }
     }
 
-    pub(crate) fn push_holdback(&mut self, chunk: AudioChunk) -> DecodeResult<StageResult> {
+    pub(crate) fn push_holdback(
+        &mut self,
+        chunk: AudioChunk,
+        cut: Option<u64>,
+    ) -> DecodeResult<StageResult> {
         if self.gapless.has_output() {
             return Ok(StageResult::Invalid(Box::new(stage_failure(
                 chunk,
                 "transition holdback has undrained gapless output",
             ))));
         }
-        if matches!(self.holdback_progress(), StageProgress::Ready) {
+        if matches!(self.holdback_progress(cut), StageProgress::Ready) {
             return Ok(StageResult::Invalid(Box::new(stage_failure(
                 chunk,
                 "transition holdback is already ready",
@@ -102,7 +116,7 @@ impl DecoderGeneration {
         }
         self.observe_comparison_base();
         self.gapless.push(chunk)?;
-        Ok(self.drain_holdback())
+        Ok(self.pump_holdback(cut))
     }
 
     fn push_holdback_chunk(&mut self, chunk: AudioChunk) -> Option<StageFailure> {
