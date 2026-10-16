@@ -3,7 +3,6 @@ use std::{
     env, fs,
     io::{self, Write},
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
 };
 
 pub use kithara::assets::{AssetReader, ReadSide};
@@ -27,7 +26,6 @@ use crate::{
 };
 
 const ARTIFACT_DIR_ENV: &str = "KITHARA_AUDIO_ARTIFACT_DIR";
-static ATTEMPT: AtomicU64 = AtomicU64::new(0);
 
 pub type AudioArtifactRecording = RecordingCore<AssetPartSink<TestPools>>;
 
@@ -267,9 +265,10 @@ impl AudioArtifactSet {
             ));
         }
         validate_label(case)?;
-        let attempt = ATTEMPT.fetch_add(1, Ordering::Relaxed);
+        // The root outlives the process: CI runners keep it between jobs and
+        // reuse process ids, so only a random identity is fresh in it.
         let source = AssetSource::Local {
-            path: root.join(format!("{case}-{}-{attempt}", std::process::id())),
+            path: root.join(format!("{case}-{}", uuid::Uuid::new_v4())),
         };
         let store = AssetStore::builder(pools())
             .backend(StorageBackend::Disk {

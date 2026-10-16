@@ -1,9 +1,12 @@
 use std::mem::size_of;
 
+use ::kithara::assets::{
+    AcquisitionResult, AssetResource, AssetSource, AssetStore, StorageBackend, WriteSide,
+};
 use kithara_integration_tests::{
     artifact_timeline::ArtifactTimeline,
     audio_artifact::{AssetReader, AudioArtifactSet, ReadSide, audio_artifact_path},
-    bufpool_ext::TestPools,
+    bufpool_ext::{TestPools, pools},
 };
 use kithara_test_utils::kithara;
 use tempfile::tempdir;
@@ -50,6 +53,52 @@ fn timeline_coalesces_adjacent_presented_spans() {
 
     assert_eq!(timeline.events().len(), 1);
     assert!(timeline.svg().contains("output 0..256, source 20..276"));
+}
+
+/// A CI runner keeps the artifact root between jobs and its containers reuse
+/// process ids, so an earlier job leaves committed captures under the ids the
+/// next job's process starts with.
+#[kithara::test(native)]
+fn an_earlier_run_with_the_same_process_id_does_not_block_a_new_capture() {
+    let temp = tempdir().expect("temporary artifact directory");
+    let store = AssetStore::builder(pools())
+        .backend(StorageBackend::Disk {
+            root: temp.path().to_path_buf(),
+        })
+        .build();
+    for attempt in 0..16 {
+        let source = AssetSource::Local {
+            path: temp
+                .path()
+                .join(format!("reused-{}-{attempt}", std::process::id())),
+        };
+        let scope = store
+            .scope::<AudioArtifactSet>(&source)
+            .expect("earlier run scope");
+        let key = scope
+            .key(&AssetResource::Named {
+                namespace: "artifacts".to_owned(),
+                name: "capture.wav".to_owned(),
+            })
+            .expect("earlier run key");
+        let AcquisitionResult::Pending(writer) = store
+            .acquire_resource(&key, None)
+            .expect("earlier run acquisition")
+        else {
+            panic!("earlier run found its capture already committed");
+        };
+        writer.write_at(0, b"earlier").expect("earlier run write");
+        writer.commit(Some(7)).expect("earlier run commit");
+    }
+
+    let set = AudioArtifactSet::new(temp.path(), "reused", 48_000, 1).expect("audio artifact set");
+    let mut recording = set
+        .recording("capture", Some(1))
+        .expect("new run recording");
+    recording.push(&[0.5]).expect("record samples");
+    let bytes = read(&AudioArtifactSet::finish(recording).expect("finish recording"));
+
+    assert_eq!(&bytes[0..4], b"RIFF");
 }
 
 #[kithara::test(native, flash(false))]
