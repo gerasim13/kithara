@@ -212,6 +212,8 @@ pub(super) async fn physical_fixture(
         fixture.source.shared_stream.clone(),
         decode,
         SourceDecoderConfig {
+            runtime: kithara_platform::tokio::runtime::Handle::try_current()
+                .expect("source fixture runtime"),
             factory,
             host_rate: Some(rate),
             backend: kithara_decode::DecoderBackend::default(),

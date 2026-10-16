@@ -59,20 +59,6 @@ pub(super) fn classify_seek_err(err: &SymphoniaError) -> DecodeError {
     }
 }
 
-/// Whether a failed resume re-seek means the source has nothing left to read.
-///
-/// `resume_ts` is the end of the last cleanly emitted packet, and a
-/// packet-quantised reader reports a full packet duration even for a
-/// truncated final packet — so once the last frame is out, the resume point
-/// can sit past the end of the source. A reader publishes a length only once
-/// every segment size is exact, so "past the published end" is a final
-/// answer rather than a not-ready boundary: there is no stranded packet to
-/// re-read and the stream ends, the way [`Demuxer::seek`] reports
-/// `PastEof` instead of failing.
-pub(super) const fn resume_point_is_past_the_end(failure: &DecodeError) -> bool {
-    matches!(failure, DecodeError::SeekOutOfRange { .. })
-}
-
 pub(super) fn pending_reason(error: &SymphoniaError) -> Option<PendingReason> {
     let SymphoniaError::IoError(error) = error else {
         return None;

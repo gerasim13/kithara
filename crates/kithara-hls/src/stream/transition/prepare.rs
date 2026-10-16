@@ -137,6 +137,7 @@ where
             session.len(),
             Some(Arc::clone(&session) as Arc<dyn ByteMap>),
             Some(session.construction_gate()),
+            session.reader_control(),
             Some(Box::new(HlsReaderEventSink::for_session(
                 Arc::clone(&self.emit),
                 Arc::clone(&session),

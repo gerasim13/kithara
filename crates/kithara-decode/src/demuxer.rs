@@ -2,7 +2,7 @@ use kithara_platform::time::Duration;
 pub(crate) use kithara_stream::PrerollHint;
 use kithara_stream::{AudioCodec, PendingReason};
 
-use crate::{codec::CodecPriming, error::DecodeResult};
+use crate::{InputState, PrepareWait, codec::CodecPriming, error::DecodeResult};
 
 /// Container-side demuxer trait.
 ///
@@ -55,6 +55,14 @@ pub(crate) trait Demuxer: Send {
         Ok(())
     }
 
+    fn prepare_frame_with_wait(&mut self, _wait: PrepareWait) -> DecodeResult<()> {
+        self.prepare_frame()
+    }
+
+    fn release_input(&mut self) -> InputState {
+        InputState::Idle
+    }
+
     /// Seek to `target`, backing off by `priming` for codec warm-up when supported.
     /// Android and Apple `AudioFile` may ignore pre-roll and return `PrerollHint::NotNeeded`.
     /// Returns the actual landing point or `PastEof` beyond the known extent.
@@ -63,12 +71,28 @@ pub(crate) trait Demuxer: Send {
     /// Surfaces parser-level seek failures verbatim.
     fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome>;
 
+    fn seek_with_wait(
+        &mut self,
+        target: Duration,
+        priming: CodecPriming,
+        _wait: PrepareWait,
+    ) -> DecodeResult<DemuxSeekOutcome> {
+        self.seek(target, priming)
+    }
+
     /// Continue an unresolved seek, returning its settlement once.
     ///
     /// # Errors
     /// Returns source or parser failures from the same seek operation.
     fn prepare_seek(&mut self) -> DecodeResult<Option<DemuxSeekOutcome>> {
         Ok(None)
+    }
+
+    fn prepare_seek_with_wait(
+        &mut self,
+        _wait: PrepareWait,
+    ) -> DecodeResult<Option<DemuxSeekOutcome>> {
+        self.prepare_seek()
     }
 
     /// Raw packet coordinate of native media zero; absent when the translation is unknown.

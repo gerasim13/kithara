@@ -198,6 +198,7 @@ pub(in crate::pipeline::source) struct RouteSignalDecoder {
     #[field(with, vis = "pub(in crate::pipeline::source)")]
     pub(in crate::pipeline::source) timeline_gap: u64,
     pub(in crate::pipeline::source) phase: Option<Arc<Mutex<SourcePhase>>>,
+    pub(in crate::pipeline::source) prime_gate: Option<(oneshot::Sender<()>, mpsc::Receiver<()>)>,
 }
 
 impl RouteSignalDecoder {
@@ -227,6 +228,7 @@ impl RouteSignalDecoder {
             seek_landing: None,
             timeline_gap: 0,
             phase: None,
+            prime_gate: None,
         }
     }
 
@@ -253,6 +255,10 @@ impl Decoder for RouteSignalDecoder {
     }
 
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
+        if let Some((entered, released)) = self.prime_gate.take() {
+            let _ = entered.send(());
+            let _ = released.recv();
+        }
         if self.phase.as_ref().is_some_and(|phase| {
             matches!(
                 *phase.lock(),
@@ -511,7 +517,14 @@ impl VariantControl for TestControl {
         if self.exact_reader_taken.swap(true, Ordering::AcqRel) {
             return Ok(VariantReaderTake::Taken);
         }
-        let reader = OpenedReader::new(Cursor::new(Vec::new()), Some(0), None, None, None);
+        let reader = OpenedReader::new(
+            Cursor::new(Vec::new()),
+            Some(0),
+            None,
+            None,
+            kithara_stream::ReaderControl::new(None),
+            None,
+        );
         Ok(VariantReaderTake::Ready(OpenedVariantReader::new(
             plan, reader,
         )))
@@ -756,6 +769,7 @@ impl Source for TestSource {
         &mut self,
         range: Range<u64>,
         _timeout: Option<Duration>,
+        _cancel: Option<&kithara_stream::ReaderControl>,
     ) -> StreamResult<WaitOutcome> {
         self.park.enter_if_armed();
         self.waits.lock().push(range);
@@ -920,6 +934,8 @@ pub(in crate::pipeline::source) async fn test_source_with_mode(
         shared_stream,
         decode,
         SourceDecoderConfig {
+            runtime: kithara_platform::tokio::runtime::Handle::try_current()
+                .expect("source fixture runtime"),
             factory: decoder_factory,
             host_rate: NonZeroU32::new(consts::SAMPLE_RATE),
             backend: kithara_decode::DecoderBackend::default(),

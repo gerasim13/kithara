@@ -52,7 +52,7 @@ impl<T: StreamType> Stream<T> {
     /// reports a genuine I/O failure. Backpressure and a
     /// variant fence are non-errors — they surface as `Ok(Pending(..))`.
     pub fn try_read(&mut self, buf: &mut [u8]) -> Result<StreamReadOutcome, StreamReadError> {
-        self.try_read_with(buf, WaitMode::Probe)
+        self.try_read_with(buf, WaitMode::Probe, None)
     }
 
     /// Awaits only the unit holding the read cursor, never a wider range, since segmented readiness
@@ -65,6 +65,7 @@ impl<T: StreamType> Stream<T> {
         &mut self,
         buf: &mut [u8],
         wait: WaitMode,
+        cancel: Option<&crate::ReaderControl>,
     ) -> Result<StreamReadOutcome, StreamReadError> {
         if buf.is_empty() {
             return Ok(StreamReadOutcome::Eof {
@@ -93,9 +94,9 @@ impl<T: StreamType> Stream<T> {
                 .map_or(buf.len(), |len| len.min(buf.len()));
             let buf = &mut buf[..read_len];
 
-            let wait_result = self
-                .source
-                .wait_range(range, wait.timeout(Self::WAIT_RANGE_TIMEOUT));
+            let wait_result =
+                self.source
+                    .wait_range(range, wait.timeout(Self::WAIT_RANGE_TIMEOUT), cancel);
             let wait_outcome = match wait_result {
                 Ok(outcome) => outcome,
                 Err(StreamError::Source(SourceError::WaitBudgetExceeded)) => {
@@ -224,8 +225,30 @@ impl<T: StreamType> Read for Stream<T> {
     #[kithara::flash(true)]
     #[kithara::hang_watchdog(timeout = consts::READ_HANG_TIMEOUT)]
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.read_with_control(buf, None)
+    }
+}
+
+impl<T: StreamType> Stream<T> {
+    /// Read off-core while allowing an individual decoder generation to retire its wait.
+    ///
+    /// # Errors
+    /// Returns source failures or cancellation of the input generation.
+    #[kithara::flash(true)]
+    #[kithara::hang_watchdog(timeout = consts::READ_HANG_TIMEOUT)]
+    pub fn read_with_control(
+        &mut self,
+        buf: &mut [u8],
+        cancel: Option<&crate::ReaderControl>,
+    ) -> io::Result<usize> {
         loop {
-            match self.try_read_with(buf, WaitMode::Block) {
+            if cancel.is_some_and(crate::ReaderControl::is_cancelled) {
+                return Err(IoError::new(
+                    ErrorKind::Interrupted,
+                    PendingReason::SessionRetired,
+                ));
+            }
+            match self.try_read_with(buf, WaitMode::Block, cancel) {
                 Ok(StreamReadOutcome::Bytes { count, .. }) => return Ok(count.get()),
                 Ok(StreamReadOutcome::Eof { .. }) => return Ok(0),
                 Ok(StreamReadOutcome::Pending(

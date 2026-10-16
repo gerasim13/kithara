@@ -1,3 +1,4 @@
+mod change;
 mod core;
 mod seek;
 mod variant;

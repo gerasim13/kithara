@@ -18,9 +18,10 @@ use crate::{
         AudioEvent, AudioLaneEvent, AudioSource, DecoderFactory, DecoderGeneration, OwnerPhase,
         RecreateCause, RecreateState, TrackFailureKind, TrackStep, WaitingReason,
         rebuild::{
-            media_info, produced_data, route_signal_source, route_signal_source_with_gapless_eof,
-            test_source,
+            PreparationWake, media_info, produced_data, route_signal_source,
+            route_signal_source_with_gapless_eof, test_source, wait_for_source_change,
         },
+        transition::wait_for_incoming_priming,
     },
 };
 
@@ -220,7 +221,8 @@ async fn real_terminal_transitions_wait_for_the_diagnostic_shell(
                 },
                 None,
             );
-            let error = fixture
+            let wake = PreparationWake::install(&mut fixture.source);
+            fixture
                 .source
                 .install_replacement(
                     RecreateState {
@@ -230,17 +232,15 @@ async fn real_terminal_transitions_wait_for_the_diagnostic_shell(
                     },
                     None,
                 )
-                .expect_err("failed real reconstruction");
-            let failure = fixture.source.fail(
-                TrackFailureKind::RecreateFailed { offset: 8193 },
-                Some(error),
-            );
-            assert_eq!(failure, TrackFailureKind::RecreateFailed { offset: 8193 });
+                .expect("real reconstruction admission");
+            wait_for_source_change(&mut fixture.source, &wake).await;
             assert!(matches!(
                 fixture.source.phase,
                 OwnerPhase::Failed {
                     failure: TrackFailureKind::RecreateFailed { offset: 8193 },
-                    ..
+                    error: Some(DecodeError::InvalidData {
+                        detail: "recreate failure"
+                    }),
                 }
             ));
             TrackFailureKind::RecreateFailed { offset: 8193 }
@@ -350,7 +350,9 @@ async fn decode_error_precedes_track_failure_on_event_bus() {
 async fn rebuild_factory_panic_fails_track_without_hang() {
     let mut source = test_source(1).await.source;
     source.factory = DecoderFactory::new(|_, _, _| panic!("decoder construction blew up"), None);
+    let wake = PreparationWake::install(&mut source);
     source.set_host_sample_rate(NonZeroU32::new(96_000).expect("host rate"));
+    wait_for_source_change(&mut source, &wake).await;
     assert!(matches!(
         source.step_track(),
         TrackStep::Failed(TrackFailureKind::RecreateFailed { offset: 0 })
@@ -493,6 +495,7 @@ async fn gapless_eof_flushes_once_and_drains_every_frame_across_repeated_ticks(
     fixture.control.set_promotion(VariantPromotion::Deferred);
     let _ = fixture.source.prepare_deferred();
     fixture.source.finish_deferred();
+    wait_for_incoming_priming(&mut fixture, transition).await;
     assert!(fixture.source.decode.incoming_is_priming(transition));
 
     let expected = RAW_CHUNKS

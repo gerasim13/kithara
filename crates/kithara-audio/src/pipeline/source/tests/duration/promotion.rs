@@ -294,10 +294,12 @@ async fn an_unrepresentable_known_origin_retires_the_incoming_without_model_retr
             .begin_incoming(transition, OutgoingFrontier::Awaiting),
     );
     assert!(
-        source
-            .decode
-            .install_incoming(transition, incoming)
-            .is_none()
+        crate::pipeline::decode::transition_promotion::preparation::fixtures::install(
+            &mut source.decode,
+            transition,
+            incoming
+        )
+        .is_none()
     );
     assert_eq!(
         source.decode.prime_incoming(OutgoingFrontier::Exact {

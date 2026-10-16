@@ -75,60 +75,90 @@ where
         if buf.is_empty() {
             return Ok(0);
         }
-        self.session.check_live()?;
-        let position = self.session.projected_position();
-        let byte = position.byte;
-        let requested_end = byte.saturating_add(buf.len() as u64);
-        let unit_end = self
-            .session
-            .variant
-            .init_descriptor_at(byte)
-            .map(|range| range.end)
-            .or_else(|| {
-                self.session
-                    .find_at_offset(byte)
-                    .map(|(_, start, size)| start.saturating_add(size))
-            })
-            .unwrap_or(requested_end);
-        let read_end = requested_end.min(unit_end);
-        let read_len = usize::try_from(read_end.saturating_sub(byte))
-            .map_or(buf.len(), |len| len.min(buf.len()));
-        let buf = &mut buf[..read_len];
-        let range = byte..read_end;
-        let wait_budget = if self.session.construction_blocking() {
-            None
-        } else {
-            Some(Duration::ZERO)
-        };
-        match self.session.wait_range(range, wait_budget) {
-            Ok(WaitOutcome::Ready) => {}
-            Ok(WaitOutcome::Eof) => return Ok(0),
-            Ok(WaitOutcome::Interrupted) => {
-                return Err(pending(PendingReason::NotReady(
-                    NotReadyCause::WaitInterrupted,
-                )));
+        loop {
+            self.session.check_live()?;
+            let reader_control = self.session.reader_control();
+            let reader_cancel = reader_control.cancel_token();
+            if reader_cancel.is_cancelled() {
+                return Err(pending(PendingReason::SessionRetired));
             }
-            Err(StreamError::Source(SourceError::WaitBudgetExceeded)) => {
-                self.session.arm_peer();
-                return Err(pending(PendingReason::NotReady(
-                    NotReadyCause::WaitBudgetExhausted,
-                )));
+            let position = self.session.projected_position();
+            let byte = position.byte;
+            let requested_end = byte.saturating_add(buf.len() as u64);
+            let unit_end = self
+                .session
+                .variant
+                .init_descriptor_at(byte)
+                .map(|range| range.end)
+                .or_else(|| {
+                    self.session
+                        .find_at_offset(byte)
+                        .map(|(_, start, size)| start.saturating_add(size))
+                })
+                .unwrap_or(requested_end);
+            let read_end = requested_end.min(unit_end);
+            let read_len = usize::try_from(read_end.saturating_sub(byte))
+                .map_or(buf.len(), |len| len.min(buf.len()));
+            let buf = &mut buf[..read_len];
+            let range = byte..read_end;
+            let wait_budget = if self.session.construction_blocking()
+                || self.session.reader_control().is_blocking()
+            {
+                None
+            } else {
+                Some(Duration::ZERO)
+            };
+            match self
+                .session
+                .wait_range(range, wait_budget, Some(&reader_control))
+            {
+                Ok(WaitOutcome::Ready) => {}
+                Ok(WaitOutcome::Eof) => return Ok(0),
+                Ok(WaitOutcome::Interrupted) => {
+                    self.session.check_live()?;
+                    if reader_cancel.is_cancelled() {
+                        return Err(pending(PendingReason::SessionRetired));
+                    }
+                    if wait_budget.is_none() {
+                        self.session.wake_peer_for_readiness();
+                        continue;
+                    }
+                    return Err(pending(PendingReason::NotReady(
+                        NotReadyCause::WaitInterrupted,
+                    )));
+                }
+                Err(StreamError::Source(SourceError::WaitBudgetExceeded)) => {
+                    if wait_budget.is_none() {
+                        self.session.wake_peer_for_readiness();
+                        continue;
+                    }
+                    self.session.arm_peer();
+                    return Err(pending(PendingReason::NotReady(
+                        NotReadyCause::WaitBudgetExhausted,
+                    )));
+                }
+                Err(error) => return Err(Error::other(error)),
             }
-            Err(error) => return Err(Error::other(error)),
-        }
-        self.session.check_live()?;
-        match self.session.variant.read_at(byte, buf) {
-            Ok(ReadOutcome::Bytes(count)) => {
-                self.session.check_live()?;
-                self.session.advance_from(position, count.get() as u64);
-                Ok(count.get())
-            }
-            Ok(ReadOutcome::Eof) => Ok(0),
-            Ok(ReadOutcome::Pending(reason)) => {
-                self.session.arm_peer();
-                Err(pending(reason))
-            }
-            Err(error) => Err(Error::other(error)),
+            self.session.check_live()?;
+            return match self.session.variant.read_at(byte, buf) {
+                Ok(ReadOutcome::Bytes(count)) => {
+                    self.session.check_live()?;
+                    self.session.advance_from(position, count.get() as u64);
+                    Ok(count.get())
+                }
+                Ok(ReadOutcome::Eof) => Ok(0),
+                Ok(ReadOutcome::Pending(reason)) => {
+                    if wait_budget.is_none()
+                        && matches!(reason, PendingReason::NotReady(_) | PendingReason::Retry)
+                    {
+                        self.session.wake_peer_for_readiness();
+                        continue;
+                    }
+                    self.session.arm_peer();
+                    Err(pending(reason))
+                }
+                Err(error) => Err(Error::other(error)),
+            };
         }
     }
 }

@@ -179,6 +179,7 @@ impl Source for MemorySource {
         &mut self,
         range: Range<u64>,
         timeout: Option<Duration>,
+        _cancel: Option<&kithara::stream::ReaderControl>,
     ) -> StreamResult<WaitOutcome> {
         let _ = timeout;
         if range.start >= self.data.len() as u64 {

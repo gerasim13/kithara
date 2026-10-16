@@ -300,6 +300,10 @@ impl<S> kithara_stream::Source for FileSource<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
+    fn cancel_token(&self) -> Option<CancelToken> {
+        Some(self.inner.source.cancel.clone())
+    }
+
     fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
         file_byte_map(&self.inner)
     }
@@ -352,6 +356,7 @@ where
         &mut self,
         range: Range<u64>,
         timeout: Option<Duration>,
+        cancel: Option<&kithara_stream::ReaderControl>,
     ) -> StreamResult<WaitOutcome> {
         self.ensure_not_cancelled()?;
         if timeout.is_some() {
@@ -372,11 +377,23 @@ where
             return Err(StreamError::Source(StreamSourceError::WaitBudgetExceeded));
         }
 
-        self.inner
+        if let Some(control) = cancel {
+            control.set_pending(PendingReason::NotReady(NotReadyCause::WaitBudgetExhausted));
+        }
+        let reader_cancel = cancel.map(kithara_stream::ReaderControl::cancel_token);
+        let result = self
+            .inner
             .asset
             .reader
-            .wait_range_with_cancel(range, &self.inner.source.cancel)
-            .map_err(|e| StreamError::Source(FileSourceError::Storage(e).into()))
+            .wait_range_with_cancel(
+                range,
+                reader_cancel.as_ref().unwrap_or(&self.inner.source.cancel),
+            )
+            .map_err(|e| StreamError::Source(FileSourceError::Storage(e).into()));
+        if let Some(control) = cancel {
+            control.clear_pending();
+        }
+        result
     }
 
     delegate::delegate! {

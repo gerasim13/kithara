@@ -46,7 +46,8 @@ pub use gapless::{
     SilenceTrimParams, probe_mp4_gapless,
 };
 pub use traits::{
-    Decoder, DecoderChunkOutcome, DecoderInput, DecoderSeekOutcome, InputReadOutcome,
+    Decoder, DecoderChunkOutcome, DecoderInput, DecoderSeekOutcome, InputReadOutcome, InputState,
+    PrepareWait,
 };
 pub use types::{
     BlenderProfile, DecoderDuration, DecoderTrackInfo, GaplessProfile, PcmOrigin, TrackMetadata,

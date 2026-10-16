@@ -2,7 +2,7 @@ use std::sync::OnceLock;
 
 use kithara_platform::{
     CancelToken,
-    sync::{Arc, ThreadGate, WaitGate},
+    sync::{Arc, CondvarGate, WaitGate},
     time::Duration,
 };
 use kithara_storage::WaitOutcome;
@@ -35,7 +35,7 @@ pub(crate) struct SizeSignal {
     /// Deferred peer wake used by RT callers, which arm it for the scheduler
     /// shell to flush without invoking a task waker on the produce core.
     peer_wake: Arc<OnceLock<Arc<DeferredWake>>>,
-    ready: Arc<ThreadGate>,
+    ready: Arc<CondvarGate<u64>>,
     worker_wake: WorkerWakeCell,
 }
 
@@ -45,14 +45,13 @@ impl SizeSignal {
     /// event-driven. This interval bounds only the *quiet* case: if no signal
     /// arrives within it, the peer may be mis-aimed after a seek (it fetched,
     /// went idle, and the range the reader now wants is outside its prefetch
-    /// window), so the wait yields `WaitBudgetExceeded` to let the off-RT reader
-    /// re-assert the peer's aim (`notify_peer_wake`) and re-enter. It never polls
-    /// for data — readiness is always learned from a signal, never from a timer.
+    /// window). The next internal probe re-asserts the peer's aim while the
+    /// same parser operation remains parked until its range resolves.
     const READER_REAIM_INTERVAL: Duration = Duration::from_millis(25);
 
     /// Construct from a fresh readiness gate and an empty worker-wake cell. Built
     /// once in `Hls::create` and cloned down into every consumer.
-    pub(crate) fn new(ready: Arc<ThreadGate>, worker_wake: WorkerWakeCell) -> Self {
+    pub(crate) fn new(ready: Arc<CondvarGate<u64>>, worker_wake: WorkerWakeCell) -> Self {
         Self {
             ready,
             worker_wake,
@@ -82,7 +81,7 @@ impl SizeSignal {
 
     /// Re-vend the underlying readiness gate. Used by the cancel waker, which
     /// must capture a hard-`Send + Sync` handle in its `on_cancel` closure.
-    pub(crate) fn ready_gate(&self) -> Arc<ThreadGate> {
+    pub(crate) fn ready_gate(&self) -> Arc<CondvarGate<u64>> {
         Arc::clone(&self.ready)
     }
 
@@ -128,18 +127,31 @@ impl SizeSignal {
     pub(crate) fn wait_range_blocking(
         &self,
         cancel: &CancelToken,
+        reader_cancel: Option<&kithara_stream::ReaderControl>,
         mut probe: impl FnMut() -> StreamResult<WaitOutcome>,
     ) -> StreamResult<WaitOutcome> {
         let _cancel_wake = {
             let ready = self.ready_gate();
             cancel.on_cancel(move || ready.signal())
         };
+        let _reader_cancel_wake = reader_cancel.map(|cancel| {
+            let ready = self.ready_gate();
+            cancel.cancel_token().on_cancel(move || ready.signal())
+        });
         loop {
             hang_tick!();
+            if cancel.is_cancelled()
+                || reader_cancel.is_some_and(kithara_stream::ReaderControl::is_cancelled)
+            {
+                return Ok(WaitOutcome::Interrupted);
+            }
             let since = self.current();
             match probe() {
                 Ok(WaitOutcome::Ready) => {
                     hang_reset!();
+                    if let Some(control) = reader_cancel {
+                        control.clear_pending();
+                    }
                     return Ok(WaitOutcome::Ready);
                 }
                 Ok(WaitOutcome::Eof) => {
@@ -147,12 +159,16 @@ impl SizeSignal {
                     return Ok(WaitOutcome::Eof);
                 }
                 Ok(WaitOutcome::Interrupted) => return Ok(WaitOutcome::Interrupted),
-                Err(StreamError::Source(SourceError::WaitBudgetExceeded)) => {}
+                Err(StreamError::Source(SourceError::WaitBudgetExceeded)) => {
+                    if let Some(control) = reader_cancel {
+                        control.set_pending(kithara_stream::PendingReason::NotReady(
+                            kithara_stream::NotReadyCause::WaitBudgetExhausted,
+                        ));
+                    }
+                }
                 Err(e) => return Err(e),
             }
-            if !self.wait_timeout(since, Self::READER_REAIM_INTERVAL) {
-                return Err(StreamError::Source(SourceError::WaitBudgetExceeded));
-            }
+            self.wait_timeout(since, Self::READER_REAIM_INTERVAL);
         }
     }
 

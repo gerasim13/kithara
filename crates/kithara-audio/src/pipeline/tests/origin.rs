@@ -250,6 +250,9 @@ fn observed_incoming_origin_keeps_the_shared_gap_after_promotion() {
         VariantIndex::new(1),
     );
     drop(decode.commit_prepared_promotion(PreparedPromotion {
+        preparation:
+            crate::pipeline::decode::transition_promotion::preparation::fixtures::preparation_owner(
+            ),
         generation: incoming,
         transition,
         join: PromotionJoin::HardCut,

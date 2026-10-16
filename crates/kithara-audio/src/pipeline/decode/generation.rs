@@ -334,6 +334,28 @@ impl DecoderGeneration {
         }
     }
 
+    pub(crate) fn prepare_incoming(
+        &mut self,
+        target: super::transition_promotion::preparation::IncomingPreparation,
+    ) -> DecodeResult<super::transition::IncomingPrime> {
+        if let Some(gate) = &self.construction_gate {
+            gate.arm();
+        }
+        let outcome = catch_unwind(AssertUnwindSafe(|| target.prepare(self)));
+        if let Some(gate) = &self.construction_gate {
+            gate.disarm();
+        }
+        match outcome {
+            Ok(outcome) => outcome,
+            Err(payload) => {
+                warn!(panic = %panic_message(payload), "decoder panicked during incoming preparation");
+                Err(DecodeError::InvalidData {
+                    detail: "decoder panicked during incoming preparation",
+                })
+            }
+        }
+    }
+
     pub(crate) const fn observe_exhaustion(&mut self) {
         self.exhaustion_observed = true;
     }

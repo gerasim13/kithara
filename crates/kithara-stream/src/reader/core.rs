@@ -5,6 +5,7 @@ use std::{
 
 use kithara_platform::{sync::Arc, time::Duration};
 
+use super::ReaderControl;
 use crate::{BoxedEventSink, ByteMap, MediaInfo, VariantTransition};
 
 /// Per-reader switch for blocking I/O during off-RT decoder construction.
@@ -67,6 +68,7 @@ pub struct OpenedReader {
     byte_len: Option<u64>,
     byte_map: Option<Arc<dyn ByteMap>>,
     construction_gate: Option<ConstructionGate>,
+    control: ReaderControl,
     event_sink: Option<BoxedEventSink>,
 }
 
@@ -78,12 +80,14 @@ impl OpenedReader {
         byte_len: Option<u64>,
         byte_map: Option<Arc<dyn ByteMap>>,
         construction_gate: Option<ConstructionGate>,
+        control: ReaderControl,
         event_sink: Option<BoxedEventSink>,
     ) -> Self {
         Self {
             byte_len,
             byte_map,
             construction_gate,
+            control,
             event_sink,
             input: Box::new(input),
         }
@@ -99,6 +103,12 @@ impl OpenedReader {
     #[must_use]
     pub fn construction_gate(&self) -> Option<ConstructionGate> {
         self.construction_gate.clone()
+    }
+
+    /// Independent cancellation and readiness of this exact reader generation.
+    #[must_use]
+    pub fn control(&self) -> ReaderControl {
+        self.control.clone()
     }
 
     /// Transfer byte input to the decoder.

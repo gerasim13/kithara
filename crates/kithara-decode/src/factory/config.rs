@@ -4,7 +4,7 @@ use kithara_bufpool::PoolRegion;
 use kithara_config::Config;
 use kithara_platform::sync::Arc;
 use kithara_resampler::{NoResamplerBackend, ResamplerBackend, ResamplerOptions, ResamplerQuality};
-use kithara_stream::{BoxedEventSink, ByteMap, ConstructionGate};
+use kithara_stream::{BoxedEventSink, ByteMap, ConstructionGate, ReaderControl};
 
 use super::inner::DecoderBackend;
 
@@ -45,6 +45,9 @@ pub struct DecoderConfig<B, S> {
     /// Reader-owned I/O mode shared with resumable segment operations.
     #[config(skip = "transferred to the segment reader")]
     pub(crate) construction_gate: Option<ConstructionGate>,
+    /// Cancellation and availability owned by this opened input generation.
+    #[config(skip = "transferred to the native parser input")]
+    pub(crate) reader_control: Option<ReaderControl>,
     /// File extension hint for Symphonia probe (e.g., "mp3", "aac").
     #[cfg(feature = "symphonia")]
     #[config(skip = "consumed by the decoder probe", builder(into))]

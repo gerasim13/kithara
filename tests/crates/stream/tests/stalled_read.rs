@@ -41,6 +41,7 @@ impl Source for StalledSource {
         &mut self,
         _range: Range<u64>,
         _timeout: Option<Duration>,
+        _cancel: Option<&kithara::stream::ReaderControl>,
     ) -> StreamResult<WaitOutcome> {
         let since = self.gate.current();
         self.gate.wait_timeout(since, Self::REAIM);

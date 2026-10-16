@@ -13,7 +13,7 @@ use kithara_drm::DecryptContext;
 use kithara_events::EventBus;
 use kithara_platform::{
     CancelToken,
-    sync::{Arc, ThreadGate},
+    sync::Arc,
     time::{Duration, Instant},
 };
 use kithara_storage::WaitOutcome;
@@ -82,7 +82,10 @@ fn ctx_over(
             })
             .expect("test asset scope"),
         look_ahead_segments: None,
-        signal: SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new())),
+        signal: SizeSignal::new(
+            Arc::new(kithara_platform::sync::CondvarGate::default()),
+            Arc::new(OnceLock::new()),
+        ),
         config: Arc::new(
             HlsConfig::for_url(Url::parse("https://example.com/master.m3u8").expect("master url"))
                 .store(store.clone())
@@ -1422,17 +1425,16 @@ fn incoming_session_dispatches_only_the_decoder_construction_window() {
     assert_eq!(bytes, [9; 8]);
 }
 
-/// The construction pack is not just *emitted* — landing it is what makes the
-/// session readable. An init-only reader cannot be built until its header is
-/// on disk, so the pack and the readiness window have to agree on which bytes
-/// that is: a pack that never covers what readiness waits on leaves the
-/// transition preparing forever with no failure to point at.
+/// Init-only construction waits for its header; media read-ahead remains part
+/// of the fetch plan and is consumed after the reader is transferred.
 #[kithara::test]
 fn incoming_session_is_ready_once_its_construction_fetches_land() {
     let ctx = test_ctx(10);
     let v = VariantParts {
         init: make_init(48, &ctx.scope),
-        segments: (0..10).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
+        segments: (0..10)
+            .map(|idx| make_seg(idx, 64 * 1_024, &ctx.scope))
+            .collect(),
         codec: Some(AudioCodec::Flac),
         container: Some(ContainerFormat::Fmp4),
     }
@@ -1450,7 +1452,7 @@ fn incoming_session_is_ready_once_its_construction_fetches_land() {
     let profile = ReaderProfile::new(
         ReaderInput::InitOnly,
         ReaderWarmup::None,
-        NonZeroU64::new(64).expect("non-zero read ahead"),
+        NonZeroU64::new(32 * 1_024).expect("non-zero read ahead"),
     );
     let session = HlsSession::incoming(
         CancelToken::never(),
@@ -1468,18 +1470,32 @@ fn incoming_session_is_ready_once_its_construction_fetches_land() {
     );
 
     let mut commands = session.dispatch_constructing(&ctx, 10);
-    for cmd in &mut commands {
-        let Some(mut writer) = cmd.take_writer() else {
-            continue;
-        };
-        writer(&[7; 100]).expect("construction bytes");
-    }
+    assert_eq!(commands.len(), 3, "init, landing backoff, and landing");
+    assert_eq!(queue_seg_indices(&v), vec![5, 6, 7, 8, 9]);
+    assert_eq!(v.prefetch_anchor(), 48 + 4 * 64 * 1_024);
+    assert!(
+        !session
+            .is_ready()
+            .expect("readiness while header is missing")
+    );
+
+    let init = commands
+        .iter_mut()
+        .find(|command| command.url() == v.init().expect("declared init").url())
+        .expect("construction init fetch");
+    init.take_writer().expect("init writer")(&[7; 48]).expect("init bytes");
+    init.take_on_complete().expect("init completion")(48, None, None);
+    assert!(v.init().expect("declared init").state().is_loaded());
+    assert!(
+        v.segments()
+            .iter()
+            .all(|segment| !segment.state().is_loaded())
+    );
+    assert!(!v.segment_contains(4, 0..32 * 1_024));
 
     assert!(
-        session
-            .is_ready()
-            .expect("readiness after construction bytes"),
-        "the construction pack must cover everything readiness waits on"
+        session.is_ready().expect("readiness after init bytes"),
+        "InitOnly construction must not wait for its planned media read-ahead"
     );
 }
 
@@ -1786,25 +1802,52 @@ fn a_settled_slot_answers_no_demand() {
 #[kithara::test]
 fn a_readiness_poll_leaves_demand_unfiled() {
     let ctx = test_ctx(3);
-    let v = make_var(0, 0, &[100, 100], &ctx);
+    let v = make_var(0, 0, &[64 * 1_024, 64 * 1_024], &ctx);
     let profile = ReaderProfile::new(
         ReaderInput::Incremental,
         ReaderWarmup::None,
-        NonZeroU64::new(16).expect("non-zero read ahead"),
+        NonZeroU64::new(32 * 1_024).expect("non-zero read ahead"),
     );
     let preparation = v
         .prepare_reader(profile, Duration::ZERO)
         .expect("reader preparation");
-    let _claim = claim_segment_zero(&v, &ctx);
+    let claim = claim_segment_zero(&v, &ctx);
 
     assert!(
-        !v.reader_is_ready(&preparation).expect("readiness poll"),
-        "the claimed segment is not loaded"
+        v.reader_is_ready(&preparation).expect("readiness poll"),
+        "Incremental construction must not wait for any input bytes"
     );
 
     assert!(
         !v.segments()[0].state().is_reader_demanded(),
         "a readiness poll is not a read; only a parked wait escalates the fetch"
+    );
+
+    let mut bytes = [0xa5; 16];
+    assert!(matches!(
+        v.read_at(0, &mut bytes).expect("deferred media read"),
+        ReadOutcome::Pending(_)
+    ));
+    assert_eq!(bytes, [0xa5; 16]);
+    assert!(matches!(
+        v.wait_range(0..16, Some(Duration::ZERO)),
+        Err(StreamError::Source(SourceError::WaitBudgetExceeded))
+    ));
+    assert!(v.segments()[0].state().is_reader_demanded());
+
+    write_seg_bytes(&v, &ctx, 0, 64 * 1_024);
+    claim.into_loaded(64 * 1_024);
+    assert!(matches!(
+        v.wait_range(0..16, Some(Duration::ZERO)),
+        Ok(WaitOutcome::Ready)
+    ));
+    assert!(matches!(
+        v.read_at(0, &mut bytes).expect("landed media read"),
+        ReadOutcome::Bytes(count) if count.get() == bytes.len()
+    ));
+    assert_eq!(
+        bytes,
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
     );
 }
 
@@ -2464,7 +2507,7 @@ fn reader_demand_replans_a_prefix_outside_the_forward_window() {
     let session = active_session(&variant, &ctx, 12);
 
     assert!(matches!(
-        session.wait_range(12..22, Some(Duration::ZERO)),
+        session.wait_range(12..22, Some(Duration::ZERO), None),
         Err(StreamError::Source(SourceError::WaitBudgetExceeded))
     ));
     let commands = session.dispatch(&ctx, 1);
@@ -2766,7 +2809,7 @@ fn wait_range_flush_short_circuits_without_sleeping() {
     let session = active_session(&variant, &ctx, 0);
     session.abort();
     let started = Instant::now();
-    let interrupted = session.wait_range(0..1, Some(Duration::from_millis(10)));
+    let interrupted = session.wait_range(0..1, Some(Duration::from_millis(10)), None);
     let elapsed = Instant::now().saturating_duration_since(started);
     assert!(
         matches!(interrupted, Ok(WaitOutcome::Interrupted)),

@@ -8,6 +8,7 @@ use super::{
     reader::{FillStatus, LiveRange, SegmentReadState, fill_segment_buffer},
 };
 use crate::{
+    PrepareWait,
     codec::{CodecPriming, access_unit_frames, seek_warmup_access_units},
     demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, PrerollHint, TrackInfo},
     error::{DecodeError, DecodeResult},
@@ -297,6 +298,15 @@ where
     /// The seek target backs off by the SBR/PS pre-roll warmup before locating the covering
     /// segment.
     fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome> {
+        self.seek_with_wait(target, priming, PrepareWait::Poll)
+    }
+
+    fn seek_with_wait(
+        &mut self,
+        target: Duration,
+        priming: CodecPriming,
+        wait: PrepareWait,
+    ) -> DecodeResult<DemuxSeekOutcome> {
         let seek_target =
             warmup_backoff(self.track_info.codec, self.track_info.sample_rate, &priming)
                 .map_or(target, |backoff| target.saturating_sub(backoff));
@@ -333,17 +343,28 @@ where
             skip_to: skip_to.filter(|skip| *skip > desc.decode_time),
             priming,
         });
-        self.prepare_seek()?.ok_or(DecodeError::InvalidData {
-            detail: "fMP4 seek operation disappeared before resolution",
-        })
+        self.prepare_seek_with_wait(wait)?
+            .ok_or(DecodeError::InvalidData {
+                detail: "fMP4 seek operation disappeared before resolution",
+            })
     }
 
     fn prepare_seek(&mut self) -> DecodeResult<Option<DemuxSeekOutcome>> {
+        self.prepare_seek_with_wait(PrepareWait::Poll)
+    }
+
+    fn prepare_seek_with_wait(
+        &mut self,
+        wait: PrepareWait,
+    ) -> DecodeResult<Option<DemuxSeekOutcome>> {
         if self.seek.is_none() {
             return Ok(None);
         }
         let gate = self.construction_gate.clone();
-        let _scope = gate.as_ref().map(ConstructionGate::nonblocking);
+        let _scope = gate
+            .as_ref()
+            .filter(|_| wait == PrepareWait::Poll)
+            .map(ConstructionGate::nonblocking);
         match self.fill_cursor()? {
             FillStatus::Pending(reason) => {
                 self.pending = Some(reason);

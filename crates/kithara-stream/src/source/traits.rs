@@ -3,6 +3,7 @@
 use std::ops::Range;
 
 use kithara_platform::{
+    CancelToken,
     maybe_send::{MaybeSend, MaybeSync},
     sync::Arc,
     time::Duration,
@@ -61,6 +62,11 @@ pub struct SourceSeekAnchor {
 /// (e.g., progress tracking, segment index updates).
 #[kithara::mock(api = SourceMock)]
 pub trait Source: MaybeSend + MaybeSync + 'static {
+    /// Source-owned cancellation parent for independent decoder readers.
+    fn cancel_token(&self) -> Option<CancelToken> {
+        None
+    }
+
     /// Current ABR handle for runtime mode/bandwidth control.
     ///
     /// Adaptive sources (HLS) return the peer's `AbrHandle` so callers —
@@ -214,6 +220,7 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
         &mut self,
         range: Range<u64>,
         timeout: Option<Duration>,
+        cancel: Option<&crate::ReaderControl>,
     ) -> StreamResult<WaitOutcome>;
 }
 
@@ -290,6 +297,7 @@ mod tests {
                 &mut self,
                 _range: Range<u64>,
                 _timeout: Option<Duration>,
+                _cancel: Option<&crate::ReaderControl>,
             ) -> StreamResult<WaitOutcome> {
                 Ok(WaitOutcome::Ready)
             }
@@ -355,6 +363,7 @@ mod tests {
                 &mut self,
                 _range: Range<u64>,
                 _timeout: Option<Duration>,
+                _cancel: Option<&crate::ReaderControl>,
             ) -> StreamResult<WaitOutcome> {
                 Ok(WaitOutcome::Ready)
             }

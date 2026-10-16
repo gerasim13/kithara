@@ -122,54 +122,54 @@ const fn map_codec_id(id: AudioCodecId) -> AudioCodec {
         CODEC_ID_ALAC => AudioCodec::Alac,
         CODEC_ID_OPUS => AudioCodec::Opus,
         CODEC_ID_VORBIS => AudioCodec::Vorbis,
-        other if is_pcm_codec_id(other) => AudioCodec::Pcm,
+        other if pcm_bytes_per_sample(other).is_some() => AudioCodec::Pcm,
         other if is_adpcm_codec_id(other) => AudioCodec::Adpcm,
         _ => AudioCodec::Pcm,
     }
 }
 
-const fn is_pcm_codec_id(id: AudioCodecId) -> bool {
-    matches!(
-        id,
+pub(super) const fn pcm_bytes_per_sample(id: AudioCodecId) -> Option<u16> {
+    match id {
         CODEC_ID_PCM_S32LE
-            | CODEC_ID_PCM_S32LE_PLANAR
-            | CODEC_ID_PCM_S32BE
-            | CODEC_ID_PCM_S32BE_PLANAR
-            | CODEC_ID_PCM_S24LE
-            | CODEC_ID_PCM_S24LE_PLANAR
-            | CODEC_ID_PCM_S24BE
-            | CODEC_ID_PCM_S24BE_PLANAR
-            | CODEC_ID_PCM_S16LE
-            | CODEC_ID_PCM_S16LE_PLANAR
-            | CODEC_ID_PCM_S16BE
-            | CODEC_ID_PCM_S16BE_PLANAR
-            | CODEC_ID_PCM_S8
-            | CODEC_ID_PCM_S8_PLANAR
-            | CODEC_ID_PCM_U32LE
-            | CODEC_ID_PCM_U32LE_PLANAR
-            | CODEC_ID_PCM_U32BE
-            | CODEC_ID_PCM_U32BE_PLANAR
-            | CODEC_ID_PCM_U24LE
-            | CODEC_ID_PCM_U24LE_PLANAR
-            | CODEC_ID_PCM_U24BE
-            | CODEC_ID_PCM_U24BE_PLANAR
-            | CODEC_ID_PCM_U16LE
-            | CODEC_ID_PCM_U16LE_PLANAR
-            | CODEC_ID_PCM_U16BE
-            | CODEC_ID_PCM_U16BE_PLANAR
-            | CODEC_ID_PCM_U8
-            | CODEC_ID_PCM_U8_PLANAR
-            | CODEC_ID_PCM_F32LE
-            | CODEC_ID_PCM_F32LE_PLANAR
-            | CODEC_ID_PCM_F32BE
-            | CODEC_ID_PCM_F32BE_PLANAR
-            | CODEC_ID_PCM_F64LE
-            | CODEC_ID_PCM_F64LE_PLANAR
-            | CODEC_ID_PCM_F64BE
-            | CODEC_ID_PCM_F64BE_PLANAR
-            | CODEC_ID_PCM_ALAW
-            | CODEC_ID_PCM_MULAW
-    )
+        | CODEC_ID_PCM_S32LE_PLANAR
+        | CODEC_ID_PCM_S32BE
+        | CODEC_ID_PCM_S32BE_PLANAR
+        | CODEC_ID_PCM_U32LE
+        | CODEC_ID_PCM_U32LE_PLANAR
+        | CODEC_ID_PCM_U32BE
+        | CODEC_ID_PCM_U32BE_PLANAR
+        | CODEC_ID_PCM_F32LE
+        | CODEC_ID_PCM_F32LE_PLANAR
+        | CODEC_ID_PCM_F32BE
+        | CODEC_ID_PCM_F32BE_PLANAR => Some(4),
+        CODEC_ID_PCM_S24LE
+        | CODEC_ID_PCM_S24LE_PLANAR
+        | CODEC_ID_PCM_S24BE
+        | CODEC_ID_PCM_S24BE_PLANAR
+        | CODEC_ID_PCM_U24LE
+        | CODEC_ID_PCM_U24LE_PLANAR
+        | CODEC_ID_PCM_U24BE
+        | CODEC_ID_PCM_U24BE_PLANAR => Some(3),
+        CODEC_ID_PCM_S16LE
+        | CODEC_ID_PCM_S16LE_PLANAR
+        | CODEC_ID_PCM_S16BE
+        | CODEC_ID_PCM_S16BE_PLANAR
+        | CODEC_ID_PCM_U16LE
+        | CODEC_ID_PCM_U16LE_PLANAR
+        | CODEC_ID_PCM_U16BE
+        | CODEC_ID_PCM_U16BE_PLANAR => Some(2),
+        CODEC_ID_PCM_S8
+        | CODEC_ID_PCM_S8_PLANAR
+        | CODEC_ID_PCM_U8
+        | CODEC_ID_PCM_U8_PLANAR
+        | CODEC_ID_PCM_ALAW
+        | CODEC_ID_PCM_MULAW => Some(1),
+        CODEC_ID_PCM_F64LE
+        | CODEC_ID_PCM_F64LE_PLANAR
+        | CODEC_ID_PCM_F64BE
+        | CODEC_ID_PCM_F64BE_PLANAR => Some(8),
+        _ => None,
+    }
 }
 
 const fn is_adpcm_codec_id(id: AudioCodecId) -> bool {

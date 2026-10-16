@@ -64,6 +64,8 @@ struct SpliceState {
     warmup_landing: Mutex<Option<SegmentDescriptor>>,
     waits: Mutex<Vec<Range<u64>>>,
     variants: Vec<VariantLayout>,
+    #[cfg(all(feature = "resample-rubato", feature = "symphonia"))]
+    native: std::sync::OnceLock<Arc<buffered_readiness::NativeReads>>,
 }
 
 impl SpliceState {
@@ -78,6 +80,8 @@ impl SpliceState {
             peer_wake: Arc::new(DeferredWake::default()),
             warmup_landing: Mutex::new(None),
             waits: Mutex::new(Vec::new()),
+            #[cfg(all(feature = "resample-rubato", feature = "symphonia"))]
+            native: std::sync::OnceLock::new(),
         }
     }
 
@@ -107,6 +111,17 @@ impl SpliceState {
             SourcePhase::Ready
         } else {
             SourcePhase::WaitingDemand
+        }
+    }
+
+    #[cfg(all(feature = "resample-rubato", feature = "symphonia"))]
+    fn record_cursor(&self, position: u64) {
+        if let Some(native) = self.native.get() {
+            native
+                .state
+                .lock()
+                .events
+                .push(buffered_readiness::InputEvent::Cursor(position));
         }
     }
 }
@@ -274,6 +289,8 @@ impl SourceProbe for ReadyProbe {
     }
 
     fn set_position(&self, pos: u64) {
+        #[cfg(all(feature = "resample-rubato", feature = "symphonia"))]
+        self.state.record_cursor(pos);
         self.position.store(pos, Ordering::Release);
     }
 }
@@ -288,6 +305,9 @@ impl Source for SpliceSource {
     }
 
     fn advance(&self, n: u64) {
+        #[cfg(all(feature = "resample-rubato", feature = "symphonia"))]
+        self.state
+            .record_cursor(self.position.load(Ordering::Acquire).saturating_add(n));
         self.position.fetch_add(n, Ordering::AcqRel);
     }
 
@@ -352,6 +372,8 @@ impl Source for SpliceSource {
     }
 
     fn set_position(&self, pos: u64) {
+        #[cfg(all(feature = "resample-rubato", feature = "symphonia"))]
+        self.state.record_cursor(pos);
         self.position.store(pos, Ordering::Release);
     }
 
@@ -363,8 +385,33 @@ impl Source for SpliceSource {
         &mut self,
         range: Range<u64>,
         _timeout: Option<Duration>,
+        _cancel: Option<&kithara_stream::ReaderControl>,
     ) -> StreamResult<WaitOutcome> {
         self.state.waits.lock().push(range.clone());
+        #[cfg(all(feature = "resample-rubato", feature = "symphonia"))]
+        if _timeout.is_none()
+            && let Some(native) = self.state.native.get()
+            && !matches!(self.state.phase_at(range.clone()), SourcePhase::Ready)
+        {
+            let cancel = _cancel.expect("native stream wait receives its actual reader control");
+            let mut revision = cancel.revision();
+            cancel.set_pending(PendingReason::NotReady(NotReadyCause::WaitBudgetExhausted));
+            native.record_wait(range.clone());
+            while !cancel.is_cancelled()
+                && !matches!(self.state.phase_at(range.clone()), SourcePhase::Ready)
+            {
+                if !cancel.wait(revision) {
+                    break;
+                }
+                revision = cancel.revision();
+            }
+            if cancel.is_cancelled() {
+                return Err(StreamError::Source(SourceError::Io(std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    PendingReason::SessionRetired,
+                ))));
+            }
+        }
         match self.state.phase_at(range) {
             SourcePhase::Ready => Ok(WaitOutcome::Ready),
             _ => Err(StreamError::Source(SourceError::WaitBudgetExceeded)),
@@ -564,6 +611,8 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
         shared_stream,
         decode,
         SourceDecoderConfig {
+            runtime: kithara_platform::tokio::runtime::Handle::try_current()
+                .expect("source fixture runtime"),
             factory: decoder_factory,
             host_rate: NonZeroU32::new(consts::SAMPLE_RATE),
             backend,
@@ -585,11 +634,16 @@ fn run_pending_rebuild_inline(source: &mut StreamAudioSource<SpliceStream>) {
 
 #[cfg(all(feature = "resample-rubato", feature = "symphonia"))]
 mod buffered_readiness {
-    use std::num::NonZeroU32;
+    use std::{
+        io::{self, Read, Seek, SeekFrom},
+        num::NonZeroU32,
+    };
 
-    use kithara_decode::DecoderResamplerConfig;
+    use kithara_decode::{DecoderResamplerConfig, DecoderSeekOutcome};
     use kithara_resampler::{ResamplerOptions, rubato::RubatoBackend};
-    use kithara_stream::{ReaderChunkSignal, ReaderEventSink, ReaderSeekSignal};
+    use kithara_stream::{
+        ReaderChunkSignal, ReaderControl, ReaderEventSink, ReaderSeekSignal, SessionReader,
+    };
 
     use super::*;
     use crate::pipeline::{
@@ -598,6 +652,172 @@ mod buffered_readiness {
         source::core::OwnerPhase,
         track::WaitingReason,
     };
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(super) enum InputOperation {
+        Read,
+        Seek,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub(super) enum InputEvent {
+        Opened(usize),
+        Started(usize, InputOperation),
+        Waiting(usize, InputOperation, Range<u64>),
+        Cancelled(usize),
+        Dropped(usize),
+        Cursor(u64),
+    }
+
+    #[derive(Default)]
+    pub(super) struct NativeReadState {
+        readers: Vec<(kithara_platform::CancelToken, Option<NonZeroU32>)>,
+        pub(super) events: Vec<InputEvent>,
+        active: Option<(usize, InputOperation)>,
+    }
+
+    #[derive(Default)]
+    pub(super) struct NativeReads {
+        pub(super) state: Mutex<NativeReadState>,
+        changed: kithara_platform::sync::Notify,
+    }
+
+    impl kithara_stream::WorkerWake for NativeReads {
+        delegate::delegate! {
+            to self.changed {
+                #[call(notify_one)]
+                fn defer(&self);
+                #[call(notify_one)]
+                fn wake(&self);
+            }
+        }
+    }
+
+    impl NativeReads {
+        pub(super) fn record_wait(&self, range: Range<u64>) {
+            {
+                let mut state = self.state.lock();
+                let (reader, operation) =
+                    state.active.expect("native input operation owns this wait");
+                state
+                    .events
+                    .push(InputEvent::Waiting(reader, operation, range));
+            }
+            self.changed.notify_one();
+        }
+    }
+
+    struct NativeInput {
+        input: Option<Box<dyn SessionReader>>,
+        reader: usize,
+        native: Arc<NativeReads>,
+        _cancel: kithara_platform::CancelWakerGuard,
+    }
+
+    impl NativeInput {
+        fn start(&self, operation: InputOperation) {
+            let mut native = self.native.state.lock();
+            assert_eq!(native.active.replace((self.reader, operation)), None);
+            native
+                .events
+                .push(InputEvent::Started(self.reader, operation));
+        }
+
+        fn finish(&self, operation: InputOperation) {
+            assert_eq!(
+                self.native.state.lock().active.take(),
+                Some((self.reader, operation))
+            );
+        }
+    }
+
+    impl Read for NativeInput {
+        fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+            self.start(InputOperation::Read);
+            let result = self.input.as_mut().expect("live native input").read(bytes);
+            self.finish(InputOperation::Read);
+            result
+        }
+    }
+
+    impl Seek for NativeInput {
+        fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+            self.start(InputOperation::Seek);
+            let result = self
+                .input
+                .as_mut()
+                .expect("live native input")
+                .seek(position);
+            self.finish(InputOperation::Seek);
+            result
+        }
+    }
+
+    impl Drop for NativeInput {
+        fn drop(&mut self) {
+            drop(self.input.take());
+            self.native
+                .state
+                .lock()
+                .events
+                .push(InputEvent::Dropped(self.reader));
+            self.native.changed.notify_one();
+        }
+    }
+
+    fn native_factory(native: Arc<NativeReads>) -> DecoderFactory {
+        let pools = pools();
+        DecoderFactory::new(
+            move |mut reader, info, rate| {
+                let control = reader.control();
+                control.set_worker_wake(native.clone());
+                let number = {
+                    let mut native = native.state.lock();
+                    let number = native.readers.len();
+                    native.readers.push((control.cancel_token(), rate));
+                    native.events.push(InputEvent::Opened(number));
+                    number
+                };
+                // The source keeps its byte map; omit it here to exercise the native MP4 parser.
+                let config = DecoderConfig::builder()
+                    .backend(kithara_decode::DecoderBackend::Symphonia)
+                    .pools(pools.clone())
+                    .byte_len_handle(Arc::new(AtomicU64::new(reader.byte_len().unwrap_or(0))))
+                    .maybe_construction_gate(reader.construction_gate())
+                    .reader_control(control)
+                    .maybe_hooks(reader.take_event_sink())
+                    .maybe_resampler(rate.map(|target| {
+                        DecoderResamplerConfig::builder()
+                            .backend(RubatoBackend::default())
+                            .target_sample_rate(target)
+                            .options(ResamplerOptions::builder().chunk_size(256).build())
+                            .build()
+                    }))
+                    .gapless(false)
+                    .build();
+                let cancelled_native = Arc::downgrade(&native);
+                let cancel = reader.control().cancel_token().on_cancel(move || {
+                    if let Some(native) = cancelled_native.upgrade() {
+                        native
+                            .state
+                            .lock()
+                            .events
+                            .push(InputEvent::Cancelled(number));
+                        native.changed.notify_one();
+                    }
+                });
+                let input = NativeInput {
+                    input: Some(reader.into_inner()),
+                    reader: number,
+                    native: native.clone(),
+                    _cancel: cancel,
+                };
+                assert!(info.is_none(), "native input requires probing");
+                DecodeFactory::create_with_probe(input, Some("mp4"), config)
+            },
+            None,
+        )
+    }
 
     struct PendingSignals(Arc<AtomicUsize>);
 
@@ -787,7 +1007,7 @@ mod buffered_readiness {
         assert_eq!(fixture.source.shared_stream.position(), boundary);
     }
 
-    #[kithara::test(tokio)]
+    #[kithara::test(tokio, tracing("kithara_audio=debug,kithara_decode=debug"))]
     #[case(false)]
     #[case(true)]
     async fn persistent_decoder_pending_parks_with_demand_and_peer_wake(#[case] resampled: bool) {
@@ -830,6 +1050,248 @@ mod buffered_readiness {
         assert!(chunk.meta.timestamp < Duration::from_secs(6));
         assert_eq!(fixture.state.available.load(Ordering::Acquire), boundary);
         assert_eq!(fixture.source.shared_stream.position(), boundary);
+        drop(fixture);
+
+        let mut fixture = splice_source(vec![slq_layout()]).await;
+        let mut reference = splice_source(vec![slq_layout()]).await;
+        let native = Arc::new(NativeReads::default());
+        let reference_native = Arc::new(NativeReads::default());
+        let initial_rate = if resampled {
+            NonZeroU32::new(48_000).expect("resampled rate")
+        } else {
+            fixture.source.decode.output_spec().sample_rate
+        };
+        let final_rate = NonZeroU32::new(96_000).expect("final host rate");
+        let final_target = Duration::from_secs(1);
+        let mut initial_control: Option<ReaderControl> = None;
+        let mut reference_landing = None;
+        for (fixture, native, rate, landing) in [
+            (&mut fixture, &native, initial_rate, None),
+            (
+                &mut reference,
+                &reference_native,
+                final_rate,
+                Some(ResumeTarget::Position(final_target)),
+            ),
+        ] {
+            assert!(fixture.state.native.set(native.clone()).is_ok());
+            *fixture.state.media_info.lock() = None;
+            fixture.source.shared_stream.set_position(0);
+            fixture.source.factory = native_factory(native.clone());
+            fixture.source.wake = native.clone();
+            fixture.source.host_rate = Some(rate);
+            fixture.source.decoder_backend = kithara_decode::DecoderBackend::Symphonia;
+            fixture.source.playback_resampler_backend = "rubato";
+            let reader = fixture.source.shared_stream.open_initial_reader();
+            if landing.is_none() {
+                initial_control = Some(reader.control());
+            }
+            let (generation, outcome) = fixture
+                .source
+                .factory
+                .build_generation(reader, None, 0, landing, Some(rate), GaplessMode::Disabled)
+                .expect("native fMP4 generation");
+            if landing.is_some() {
+                let Some(DecoderSeekOutcome::Landed { landed_at, .. }) = outcome else {
+                    panic!("independent final-seek reference must land: {outcome:?}");
+                };
+                reference_landing = Some(landed_at);
+            }
+            fixture
+                .source
+                .decode
+                .prepare_replacement_profile(generation.blender_profile());
+            assert!(fixture.source.decode.take_stage_error().is_none());
+            drop(fixture.source.decode.replace_active(generation));
+            fixture.source.decode.reset();
+            let boundary = fixture.state.active_layout().segments[0].byte_range.end;
+            fixture.state.available.store(boundary, Ordering::Release);
+        }
+        let boundary = fixture.state.active_layout().segments[0].byte_range.end;
+        kithara_platform::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let changed = native.changed.notified();
+                fixture.source.prepare_deferred();
+                let step = fixture.source.step_track();
+                assert!(!matches!(&step, TrackStep::Failed(_) | TrackStep::Eof));
+                fixture.source.finish_deferred();
+                if native.state.lock().events.iter().any(|event| matches!(
+                    event,
+                    InputEvent::Waiting(0, InputOperation::Read, range) if range.start >= boundary
+                )) {
+                    break;
+                }
+                if matches!(step, TrackStep::Blocked(_)) {
+                    changed.await;
+                }
+            }
+        })
+        .await
+        .expect("the actual native Read must park on withheld input");
+        let initial_control = initial_control.expect("actual initial reader control");
+        assert_eq!(
+            initial_control.pending_reason(),
+            Some(PendingReason::NotReady(NotReadyCause::WaitBudgetExhausted))
+        );
+        let command_start = native.state.lock().events.len();
+        let mut audio_events = fixture.source.emit.bus().subscribe::<crate::AudioEvent>();
+        let first_target =
+            fixture.state.active_layout().segments[1].decode_time + Duration::from_secs(1);
+        assert!(matches!(
+            fixture.source.seek(first_target),
+            Ok(crate::SeekOutcome::Pending { target, .. }) if target == first_target
+        ));
+        assert!(initial_control.is_cancelled());
+        kithara_platform::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let changed = native.changed.notified();
+                fixture.source.prepare_deferred();
+                fixture.source.finish_deferred();
+                assert!(!matches!(fixture.source.phase, OwnerPhase::Failed { .. }));
+                if native.state.lock().events.iter().any(|event| {
+                    matches!(
+                        event,
+                        InputEvent::Waiting(reader, _, range) if *reader > 0 && range.end > boundary
+                    )
+                }) {
+                    break;
+                }
+                changed.await;
+            }
+        })
+        .await
+        .expect("the real replacement must reach withheld input");
+        let blocked_control = native
+            .state
+            .lock()
+            .readers
+            .last()
+            .expect("replacement input")
+            .0
+            .clone();
+        assert!(!blocked_control.is_cancelled());
+        fixture
+            .source
+            .set_host_sample_rate(NonZeroU32::new(32_000).expect("superseded host rate"));
+        assert!(matches!(
+            fixture.source.seek(final_target),
+            Ok(crate::SeekOutcome::Pending { target, .. }) if target == final_target
+        ));
+        fixture.source.set_host_sample_rate(final_rate);
+        assert!(blocked_control.is_cancelled());
+        assert!(matches!(
+            fixture.source.resume_target(),
+            ResumeTarget::Position(target) if target == final_target
+        ));
+        let actual = kithara_platform::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let changed = native.changed.notified();
+                fixture.source.prepare_deferred();
+                let step = fixture.source.step_track();
+                fixture.source.finish_deferred();
+                match step {
+                    TrackStep::Produced(fetch) => break produced_data(fetch),
+                    TrackStep::StateChanged | TrackStep::Blocked(_) => changed.await,
+                    TrackStep::Failed(failure) => {
+                        panic!("latest native seek/rate failed: {failure:?}")
+                    }
+                    TrackStep::Eof => panic!("latest native seek/rate reached EOF before PCM"),
+                }
+            }
+        })
+        .await
+        .expect("latest command settles without releasing any withheld input");
+        let expected = kithara_platform::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let changed = reference_native.changed.notified();
+                reference.source.prepare_deferred();
+                match reference.source.step_track() {
+                    TrackStep::Produced(fetch) => break produced_data(fetch),
+                    TrackStep::StateChanged | TrackStep::Blocked(_) => changed.await,
+                    _ => panic!("independent native reference must produce PCM"),
+                }
+            }
+        })
+        .await
+        .expect("independent final-seek reference");
+        assert_eq!(fixture.source.host_sample_rate(), Some(final_rate));
+        assert_eq!(fixture.source.decode.output_spec().sample_rate, final_rate);
+        assert_eq!(
+            fixture.source.playhead.position(),
+            reference_landing.expect("independent decoder landing")
+        );
+        assert_eq!(actual.spec(), expected.spec());
+        assert_eq!(actual.spec().sample_rate, final_rate);
+        assert_eq!(actual.meta.timestamp, final_target);
+        assert_eq!(
+            actual.meta.frame_offset,
+            actual
+                .spec()
+                .frame_at(final_target)
+                .expect("final PCM frame")
+        );
+        assert_eq!(actual.meta.timestamp, expected.meta.timestamp);
+        assert_eq!(actual.meta.frame_offset, expected.meta.frame_offset);
+        assert_eq!(actual.meta.segment_index, expected.meta.segment_index);
+        assert_eq!(actual.samples.as_ref(), expected.samples.as_ref());
+        assert!(actual.frames() > 0 && actual.samples.iter().any(|sample| sample.abs() > 0.001));
+        assert_eq!(fixture.state.available.load(Ordering::Acquire), boundary);
+        let mut stages = Vec::new();
+        while let Ok(envelope) = audio_events.try_recv() {
+            match envelope.event {
+                crate::AudioEvent::SeekLifecycle { stage, .. } => stages.push(stage),
+                crate::AudioEvent::SeekRejected { target } => {
+                    panic!("native seek rejected: {target:?}")
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(
+            stages,
+            [
+                crate::SeekLifecycleStage::SeekRequest,
+                crate::SeekLifecycleStage::SeekRequest,
+                crate::SeekLifecycleStage::SeekApplied,
+            ]
+        );
+        let native = native.state.lock();
+        assert!(native.readers.len() >= 3);
+        assert_eq!(
+            native.readers.last().expect("latest reader").1,
+            Some(final_rate)
+        );
+        for reader in 0..native.readers.len() - 1 {
+            assert!(native.readers[reader].0.is_cancelled());
+            let cancelled = native
+                .events
+                .iter()
+                .position(|event| *event == InputEvent::Cancelled(reader))
+                .expect("old actual reader was cancelled");
+            let retired = native
+                .events
+                .iter()
+                .position(|event| *event == InputEvent::Dropped(reader))
+                .expect("old actual input was dropped");
+            let next_open = native
+                .events
+                .iter()
+                .position(|event| *event == InputEvent::Opened(reader + 1))
+                .expect("next actual input was opened");
+            assert!(command_start <= cancelled && cancelled < retired && retired < next_open);
+            let mutation = native
+                .events
+                .iter()
+                .enumerate()
+                .skip(cancelled + 1)
+                .find(|(_, event)| matches!(event, InputEvent::Cursor(_)))
+                .expect("next command changes the shared cursor")
+                .0;
+            assert!(
+                retired < mutation,
+                "old input drop precedes command cursor mutation"
+            );
+        }
+        drop(native);
     }
 
     #[kithara::test(tokio)]

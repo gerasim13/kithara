@@ -9,10 +9,7 @@ use kithara_download::{Downloader, DownloaderConfig, Peer};
 use kithara_events::{DeferredBus, EventBus};
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
-    CancelScope, CancelToken,
-    sync::{Arc, ThreadGate},
-    tokio::sync::mpsc,
-    traits::FromWithParams,
+    CancelScope, CancelToken, sync::Arc, tokio::sync::mpsc, traits::FromWithParams,
 };
 use kithara_stream::{ActivityWriter, PlayheadState, PlayheadWrite, SourceError, StreamType};
 
@@ -130,7 +127,10 @@ where
 
         playhead.set_duration(playlist_state.track_duration());
 
-        let signal = SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new()));
+        let signal = SizeSignal::new(
+            Arc::new(kithara_platform::sync::CondvarGate::default()),
+            Arc::new(OnceLock::new()),
+        );
         let emit = Arc::new(DeferredBus::new(bus.clone(), 256));
 
         let plan_ctx = PlanCtx {

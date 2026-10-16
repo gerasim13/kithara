@@ -77,6 +77,7 @@ impl Source for MockSource {
         &mut self,
         _range: Range<u64>,
         timeout: Option<Duration>,
+        _cancel: Option<&kithara_stream::ReaderControl>,
     ) -> StreamResult<WaitOutcome> {
         let _ = timeout;
         Ok(WaitOutcome::Ready)

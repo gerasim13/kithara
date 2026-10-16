@@ -162,6 +162,26 @@ impl<T: Read + Seek + Send + Sync + ?Sized> DecoderInput for T {}
 /// demuxers don't have to be generic over the byte source.
 pub(crate) type BoxedSource = Box<dyn DecoderInput>;
 
+/// Waiting policy of one front-side preparation or seek settlement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrepareWait {
+    /// Submit or inspect work without waiting for native input.
+    Poll,
+    /// Wait for the same operation to finish or be cancelled.
+    Wait,
+}
+
+/// Whether a decoder has relinquished its input for a source command.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InputState {
+    /// A healthy parser has no operation using the input.
+    Idle,
+    /// Cancellation is in flight; the source cursor is still owned by the parser.
+    Retiring,
+    /// The parser has dropped its input and cannot be resumed.
+    Retired,
+}
+
 /// Trait for runtime-polymorphic audio decoders.
 ///
 /// This trait is used by kithara-audio for dynamic dispatch when the
@@ -280,6 +300,16 @@ pub trait Decoder: Send + 'static {
     /// consumes them. Pending is provisional and may be refreshed by later preparation.
     fn prepare_next_chunk(&mut self) {}
 
+    /// Prepare with an explicit waiting policy for this call.
+    fn prepare_next_chunk_with_wait(&mut self, _wait: PrepareWait) {
+        self.prepare_next_chunk();
+    }
+
+    /// Relinquish an in-flight input operation before another owner changes its cursor.
+    fn release_input(&mut self) -> InputState {
+        InputState::Idle
+    }
+
     /// Seek to a time position.
     ///
     /// On success returns [`DecoderSeekOutcome::Landed`] with the
@@ -295,6 +325,15 @@ pub trait Decoder: Send + 'static {
     /// or the position is invalid for reasons other than past-EOF.
     fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome>;
 
+    /// Seek with an explicit front-side waiting policy.
+    fn seek_with_wait(
+        &mut self,
+        pos: Duration,
+        _wait: PrepareWait,
+    ) -> DecodeResult<DecoderSeekOutcome> {
+        self.seek(pos)
+    }
+
     /// Continue an unresolved seek without starting it again.
     ///
     /// `None` means no unresolved seek. A terminal outcome settles the operation once;
@@ -304,6 +343,14 @@ pub trait Decoder: Send + 'static {
     /// Returns source or decoder failures from the same seek operation.
     fn prepare_seek(&mut self) -> DecodeResult<Option<DecoderSeekOutcome>> {
         Ok(None)
+    }
+
+    /// Settle the same pending seek with an explicit waiting policy.
+    fn prepare_seek_with_wait(
+        &mut self,
+        _wait: PrepareWait,
+    ) -> DecodeResult<Option<DecoderSeekOutcome>> {
+        self.prepare_seek()
     }
 
     /// Seeks while retaining the native sample at or before `pos` for later rendering.
@@ -317,6 +364,15 @@ pub trait Decoder: Send + 'static {
         Err(crate::DecodeError::SeekFailed {
             detail: "native-prefix seeking is unsupported",
         })
+    }
+
+    /// Seek a native prefix with an explicit front-side waiting policy.
+    fn seek_prefix_with_wait(
+        &mut self,
+        pos: Duration,
+        _wait: PrepareWait,
+    ) -> DecodeResult<DecoderSeekOutcome> {
+        self.seek_prefix(pos)
     }
 
     /// Get the decoded audio output specification.

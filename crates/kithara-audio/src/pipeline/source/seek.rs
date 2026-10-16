@@ -2,7 +2,10 @@ use kithara_decode::{DecodeError, DecodeResult, DecoderSeekOutcome};
 use kithara_platform::time::Duration;
 use kithara_stream::{PendingReason, SourcePhase, StreamType};
 
-use super::core::{OwnerPhase, StreamAudioSource};
+use super::{
+    change::SourceCommand,
+    core::{OwnerPhase, StreamAudioSource},
+};
 use crate::{
     AudioEvent, SeekOutcome, TrackFailureKind,
     pipeline::{
@@ -20,6 +23,11 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 
     pub(super) fn resume_target(&self) -> ResumeTarget {
+        if let OwnerPhase::Changing(change) = &self.phase
+            && let Some(target) = change.command.target()
+        {
+            return target;
+        }
         if let OwnerPhase::Seeking { target, .. } = self.phase {
             return target;
         }
@@ -33,33 +41,54 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 
     pub(super) fn prepare_active(&mut self) -> Result<(), (TrackFailureKind, DecodeError)> {
+        if let OwnerPhase::Changing(change) = &self.phase {
+            let offset = match &change.command {
+                SourceCommand::Recreate { recreate, .. } => recreate.offset,
+                SourceCommand::Seek(_) | SourceCommand::Rate { .. } => {
+                    self.decode.active().base_offset()
+                }
+            };
+            self.drive_source_change().map_err(|error| {
+                let failure = if self.shared_stream.phase() == SourcePhase::Cancelled {
+                    TrackFailureKind::SourceCancelled
+                } else {
+                    TrackFailureKind::RecreateFailed { offset }
+                };
+                (failure, error)
+            })?;
+            if !matches!(
+                self.phase,
+                OwnerPhase::Decoding | OwnerPhase::Seeking { .. }
+            ) {
+                return Ok(());
+            }
+        }
         let seeking = match self.phase {
             OwnerPhase::Seeking { target, .. } => Some(target),
             _ => None,
         };
-        let (outcome, mut replaced) = match self.phase {
-            OwnerPhase::Seeking {
-                target,
-                reason: PendingReason::SessionRetired,
-            } => (Some(self.replace_retired_reader(target)?), true),
-            _ => (
-                self.decode.prepare_deferred(true).map_err(|error| {
-                    let failure = if self.shared_stream.phase() == SourcePhase::Cancelled {
-                        TrackFailureKind::SourceCancelled
-                    } else {
-                        TrackFailureKind::Decode {
-                            kind: crate::map_decode_error_kind(&error),
-                        }
-                    };
-                    (failure, error)
-                })?,
-                false,
-            ),
-        };
+        if let OwnerPhase::Seeking {
+            target,
+            reason: PendingReason::SessionRetired,
+        } = self.phase
+        {
+            self.replace_retired_reader(target)?;
+            return Ok(());
+        }
+        let outcome = self.decode.prepare_deferred(true).map_err(|error| {
+            let failure = if self.shared_stream.phase() == SourcePhase::Cancelled {
+                TrackFailureKind::SourceCancelled
+            } else {
+                TrackFailureKind::Decode {
+                    kind: crate::map_decode_error_kind(&error),
+                }
+            };
+            (failure, error)
+        })?;
         if self.shared_stream.phase() == SourcePhase::Cancelled {
             return Err((TrackFailureKind::SourceCancelled, DecodeError::Interrupted));
         }
-        let Some(mut outcome) = outcome else {
+        let Some(outcome) = outcome else {
             return if seeking.is_some() {
                 Err((
                     TrackFailureKind::Decode {
@@ -74,57 +103,23 @@ impl<T: StreamType> StreamAudioSource<T> {
             };
         };
         let target = self.resume_target();
-        match outcome {
-            DecoderSeekOutcome::Pending(PendingReason::SessionRetired) if !replaced => {
-                outcome = self.replace_retired_reader(target)?;
-                replaced = true;
-            }
-            DecoderSeekOutcome::Pending(PendingReason::VariantChange) if !replaced => {
-                if let FormatDecision::Recreate(recreate) =
-                    detect(&self.shared_stream, self.decode.active())
-                {
-                    let offset = recreate.offset;
-                    outcome = self
-                        .install_replacement(recreate, Some(target))
-                        .and_then(|outcome| {
-                            outcome.ok_or(DecodeError::InvalidData {
-                                detail: "replacement seek has no outcome",
-                            })
-                        })
-                        .map_err(|error| {
-                            let failure = if self.shared_stream.phase() == SourcePhase::Cancelled {
-                                TrackFailureKind::SourceCancelled
-                            } else {
-                                TrackFailureKind::RecreateFailed { offset }
-                            };
-                            (failure, error)
-                        })?;
-                    replaced = true;
-                }
-            }
-            _ => {}
+        if matches!(
+            outcome,
+            DecoderSeekOutcome::Pending(PendingReason::SessionRetired)
+        ) {
+            self.replace_retired_reader(target)?;
+            return Ok(());
         }
-        if replaced && matches!(outcome, DecoderSeekOutcome::Landed { .. }) {
-            let continuation = self.decode.prepare_deferred(true).map_err(|error| {
-                let failure = if self.shared_stream.phase() == SourcePhase::Cancelled {
-                    TrackFailureKind::SourceCancelled
-                } else {
-                    TrackFailureKind::Decode {
-                        kind: crate::map_decode_error_kind(&error),
-                    }
-                };
-                (failure, error)
-            })?;
-            if continuation.is_some() {
-                return Err((
-                    TrackFailureKind::Decode {
-                        kind: crate::DecodeErrorKind::InvalidData,
-                    },
-                    DecodeError::InvalidData {
-                        detail: "landed replacement still has an unresolved seek",
-                    },
-                ));
-            }
+        if matches!(
+            outcome,
+            DecoderSeekOutcome::Pending(PendingReason::VariantChange)
+        ) && let FormatDecision::Recreate(recreate) =
+            detect(&self.shared_stream, self.decode.active())
+        {
+            let offset = recreate.offset;
+            self.install_replacement(recreate, Some(target))
+                .map_err(|error| (TrackFailureKind::RecreateFailed { offset }, error))?;
+            return Ok(());
         }
         if let Some(target) = seeking {
             self.accept_seek_outcome(target, outcome).map_err(|error| {
@@ -143,48 +138,25 @@ impl<T: StreamType> StreamAudioSource<T> {
         &mut self,
         target: ResumeTarget,
     ) -> Result<DecoderSeekOutcome, (TrackFailureKind, DecodeError)> {
-        let mut offset = self.decode.active().base_offset();
-        let result = (|| {
-            if self.shared_stream.phase() == SourcePhase::Cancelled {
-                return Err(DecodeError::Interrupted);
-            }
-            self.shared_stream
-                .seek_time_anchor(DecodeResult::from(target)?)
-                .map_err(|source| DecodeError::Io { source })?;
-            if self.shared_stream.phase() == SourcePhase::Cancelled {
-                return Err(DecodeError::Interrupted);
-            }
-            let media_info = self
-                .shared_stream
-                .media_info()
-                .ok_or(DecodeError::InvalidData {
-                    detail: "retired reader has no current media information",
-                })?;
-            let range = self
-                .shared_stream
-                .format_change_segment_range()
-                .map_err(DecodeError::backend)?;
-            offset = range.start;
-            self.install_replacement(
-                RecreateState {
-                    media_info: Some(media_info),
-                    offset,
-                    cause: RecreateCause::VariantSwitch,
-                },
-                Some(target),
-            )?
-            .ok_or(DecodeError::InvalidData {
-                detail: "replacement seek has no outcome",
-            })
-        })();
-        result.map_err(|error| {
+        self.install_replacement(
+            RecreateState {
+                media_info: None,
+                offset: self.decode.active().base_offset(),
+                cause: RecreateCause::VariantSwitch,
+            },
+            Some(target),
+        )
+        .map_err(|error| {
             let failure = if self.shared_stream.phase() == SourcePhase::Cancelled {
                 TrackFailureKind::SourceCancelled
             } else {
-                TrackFailureKind::RecreateFailed { offset }
+                TrackFailureKind::RecreateFailed {
+                    offset: self.decode.active().base_offset(),
+                }
             };
             (failure, error)
-        })
+        })?;
+        Ok(DecoderSeekOutcome::Pending(PendingReason::Retry))
     }
 
     pub(super) fn accept_seek_outcome(
@@ -193,7 +165,6 @@ impl<T: StreamType> StreamAudioSource<T> {
         outcome: DecoderSeekOutcome,
     ) -> DecodeResult<SeekOutcome> {
         if self.shared_stream.phase() == SourcePhase::Cancelled {
-            self.fail(TrackFailureKind::SourceCancelled, None);
             return Err(DecodeError::Interrupted);
         }
         let position = DecodeResult::from(target)?;
@@ -267,9 +238,13 @@ impl<T: StreamType> StreamAudioSource<T> {
             } else {
                 TrackFailureKind::from(error)
             };
+            let rejected_by_failure = matches!(self.pending_seek_target(),
+                Some(ResumeTarget::Position(target) | ResumeTarget::Render(target)) if target == position);
             self.fail(failure, None);
-            self.emit
-                .enqueue(AudioEvent::SeekRejected { target: position });
+            if !rejected_by_failure {
+                self.emit
+                    .enqueue(AudioEvent::SeekRejected { target: position });
+            }
         }
         result
     }
@@ -288,8 +263,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             abr.lock();
             self.seek_abr = Some(abr);
         }
-        self.phase = OwnerPhase::Decoding;
-        self.discard_local_incoming();
+        self.abandon_incoming();
         self.resume.clear();
         self.waiting_for_source = false;
         let target = if for_render {
@@ -297,42 +271,10 @@ impl<T: StreamType> StreamAudioSource<T> {
         } else {
             ResumeTarget::Position(position)
         };
-        if let Some(duration) = self
-            .decode
-            .active()
-            .visible_origin()
-            .and_then(|origin| origin.checked_add(self.playhead.duration()?))
-            .filter(|endpoint| position >= *endpoint)
-        {
-            drop(self.decode.notify_seek());
-            return Ok(self.accept_seek_outcome(target, DecoderSeekOutcome::PastEof { duration })?);
-        }
-        self.shared_stream
-            .seek_time_anchor(position)
-            .map_err(|source| DecodeError::Io { source })?;
-        if let FormatDecision::Recreate(recreate) =
-            detect(&self.shared_stream, self.decode.active())
-        {
-            let offset = recreate.offset;
-            self.install_replacement(recreate, None).map_err(|error| {
-                self.fail(TrackFailureKind::RecreateFailed { offset }, Some(error));
-                crate::AudioReadError::Stream {
-                    what: "seek decoder recreation",
-                    source: crate::FailureSource::Producer {
-                        failure: TrackFailureKind::RecreateFailed { offset },
-                    },
-                }
-            })?;
-        }
-        if let Some(len) = self.shared_stream.len() {
-            self.decode
-                .update_len(len.saturating_sub(self.decode.active().base_offset()));
-        }
-        let outcome = if for_render {
-            self.decode.seek_for_render(position)?
-        } else {
-            self.decode.seek(position)?
-        };
-        Ok(self.accept_seek_outcome(target, outcome)?)
+        let result = self.request_source_change(SourceCommand::Seek(target))?;
+        Ok(result.unwrap_or(SeekOutcome::Pending {
+            target: position,
+            reason: PendingReason::Retry,
+        }))
     }
 }

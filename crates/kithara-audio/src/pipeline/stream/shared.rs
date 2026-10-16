@@ -5,10 +5,13 @@ use std::{
 
 use delegate::delegate;
 use kithara_abr::AbrHandle;
-use kithara_platform::sync::{Arc, Mutex};
+use kithara_platform::{
+    CancelToken,
+    sync::{Arc, Mutex},
+};
 use kithara_stream::{
-    ByteMap, ConstructionGate, DeferredWake, MediaInfo, OpenedReader, PlayheadWrite, SourceProbe,
-    SourceSeekAnchor, Stream, StreamResult, StreamType, VariantControl,
+    ByteMap, ConstructionGate, DeferredWake, MediaInfo, OpenedReader, PlayheadWrite, ReaderControl,
+    SourceProbe, SourceSeekAnchor, Stream, StreamResult, StreamType, VariantControl,
     format_change_segment_range, resolve_seek_target,
 };
 
@@ -35,6 +38,8 @@ pub(crate) struct SharedStream<T: StreamType> {
     /// gate; every opened reader receives a fresh gate so an off-RT rebuild
     /// cannot switch the active decoder to blocking I/O.
     construction_gate: Option<ConstructionGate>,
+    reader_control: Option<ReaderControl>,
+    cancel: Option<CancelToken>,
     peer_wake: Option<Arc<DeferredWake>>,
     variants: Option<Arc<dyn VariantControl>>,
 }
@@ -45,6 +50,7 @@ impl<T: StreamType> SharedStream<T> {
         let abr = stream.abr_handle();
         let variants = stream.variant_control();
         let peer_wake = stream.peer_wake();
+        let cancel = stream.cancel_token();
         Self {
             probe,
             abr,
@@ -52,6 +58,8 @@ impl<T: StreamType> SharedStream<T> {
             peer_wake,
             inner: Arc::new(Mutex::new(stream)),
             construction_gate: None,
+            reader_control: None,
+            cancel,
         }
     }
 
@@ -68,22 +76,32 @@ impl<T: StreamType> SharedStream<T> {
 
     pub(crate) fn open_initial_reader(&self) -> OpenedReader {
         let construction_gate = ConstructionGate::default();
+        let control = ReaderControl::new(self.cancel.clone());
         OpenedReader::new(
-            self.with_construction_gate(construction_gate.clone()),
+            self.with_reader(construction_gate.clone(), control.clone()),
             self.len(),
             self.byte_map(),
             Some(construction_gate),
+            control,
             self.take_reader_event_sink(),
         )
     }
 
-    pub(crate) fn open_rebuild_reader(&self, base_offset: u64) -> OpenedReader {
+    pub(crate) fn new_reader_control(&self) -> ReaderControl {
+        ReaderControl::new(self.cancel.clone())
+    }
+
+    pub(crate) fn open_rebuild_reader_with_control(
+        &self,
+        base_offset: u64,
+        control: ReaderControl,
+    ) -> OpenedReader {
         let byte_len = self.len().map(|length| length.saturating_sub(base_offset));
         let byte_map = self.byte_map();
         let event_sink = self.take_reader_event_sink();
         let construction_gate = ConstructionGate::default();
         let input = OffsetReader::new(
-            self.with_construction_gate(construction_gate.clone()),
+            self.with_reader(construction_gate.clone(), control.clone()),
             base_offset,
         );
         OpenedReader::new(
@@ -91,6 +109,7 @@ impl<T: StreamType> SharedStream<T> {
             byte_len,
             byte_map,
             Some(construction_gate),
+            control,
             event_sink,
         )
     }
@@ -116,7 +135,11 @@ impl<T: StreamType> SharedStream<T> {
         Ok(new_pos)
     }
 
-    fn with_construction_gate(&self, construction_gate: ConstructionGate) -> Self {
+    fn with_reader(
+        &self,
+        construction_gate: ConstructionGate,
+        reader_control: ReaderControl,
+    ) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
             probe: Arc::clone(&self.probe),
@@ -124,6 +147,8 @@ impl<T: StreamType> SharedStream<T> {
             variants: self.variants.clone(),
             peer_wake: self.peer_wake.clone(),
             construction_gate: Some(construction_gate),
+            reader_control: Some(reader_control),
+            cancel: self.cancel.clone(),
         }
     }
 
@@ -181,8 +206,12 @@ impl<T: StreamType> Read for SharedStream<T> {
             .construction_gate
             .as_ref()
             .is_some_and(ConstructionGate::is_armed)
+            || self
+                .reader_control
+                .as_ref()
+                .is_some_and(ReaderControl::is_blocking)
         {
-            stream.read(buf)
+            stream.read_with_control(buf, self.reader_control.as_ref())
         } else {
             stream.probe_read(buf)
         }
@@ -195,8 +224,14 @@ impl<T: StreamType> Seek for SharedStream<T> {
             .construction_gate
             .as_ref()
             .is_some_and(ConstructionGate::is_armed)
+            || self
+                .reader_control
+                .as_ref()
+                .is_some_and(ReaderControl::is_blocking)
         {
-            self.inner.lock().seek(pos)
+            self.inner
+                .lock()
+                .seek_with_control(pos, self.reader_control.as_ref())
         } else {
             self.probe_seek(pos)
         }

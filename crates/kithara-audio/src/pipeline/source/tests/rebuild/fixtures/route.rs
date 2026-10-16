@@ -1,4 +1,102 @@
+use kithara_test_utils::kithara;
+
 use super::*;
+
+pub(in crate::pipeline::source) struct PreparationWake(Notify);
+
+impl kithara_stream::WorkerWake for PreparationWake {
+    delegate::delegate! {
+        to self.0 {
+            #[call(notify_one)]
+            fn defer(&self);
+            #[call(notify_one)]
+            fn wake(&self);
+        }
+    }
+}
+
+impl PreparationWake {
+    pub(in crate::pipeline::source) fn install(
+        source: &mut StreamAudioSource<TestStream>,
+    ) -> Arc<Self> {
+        let wake = Arc::new(Self(Notify::default()));
+        source.wake = wake.clone();
+        wake
+    }
+
+    pub(in crate::pipeline::source) fn notified(&self) -> impl Future<Output = ()> + '_ {
+        self.0.notified()
+    }
+}
+
+#[kithara::hang_watchdog]
+pub(in crate::pipeline::source) async fn wait_for_promotion_attempt(
+    fixture: &mut RouteFixture,
+    wake: &PreparationWake,
+    transition: VariantTransition,
+    attempt: u64,
+) {
+    loop {
+        hang_tick!();
+        let notified = wake.notified();
+        fixture.source.prepare_deferred();
+        fixture.source.finish_deferred();
+        if fixture.control.promote_calls() >= attempt {
+            return;
+        }
+        assert_eq!(
+            fixture.source.decode.incoming_transition(),
+            Some(transition)
+        );
+        assert!(
+            !fixture.source.decode.incoming_is_priming(transition),
+            "the retained outgoing PCM must only await executor-owned incoming preparation"
+        );
+        notified.await;
+    }
+}
+
+pub(in crate::pipeline::source) struct IncomingFactoryGate {
+    entered: oneshot::Receiver<()>,
+    release: mpsc::Sender<()>,
+}
+
+impl IncomingFactoryGate {
+    pub(in crate::pipeline::source) async fn wait_entered(&mut self) {
+        (&mut self.entered)
+            .await
+            .expect("incoming factory must enter before lifecycle mutation");
+    }
+
+    pub(in crate::pipeline::source) fn release(self) {
+        drop(self.release);
+    }
+}
+
+pub(in crate::pipeline::source) fn gate_incoming_factory(
+    source: &mut StreamAudioSource<TestStream>,
+) -> IncomingFactoryGate {
+    let factory = source.factory.clone();
+    let (entered, entry) = oneshot::channel();
+    let entered = Mutex::new(Some(entered));
+    let (release, released) = mpsc::channel::<()>();
+    let released = Mutex::new(released);
+    source.factory = DecoderFactory::new(
+        move |reader, media, rate| {
+            let entered = entered.lock().take();
+            if let Some(entered) = entered {
+                let _ = entered.send(());
+                let _ = released.lock().recv();
+            }
+            factory.create(reader, media, rate)
+        },
+        None,
+    );
+    IncomingFactoryGate {
+        entered: entry,
+        release,
+    }
+}
 
 pub(in crate::pipeline::source) async fn route_signal_source(
     route_pcm: &RoutePcm,
@@ -208,6 +306,8 @@ pub(in crate::pipeline::source) async fn route_source(
         shared_stream,
         decode,
         SourceDecoderConfig {
+            runtime: kithara_platform::tokio::runtime::Handle::try_current()
+                .expect("source fixture runtime"),
             factory: decoder_factory,
             host_rate: NonZeroU32::new(params.initial_host_rate),
             backend: kithara_decode::DecoderBackend::default(),
@@ -322,13 +422,35 @@ pub(in crate::pipeline::source) fn next_decoded_chunk(
     }
 }
 
-pub(in crate::pipeline::source) fn enter_rebuilding(
+#[kithara::hang_watchdog]
+pub(in crate::pipeline::source) async fn wait_for_source_change(
+    source: &mut StreamAudioSource<TestStream>,
+    wake: &PreparationWake,
+) {
+    loop {
+        hang_tick!();
+        let changed = wake.notified();
+        source.prepare_deferred();
+        if !matches!(
+            source.phase,
+            crate::pipeline::source::core::OwnerPhase::Changing(_)
+                | crate::pipeline::source::core::OwnerPhase::Seeking { .. }
+        ) {
+            return;
+        }
+        changed.await;
+    }
+}
+
+pub(in crate::pipeline::source) async fn enter_rebuilding(
     source: &mut StreamAudioSource<TestStream>,
     recreate: RecreateState,
 ) {
+    let wake = PreparationWake::install(source);
     source
         .install_replacement(recreate, None)
-        .expect("synchronous replacement");
+        .expect("replacement admission");
+    wait_for_source_change(source, &wake).await;
 }
 
 pub(in crate::pipeline::source) fn install_test_factory(

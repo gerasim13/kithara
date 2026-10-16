@@ -3,7 +3,7 @@ use std::task::{Context, Poll};
 use kithara_audio::{AudioSource, Fetch, TrackFailureKind, TrackStep, WaitingReason};
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::{CancelToken, sync::Arc, time::WallInstant};
-use kithara_signal::{AudioChunk, AudioChunkInfo, FrameCount, SegmentId};
+use kithara_signal::{AudioChunk, AudioChunkInfo, FrameCount, SegmentId, SourceSpan};
 use kithara_stream::ActivityWriter;
 use kithara_test_utils::kithara;
 use kithara_worker::{Priority, Task, TickResult};
@@ -154,6 +154,18 @@ where
                             self.source.admitted();
                         }
                         kithara::probe_event!(chunk_admitted, segment = meta.segment.get());
+                        tracing::trace!(
+                            target: "render_refill",
+                            probe = "chunk_admitted",
+                            thread = ?kithara_platform::thread::current().id(),
+                            segment = meta.segment.get(),
+                            lane_frame = meta.lane_frame,
+                            source_start = meta.source_span.map(SourceSpan::start),
+                            source_end = meta.source_span.map(SourceSpan::end),
+                            frames = meta.frames,
+                            source_revision = meta.source_revision,
+                            variant = meta.variant_index,
+                        );
                     }
                 }
                 if let Some(terminal) = terminal {
@@ -265,6 +277,21 @@ where
 
     #[kithara::hang_watchdog]
     fn recycle(&mut self) {
+        tracing::trace!(
+            target: "render_refill",
+            probe = "recycle_enter",
+            thread = ?kithara_platform::thread::current().id(),
+            segment = self.source.cursor().segment.get(),
+            lane_frame = self.source.cursor().frame,
+            forward_full = self.port.forward.is_full(),
+            pending_frames = self.pending.as_ref().map(|pending| match &pending.packet {
+                PcmPacket::Chunk(chunk) => chunk.frames(),
+                PcmPacket::Failed { .. } => 0,
+            }),
+            last_source_start = self.last_output.source_span.map(SourceSpan::start),
+            last_source_end = self.last_output.source_span.map(SourceSpan::end),
+            last_frames = self.last_output.frames,
+        );
         while let Some(packet) = self.port.reverse.try_pop() {
             hang_tick!();
             self.retire(packet);
@@ -274,6 +301,21 @@ where
         let _ = self.source.prepare_deferred();
         self.source.finish_deferred();
         self.port.flush();
+        tracing::trace!(
+            target: "render_refill",
+            probe = "recycle_exit",
+            thread = ?kithara_platform::thread::current().id(),
+            segment = self.source.cursor().segment.get(),
+            lane_frame = self.source.cursor().frame,
+            forward_full = self.port.forward.is_full(),
+            pending_frames = self.pending.as_ref().map(|pending| match &pending.packet {
+                PcmPacket::Chunk(chunk) => chunk.frames(),
+                PcmPacket::Failed { .. } => 0,
+            }),
+            last_source_start = self.last_output.source_span.map(SourceSpan::start),
+            last_source_end = self.last_output.source_span.map(SourceSpan::end),
+            last_frames = self.last_output.frames,
+        );
     }
 
     #[kithara::measure(label = "play.decoder.tick")]
@@ -292,6 +334,16 @@ where
             return TickResult::Backpressured;
         }
         if matches!(self.terminal, Some(Err(_))) || self.port.forward.is_full() {
+            tracing::trace!(
+                target: "render_refill",
+                probe = "refill_backpressured",
+                thread = ?kithara_platform::thread::current().id(),
+                segment = self.source.cursor().segment.get(),
+                lane_frame = self.source.cursor().frame,
+                terminal_failed = matches!(self.terminal, Some(Err(_))),
+                forward_full = self.port.forward.is_full(),
+                last_source_end = self.last_output.source_span.map(SourceSpan::end),
+            );
             return TickResult::Backpressured;
         }
         let start = WallInstant::now();

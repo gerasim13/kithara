@@ -230,10 +230,7 @@ mod tests {
     use kithara_abr::{Abr, AbrController, AbrMock, AbrSettings, AbrState};
     use kithara_assets::{AssetResource, AssetSource, AssetStore, StorageBackend};
     use kithara_events::EventBus;
-    use kithara_platform::{
-        CancelToken,
-        sync::{Arc, ThreadGate},
-    };
+    use kithara_platform::{CancelToken, sync::Arc};
     use kithara_stream::{ActivityWriter, AudioCodec, ContainerFormat, PlayheadState};
     use kithara_test_utils::kithara;
     use unimock::{MockFn, Unimock, matching};
@@ -270,7 +267,10 @@ mod tests {
                 })
                 .expect("reader asset scope"),
             look_ahead_segments: None,
-            signal: SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new())),
+            signal: SizeSignal::new(
+                Arc::new(kithara_platform::sync::CondvarGate::default()),
+                Arc::new(OnceLock::new()),
+            ),
             config: Arc::new(
                 HlsConfig::for_url("https://example.com/master.m3u8".parse().expect("url"))
                     .store((*store).clone())

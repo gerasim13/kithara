@@ -16,7 +16,7 @@ use smallvec::SmallVec;
 use crate::{
     BlenderProfile, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome,
     DecoderResamplerConfig, DecoderSeekOutcome, DecoderTrackInfo, GaplessInfo,
-    GaplessTailCompensation, PcmOrigin, TrackMetadata,
+    GaplessTailCompensation, InputState, PcmOrigin, PrepareWait, TrackMetadata,
 };
 
 pub(crate) fn wrap<B, S>(
@@ -111,14 +111,19 @@ where
         })
     }
 
-    fn seek_selected(&mut self, pos: Duration, prefix: bool) -> DecodeResult<DecoderSeekOutcome> {
+    fn seek_selected(
+        &mut self,
+        pos: Duration,
+        prefix: bool,
+        wait: PrepareWait,
+    ) -> DecodeResult<DecoderSeekOutcome> {
         if !pos.is_zero() {
             self.observing_initial_pcm = false;
         }
         let outcome = if prefix {
-            self.decoder.seek_prefix(pos)?
+            self.decoder.seek_prefix_with_wait(pos, wait)?
         } else {
-            self.decoder.seek(pos)?
+            self.decoder.seek_with_wait(pos, wait)?
         };
         self.prepared = None;
         self.reset_resampler_state();
@@ -210,11 +215,11 @@ where
     S: HasPool<f32>,
 {
     #[kithara::measure(label = "decode.resampled.next")]
-    fn prepare_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
+    fn prepare_chunk(&mut self, wait: PrepareWait) -> DecodeResult<DecoderChunkOutcome> {
         if let Some(output) = self.drain_ready()? {
             return Ok(DecoderChunkOutcome::Chunk(Box::new(output)));
         }
-        self.decoder.prepare_next_chunk();
+        self.decoder.prepare_next_chunk_with_wait(wait);
         match self.decoder.next_chunk_prepared()? {
             DecoderChunkOutcome::Chunk(chunk) => {
                 self.append_chunk(&chunk)?;
@@ -550,8 +555,12 @@ where
     }
 
     fn prepare_next_chunk(&mut self) {
+        self.prepare_next_chunk_with_wait(PrepareWait::Wait);
+    }
+
+    fn prepare_next_chunk_with_wait(&mut self, wait: PrepareWait) {
         if !self.has_prepared_result() {
-            self.prepared = Some(self.prepare_chunk());
+            self.prepared = Some(self.prepare_chunk(wait));
         }
     }
 
@@ -561,6 +570,7 @@ where
             fn metadata(&self) -> TrackMetadata;
             fn update_byte_len(&self, len: u64);
             fn media_origin(&self) -> Option<Duration>;
+            fn release_input(&mut self) -> InputState;
         }
     }
 
@@ -569,17 +579,40 @@ where
     }
 
     fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
-        self.seek_selected(pos, false)
+        self.seek_selected(pos, false, PrepareWait::Wait)
+    }
+
+    fn seek_with_wait(
+        &mut self,
+        pos: Duration,
+        wait: PrepareWait,
+    ) -> DecodeResult<DecoderSeekOutcome> {
+        self.seek_selected(pos, false, wait)
     }
 
     fn seek_prefix(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
-        self.seek_selected(pos, true)
+        self.seek_selected(pos, true, PrepareWait::Wait)
+    }
+
+    fn seek_prefix_with_wait(
+        &mut self,
+        pos: Duration,
+        wait: PrepareWait,
+    ) -> DecodeResult<DecoderSeekOutcome> {
+        self.seek_selected(pos, true, wait)
     }
 
     fn prepare_seek(&mut self) -> DecodeResult<Option<DecoderSeekOutcome>> {
+        self.prepare_seek_with_wait(PrepareWait::Wait)
+    }
+
+    fn prepare_seek_with_wait(
+        &mut self,
+        wait: PrepareWait,
+    ) -> DecodeResult<Option<DecoderSeekOutcome>> {
         Ok(self
             .decoder
-            .prepare_seek()?
+            .prepare_seek_with_wait(wait)?
             .map(|outcome| self.map_seek_outcome(outcome)))
     }
 

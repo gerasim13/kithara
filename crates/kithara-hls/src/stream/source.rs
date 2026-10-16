@@ -7,7 +7,7 @@ use kithara_assets::EvictionSubscription;
 use kithara_bufpool::HasPool;
 use kithara_download::PeerHandle;
 use kithara_events::DeferredBus;
-use kithara_platform::{CancelScope, sync::Arc, time::Duration};
+use kithara_platform::{CancelScope, CancelToken, sync::Arc, time::Duration};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     Activity, ActivityWriter, BoxedEventSink, ByteMap, DeferredWake, MediaInfo, PlayheadRead,
@@ -100,6 +100,10 @@ impl<S> Source for HlsSource<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
+    fn cancel_token(&self) -> Option<CancelToken> {
+        Some(self.stream_scope.token())
+    }
+
     fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
         self.peer_handle.as_ref().map(|h| h.abr().clone())
     }
@@ -157,6 +161,7 @@ where
                 &mut self,
                 range: Range<u64>,
                 timeout: Option<Duration>,
+                cancel: Option<&kithara_stream::ReaderControl>,
             ) -> StreamResult<WaitOutcome>;
             fn activity(&self) -> Activity;
             fn take_activity_writer(&mut self) -> Option<ActivityWriter>;
@@ -321,7 +326,10 @@ mod tests {
                     })
                     .expect("source asset scope"),
                 look_ahead_segments: None,
-                signal: SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new())),
+                signal: SizeSignal::new(
+                    Arc::new(kithara_platform::sync::CondvarGate::default()),
+                    Arc::new(OnceLock::new()),
+                ),
                 config: Arc::new(
                     HlsConfig::for_url("https://example.com/master.m3u8".parse().expect("url"))
                         .store((*store).clone())

@@ -199,6 +199,7 @@ impl Source for ScriptSource {
         &mut self,
         range: Range<u64>,
         _timeout: Option<Duration>,
+        _cancel: Option<&crate::ReaderControl>,
     ) -> StreamResult<WaitOutcome> {
         self.waited.push(range.clone());
         if self
@@ -375,6 +376,7 @@ impl Source for SeekDuringWaitSource {
         &mut self,
         _range: Range<u64>,
         _timeout: Option<Duration>,
+        _cancel: Option<&crate::ReaderControl>,
     ) -> StreamResult<WaitOutcome> {
         Err(SourceError::Io(IoError::new(
             ErrorKind::Interrupted,
@@ -572,7 +574,7 @@ fn blocking_read_stops_at_ready_segment_boundary() {
     let mut buf = [0u8; 8];
 
     let outcome = stream
-        .try_read_with(&mut buf, WaitMode::Block)
+        .try_read_with(&mut buf, WaitMode::Block, None)
         .expect("the ready current segment must produce a partial read");
     let StreamReadOutcome::Bytes {
         count,
@@ -602,7 +604,7 @@ fn blocking_read_reports_not_ready_when_its_own_segment_is_unready() {
     let mut buf = [0u8; 8];
 
     let outcome = stream
-        .try_read_with(&mut buf, WaitMode::Block)
+        .try_read_with(&mut buf, WaitMode::Block, None)
         .expect("an unready segment under the cursor is a pending status");
     assert!(matches!(
         outcome,
@@ -699,5 +701,5 @@ fn probe_wait<T: StreamType>(
     stream: &mut Stream<T>,
     range: Range<u64>,
 ) -> StreamResult<WaitOutcome> {
-    stream.source.wait_range(range, Some(Duration::ZERO))
+    stream.source.wait_range(range, Some(Duration::ZERO), None)
 }

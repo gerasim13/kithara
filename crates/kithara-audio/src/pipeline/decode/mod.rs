@@ -10,6 +10,6 @@ pub(crate) mod output;
 pub(crate) mod resume;
 pub(crate) mod step;
 pub(crate) mod transition;
-mod transition_promotion;
+pub(crate) mod transition_promotion;
 
 pub(crate) use generation::DecoderGeneration;

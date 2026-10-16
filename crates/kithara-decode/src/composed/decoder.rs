@@ -13,7 +13,7 @@ use super::{
     state::SeekTrim, trim::frames_to_trim_prefix,
 };
 use crate::{
-    BlenderProfile, PcmOrigin,
+    BlenderProfile, InputState, PcmOrigin, PrepareWait,
     codec::FrameCodec,
     consts,
     demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer},
@@ -367,12 +367,17 @@ where
         }
     }
 
-    fn seek_selected(&mut self, pos: Duration, prefix: bool) -> DecodeResult<DecoderSeekOutcome> {
+    fn seek_selected(
+        &mut self,
+        pos: Duration,
+        prefix: bool,
+        wait: PrepareWait,
+    ) -> DecodeResult<DecoderSeekOutcome> {
         if !pos.is_zero() && matches!(self.origin, PcmOriginState::Observing(_)) {
             self.origin = PcmOriginState::Sealed;
         }
         let priming = self.codec.priming(self.demuxer.track_info().codec);
-        let outcome = self.demuxer.seek(pos, priming)?;
+        let outcome = self.demuxer.seek_with_wait(pos, priming, wait)?;
         self.codec.flush()?;
         self.head_strip = HeadStrip::default();
         self.zero_frame_count = 0;
@@ -503,6 +508,10 @@ where
     }
 
     fn prepare_next_chunk(&mut self) {
+        self.prepare_next_chunk_with_wait(PrepareWait::Wait);
+    }
+
+    fn prepare_next_chunk_with_wait(&mut self, wait: PrepareWait) {
         if self.has_prepared_result() || matches!(self.prefill, Prefill::Seeking(_)) {
             return;
         }
@@ -510,7 +519,7 @@ where
             self.prefill = Prefill::Needed;
         }
         if !self.codec.has_output()
-            && let Err(error) = self.demuxer.prepare_frame()
+            && let Err(error) = self.demuxer.prepare_frame_with_wait(wait)
         {
             self.output = Some(Err(error));
             return;
@@ -525,18 +534,45 @@ where
     }
 
     fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
-        self.seek_selected(pos, false)
+        self.seek_selected(pos, false, PrepareWait::Wait)
+    }
+
+    fn seek_with_wait(
+        &mut self,
+        pos: Duration,
+        wait: PrepareWait,
+    ) -> DecodeResult<DecoderSeekOutcome> {
+        self.seek_selected(pos, false, wait)
     }
 
     fn seek_prefix(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
-        self.seek_selected(pos, true)
+        self.seek_selected(pos, true, PrepareWait::Wait)
+    }
+
+    fn seek_prefix_with_wait(
+        &mut self,
+        pos: Duration,
+        wait: PrepareWait,
+    ) -> DecodeResult<DecoderSeekOutcome> {
+        self.seek_selected(pos, true, wait)
     }
 
     fn prepare_seek(&mut self) -> DecodeResult<Option<DecoderSeekOutcome>> {
+        self.prepare_seek_with_wait(PrepareWait::Wait)
+    }
+
+    fn prepare_seek_with_wait(
+        &mut self,
+        wait: PrepareWait,
+    ) -> DecodeResult<Option<DecoderSeekOutcome>> {
         Ok(self
             .demuxer
-            .prepare_seek()?
+            .prepare_seek_with_wait(wait)?
             .map(|outcome| self.apply_seek_outcome(outcome)))
+    }
+
+    fn release_input(&mut self) -> InputState {
+        self.demuxer.release_input()
     }
 
     fn spec(&self) -> AudioSpec {

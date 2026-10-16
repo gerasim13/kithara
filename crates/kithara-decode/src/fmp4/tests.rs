@@ -31,6 +31,7 @@ use crate::apple::AppleCodec as TestCodec;
 #[cfg(feature = "symphonia")]
 use crate::symphonia::SymphoniaCodec as TestCodec;
 use crate::{
+    PrepareWait,
     codec::CodecPriming,
     composed::{ComposedDecoder, DecoderRuntime},
     demuxer::{DemuxOutcome, Demuxer},
@@ -142,83 +143,113 @@ fn prepared_frames_do_not_read_container_bytes(
     expected_blocking.store(false, Ordering::Release);
     let reason = PendingReason::NotReady(NotReadyCause::WaitBudgetExhausted);
     for target in [Duration::ZERO, Duration::from_secs(1), Duration::ZERO] {
-        gate.arm();
-        reads.lock().expect("read log").clear();
-        if partial {
-            available.store(prefix_end, Ordering::Release);
-        }
-        let outcome = decoder.seek(target).expect("seek");
-        assert!(gate.is_armed(), "seek restores the caller's blocking mode");
-        if partial {
-            assert_eq!(outcome, DecoderSeekOutcome::Pending(reason));
-            assert_eq!(
-                reads.lock().expect("read log").as_slice(),
-                &[segment.byte_range.start..prefix_end, prefix_end..prefix_end]
-            );
-            if supersede {
-                reads.lock().expect("read log").clear();
-                assert_eq!(decoder.seek(target).expect("replacement seek"), outcome);
-                assert!(
-                    gate.is_armed(),
-                    "replacement seek restores the caller's mode"
-                );
+        for wait in [PrepareWait::Poll, PrepareWait::Wait] {
+            expected_blocking.store(wait == PrepareWait::Wait, Ordering::Release);
+            gate.arm();
+            reads.lock().expect("read log").clear();
+            if partial {
+                available.store(prefix_end, Ordering::Release);
+            }
+            let outcome = decoder.seek_with_wait(target, wait).expect("seek");
+            assert!(gate.is_armed(), "seek restores the caller's blocking mode");
+            if partial {
+                assert_eq!(outcome, DecoderSeekOutcome::Pending(reason));
                 assert_eq!(
                     reads.lock().expect("read log").as_slice(),
-                    &[segment.byte_range.start..prefix_end, prefix_end..prefix_end],
-                    "a new seek replaces the old read prefix even at the same target"
+                    &[segment.byte_range.start..prefix_end, prefix_end..prefix_end]
                 );
+                if supersede {
+                    reads.lock().expect("read log").clear();
+                    assert_eq!(
+                        decoder
+                            .seek_with_wait(target, wait)
+                            .expect("replacement seek"),
+                        outcome
+                    );
+                    assert!(
+                        gate.is_armed(),
+                        "replacement seek restores the caller's mode"
+                    );
+                    assert_eq!(
+                        reads.lock().expect("read log").as_slice(),
+                        &[segment.byte_range.start..prefix_end, prefix_end..prefix_end],
+                        "a new seek replaces the old read prefix even at the same target"
+                    );
+                }
+                gate.disarm();
+                expected_blocking.store(false, Ordering::Release);
+                reads.lock().expect("read log").clear();
+                decoder.prepare_next_chunk();
+                assert!(matches!(
+                    decoder.next_chunk_prepared().expect("unresolved PCM"),
+                    DecoderChunkOutcome::Pending(actual) if actual == reason
+                ));
+                assert!(reads.lock().expect("read log").is_empty());
+                assert_eq!(
+                    decoder.prepare_seek_with_wait(wait).expect("continue seek"),
+                    Some(outcome)
+                );
+                assert!(!gate.is_armed(), "pending continuation retains probe mode");
+                assert_eq!(
+                    reads.lock().expect("read log").as_slice(),
+                    std::slice::from_ref(&(prefix_end..prefix_end)),
+                    "continuation must retain the accumulated prefix"
+                );
+                gate.arm();
+                expected_blocking.store(wait == PrepareWait::Wait, Ordering::Release);
+                reads.lock().expect("read log").clear();
+                assert_eq!(
+                    decoder
+                        .prepare_seek_with_wait(wait)
+                        .expect("armed continuation"),
+                    Some(outcome)
+                );
+                assert!(gate.is_armed(), "continuation restores the caller's mode");
+                assert_eq!(
+                    reads.lock().expect("read log").as_slice(),
+                    std::slice::from_ref(&(prefix_end..prefix_end)),
+                    "armed continuation must retain the accumulated prefix"
+                );
+                gate.disarm();
+                expected_blocking.store(false, Ordering::Release);
+                reads.lock().expect("read log").clear();
+                available.store(u64::MAX, Ordering::Release);
+                let outcome = decoder.prepare_seek_with_wait(wait).expect("resolve seek");
+                assert!(matches!(outcome, Some(DecoderSeekOutcome::Landed { .. })));
+                assert!(!gate.is_armed(), "landing continuation retains probe mode");
+                assert!(
+                    reads
+                        .lock()
+                        .expect("read log")
+                        .iter()
+                        .all(|read| read.start >= prefix_end),
+                    "resolving the same operation must not reread its prefix"
+                );
+            } else {
+                assert!(matches!(outcome, DecoderSeekOutcome::Landed { .. }));
             }
             gate.disarm();
+            expected_blocking.store(false, Ordering::Release);
             reads.lock().expect("read log").clear();
-            decoder.prepare_next_chunk();
-            assert!(matches!(
-                decoder.next_chunk_prepared().expect("unresolved PCM"),
-                DecoderChunkOutcome::Pending(actual) if actual == reason
-            ));
-            assert!(reads.lock().expect("read log").is_empty());
             assert_eq!(
-                decoder.prepare_seek().expect("continue seek"),
-                Some(outcome)
+                decoder.prepare_seek_with_wait(wait).expect("settled seek"),
+                None
             );
-            assert!(!gate.is_armed(), "pending continuation retains probe mode");
-            assert_eq!(
-                reads.lock().expect("read log").as_slice(),
-                std::slice::from_ref(&(prefix_end..prefix_end)),
-                "continuation must retain the accumulated prefix"
-            );
-            reads.lock().expect("read log").clear();
-            available.store(u64::MAX, Ordering::Release);
-            let outcome = decoder.prepare_seek().expect("resolve seek");
-            assert!(matches!(outcome, Some(DecoderSeekOutcome::Landed { .. })));
-            assert!(!gate.is_armed(), "landing continuation retains probe mode");
-            assert!(
-                reads
-                    .lock()
-                    .expect("read log")
-                    .iter()
-                    .all(|read| read.start >= prefix_end),
-                "resolving the same operation must not reread its prefix"
-            );
-        } else {
-            assert!(matches!(outcome, DecoderSeekOutcome::Landed { .. }));
-        }
-        gate.disarm();
-        reads.lock().expect("read log").clear();
-        assert_eq!(decoder.prepare_seek().expect("settled seek"), None);
-        assert!(reads.lock().expect("read log").is_empty());
-        let mut chunks = 0;
-        for _ in 0..128 {
-            decoder.prepare_next_chunk();
-            reads.lock().expect("read log").clear();
-            let outcome = decoder.next_chunk_prepared().expect("prepared decode");
             assert!(reads.lock().expect("read log").is_empty());
-            match outcome {
-                DecoderChunkOutcome::Chunk(_) => chunks += 1,
-                DecoderChunkOutcome::Pending(_) => {}
-                DecoderChunkOutcome::Eof => break,
+            let mut chunks = 0;
+            for _ in 0..128 {
+                decoder.prepare_next_chunk();
+                reads.lock().expect("read log").clear();
+                let outcome = decoder.next_chunk_prepared().expect("prepared decode");
+                assert!(reads.lock().expect("read log").is_empty());
+                match outcome {
+                    DecoderChunkOutcome::Chunk(_) => chunks += 1,
+                    DecoderChunkOutcome::Pending(_) => {}
+                    DecoderChunkOutcome::Eof => break,
+                }
             }
+            assert!(chunks > 0, "prepared seek must produce PCM");
         }
-        assert!(chunks > 0, "prepared seek must produce PCM");
     }
 }
 

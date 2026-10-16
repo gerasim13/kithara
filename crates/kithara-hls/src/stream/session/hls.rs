@@ -13,8 +13,8 @@ use kithara_platform::{
 };
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    ByteMap, ConstructionGate, PendingReason, ReaderProfile, SegmentDescriptor, SourceError,
-    SourcePhase, SourceSeekAnchor, StreamError, StreamResult, VariantTransition,
+    ByteMap, ConstructionGate, PendingReason, ReaderControl, ReaderProfile, SegmentDescriptor,
+    SourceError, SourcePhase, SourceSeekAnchor, StreamError, StreamResult, VariantTransition,
 };
 use tracing::debug;
 
@@ -34,6 +34,7 @@ where
     active: AtomicBool,
     position: AtomicU64,
     construction_gate: ConstructionGate,
+    reader_control: ReaderControl,
     #[field(get, vis = "pub(crate)", copy)]
     transition: Option<VariantTransition>,
     cancel: SessionCancel,
@@ -77,6 +78,7 @@ where
             variant,
             variant_index,
             active: AtomicBool::new(true),
+            reader_control: ReaderControl::new(Some(cancel.clone())),
             cancel: SessionCancel::new(cancel),
             construction_gate: ConstructionGate::default(),
             position: AtomicU64::new(position),
@@ -211,6 +213,7 @@ where
             signal,
             variant,
             active: AtomicBool::new(false),
+            reader_control: ReaderControl::new(Some(cancel.clone())),
             cancel: SessionCancel::new(cancel),
             construction_gate: ConstructionGate::default(),
             position: AtomicU64::new(0),
@@ -327,33 +330,36 @@ where
         &self,
         range: Range<u64>,
         timeout: Option<Duration>,
+        reader_cancel: Option<&ReaderControl>,
     ) -> StreamResult<WaitOutcome> {
         if self.cancel.root.is_cancelled() {
             return Ok(WaitOutcome::Interrupted);
         }
         match timeout {
             Some(_) => self.variant.wait_range(range, timeout),
-            None => self.signal.wait_range_blocking(&self.cancel.root, || {
-                if self.cancel.root.is_cancelled() {
-                    return Ok(WaitOutcome::Interrupted);
-                }
-                let outcome = self.variant.wait_range(range.clone(), Some(Duration::ZERO));
-                if matches!(
-                    outcome,
-                    Err(StreamError::Source(SourceError::WaitBudgetExceeded))
-                ) {
-                    debug!(
-                        target: "kithara_hls::wait",
-                        variant = self.variant.variant_index_u32(),
-                        start = range.start,
-                        end = range.end,
-                        phase = ?self.variant.phase_at(range.clone()),
-                        "construction wait parked on an unready range"
-                    );
-                    self.signal.wake_peer();
-                }
-                outcome
-            }),
+            None => self
+                .signal
+                .wait_range_blocking(&self.cancel.root, reader_cancel, || {
+                    if self.cancel.root.is_cancelled() {
+                        return Ok(WaitOutcome::Interrupted);
+                    }
+                    let outcome = self.variant.wait_range(range.clone(), Some(Duration::ZERO));
+                    if matches!(
+                        outcome,
+                        Err(StreamError::Source(SourceError::WaitBudgetExceeded))
+                    ) {
+                        debug!(
+                            target: "kithara_hls::wait",
+                            variant = self.variant.variant_index_u32(),
+                            start = range.start,
+                            end = range.end,
+                            phase = ?self.variant.phase_at(range.clone()),
+                            "construction wait parked on an unready range"
+                        );
+                        self.signal.wake_peer();
+                    }
+                    outcome
+                }),
         }
     }
 
@@ -379,6 +385,10 @@ where
             pub(crate) fn construction_blocking(&self) -> bool;
             #[call(clone)]
             pub(crate) fn construction_gate(&self) -> ConstructionGate;
+        }
+        to self.reader_control {
+            #[call(clone)]
+            pub(crate) fn reader_control(&self) -> ReaderControl;
         }
         to self.variant {
             pub(crate) fn find_at_offset(&self, byte: u64) -> Option<(u32, u64, u64)>;

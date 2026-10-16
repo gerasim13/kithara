@@ -1,6 +1,6 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use kithara_decode::{DecodeError, DecodeResult, DecoderSeekOutcome, GaplessMode};
+use kithara_decode::{DecodeError, DecodeResult, DecoderSeekOutcome, GaplessMode, PrepareWait};
 use kithara_platform::time::Duration;
 use tracing::warn;
 
@@ -48,6 +48,16 @@ impl DecoderGeneration {
         gapless_mode: GaplessMode,
         for_render: bool,
     ) -> DecodeResult<DecoderSeekOutcome> {
+        self.seek_with_wait(position, gapless_mode, for_render, PrepareWait::Poll)
+    }
+
+    pub(crate) fn seek_with_wait(
+        &mut self,
+        position: Duration,
+        gapless_mode: GaplessMode,
+        for_render: bool,
+        wait: PrepareWait,
+    ) -> DecodeResult<DecoderSeekOutcome> {
         if !position.is_zero() {
             self.seal_visible_origin(gapless_mode);
         }
@@ -56,9 +66,9 @@ impl DecoderGeneration {
         }
         let result = catch_unwind(AssertUnwindSafe(|| {
             if for_render {
-                self.decoder.seek_prefix(position)
+                self.decoder.seek_prefix_with_wait(position, wait)
             } else {
-                self.decoder.seek(position)
+                self.decoder.seek_with_wait(position, wait)
             }
         }));
         if let Some(gate) = &self.construction_gate {
@@ -123,18 +133,28 @@ impl DecoderGeneration {
         prepare_input: bool,
         gapless_mode: GaplessMode,
     ) -> DecodeResult<Option<DecoderSeekOutcome>> {
+        self.prepare_deferred_with_wait(prepare_input, gapless_mode, PrepareWait::Poll)
+    }
+
+    pub(crate) fn prepare_deferred_with_wait(
+        &mut self,
+        prepare_input: bool,
+        gapless_mode: GaplessMode,
+        wait: PrepareWait,
+    ) -> DecodeResult<Option<DecoderSeekOutcome>> {
         self.gapless.prepare_deferred();
         if !prepare_input || self.finished {
             return Ok(None);
         }
-        let outcome = catch_unwind(AssertUnwindSafe(|| self.decoder.prepare_seek())).map_err(
-            |payload| {
-                warn!(panic = %panic_message(payload), "decoder panicked during seek preparation");
-                DecodeError::InvalidData {
-                    detail: "decoder panicked during seek preparation",
-                }
-            },
-        )??;
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            self.decoder.prepare_seek_with_wait(wait)
+        }))
+        .map_err(|payload| {
+            warn!(panic = %panic_message(payload), "decoder panicked during seek preparation");
+            DecodeError::InvalidData {
+                detail: "decoder panicked during seek preparation",
+            }
+        })??;
         match outcome {
             Some(DecoderSeekOutcome::Pending(_)) => return Ok(outcome),
             Some(terminal) => {
@@ -149,7 +169,7 @@ impl DecoderGeneration {
             }
             None => {}
         }
-        self.decoder.prepare_next_chunk();
+        self.decoder.prepare_next_chunk_with_wait(wait);
         Ok(outcome)
     }
 }

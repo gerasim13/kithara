@@ -349,7 +349,7 @@ fn file_source_wait_range_returns_interrupted_while_flushing() {
     coord.set_position(50);
     let mut source = make_source(res, coord, bus);
 
-    let result = Source::wait_range(&mut source, 50..60, Some(Duration::from_secs(1)));
+    let result = Source::wait_range(&mut source, 50..60, Some(Duration::from_secs(1)), None);
     assert!(matches!(
         result,
         Err(StreamError::Source(StreamSourceError::WaitBudgetExceeded))
@@ -364,7 +364,7 @@ fn file_source_probe_wait_range_does_not_block_on_missing_bytes() {
     coord.set_total_bytes(Some(100));
     let mut source = make_source(res, coord, bus);
 
-    let result = Source::wait_range(&mut source, 0..10, Some(Duration::from_secs(1)));
+    let result = Source::wait_range(&mut source, 0..10, Some(Duration::from_secs(1)), None);
 
     assert!(matches!(
         result,
@@ -379,7 +379,7 @@ fn file_source_probe_is_ready_on_written_bytes_before_commit() {
     coord.set_total_bytes(Some(5));
     let mut source = make_source(reader, coord, EventBus::new(16));
 
-    let result = Source::wait_range(&mut source, 0..5, Some(Duration::from_millis(1)));
+    let result = Source::wait_range(&mut source, 0..5, Some(Duration::from_millis(1)), None);
 
     assert_eq!(result.unwrap(), WaitOutcome::Ready);
 }
@@ -392,7 +392,7 @@ fn file_source_probe_wait_range_surfaces_terminal_storage_failure() {
     coord.set_total_bytes(Some(4));
     let mut source = make_source(reader, coord, EventBus::new(16));
 
-    let result = Source::wait_range(&mut source, 0..4, Some(Duration::from_millis(1)));
+    let result = Source::wait_range(&mut source, 0..4, Some(Duration::from_millis(1)), None);
 
     assert!(matches!(
         result,
@@ -410,7 +410,7 @@ fn file_source_probe_wait_range_surfaces_terminal_storage_cancellation() {
     resource_cancel.cancel();
 
     assert_eq!(Source::phase_at(&source, 0..4), SourcePhase::Cancelled);
-    let result = Source::wait_range(&mut source, 0..4, Some(Duration::from_millis(1)));
+    let result = Source::wait_range(&mut source, 0..4, Some(Duration::from_millis(1)), None);
 
     assert!(matches!(
         result,
@@ -430,7 +430,7 @@ fn file_source_probe_wait_range_clamps_read_ahead_at_known_eof() {
     coord.set_total_bytes(Some(total));
     let mut source = make_source(res, coord, bus);
 
-    let result = Source::wait_range(&mut source, 0..1024, Some(Duration::from_secs(1)));
+    let result = Source::wait_range(&mut source, 0..1024, Some(Duration::from_secs(1)), None);
 
     assert_eq!(result.unwrap(), WaitOutcome::Ready);
 }
@@ -457,7 +457,7 @@ fn source_cancel_interrupts_blocked_wait_without_poisoning_asset() {
         let entering_wait = Arc::clone(&entering_wait);
         move || {
             entering_wait.wait();
-            Source::wait_range(&mut source, 0..4, None)
+            Source::wait_range(&mut source, 0..4, None, None)
         }
     });
 
@@ -493,7 +493,7 @@ fn pre_cancelled_source_is_terminal_for_ready_eof_and_probe_wait() {
     );
     assert_eq!(Source::phase_at(&ready, 0..1), SourcePhase::Cancelled);
     assert!(matches!(
-        Source::wait_range(&mut ready, 0..1, Some(Duration::from_millis(1))),
+        Source::wait_range(&mut ready, 0..1, Some(Duration::from_millis(1)), None),
         Err(StreamError::Source(StreamSourceError::Storage(
             StorageError::Cancelled
         )))
@@ -516,7 +516,7 @@ fn pre_cancelled_source_is_terminal_for_ready_eof_and_probe_wait() {
     );
     assert_eq!(Source::phase_at(&eof, 4..5), SourcePhase::Cancelled);
     assert!(matches!(
-        Source::wait_range(&mut eof, 4..5, None),
+        Source::wait_range(&mut eof, 4..5, None, None),
         Err(StreamError::Source(StreamSourceError::Storage(
             StorageError::Cancelled
         )))
@@ -527,7 +527,7 @@ fn pre_cancelled_source_is_terminal_for_ready_eof_and_probe_wait() {
     waiting_coord.set_total_bytes(Some(4));
     let mut waiting = make_source_with_cancel(reader, waiting_coord, EventBus::new(16), cancel);
     assert!(matches!(
-        Source::wait_range(&mut waiting, 0..4, Some(Duration::from_millis(1))),
+        Source::wait_range(&mut waiting, 0..4, Some(Duration::from_millis(1)), None),
         Err(StreamError::Source(StreamSourceError::Storage(
             StorageError::Cancelled
         )))

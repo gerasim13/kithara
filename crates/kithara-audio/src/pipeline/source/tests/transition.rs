@@ -1,7 +1,15 @@
 use kithara_abr::{AbrMode, AbrReason, AbrState, VariantIndex};
 use kithara_decode::{DecodeError, DecoderFactory as DecoderBuilder, GaplessInfo, GaplessMode};
-use kithara_events::{DeferredBus, EventBus};
-use kithara_platform::{sync::Arc, time::Duration, tokio::task::yield_now};
+use kithara_events::{DeferredBus, EventBus, EventReceiver, TryRecvError};
+use kithara_platform::{
+    sync::{Arc, Mutex, mpsc},
+    time::{Duration, timeout},
+    tokio::{
+        runtime::Handle,
+        sync::oneshot,
+        task::{spawn_blocking_on, yield_now},
+    },
+};
 use kithara_signal::AudioChunk;
 use kithara_stream::{
     AudioCodec, ContainerFormat, MediaInfo, OutgoingDisposition, SourcePhase, VariantPromotion,
@@ -11,15 +19,16 @@ use kithara_test_fixtures::unit_fixtures::{RoutePcm, route_pcm};
 use kithara_test_utils::kithara;
 
 use super::rebuild::{
-    RouteFixture, TestDecoder, media_info, produced_data, route_signal_source,
-    route_signal_source_with_finite_incoming, route_signal_source_with_finite_sides,
-    route_signal_source_with_gapless, route_signal_source_with_gapless_eof,
-    route_signal_source_with_gaps, spec,
+    PreparationWake, RouteFixture, RouteSignalDecoder, TestDecoder, gate_incoming_factory,
+    media_info, produced_data, route_signal_source, route_signal_source_with_finite_incoming,
+    route_signal_source_with_finite_sides, route_signal_source_with_gapless,
+    route_signal_source_with_gapless_eof, route_signal_source_with_gaps, spec,
+    wait_for_promotion_attempt,
 };
 use crate::{
     DecoderChangeCause, DecoderEvent, consts,
     pipeline::{
-        decode::{DecoderGeneration, transition::OutgoingFrontier},
+        decode::{DecoderGeneration, core::DecoderFactory, transition::OutgoingFrontier},
         source::core::OwnerPhase,
         track::TrackStep,
     },
@@ -105,7 +114,10 @@ fn assert_route_signal(chunk: &AudioChunk, expected_offset: u64) {
 /// Waits for the build, not for a number of yields: on a real clock the build
 /// takes milliseconds while sixty-four yields take microseconds.
 #[kithara::hang_watchdog]
-async fn wait_for_incoming_priming(fixture: &mut RouteFixture, transition: VariantTransition) {
+pub(in crate::pipeline::source) async fn wait_for_incoming_priming(
+    fixture: &mut RouteFixture,
+    transition: VariantTransition,
+) {
     loop {
         yield_now().await;
         fixture.source.prepare_deferred();
@@ -120,7 +132,7 @@ async fn wait_for_incoming_priming(fixture: &mut RouteFixture, transition: Varia
 /// Settle on whichever way the transition resolved, so the oracle reads the verdict and never a
 /// tick count. A switch that neither promotes nor aborts is itself the failure the watchdog names.
 #[kithara::hang_watchdog]
-async fn wait_for_transition_settled(fixture: &mut RouteFixture) {
+pub(in crate::pipeline::source) async fn wait_for_transition_settled(fixture: &mut RouteFixture) {
     loop {
         yield_now().await;
         fixture.source.prepare_deferred();
@@ -150,116 +162,222 @@ async fn wait_for_abandoned_incoming_progress(
     }
 }
 
+fn watch_variant_events(fixture: &mut RouteFixture) -> EventReceiver<DecoderEvent> {
+    let bus = EventBus::new(16);
+    let events = bus.subscribe();
+    fixture.source.emit = Arc::new(DeferredBus::new(bus, 16));
+    events
+}
+
+fn assert_no_variant_event(events: &mut EventReceiver<DecoderEvent>) {
+    loop {
+        match events.try_recv() {
+            Ok(event) => assert!(!matches!(
+                event.event,
+                DecoderEvent::DecoderChanged {
+                    variant: Some(1),
+                    ..
+                }
+            )),
+            Err(TryRecvError::Empty) => break,
+            Err(error) => panic!("variant event observation failed: {error}"),
+        }
+    }
+}
+
+#[kithara::hang_watchdog]
+pub(in crate::pipeline::source) async fn wait_for_retired_decoder(
+    drops: &Arc<Mutex<Vec<u64>>>,
+    id: u64,
+) {
+    while !drops.lock().contains(&id) {
+        yield_now().await;
+        hang_tick!();
+    }
+}
+
 #[kithara::test(tokio)]
 async fn eof_transition_retires_staged_incoming_and_aborts_variant(route_pcm: RoutePcm) {
-    let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
-    let plan = incoming_plan();
-    let transition = plan.transition();
-    fixture.control.set_exact_plan(plan);
-    fixture.control.set_exact_reader_ready();
+    for building in [false, true] {
+        let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
+        let mut events = watch_variant_events(&mut fixture);
+        let plan = incoming_plan();
+        let transition = plan.transition();
+        fixture.control.set_exact_plan(plan);
+        fixture.control.set_exact_reader_ready();
+        let mut gate = building.then(|| gate_incoming_factory(&mut fixture.source));
+        fixture.source.prepare_deferred();
+        fixture.source.finish_deferred();
+        if let Some(gate) = &mut gate {
+            gate.wait_entered().await;
+        } else {
+            wait_for_incoming_priming(&mut fixture, transition).await;
+        }
+        let pending = fixture.source.decode.incoming_transition();
+        let initially_aborted = fixture.control.aborted_transition();
+        let initially_retired = fixture.drops.lock().clone();
+        fixture.source.phase = OwnerPhase::AtEof;
+        fixture.source.prepare_deferred();
+        fixture.source.finish_deferred();
+        drop(gate);
+        wait_for_retired_decoder(&fixture.drops, 99).await;
 
-    fixture.source.prepare_deferred();
-    fixture.source.finish_deferred();
-    wait_for_incoming_priming(&mut fixture, transition).await;
-
-    assert!(fixture.source.decode.incoming_is_priming(transition));
-    assert_eq!(fixture.control.aborted_transition(), None);
-    assert!(fixture.drops.lock().is_empty());
-
-    fixture.source.phase = OwnerPhase::AtEof;
-    assert!(matches!(fixture.source.phase, OwnerPhase::AtEof));
-    fixture.source.prepare_deferred();
-    fixture.source.finish_deferred();
-
-    assert!(fixture.source.decode.incoming_transition().is_none());
-    assert_eq!(fixture.control.aborted_transition(), Some(transition));
-    assert_eq!(fixture.drops.lock().as_slice(), &[99]);
+        assert_eq!(pending, Some(transition));
+        assert_eq!(initially_aborted, None);
+        assert!(initially_retired.is_empty());
+        assert!(matches!(fixture.source.phase, OwnerPhase::AtEof));
+        assert!(fixture.source.decode.incoming_transition().is_none());
+        assert_eq!(fixture.control.aborted_transition(), Some(transition));
+        assert_eq!(fixture.drops.lock().as_slice(), &[99]);
+        assert_eq!(fixture.control.promote_calls(), 0);
+        assert_no_variant_event(&mut events);
+    }
 }
 
 #[kithara::test(tokio)]
 async fn an_applied_seek_retires_the_incoming_its_epoch_superseded(route_pcm: RoutePcm) {
-    let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
-    let plan = incoming_plan();
-    let transition = plan.transition();
-    fixture.control.set_exact_plan(plan);
-    fixture.control.set_exact_reader_ready();
+    for building in [false, true] {
+        let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
+        let mut events = watch_variant_events(&mut fixture);
+        let plan = incoming_plan();
+        let transition = plan.transition();
+        fixture.control.set_exact_plan(plan);
+        fixture.control.set_exact_reader_ready();
+        let mut gate = building.then(|| gate_incoming_factory(&mut fixture.source));
+        fixture.source.prepare_deferred();
+        fixture.source.finish_deferred();
+        if let Some(gate) = &mut gate {
+            gate.wait_entered().await;
+        } else {
+            wait_for_incoming_priming(&mut fixture, transition).await;
+        }
+        let pending = fixture.source.decode.incoming_transition();
+        let target = Duration::from_secs(1);
+        let outcome = fixture.source.seek(target);
+        drop(gate);
+        wait_for_retired_decoder(&fixture.drops, 99).await;
+        fixture.source.prepare_deferred();
+        fixture.source.finish_deferred();
 
-    fixture.source.prepare_deferred();
-    fixture.source.finish_deferred();
-    wait_for_incoming_priming(&mut fixture, transition).await;
-
-    assert!(fixture.source.decode.incoming_is_priming(transition));
-
-    let target = Duration::from_secs(1);
-    let outcome = fixture.source.seek(target).expect("synchronous seek");
-    assert!(matches!(outcome, crate::SeekOutcome::Landed { landed_at, .. } if landed_at == target));
-    assert!(matches!(fixture.source.phase, OwnerPhase::Decoding));
-    assert!(fixture.source.decode.incoming_transition().is_none());
-    assert!(!fixture.source.decode.transition_holds_output());
-    assert_eq!(fixture.control.aborted_transition(), None);
-
-    fixture.source.prepare_deferred();
-    fixture.source.finish_deferred();
-
-    assert_eq!(fixture.drops.lock().as_slice(), &[99]);
+        assert_eq!(pending, Some(transition));
+        assert!(
+            matches!(outcome, Ok(crate::SeekOutcome::Landed { landed_at, .. }) if landed_at == target)
+        );
+        assert!(matches!(fixture.source.phase, OwnerPhase::Decoding));
+        assert!(fixture.source.decode.incoming_transition().is_none());
+        assert!(!fixture.source.decode.transition_holds_output());
+        assert_eq!(fixture.control.aborted_transition(), Some(transition));
+        assert_eq!(fixture.drops.lock().as_slice(), &[99]);
+        assert_eq!(fixture.control.promote_calls(), 0);
+        assert_no_variant_event(&mut events);
+    }
 }
 
 #[kithara::test(tokio)]
 async fn a_preempting_seek_retires_the_incoming_it_leaves_without_a_join(route_pcm: RoutePcm) {
-    let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
-    let plan = incoming_plan();
-    let transition = plan.transition();
-    fixture.control.set_exact_plan(plan);
-    fixture.control.set_exact_reader_ready();
+    for past_eof in [false, true] {
+        let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
+        let first = fixture.source.step_track();
+        let mut events = watch_variant_events(&mut fixture);
+        let plan = incoming_plan();
+        let transition = plan.transition();
+        fixture.control.set_exact_plan(plan);
+        fixture.control.set_exact_reader_ready();
+        let mut gate = gate_incoming_factory(&mut fixture.source);
+        fixture.source.prepare_deferred();
+        fixture.source.finish_deferred();
+        gate.wait_entered().await;
+        let pending = fixture.source.decode.incoming_transition();
+        let initially_retired = fixture.drops.lock().clone();
+        let target = Duration::from_secs(if past_eof { 60 } else { 1 });
+        fixture
+            .source
+            .playhead
+            .set_duration(Some(Duration::from_secs(60)));
+        let outcome = fixture.source.seek(target);
+        gate.release();
+        wait_for_retired_decoder(&fixture.drops, 99).await;
+        fixture.source.prepare_deferred();
+        fixture.source.finish_deferred();
 
-    fixture.source.prepare_deferred();
-    fixture.source.finish_deferred();
-    wait_for_incoming_priming(&mut fixture, transition).await;
-
-    assert!(fixture.source.decode.incoming_is_priming(transition));
-    assert!(fixture.drops.lock().is_empty());
-
-    let target = Duration::from_secs(1);
-    assert!(
-        matches!(fixture.source.seek(target), Ok(crate::SeekOutcome::Landed { landed_at, .. }) if landed_at == target)
-    );
-    assert!(matches!(fixture.source.phase, OwnerPhase::Decoding));
-    assert!(fixture.source.decode.incoming_transition().is_none());
-    assert!(!fixture.source.decode.transition_holds_output());
-    assert_eq!(fixture.control.aborted_transition(), None);
-
-    fixture.source.prepare_deferred();
-    fixture.source.finish_deferred();
-
-    assert_eq!(fixture.drops.lock().as_slice(), &[99]);
+        assert!(matches!(first, TrackStep::Produced(_)));
+        assert_eq!(pending, Some(transition));
+        assert!(initially_retired.is_empty());
+        if past_eof {
+            assert!(matches!(outcome, Ok(crate::SeekOutcome::PastEof { .. })));
+            assert!(matches!(fixture.source.phase, OwnerPhase::AtEof));
+        } else {
+            assert!(
+                matches!(outcome, Ok(crate::SeekOutcome::Landed { landed_at, .. }) if landed_at == target)
+            );
+            assert!(matches!(fixture.source.phase, OwnerPhase::Decoding));
+        }
+        assert!(fixture.source.decode.incoming_transition().is_none());
+        assert!(!fixture.source.decode.transition_holds_output());
+        assert_eq!(fixture.control.aborted_transition(), Some(transition));
+        assert_eq!(fixture.drops.lock().as_slice(), &[99]);
+        assert_eq!(fixture.control.promote_calls(), 0);
+        assert_no_variant_event(&mut events);
+    }
 }
 
 #[kithara::test(tokio)]
 async fn failed_source_removal_retires_staged_incoming_and_aborts_variant(route_pcm: RoutePcm) {
-    let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
-    let plan = incoming_plan();
-    let transition = plan.transition();
-    fixture.control.set_exact_plan(plan);
-    fixture.control.set_exact_reader_ready();
+    for (building, cancel_before_drop) in [(false, false), (true, false), (true, true)] {
+        let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
+        let mut events = watch_variant_events(&mut fixture);
+        let plan = incoming_plan();
+        let transition = plan.transition();
+        fixture.control.set_exact_plan(plan);
+        fixture.control.set_exact_reader_ready();
+        let mut gate = building.then(|| gate_incoming_factory(&mut fixture.source));
+        fixture.source.prepare_deferred();
+        fixture.source.finish_deferred();
+        if let Some(gate) = &mut gate {
+            gate.wait_entered().await;
+        } else {
+            wait_for_incoming_priming(&mut fixture, transition).await;
+        }
+        let pending = fixture.source.decode.incoming_transition();
+        let initially_aborted = fixture.control.aborted_transition();
+        let initially_retired = fixture.drops.lock().clone();
+        let failed = if cancel_before_drop {
+            *fixture.phase.lock() = SourcePhase::Cancelled;
+            Some(fixture.source.step_track())
+        } else {
+            fixture.source.phase = OwnerPhase::Failed {
+                failure: crate::TrackFailureKind::SourceCancelled,
+                error: None,
+            };
+            None
+        };
+        let aborted_before_drop = fixture.control.aborted_transition();
+        let control = fixture.control.clone();
+        let drops = fixture.drops.clone();
+        let emit = fixture.source.emit.clone();
+        drop(fixture.source);
+        drop(gate);
+        wait_for_retired_decoder(&drops, 99).await;
 
-    fixture.source.prepare_deferred();
-    fixture.source.finish_deferred();
-    wait_for_incoming_priming(&mut fixture, transition).await;
-
-    assert!(fixture.source.decode.incoming_is_priming(transition));
-    assert_eq!(fixture.control.aborted_transition(), None);
-    assert!(fixture.drops.lock().is_empty());
-
-    fixture.source.phase = OwnerPhase::Failed {
-        failure: crate::TrackFailureKind::SourceCancelled,
-        error: None,
-    };
-    let control = fixture.control.clone();
-    let drops = fixture.drops.clone();
-    drop(fixture.source);
-
-    assert_eq!(control.aborted_transition(), Some(transition));
-    assert_eq!(drops.lock().as_slice(), &[99, 1]);
+        assert_eq!(pending, Some(transition));
+        assert_eq!(initially_aborted, None);
+        assert!(initially_retired.is_empty());
+        if cancel_before_drop {
+            assert!(matches!(
+                failed,
+                Some(TrackStep::Failed(crate::TrackFailureKind::SourceCancelled))
+            ));
+            assert_eq!(aborted_before_drop, Some(transition));
+        }
+        assert_eq!(control.aborted_transition(), Some(transition));
+        assert_eq!(
+            drops.lock().as_slice(),
+            if building { &[1, 99] } else { &[99, 1] }
+        );
+        assert_eq!(control.promote_calls(), 0);
+        assert_no_variant_event(&mut events);
+        drop(emit);
+    }
 }
 
 #[kithara::test(tokio)]
@@ -292,30 +410,169 @@ async fn exact_incoming_reader_pending_keeps_outgoing_pcm_running(route_pcm: Rou
 }
 
 #[kithara::test(tokio)]
+#[kithara::hang_watchdog]
 async fn exact_incoming_build_pending_keeps_outgoing_pcm_running(route_pcm: RoutePcm) {
     let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
+    let preparation_wake = PreparationWake::install(&mut fixture.source);
     let plan = incoming_plan();
     let transition = plan.transition();
+    let bus = EventBus::new(16);
+    let mut events = bus.subscribe();
+    fixture.source.emit = Arc::new(DeferredBus::new(bus, 16));
     fixture.control.set_exact_plan(plan);
     fixture.control.set_exact_reader_ready();
-
-    fixture.source.prepare_deferred();
-    fixture.source.finish_deferred();
-
-    assert!(fixture.source.decode.incoming_is_priming(transition));
-    let step = (0..64).find_map(|_| match fixture.source.step_track() {
-        TrackStep::StateChanged => None,
-        step => Some(step),
+    let (prime_entered, prime_entry) = oneshot::channel();
+    let (prime_release, prime_released) = mpsc::channel::<()>();
+    let mut prime_release = Some(prime_release);
+    let prime_gate = Mutex::new(Some((prime_entered, prime_released)));
+    let factory_pcm = route_pcm.clone();
+    let factory_pools = fixture.pools.clone();
+    let factory_drops = fixture.drops.clone();
+    fixture.source.factory = DecoderFactory::new(
+        move |_, _, rate| {
+            let mut decoder = RouteSignalDecoder::new(
+                &factory_pcm,
+                99,
+                rate.map_or(consts::SAMPLE_RATE, std::num::NonZeroU32::get),
+                None,
+                None,
+                factory_drops.clone(),
+                factory_pools.clone(),
+            );
+            decoder.prime_gate = prime_gate.lock().take();
+            Ok(Box::new(decoder))
+        },
+        None,
+    );
+    let factory = fixture.source.factory.clone();
+    let (entered, entry) = oneshot::channel();
+    let entered = Mutex::new(Some(entered));
+    let (release, released) = mpsc::channel::<()>();
+    let released = Mutex::new(released);
+    fixture.source.factory = DecoderFactory::new(
+        move |reader, media, rate| {
+            if let Some(entered) = entered.lock().take() {
+                let _ = entered.send(());
+            }
+            let _ = released.lock().recv();
+            factory.create(reader, media, rate)
+        },
+        None,
+    );
+    let runtime = Handle::try_current().expect("source test must run in its runtime");
+    let mut owner = spawn_blocking_on(&runtime, move || {
+        fixture.source.prepare_deferred();
+        fixture.source.finish_deferred();
+        let step = (0..64).find_map(|_| match fixture.source.step_track() {
+            TrackStep::StateChanged => None,
+            step => Some(step),
+        });
+        let pending = !fixture.source.decode.incoming_is_priming(transition);
+        let active_variant = fixture
+            .source
+            .decode
+            .active()
+            .media_info()
+            .and_then(|info| info.variant_index);
+        let promoted = fixture.control.promote_calls();
+        let calls = (
+            fixture.control.plan_calls(),
+            fixture.control.prepare_calls(),
+            fixture.control.take_calls(),
+        );
+        (fixture, step, pending, active_variant, promoted, calls)
     });
+    let entered = timeout(Duration::from_secs(1), entry).await;
+    let observed = timeout(Duration::from_secs(1), &mut owner).await;
+    let produced_before_release = observed.is_ok();
+    let mut changed_before_release = false;
+    let event_receipt = loop {
+        match events.try_recv() {
+            Ok(event) => {
+                changed_before_release |= matches!(
+                    event.event,
+                    DecoderEvent::DecoderChanged {
+                        variant: Some(1),
+                        ..
+                    }
+                );
+            }
+            Err(TryRecvError::Empty) => break Ok(()),
+            Err(error) => break Err(error),
+        }
+    };
+
+    // Release and join before any assertion so the synchronous regression cannot strand a worker.
+    drop(release);
+    if observed.is_err() {
+        drop(prime_release.take());
+    }
+    let (mut fixture, step, pending, active_variant, promoted, calls) = match observed {
+        Ok(result) => result.expect("outgoing owner must return its fixture"),
+        Err(_) => owner.await.expect("released outgoing owner must finish"),
+    };
+
+    assert!(
+        matches!(entered, Ok(Ok(()))),
+        "incoming factory must actually enter"
+    );
+    assert!(
+        produced_before_release,
+        "outgoing owner must produce before the incoming factory is released"
+    );
     let Some(TrackStep::Produced(fetch)) = step else {
         panic!("outgoing must keep producing while the incoming decoder is building");
     };
     let chunk = produced_data(fetch);
     assert!(!chunk.samples.is_empty());
-    assert_eq!(chunk.meta.frame_offset, 0);
-    assert_eq!(fixture.control.plan_calls(), 1);
-    assert_eq!(fixture.control.prepare_calls(), 1);
-    assert_eq!(fixture.control.take_calls(), 1);
+    assert_route_signal(&chunk, 0);
+    assert!(pending, "the observed PCM must precede incoming priming");
+    assert_eq!(calls, (1, 1, 1));
+    assert_eq!(active_variant, Some(0));
+    assert_eq!(promoted, 0);
+    assert!(
+        event_receipt.is_ok(),
+        "event observation failed: {event_receipt:?}"
+    );
+    assert!(!changed_before_release);
+    assert!(matches!(fixture.source.phase, OwnerPhase::Decoding));
+    let prime_entered = timeout(Duration::from_secs(1), prime_entry).await;
+    let mut owner = spawn_blocking_on(&runtime, move || {
+        fixture.source.prepare_deferred();
+        fixture.source.finish_deferred();
+        let second = (0..64).find_map(|_| match fixture.source.step_track() {
+            TrackStep::StateChanged => None,
+            step => Some(step),
+        });
+        let frontier = fixture.source.decode.incoming_frontier();
+        let promoted = fixture.control.promote_calls();
+        (fixture, second, frontier, promoted)
+    });
+    let observed = timeout(Duration::from_secs(1), &mut owner).await;
+    let produced_before_prime_release = observed.is_ok();
+    drop(prime_release.take());
+    let (mut fixture, second, frontier_before_media, promoted_before_media) = match observed {
+        Ok(result) => result.expect("outgoing owner must return while incoming priming is blocked"),
+        Err(_) => owner.await.expect("released outgoing owner must finish"),
+    };
+
+    assert!(
+        matches!(prime_entered, Ok(Ok(()))),
+        "incoming PCM preparation must actually enter"
+    );
+    assert!(
+        produced_before_prime_release,
+        "outgoing PCM must be produced while incoming PCM preparation is blocked"
+    );
+    let Some(TrackStep::Produced(fetch)) = second else {
+        panic!("outgoing must keep producing after construction while incoming PCM is pending");
+    };
+    let chunk = produced_data(fetch);
+    assert_eq!(chunk.frames(), consts::ROUTE_CHUNK_FRAMES);
+    assert_eq!(chunk.samples.len(), consts::ROUTE_CHUNK_FRAMES * 2);
+    assert_route_signal(&chunk, consts::ROUTE_CHUNK_FRAMES as u64);
+    assert_eq!(frontier_before_media, Some(OutgoingFrontier::Awaiting));
+    assert_eq!(promoted_before_media, 0);
     assert_eq!(
         fixture
             .source
@@ -325,7 +582,62 @@ async fn exact_incoming_build_pending_keeps_outgoing_pcm_running(route_pcm: Rout
             .and_then(|info| info.variant_index),
         Some(0)
     );
-    assert!(matches!(fixture.source.phase, OwnerPhase::Decoding));
+    assert_no_variant_event(&mut events);
+
+    fixture.control.set_promotion(VariantPromotion::Promoted);
+    let mut expected_offset = 2 * consts::ROUTE_CHUNK_FRAMES as u64;
+    loop {
+        hang_tick!();
+        yield_now().await;
+        fixture.source.prepare_deferred();
+        fixture.source.finish_deferred();
+        if fixture.control.promote_calls() != 0 {
+            break;
+        }
+        assert_eq!(
+            fixture.source.decode.incoming_transition(),
+            Some(transition),
+            "released incoming must remain live until its promotion"
+        );
+        if !fixture.source.decode.incoming_is_priming(transition) {
+            preparation_wake.notified().await;
+            continue;
+        }
+        match fixture.source.step_track() {
+            TrackStep::Produced(fetch) => {
+                let chunk = produced_data(fetch);
+                assert_route_signal(&chunk, expected_offset);
+                expected_offset = expected_offset.saturating_add(u64::from(chunk.meta.frames));
+            }
+            TrackStep::StateChanged | TrackStep::Blocked(_) => {}
+            _ => panic!("released incoming must complete its normal promotion"),
+        }
+    }
+    assert_eq!(fixture.control.promote_calls(), 1);
+    assert_eq!(fixture.control.aborted_transition(), None);
+    assert!(fixture.source.decode.incoming_transition().is_none());
+    assert_eq!(
+        fixture
+            .source
+            .decode
+            .active()
+            .media_info()
+            .and_then(|info| info.variant_index),
+        Some(1)
+    );
+    let incoming = (0..64).find_map(|_| match fixture.source.step_track() {
+        TrackStep::StateChanged => None,
+        step => Some(step),
+    });
+    let Some(TrackStep::Produced(fetch)) = incoming else {
+        panic!("promoted incoming must emit real PCM");
+    };
+    let chunk = produced_data(fetch);
+    assert!(chunk.frames() > 0);
+    assert_route_signal(&chunk, expected_offset);
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
+    assert_eq!(fixture.control.promote_calls(), 1);
 }
 
 #[kithara::test(tokio)]
@@ -514,6 +826,7 @@ async fn same_spec_priming_retains_the_full_join_after_the_emitted_frontier(rout
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn exact_primed_generation_promotes_once_at_outgoing_frontier(route_pcm: RoutePcm) {
     let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
+    let preparation_wake = PreparationWake::install(&mut fixture.source);
     let plan = incoming_plan();
     let transition = plan.transition();
     fixture.control.set_exact_plan(plan);
@@ -539,8 +852,7 @@ async fn exact_primed_generation_promotes_once_at_outgoing_frontier(route_pcm: R
     assert_eq!(produced_data(outgoing).meta.frame_offset, 0);
     assert_eq!(fixture.control.promote_calls(), 0);
 
-    fixture.source.prepare_deferred();
-    fixture.source.finish_deferred();
+    wait_for_promotion_attempt(&mut fixture, &preparation_wake, transition, 1).await;
 
     assert_eq!(fixture.control.promote_calls(), 1);
     assert_eq!(
@@ -577,6 +889,7 @@ async fn exact_primed_generation_promotes_once_at_outgoing_frontier(route_pcm: R
 #[kithara::test(tokio)]
 async fn incoming_promotion_discards_an_unavailable_outgoing_input_wait(route_pcm: RoutePcm) {
     let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
+    let preparation_wake = PreparationWake::install(&mut fixture.source);
     let plan = incoming_plan();
     let transition = plan.transition();
     fixture.control.set_exact_plan(plan);
@@ -602,8 +915,7 @@ async fn incoming_promotion_discards_an_unavailable_outgoing_input_wait(route_pc
     *fixture.phase.lock() = SourcePhase::Waiting;
     fixture.source.waiting_for_source = true;
 
-    fixture.source.prepare_deferred();
-    fixture.source.finish_deferred();
+    wait_for_promotion_attempt(&mut fixture, &preparation_wake, transition, 1).await;
 
     assert_eq!(fixture.control.promote_calls(), 1);
     assert!(
@@ -1018,6 +1330,7 @@ async fn incoming_lands_on_the_outgoing_frontier_not_ahead_of_it(route_pcm: Rout
 #[kithara::test(tokio)]
 async fn locked_promotion_keeps_primed_incoming_and_outgoing_authoritative(route_pcm: RoutePcm) {
     let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
+    let preparation_wake = PreparationWake::install(&mut fixture.source);
     let plan = incoming_plan();
     let transition = plan.transition();
     fixture.control.set_exact_plan(plan);
@@ -1042,8 +1355,7 @@ async fn locked_promotion_keeps_primed_incoming_and_outgoing_authoritative(route
     };
     assert_eq!(produced_data(first_outgoing).meta.frame_offset, 0);
 
-    fixture.source.prepare_deferred();
-    fixture.source.finish_deferred();
+    wait_for_promotion_attempt(&mut fixture, &preparation_wake, transition, 1).await;
 
     assert_eq!(fixture.control.promote_calls(), 1);
     assert!(fixture.source.decode.incoming_is_priming(transition));
@@ -1073,8 +1385,7 @@ async fn locked_promotion_keeps_primed_incoming_and_outgoing_authoritative(route
         produced_data(next_outgoing).meta.frame_offset,
         u64::try_from(consts::ROUTE_CHUNK_FRAMES).unwrap_or(u64::MAX)
     );
-    fixture.source.prepare_deferred();
-    fixture.source.finish_deferred();
+    wait_for_promotion_attempt(&mut fixture, &preparation_wake, transition, 2).await;
     assert_eq!(fixture.control.promote_calls(), 2);
     let incoming_first = fixture
         .source
@@ -1087,8 +1398,7 @@ async fn locked_promotion_keeps_primed_incoming_and_outgoing_authoritative(route
     );
 
     fixture.control.set_promotion(VariantPromotion::Promoted);
-    fixture.source.prepare_deferred();
-    fixture.source.finish_deferred();
+    wait_for_promotion_attempt(&mut fixture, &preparation_wake, transition, 3).await;
 
     assert_eq!(fixture.control.promote_calls(), 3);
     assert_eq!(
@@ -1114,6 +1424,7 @@ async fn locked_promotion_keeps_primed_incoming_and_outgoing_authoritative(route
 #[kithara::test(tokio)]
 async fn stale_prepared_promotion_returns_incoming_for_shell_retirement(route_pcm: RoutePcm) {
     let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
+    let preparation_wake = PreparationWake::install(&mut fixture.source);
     let plan = incoming_plan();
     let transition = plan.transition();
     fixture.control.set_exact_plan(plan);
@@ -1136,8 +1447,7 @@ async fn stale_prepared_promotion_returns_incoming_for_shell_retirement(route_pc
         panic!("outgoing must name the cut before stale publication");
     };
     assert_eq!(produced_data(outgoing).meta.frame_offset, 0);
-    fixture.source.prepare_deferred();
-    fixture.source.finish_deferred();
+    wait_for_promotion_attempt(&mut fixture, &preparation_wake, transition, 1).await;
 
     assert_eq!(fixture.control.promote_calls(), 1);
     assert!(fixture.source.decode.incoming_transition().is_none());
@@ -1264,9 +1574,11 @@ async fn newer_ticket_supersedes_only_incoming_generation(route_pcm: RoutePcm) {
 
     fixture.control.set_exact_plan(second);
     fixture.control.set_exact_reader_ready();
+    fixture.control.set_promotion(VariantPromotion::Deferred);
     fixture.source.prepare_deferred();
     fixture.source.finish_deferred();
 
+    wait_for_incoming_priming(&mut fixture, second_transition).await;
     assert!(fixture.source.decode.incoming_is_priming(second_transition));
     assert_eq!(
         fixture
@@ -1306,7 +1618,8 @@ async fn stale_incoming_completion_retires_generation_in_shell(route_pcm: RouteP
             .begin_incoming(second_transition, OutgoingFrontier::Awaiting)
             .is_none()
     );
-    let rejected = fixture.source.decode.install_incoming(
+    let rejected = crate::pipeline::decode::transition_promotion::preparation::fixtures::install(
+        &mut fixture.source.decode,
         first_transition,
         DecoderGeneration::new(
             Box::new(TestDecoder::new(77, fixture.drops.clone())),
@@ -1331,6 +1644,67 @@ async fn stale_incoming_completion_retires_generation_in_shell(route_pcm: RouteP
             .and_then(|info| info.variant_index),
         Some(0)
     );
+
+    let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
+    let mut events = watch_variant_events(&mut fixture);
+    let (first, second) = successive_incoming_plans();
+    let first_transition = first.transition();
+    let second_transition = second.transition();
+    fixture.control.set_exact_plan(first);
+    fixture.control.set_exact_reader_ready();
+    let mut gate = gate_incoming_factory(&mut fixture.source);
+    fixture.source.prepare_deferred();
+    gate.wait_entered().await;
+    fixture.control.set_exact_plan(second);
+    fixture.source.prepare_deferred();
+    let current = fixture.source.decode.incoming_transition();
+    gate.release();
+    wait_for_retired_decoder(&fixture.drops, 99).await;
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
+
+    assert_eq!(current, Some(second_transition));
+    assert_ne!(current, Some(first_transition));
+    assert!(
+        fixture
+            .source
+            .decode
+            .incoming_is_preparing(second_transition)
+    );
+    assert_eq!(fixture.control.aborted_transition(), None);
+    assert_eq!(fixture.control.promote_calls(), 0);
+    assert_eq!(fixture.drops.lock().as_slice(), &[99]);
+    assert_no_variant_event(&mut events);
+    let TrackStep::Produced(fetch) = fixture.source.step_track() else {
+        panic!("stale completion must preserve outgoing PCM");
+    };
+    assert_route_signal(&produced_data(fetch), 0);
+
+    fixture.source.abandon_incoming();
+    let plan = incoming_plan();
+    let transition = plan.transition();
+    fixture.control.set_exact_plan(plan);
+    drop(
+        fixture
+            .source
+            .decode
+            .begin_incoming(transition, OutgoingFrontier::Awaiting),
+    );
+    let (sender, receiver) = mpsc::channel();
+    let (requests, _requested) = mpsc::channel();
+    assert!(fixture.source.decode.begin_incoming_build(
+        transition,
+        crate::pipeline::decode::transition_promotion::preparation::IncomingPreparationOwner {
+            requests,
+            completion: receiver,
+        }
+    ));
+    drop(sender);
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
+    assert_eq!(fixture.source.decode.incoming_transition(), None);
+    assert_eq!(fixture.control.aborted_transition(), Some(transition));
+    assert!(matches!(fixture.source.phase, OwnerPhase::Decoding));
 }
 
 #[kithara::test(tokio)]
@@ -1364,6 +1738,7 @@ async fn incoming_media_facts_choose_reader_profile(route_pcm: RoutePcm) {
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn exact_promotion_emits_variant_switch_decoder_event(route_pcm: RoutePcm) {
     let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
+    let preparation_wake = PreparationWake::install(&mut fixture.source);
     let bus = EventBus::new(16);
     let mut events = bus.subscribe();
     fixture.source.emit = Arc::new(DeferredBus::new(bus, 16));
@@ -1389,8 +1764,7 @@ async fn exact_promotion_emits_variant_switch_decoder_event(route_pcm: RoutePcm)
         fixture.source.step_track(),
         TrackStep::Produced(_)
     ));
-    fixture.source.prepare_deferred();
-    fixture.source.finish_deferred();
+    wait_for_promotion_attempt(&mut fixture, &preparation_wake, transition, 1).await;
 
     let mut changed = false;
     while let Ok(envelope) = events.try_recv() {

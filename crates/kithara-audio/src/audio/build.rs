@@ -7,7 +7,12 @@ use std::{
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_decode::{Decoder, DecoderConfig, DecoderFactory, DecoderResamplerConfig};
 use kithara_events::{DeferredBus, EventBus, EventReceiver, EventSet};
-use kithara_platform::{CancelScope, sync::Arc, time::Duration, tokio::task::spawn_blocking};
+use kithara_platform::{
+    CancelScope,
+    sync::Arc,
+    time::Duration,
+    tokio::{runtime::Handle, task::spawn_blocking},
+};
 use kithara_resampler::ResamplerBackend;
 use kithara_signal::AudioSpec;
 use kithara_stream::{MediaInfo, OpenedReader, Stream, StreamType, WorkerWake};
@@ -107,6 +112,9 @@ impl<T: StreamType<Events = EventBus>> Audio<Stream<T>> {
         B: Default + ResamplerBackend,
         S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
     {
+        let runtime = Handle::try_current().map_err(|error| DecodeError::Io {
+            source: IoError::other(error),
+        })?;
         let AudioConfig {
             hint,
             media_info: user_info,
@@ -132,6 +140,7 @@ impl<T: StreamType<Events = EventBus>> Audio<Stream<T>> {
             pools: pools.clone(),
         };
         let reader = shared.open_initial_reader();
+        reader.control().set_worker_wake(Arc::clone(&wake));
         let gate = reader.construction_gate();
         let factory = create_decoder_factory(&deps, user_info, hint);
         let initial = create_initial_decoder(reader, info.clone(), factory.clone(), rate).await?;
@@ -172,6 +181,7 @@ impl<T: StreamType<Events = EventBus>> Audio<Stream<T>> {
             decode,
             SourceDecoderConfig {
                 factory,
+                runtime,
                 host_rate: rate,
                 backend: deps.decoder.backend(),
                 playback_resampler_backend: deps.decoder.resampler_backend_name(),
@@ -214,6 +224,7 @@ where
                 .pools(deps.pools.clone())
                 .maybe_byte_map(reader.byte_map())
                 .maybe_construction_gate(reader.construction_gate())
+                .reader_control(reader.control())
                 .maybe_hooks(reader.take_event_sink())
                 .maybe_resampler(deps.resampler_config(rate))
                 .build();

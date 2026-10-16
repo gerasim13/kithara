@@ -1,32 +1,35 @@
-use std::{
-    io::SeekFrom,
-    num::NonZeroU32,
-    panic::{AssertUnwindSafe, catch_unwind},
-};
+use std::num::NonZeroU32;
 
-use kithara_decode::{DecodeError, DecodeResult, DecoderSeekOutcome, PcmOrigin};
+use kithara_decode::{DecodeError, DecoderSeekOutcome, PcmOrigin};
 use kithara_events::DeferredBus;
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_platform::{
+    sync::{Arc, mpsc},
+    time::Duration,
+    tokio::{runtime::Handle, task::spawn_blocking_on},
+};
 use kithara_signal::AudioChunk;
 use kithara_stream::{
-    MediaInfo, OpenedReader, OpenedVariantReader, OutgoingDisposition, PendingReason,
-    PlayheadWrite, SourcePhase, StreamType, VariantControl, VariantTransition, WorkerWake,
+    OpenedVariantReader, OutgoingDisposition, PendingReason, PlayheadWrite, SourcePhase,
+    StreamType, VariantControl, VariantTransition, WorkerWake,
 };
 use tracing::warn;
 
+use super::change::{SourceChange, SourceCommand};
 use crate::{
     AudioEvent, AudioLaneEvent, AudioSource, DecoderChangeCause, SeekOutcome, TrackFailureKind,
     TrackStep,
     pipeline::{
         decode::{
-            DecoderGeneration,
-            core::{ActiveDecode, DecodeAction, DecodeCtx, DecoderFactory, panic_message},
+            core::{ActiveDecode, DecodeAction, DecodeCtx, DecoderFactory},
             event::{GenerationInstalled, enqueue_generation_installed},
             resume::ResumeCursor,
             step::tick,
             transition::OutgoingFrontier,
+            transition_promotion::preparation::{
+                IncomingPreparationOwner, IncomingPreparationRequest,
+            },
         },
-        rebuild::{RecreateCause, RecreateState},
+        rebuild::RecreateState,
         seek::ResumeTarget,
         stream::shared::SharedStream,
     },
@@ -34,6 +37,7 @@ use crate::{
 
 pub(in crate::pipeline::source) enum OwnerPhase {
     Decoding,
+    Changing(SourceChange),
     Seeking {
         target: ResumeTarget,
         reason: PendingReason,
@@ -62,6 +66,7 @@ pub(in crate::pipeline::source) fn write_failure_diagnostic(
 pub(crate) struct StreamAudioSource<T: StreamType> {
     pub(in crate::pipeline::source) decode: ActiveDecode,
     pub(in crate::pipeline::source) factory: DecoderFactory,
+    pub(in crate::pipeline::source) runtime: Handle,
     pub(in crate::pipeline::source) host_rate: Option<NonZeroU32>,
     pub(in crate::pipeline::source) decoder_backend: kithara_decode::DecoderBackend,
     pub(in crate::pipeline::source) playback_resampler_backend: &'static str,
@@ -80,6 +85,7 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
 
 pub(crate) struct SourceDecoderConfig {
     pub(crate) factory: DecoderFactory,
+    pub(crate) runtime: Handle,
     pub(crate) host_rate: Option<NonZeroU32>,
     pub(crate) backend: kithara_decode::DecoderBackend,
     pub(crate) playback_resampler_backend: &'static str,
@@ -162,42 +168,18 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
             return;
         }
         let initial_binding = self.host_rate.is_none();
+        self.abandon_incoming();
         self.host_rate = Some(rate);
         if initial_binding && self.decode.output_spec().sample_rate == rate {
             return;
         }
         let landing = self.resume_target();
-        let result = DecodeResult::from(landing).and_then(|position| {
-            self.shared_stream
-                .seek_time_anchor(position)
-                .map_err(|source| DecodeError::Io { source })
-                .and_then(|_| {
-                    let media_info = self
-                        .decode
-                        .active()
-                        .media_info()
-                        .cloned()
-                        .or_else(|| self.shared_stream.media_info());
-                    self.install_replacement(
-                        RecreateState {
-                            media_info,
-                            offset: self.decode.active().base_offset(),
-                            cause: RecreateCause::HostRateChange,
-                        },
-                        Some(landing),
-                    )
-                })
-        });
-        let result = result.and_then(|outcome| {
-            if matches!(self.phase, OwnerPhase::Seeking { .. }) {
-                let outcome = outcome.ok_or(DecodeError::InvalidData {
-                    detail: "replacement seek has no outcome",
-                })?;
-                self.accept_seek_outcome(landing, outcome)?;
-            }
-            Ok(())
-        });
-        if let Err(error) = result {
+        let apply_seek = matches!(self.phase, OwnerPhase::Seeking { .. })
+            || matches!(&self.phase, OwnerPhase::Changing(change) if change.command.applies_seek());
+        if let Err(error) = self.request_source_change(SourceCommand::Rate {
+            target: landing,
+            apply_seek,
+        }) {
             let failure = if self.shared_stream.phase() == SourcePhase::Cancelled {
                 TrackFailureKind::SourceCancelled
             } else {
@@ -208,6 +190,7 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
             self.fail(failure, Some(error));
         }
     }
+
     fn finish_deferred(&mut self) {
         self.finish_failure_diagnostic();
         if let Some(wake) = self.shared_stream.peer_wake() {
@@ -218,7 +201,7 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
     fn prepare_deferred(&mut self) -> Option<kithara_signal::AudioSpec> {
         if matches!(
             self.phase,
-            OwnerPhase::Decoding | OwnerPhase::Seeking { .. }
+            OwnerPhase::Decoding | OwnerPhase::Seeking { .. } | OwnerPhase::Changing(_)
         ) && self.shared_stream.phase() == SourcePhase::Cancelled
         {
             self.fail(TrackFailureKind::SourceCancelled, None);
@@ -226,7 +209,7 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
         self.progress_variant_transition();
         if matches!(
             self.phase,
-            OwnerPhase::Decoding | OwnerPhase::Seeking { .. }
+            OwnerPhase::Decoding | OwnerPhase::Seeking { .. } | OwnerPhase::Changing(_)
         ) && let Err((failure, error)) = self.prepare_active()
         {
             self.fail(failure, Some(error));
@@ -236,7 +219,7 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
     fn step_track(&mut self) -> TrackStep<AudioChunk> {
         if matches!(
             self.phase,
-            OwnerPhase::Decoding | OwnerPhase::Seeking { .. }
+            OwnerPhase::Decoding | OwnerPhase::Seeking { .. } | OwnerPhase::Changing(_)
         ) && self.shared_stream.phase() == SourcePhase::Cancelled
         {
             return TrackStep::Failed(self.fail(TrackFailureKind::SourceCancelled, None));
@@ -244,6 +227,7 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
         match &mut self.phase {
             OwnerPhase::AtEof => return TrackStep::Eof,
             OwnerPhase::Failed { failure, .. } => return TrackStep::Failed(*failure),
+            OwnerPhase::Changing(_) => return TrackStep::Blocked(self.pending_wait_reason()),
             OwnerPhase::Decoding => {}
             OwnerPhase::Seeking { reason, .. } => {
                 return if *reason == PendingReason::Retry {
@@ -337,6 +321,7 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
                 }
                 self.release_seek_abr();
                 if !matches!(self.phase, OwnerPhase::Failed { .. }) {
+                    self.abandon_incoming();
                     self.phase = OwnerPhase::AtEof;
                 }
                 self.emit.enqueue(AudioEvent::EndOfStream);
@@ -357,6 +342,7 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
 
 impl<T: StreamType> Drop for StreamAudioSource<T> {
     fn drop(&mut self) {
+        self.cancel_source_change();
         self.release_seek_abr();
         self.abandon_incoming();
         self.finish_deferred();
@@ -378,6 +364,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             wake,
             decode,
             factory: config.factory,
+            runtime: config.runtime,
             host_rate: config.host_rate,
             decoder_backend: config.backend,
             playback_resampler_backend: config.playback_resampler_backend,
@@ -420,6 +407,16 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
+    pub(super) fn pending_seek_target(&self) -> Option<ResumeTarget> {
+        match &self.phase {
+            OwnerPhase::Seeking { target, .. } => Some(*target),
+            OwnerPhase::Changing(change) if change.command.applies_seek() => {
+                change.command.target()
+            }
+            _ => None,
+        }
+    }
+
     pub(super) fn fail(
         &mut self,
         failure: TrackFailureKind,
@@ -428,7 +425,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         if let OwnerPhase::Failed { failure, .. } = self.phase {
             return failure;
         }
-        if let OwnerPhase::Seeking { target, .. } = self.phase {
+        if let Some(target) = self.pending_seek_target() {
             match target {
                 ResumeTarget::Position(target) | ResumeTarget::Render(target) => {
                     self.emit.enqueue(AudioEvent::SeekRejected { target });
@@ -436,6 +433,8 @@ impl<T: StreamType> StreamAudioSource<T> {
                 ResumeTarget::Source(_) => {}
             }
         }
+        self.cancel_source_change();
+        self.abandon_incoming();
         self.release_seek_abr();
         self.phase = OwnerPhase::Failed { failure, error };
         self.emit.enqueue(AudioEvent::TrackFailed { failure });
@@ -462,8 +461,8 @@ impl<T: StreamType> StreamAudioSource<T> {
         control: &dyn VariantControl,
         transition: VariantTransition,
     ) {
-        self.discard_local_incoming();
         let _ = control.abort_variant(transition);
+        self.discard_local_incoming();
     }
 
     pub(super) fn abandon_incoming(&mut self) {
@@ -483,74 +482,51 @@ impl<T: StreamType> StreamAudioSource<T> {
         reader: OpenedVariantReader,
     ) {
         let (plan, reader) = reader.split();
+        reader.control().set_worker_wake(self.wake.clone());
         let landing = Some(ResumeTarget::Position(plan.landing_time()));
         let info = Some(plan.media_info().clone());
-        match self.build_generation(reader, info, 0, landing) {
-            Ok((generation, _)) => {
-                drop(self.decode.install_incoming(transition, generation));
-                self.wake.wake();
-            }
-            Err(error) => {
-                warn!(?error, ?transition, "incoming decoder build failed");
-                self.abort_local_incoming(control, transition);
-            }
+        let frontier = self
+            .resume
+            .decode_head()
+            .map_or(OutgoingFrontier::Awaiting, |(frame, rate)| {
+                OutgoingFrontier::Exact { frame, rate }
+            });
+        let Some(target) = self
+            .decode
+            .incoming_preparation(promotion_frontier_for(transition, frontier))
+        else {
+            self.abort_local_incoming(control, transition);
+            return;
+        };
+        let (completed, completion) = mpsc::channel();
+        let (requests, requested) = mpsc::channel::<IncomingPreparationRequest>();
+        let preparation = IncomingPreparationOwner {
+            requests,
+            completion,
+        };
+        if !self.decode.begin_incoming_build(transition, preparation) {
+            let _ = control.abort_variant(transition);
+            return;
         }
-    }
-
-    pub(super) fn build_generation(
-        &self,
-        reader: OpenedReader,
-        info: Option<MediaInfo>,
-        offset: u64,
-        landing: Option<ResumeTarget>,
-    ) -> Result<(DecoderGeneration, Option<DecoderSeekOutcome>), DecodeError> {
-        let gate = reader.construction_gate();
-        if let Some(gate) = &gate {
-            gate.arm();
-        }
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            let decoder = self.factory.create(reader, info.clone(), self.host_rate)?;
-            let mut generation = DecoderGeneration::new(
-                decoder,
-                info,
-                offset,
-                gate.clone(),
-                None,
-                self.decode.gapless_mode(),
-            );
-            let outcome = if let Some(target) = landing {
-                generation.seal_visible_origin(self.decode.gapless_mode());
-                generation.notify_seek();
-                let position = DecodeResult::from(target)?;
-                let outcome = match target {
-                    ResumeTarget::Render(_) => {
-                        generation.seek_for_render(position, self.decode.gapless_mode())
-                    }
-                    ResumeTarget::Position(_) | ResumeTarget::Source(_) => {
-                        generation.seek(position, self.decode.gapless_mode())
-                    }
-                }?;
-                match outcome {
-                    DecoderSeekOutcome::Landed { .. } | DecoderSeekOutcome::Pending(_) => {
-                        generation.trim_to(target);
-                    }
-                    DecoderSeekOutcome::PastEof { .. } => generation.finish()?,
+        let factory = self.factory.clone();
+        let host_rate = self.host_rate;
+        let gapless_mode = self.decode.gapless_mode();
+        let wake = self.wake.clone();
+        drop(spawn_blocking_on(&self.runtime, move || {
+            let result = factory
+                .build_generation(reader, info, 0, landing, host_rate, gapless_mode)
+                .map(|(generation, _)| IncomingPreparationRequest { generation, target }.prepare());
+            if completed.send(result).is_err() {
+                return;
+            }
+            wake.wake();
+            while let Ok(request) = requested.recv() {
+                if completed.send(Ok(request.prepare())).is_err() {
+                    return;
                 }
-                Some(outcome)
-            } else {
-                None
-            };
-            Ok((generation, outcome))
-        }));
-        if let Some(gate) = &gate {
-            gate.disarm();
-        }
-        result.map_err(|payload| {
-            warn!(panic = %panic_message(payload), "decoder factory panicked");
-            DecodeError::InvalidData {
-                detail: "decoder factory panicked",
+                wake.wake();
             }
-        })?
+        }));
     }
 
     pub(super) fn install_replacement(
@@ -558,60 +534,15 @@ impl<T: StreamType> StreamAudioSource<T> {
         recreate: RecreateState,
         landing: Option<ResumeTarget>,
     ) -> Result<Option<DecoderSeekOutcome>, DecodeError> {
-        let gapless_mode = self.decode.gapless_mode();
         self.decode.seal_visible_origin();
         self.abandon_incoming();
-        self.shared_stream
-            .probe_seek(SeekFrom::Start(recreate.offset))
-            .map_err(|source| DecodeError::Io { source })?;
-        let reader = self.shared_stream.open_rebuild_reader(recreate.offset);
-        let (mut generation, outcome) =
-            self.build_generation(reader, recreate.media_info, recreate.offset, landing)?;
-        if landing.is_some() {
-            generation.retain_media_origin(self.decode.active().media_origin());
-            generation.retain_visible_origin(
-                self.decode.active().visible_origin(),
-                self.decode.active().comparison_base(),
-            );
-        } else {
-            generation.seal_visible_origin(gapless_mode);
-        }
-        let old_spec = self.decode.output_spec();
-        self.decode
-            .prepare_replacement_profile(generation.blender_profile());
-        if let Some(error) = self.decode.take_stage_error() {
-            return Err(error);
-        }
-        drop(self.decode.replace_active(generation));
-        self.decode.reset();
-        self.resume.clear();
-        self.waiting_for_source = false;
-        if let Some(ResumeTarget::Source(landing)) = landing {
-            self.resume.rebase(landing);
-        }
-        if !matches!(
-            self.phase,
-            OwnerPhase::Failed { .. } | OwnerPhase::Seeking { .. }
-        ) {
-            self.phase = if self.decode.active().is_finished() {
-                OwnerPhase::AtEof
-            } else {
-                OwnerPhase::Decoding
-            };
-        }
-        let new_spec = self.decode.output_spec();
-        if old_spec != new_spec {
-            self.emit.enqueue(AudioEvent::FormatChanged {
-                old: old_spec,
-                new: new_spec,
-            });
-        }
-        self.publish_generation(match recreate.cause {
-            RecreateCause::FormatBoundary => DecoderChangeCause::FormatBoundary,
-            RecreateCause::HostRateChange => DecoderChangeCause::HostRateChange,
-            RecreateCause::VariantSwitch => DecoderChangeCause::VariantSwitch,
-        });
-        Ok(outcome)
+        let apply_seek = matches!(self.phase, OwnerPhase::Seeking { .. });
+        self.request_source_change(SourceCommand::Recreate {
+            recreate,
+            landing,
+            apply_seek,
+        })?;
+        Ok(landing.map(|_| DecoderSeekOutcome::Pending(PendingReason::Retry)))
     }
 
     pub(super) fn publish_generation(&self, cause: DecoderChangeCause) {

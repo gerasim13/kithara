@@ -34,16 +34,16 @@ impl<T: StreamType> StreamAudioSource<T> {
             }
         };
         let Some(plan) = plan else {
-            self.discard_local_incoming();
+            self.abandon_incoming();
             return None;
         };
         let transition = plan.transition();
-        if self.decode.incoming_transition() != Some(transition)
-            && let Some(generation) = self
-                .decode
-                .begin_incoming(transition, initial_promotion_frontier(transition))
-        {
-            drop(generation);
+        if self.decode.incoming_transition() != Some(transition) {
+            self.abandon_incoming();
+            drop(
+                self.decode
+                    .begin_incoming(transition, initial_promotion_frontier(transition)),
+            );
         }
         if !self.decode.incoming_is_preparing(transition) {
             return None;
@@ -65,7 +65,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                 None
             }
             Ok(None) => {
-                self.discard_local_incoming();
+                self.abandon_incoming();
                 None
             }
             Err(error) => {
@@ -85,7 +85,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     pub(super) fn progress_variant_transition(&mut self) {
         match &self.phase {
             OwnerPhase::Decoding => {}
-            OwnerPhase::Seeking { .. } => return,
+            OwnerPhase::Seeking { .. } | OwnerPhase::Changing(_) => return,
             OwnerPhase::AtEof | OwnerPhase::Failed { .. } => {
                 if let (Some(control), Some(transition)) = (
                     self.variant_control.clone(),
@@ -107,6 +107,22 @@ impl<T: StreamType> StreamAudioSource<T> {
             return;
         };
 
+        if let Some((transition, result)) = self.decode.poll_incoming_build() {
+            match result {
+                Ok(prepared) => {
+                    drop(
+                        self.decode
+                            .install_incoming(transition, prepared.generation),
+                    );
+                    self.decode.finish_incoming_preparation(prepared.outcome);
+                    self.wake.wake();
+                }
+                Err(error) => {
+                    warn!(?error, ?transition, "incoming decoder build failed");
+                    self.abort_local_incoming(control.as_ref(), transition);
+                }
+            }
+        }
         let landing_frontier = match self.resume.decode_head() {
             Some((frame, rate)) => OutgoingFrontier::Exact { frame, rate },
             None => OutgoingFrontier::Awaiting,
@@ -225,7 +241,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                 );
                 self.abort_local_incoming(control, transition);
             }
-            Ok(VariantReaderTake::Stale) => self.discard_local_incoming(),
+            Ok(VariantReaderTake::Stale) => self.abandon_incoming(),
             Err(error) => {
                 warn!(?error, ?transition, "failed to take exact incoming reader");
                 self.abort_local_incoming(control, transition);

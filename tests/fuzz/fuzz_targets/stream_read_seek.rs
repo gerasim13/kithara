@@ -176,6 +176,7 @@ impl Source for ScriptSource {
         &mut self,
         _range: Range<u64>,
         _timeout: Option<Duration>,
+        _cancel: Option<&kithara::stream::ReaderControl>,
     ) -> StreamResult<WaitOutcome> {
         Ok(self.waits.pop_front().unwrap_or(WaitOutcome::Ready))
     }

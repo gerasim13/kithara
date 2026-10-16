@@ -1,4 +1,9 @@
-use std::{any::Any, mem, num::NonZeroU32};
+use std::{
+    any::Any,
+    mem,
+    num::NonZeroU32,
+    panic::{AssertUnwindSafe, catch_unwind},
+};
 
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_decode::{
@@ -11,7 +16,7 @@ use kithara_signal::AudioChunk;
 use kithara_stream::{
     ByteMap, MediaInfo, OpenedReader, ReaderProfile, StreamType, VariantTransition,
 };
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::{
     AudioLaneEvent, AudioObserver,
@@ -26,6 +31,7 @@ use crate::{
         },
         fetch::Fetch,
         rebuild::RecreateState,
+        seek::ResumeTarget,
         stream::shared::SharedStream,
         track::WaitingReason,
     },
@@ -67,6 +73,65 @@ impl DecoderFactory {
         host_rate: Option<NonZeroU32>,
     ) -> Result<Box<dyn Decoder>, DecodeError> {
         (self.builder)(reader, media_info, host_rate)
+    }
+
+    pub(crate) fn build_generation(
+        &self,
+        reader: OpenedReader,
+        info: Option<MediaInfo>,
+        offset: u64,
+        landing: Option<ResumeTarget>,
+        host_rate: Option<NonZeroU32>,
+        gapless_mode: GaplessMode,
+    ) -> Result<(DecoderGeneration, Option<DecoderSeekOutcome>), DecodeError> {
+        let gate = reader.construction_gate();
+        if let Some(gate) = &gate {
+            gate.arm();
+        }
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let decoder = self.create(reader, info.clone(), host_rate)?;
+            let mut generation =
+                DecoderGeneration::new(decoder, info, offset, gate.clone(), None, gapless_mode);
+            let outcome = if let Some(target) = landing {
+                generation.seal_visible_origin(gapless_mode);
+                generation.notify_seek();
+                let position = DecodeResult::from(target)?;
+                let outcome = match target {
+                    ResumeTarget::Render(_) => generation.seek_with_wait(
+                        position,
+                        gapless_mode,
+                        true,
+                        kithara_decode::PrepareWait::Wait,
+                    ),
+                    ResumeTarget::Position(_) | ResumeTarget::Source(_) => generation
+                        .seek_with_wait(
+                            position,
+                            gapless_mode,
+                            false,
+                            kithara_decode::PrepareWait::Wait,
+                        ),
+                }?;
+                match outcome {
+                    DecoderSeekOutcome::Landed { .. } | DecoderSeekOutcome::Pending(_) => {
+                        generation.trim_to(target);
+                    }
+                    DecoderSeekOutcome::PastEof { .. } => generation.finish()?,
+                }
+                Some(outcome)
+            } else {
+                None
+            };
+            Ok((generation, outcome))
+        }));
+        if let Some(gate) = &gate {
+            gate.disarm();
+        }
+        result.map_err(|payload| {
+            warn!(panic = %panic_message(payload), "decoder factory panicked");
+            DecodeError::InvalidData {
+                detail: "decoder factory panicked",
+            }
+        })?
     }
 
     pub(crate) fn reader_profile(
@@ -125,6 +190,10 @@ pub(crate) enum DecodeAction {
 }
 
 impl ActiveDecode {
+    pub(crate) fn release_input(&mut self) -> kithara_decode::InputState {
+        self.active.decoder_mut().release_input()
+    }
+
     pub(crate) fn new<S>(
         active: DecoderGeneration,
         gapless_mode: GaplessMode,
@@ -355,9 +424,9 @@ impl ActiveDecode {
             )
         {
             let target = if for_render {
-                crate::pipeline::seek::ResumeTarget::Render(position)
+                ResumeTarget::Render(position)
             } else {
-                crate::pipeline::seek::ResumeTarget::Position(position)
+                ResumeTarget::Position(position)
             };
             self.active.trim_to(target);
         }
@@ -573,6 +642,8 @@ mod tests {
         );
         let mut decode = active_decode(&pools, active, GaplessMode::Disabled);
         decode.incoming = Some(IncomingDecode::Priming {
+            preparation:
+                crate::pipeline::decode::transition_promotion::preparation::fixtures::preparation_owner(),
             transition,
             generation: incoming,
             frontier: OutgoingFrontier::Awaiting,
@@ -625,6 +696,8 @@ mod tests {
         );
         let mut decode = active_decode(&pools, active, GaplessMode::Disabled);
         decode.incoming = Some(IncomingDecode::Priming {
+            preparation:
+                crate::pipeline::decode::transition_promotion::preparation::fixtures::preparation_owner(),
             transition,
             generation: incoming,
             frontier: OutgoingFrontier::Awaiting,
@@ -704,6 +777,8 @@ mod tests {
         );
         let mut decode = active_decode(&pools, active, GaplessMode::Disabled);
         decode.incoming = Some(IncomingDecode::Priming {
+            preparation:
+                crate::pipeline::decode::transition_promotion::preparation::fixtures::preparation_owner(),
             transition,
             generation: incoming,
             frontier: OutgoingFrontier::Awaiting,
@@ -756,6 +831,8 @@ mod tests {
         );
         let mut decode = active_decode(&pools, active, GaplessMode::Disabled);
         decode.incoming = Some(IncomingDecode::Priming {
+            preparation:
+                crate::pipeline::decode::transition_promotion::preparation::fixtures::preparation_owner(),
             transition,
             generation: incoming,
             frontier: OutgoingFrontier::Awaiting,
@@ -848,6 +925,8 @@ mod tests {
             let (frame, rate) = cursor.decode_head().expect("source resume frontier");
             let mut decode = active_decode(&pools, active, GaplessMode::Disabled);
             decode.incoming = Some(IncomingDecode::Priming {
+                preparation:
+                    crate::pipeline::decode::transition_promotion::preparation::fixtures::preparation_owner(),
                 transition,
                 generation: incoming,
                 frontier: OutgoingFrontier::Exact { frame, rate },
@@ -904,6 +983,8 @@ mod tests {
                 .expect("outgoing PCM covers the complete join");
             let mut decode = active_decode(&pools, active, GaplessMode::Disabled);
             decode.incoming = Some(IncomingDecode::Priming {
+                preparation:
+                    crate::pipeline::decode::transition_promotion::preparation::fixtures::preparation_owner(),
                 transition,
                 generation: incoming,
                 frontier: OutgoingFrontier::Exact { frame, rate },
@@ -974,6 +1055,8 @@ mod tests {
             .expect("valid gapless PCM");
         let mut decode = active_decode(&pools, generation(spec), GaplessMode::Disabled);
         decode.incoming = Some(IncomingDecode::Priming {
+            preparation:
+                crate::pipeline::decode::transition_promotion::preparation::fixtures::preparation_owner(),
             transition,
             generation: incoming,
             frontier: OutgoingFrontier::Exact {
@@ -1081,6 +1164,8 @@ mod tests {
             .expect("valid gapless PCM");
         let mut decode = active_decode(&pools, active, GaplessMode::Disabled);
         decode.incoming = Some(IncomingDecode::Priming {
+            preparation:
+                crate::pipeline::decode::transition_promotion::preparation::fixtures::preparation_owner(),
             transition,
             generation: incoming,
             frontier: OutgoingFrontier::Exact {
@@ -1163,6 +1248,8 @@ mod tests {
             rate: spec.sample_rate.get(),
         };
         decode.incoming = Some(IncomingDecode::Priming {
+            preparation:
+                crate::pipeline::decode::transition_promotion::preparation::fixtures::preparation_owner(),
             transition,
             generation: incoming,
             frontier,
@@ -1172,6 +1259,7 @@ mod tests {
     }
 
     #[kithara::test]
+    #[kithara::hang_watchdog]
     fn incoming_variant_change_invalidates_the_stale_generation() {
         let pools = pools();
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
@@ -1195,6 +1283,8 @@ mod tests {
         );
         let mut decode = active_decode(&pools, generation(spec), GaplessMode::Disabled);
         decode.incoming = Some(IncomingDecode::Priming {
+            preparation:
+                crate::pipeline::decode::transition_promotion::preparation::fixtures::preparation_owner(),
             transition,
             generation: incoming,
             frontier: OutgoingFrontier::Awaiting,
@@ -1202,8 +1292,22 @@ mod tests {
 
         assert_eq!(
             decode.prime_incoming(OutgoingFrontier::Awaiting),
-            IncomingPrime::Failed
+            IncomingPrime::Advanced
         );
+        let (transition, prepared) = loop {
+            hang_tick!();
+            if let Some(completed) = decode.poll_incoming_build() {
+                break completed;
+            }
+            kithara_platform::thread::yield_now();
+        };
+        let prepared = prepared.expect("incoming preparation completes");
+        assert!(
+            decode
+                .install_incoming(transition, prepared.generation)
+                .is_none()
+        );
+        decode.finish_incoming_preparation(prepared.outcome);
         assert!(matches!(
             decode.incoming,
             Some(IncomingDecode::Failed {
@@ -1269,6 +1373,8 @@ mod tests {
         }));
         decode.blender.commit_join();
         decode.incoming = Some(IncomingDecode::Priming {
+            preparation:
+                crate::pipeline::decode::transition_promotion::preparation::fixtures::preparation_owner(),
             transition,
             generation: incoming,
             frontier: OutgoingFrontier::Exact {
@@ -1319,6 +1425,8 @@ mod tests {
             incoming.comparison_origin(GaplessMode::MediaOnly),
         );
         drop(decode.commit_prepared_promotion(PreparedPromotion {
+            preparation:
+                crate::pipeline::decode::transition_promotion::preparation::fixtures::preparation_owner(),
             generation: incoming,
             transition,
             join: PromotionJoin::HardCut,
@@ -1330,6 +1438,8 @@ mod tests {
         let mut incoming = generation(spec);
         incoming.align_timeline_gap(1_024);
         drop(decode.commit_prepared_promotion(PreparedPromotion {
+            preparation:
+                crate::pipeline::decode::transition_promotion::preparation::fixtures::preparation_owner(),
             generation: incoming,
             transition,
             join: PromotionJoin::HardCut,
@@ -1339,6 +1449,8 @@ mod tests {
         let shifted = decode.discontinuity().revision();
         let incoming_spec = AudioSpec::new(1, NonZeroU32::new(48_000).expect("incoming rate"));
         drop(decode.commit_prepared_promotion(PreparedPromotion {
+            preparation:
+                crate::pipeline::decode::transition_promotion::preparation::fixtures::preparation_owner(),
             generation: generation(incoming_spec),
             transition,
             join: PromotionJoin::HardCut,

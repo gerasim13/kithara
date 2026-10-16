@@ -595,9 +595,14 @@ mod tests {
                 MetadataOptions::default(),
             )
             .expect("BUG: MP3 probe should succeed");
-        let demuxer =
-            crate::symphonia::SymphoniaDemuxer::from_reader_with_layout(format_reader, None, None)
-                .expect("BUG: MP3 demuxer should build");
+        let demuxer = crate::symphonia::SymphoniaDemuxer::from_reader_with_layout(
+            format_reader,
+            None,
+            None,
+            None,
+            kithara_stream::ReaderControl::new(None),
+        )
+        .expect("BUG: MP3 demuxer should build");
         let track = demuxer.track_info().clone();
         let codec =
             WebCodecsCodec::open(&track, false, pools.clone()).expect("BUG: WebCodecs open");
@@ -654,8 +659,14 @@ mod tests {
                 MetadataOptions::default(),
             )
             .expect("BUG: MP3 probe should succeed");
-        let mut demuxer = SymphoniaDemuxer::from_reader_with_layout(format_reader, None, None)
-            .expect("BUG: MP3 demuxer should build");
+        let mut demuxer = SymphoniaDemuxer::from_reader_with_layout(
+            format_reader,
+            None,
+            None,
+            None,
+            kithara_stream::ReaderControl::new(None),
+        )
+        .expect("BUG: MP3 demuxer should build");
         let track = demuxer.track_info().clone();
         let mut codec =
             WebCodecsCodec::open(&track, false, pools.clone()).expect("BUG: WebCodecs open");

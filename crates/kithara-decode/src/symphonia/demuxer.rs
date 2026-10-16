@@ -1,15 +1,14 @@
 use std::{
     io::ErrorKind,
+    num::NonZeroU16,
     sync::atomic::{AtomicU64, Ordering},
 };
 
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_stream::{AudioCodec, PendingReason, PrerollHint};
+use kithara_stream::{AudioCodec, PendingReason, PrerollHint, ReaderControl};
 use kithara_test_utils::kithara;
 #[cfg(feature = "symphonia")]
 use symphonia_core::codecs::audio::AudioCodecParameters;
-#[cfg(all(test, feature = "symphonia"))]
-use symphonia_core::packet::Packet;
 use symphonia_core::{
     codecs::CodecParameters,
     errors::Error as SymphoniaError,
@@ -18,12 +17,12 @@ use symphonia_core::{
 };
 
 use super::{
-    error::{classify_seek_err, pending_reason, resume_point_is_past_the_end},
+    error::{classify_seek_err, pending_reason},
     packets::Packets,
     track::{build_track_info, time_to_duration, timestamp_origin},
 };
 use crate::{
-    CodecPriming, DecodeError, DecodeResult,
+    CodecPriming, DecodeError, DecodeResult, InputState, PrepareWait,
     demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, PreparedPacket, TrackInfo},
 };
 
@@ -43,13 +42,7 @@ pub(crate) struct SymphoniaDemuxer {
     /// the demuxer is built through that path; absent for synthetic
     /// readers in unit tests.
     byte_pos_handle: Option<Arc<AtomicU64>>,
-    /// Pending reason retained while recovering an interrupted packet read.
-    /// Symphonia's `MediaSourceStream` may have consumed ring-buffered bytes
-    /// into a packet that was then discarded (its read position advanced),
-    /// stranding those bytes. The next `next_frame` re-seeks the reader back
-    /// to `resume_ts`; if that seek also pends, the reason stays armed until
-    /// recovery succeeds.
-    resume_pending: Option<PendingReason>,
+    pending_seek: Option<CodecPriming>,
     /// Time base used to translate packet timestamps into wall-clock
     /// [`std::time::Duration`].
     time_base: TimeBase,
@@ -57,14 +50,6 @@ pub(crate) struct SymphoniaDemuxer {
     timestamp_origin: Timestamp,
     media_origin: Option<Duration>,
     track_info: TrackInfo,
-    /// Native (timebase-unit) timestamp the *next* packet must start at.
-    /// Authoritative across a `Pending`: set to the seek's `actual_ts` on
-    /// seek and advanced to `pts + dur` after each successfully-returned
-    /// frame. Kept in native units (not `Duration`) so the resume re-seek
-    /// round-trips exactly to a packet boundary — a `Duration` conversion
-    /// loses sub-frame precision and snaps one packet early. Used to undo a
-    /// read-ahead strand (see `next_frame` / `reseek_to_resume`).
-    resume_ts: i64,
     track_id: u32,
 }
 
@@ -122,8 +107,14 @@ mod raw_clock_tests {
             .expect("second packet exists");
         assert_eq!(first.pts.get(), -i64::from(delay));
         assert_eq!(second.pts.get(), 47);
-        let mut demuxer = SymphoniaDemuxer::from_reader_with_layout(Box::new(reader()), None, None)
-            .expect("MPEG demuxer");
+        let mut demuxer = SymphoniaDemuxer::from_reader_with_layout(
+            Box::new(reader()),
+            None,
+            None,
+            None,
+            kithara_stream::ReaderControl::new(None),
+        )
+        .expect("MPEG demuxer");
         let head = frame(&mut demuxer);
         let next = frame(&mut demuxer);
         assert_eq!(head.0, Duration::ZERO);
@@ -132,7 +123,6 @@ mod raw_clock_tests {
         assert_eq!(next.1, head.1);
         assert_eq!(head.2, first.data.as_ref());
         assert_eq!(next.2, second.data.as_ref());
-        assert_eq!(demuxer.resume_ts, 1_199);
     }
 
     #[kithara::test]
@@ -161,8 +151,14 @@ mod raw_clock_tests {
         let raw_tick =
             u64::try_from(expected.actual_ts.get() + i64::from(delay)).expect("native raw landing");
         let expected_position = Duration::from_nanos(raw_tick * 1_000_000_000 / 44_100);
-        let mut demuxer = SymphoniaDemuxer::from_reader_with_layout(Box::new(reader()), None, None)
-            .expect("MPEG demuxer");
+        let mut demuxer = SymphoniaDemuxer::from_reader_with_layout(
+            Box::new(reader()),
+            None,
+            None,
+            None,
+            kithara_stream::ReaderControl::new(None),
+        )
+        .expect("MPEG demuxer");
         let outcome = demuxer
             .seek(target, CodecPriming::default())
             .expect("public raw seek");
@@ -170,7 +166,6 @@ mod raw_clock_tests {
             panic!("in-range fixture seek must land");
         };
         assert_eq!(landed_at, expected_position);
-        assert_eq!(demuxer.resume_ts, expected.actual_ts.get());
         let actual = frame(&mut demuxer);
         assert_eq!(actual.0, expected_position);
         assert_eq!(actual.2, packet.data.as_ref());
@@ -178,8 +173,14 @@ mod raw_clock_tests {
 
     #[kithara::test]
     fn mpeg_seek_past_the_raw_end_remains_out_of_range() {
-        let mut demuxer = SymphoniaDemuxer::from_reader_with_layout(Box::new(reader()), None, None)
-            .expect("MPEG demuxer");
+        let mut demuxer = SymphoniaDemuxer::from_reader_with_layout(
+            Box::new(reader()),
+            None,
+            None,
+            None,
+            kithara_stream::ReaderControl::new(None),
+        )
+        .expect("MPEG demuxer");
         assert!(matches!(
             demuxer.seek(Duration::from_secs(7), CodecPriming::default()),
             Err(DecodeError::SeekOutOfRange { .. })
@@ -240,6 +241,8 @@ mod raw_clock_tests {
             }),
             None,
             None,
+            None,
+            kithara_stream::ReaderControl::new(None),
         )
         .expect("scripted demuxer")
     }
@@ -305,6 +308,8 @@ mod raw_clock_tests {
             }),
             None,
             None,
+            None,
+            kithara_stream::ReaderControl::new(None),
         )
         .expect("positive-origin Ogg demuxer");
         let first = frame(&mut demuxer);
@@ -380,9 +385,14 @@ mod ogg_raw_clock_tests {
         assert_eq!(track.delay, Some(delay));
         assert_eq!(track.padding, Some(padding));
         assert_eq!(track.num_frames, Some(native_end));
-        let mut demuxer =
-            SymphoniaDemuxer::from_reader_with_layout(Box::new(reader(bytes)), None, None)
-                .expect("Ogg demuxer");
+        let mut demuxer = SymphoniaDemuxer::from_reader_with_layout(
+            Box::new(reader(bytes)),
+            None,
+            None,
+            None,
+            kithara_stream::ReaderControl::new(None),
+        )
+        .expect("Ogg demuxer");
         let mut coded_frames = 0u64;
         let mut index = 0;
         while let Some(packet) = native.next_packet().expect("Ogg packet") {
@@ -401,10 +411,6 @@ mod ogg_raw_clock_tests {
             assert_eq!(frame.pts, duration(expected_raw, rate));
             assert_eq!(frame.duration, duration(packet.dur.get(), rate));
             assert_eq!(frame.data, packet.data.as_ref());
-            assert_eq!(
-                demuxer.resume_ts,
-                packet.pts.get() + i64::try_from(packet.dur.get()).expect("packet duration")
-            );
             hang_reset!();
             index += 1;
         }
@@ -455,9 +461,14 @@ mod ogg_raw_clock_tests {
             .expect("sought Ogg packet")
             .expect("sought packet exists");
         let raw_landing = u64::try_from(expected.actual_ts.get() - origin).expect("raw landing");
-        let mut demuxer =
-            SymphoniaDemuxer::from_reader_with_layout(Box::new(reader(bytes)), None, None)
-                .expect("Ogg demuxer");
+        let mut demuxer = SymphoniaDemuxer::from_reader_with_layout(
+            Box::new(reader(bytes)),
+            None,
+            None,
+            None,
+            kithara_stream::ReaderControl::new(None),
+        )
+        .expect("Ogg demuxer");
         let outcome = demuxer
             .seek(target, CodecPriming::default())
             .expect("raw Ogg seek");
@@ -465,7 +476,6 @@ mod ogg_raw_clock_tests {
             panic!("supported Ogg seek must land");
         };
         assert_eq!(landed_at, duration(raw_landing, rate));
-        assert_eq!(demuxer.resume_ts, expected.actual_ts.get());
         let DemuxOutcome::Frame(frame) = demuxer.next_frame().expect("sought raw Ogg frame") else {
             panic!("sought Ogg packet must remain readable");
         };
@@ -595,6 +605,8 @@ impl SymphoniaDemuxer {
         format_reader: Box<dyn FormatReader>,
         byte_pos_handle: Option<Arc<AtomicU64>>,
         byte_map: Option<Arc<dyn kithara_stream::ByteMap>>,
+        wav_block_align: Option<NonZeroU16>,
+        control: ReaderControl,
     ) -> DecodeResult<Self> {
         let track = format_reader
             .default_track(TrackType::Audio)
@@ -615,6 +627,13 @@ impl SymphoniaDemuxer {
             .duration_from(timestamp_origin)
             .and_then(|duration| time_base.calc_duration(duration))
             .and_then(time_to_duration);
+        let format_reader = Packets::new(
+            format_reader,
+            track_id,
+            &native_params,
+            wav_block_align,
+            control,
+        )?;
         Ok(Self {
             track_id,
             track_info,
@@ -625,9 +644,8 @@ impl SymphoniaDemuxer {
             media_origin,
             byte_pos_handle,
             byte_map,
-            format_reader: Packets::new(format_reader),
-            resume_ts: 0,
-            resume_pending: None,
+            format_reader,
+            pending_seek: None,
             prepared: None,
         })
     }
@@ -696,22 +714,44 @@ impl Demuxer for SymphoniaDemuxer {
                 packet_desc: &[],
             }),
             Some(PreparedPacket::Pending(reason)) => DemuxOutcome::Pending(reason),
-            Some(PreparedPacket::Eof) => DemuxOutcome::Eof,
+            Some(PreparedPacket::Eof) => {
+                self.prepared = Some(PreparedPacket::Eof);
+                DemuxOutcome::Eof
+            }
             None => DemuxOutcome::Pending(PendingReason::Retry),
         })
     }
 
     fn prepare_frame(&mut self) -> DecodeResult<()> {
-        if self.prepared.is_none() {
-            self.prepared = Some(self.read_frame()?.into());
+        self.prepare_frame_with_wait(PrepareWait::Wait)
+    }
+
+    fn prepare_frame_with_wait(&mut self, wait: PrepareWait) -> DecodeResult<()> {
+        if !matches!(
+            self.prepared,
+            Some(PreparedPacket::Frame { .. } | PreparedPacket::Eof)
+        ) {
+            self.prepared = Some(self.read_frame(wait)?.into());
         }
         Ok(())
     }
 
-    /// Parks before the target by the larger of priming warmup or one codec packet, so the trim
-    /// guard lands on a packet boundary; the resulting seek is the authoritative resume point and
-    /// clears any pending strand recovery.
+    fn release_input(&mut self) -> InputState {
+        self.prepared = None;
+        self.pending_seek = None;
+        self.format_reader.release_input()
+    }
+
     fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome> {
+        self.seek_with_wait(target, priming, PrepareWait::Wait)
+    }
+
+    fn seek_with_wait(
+        &mut self,
+        target: Duration,
+        priming: CodecPriming,
+        wait: PrepareWait,
+    ) -> DecodeResult<DemuxSeekOutcome> {
         self.prepared = None;
         let sr = f64::from(self.track_info.sample_rate.max(1));
         let priming_secs = f64::from(u32::try_from(priming.frames).unwrap_or(u32::MAX)) / sr;
@@ -722,22 +762,69 @@ impl Demuxer for SymphoniaDemuxer {
             ts: self.duration_to_native_timestamp(effective_target)?,
             track_id: self.track_id,
         };
-        let seeked = self
+        self.pending_seek = Some(priming);
+        match self
             .format_reader
-            .seek(SeekMode::Accurate, seek_to)
-            .map_err(|e| classify_seek_err(&e))?;
+            .seek(SeekMode::Accurate, seek_to, wait)
+            .map_err(|e| classify_seek_err(&e))?
+        {
+            Some(seeked) => {
+                self.pending_seek = None;
+                self.settle_seek(seeked, priming)
+            }
+            None => Ok(DemuxSeekOutcome::Pending(
+                self.format_reader.pending_reason(),
+            )),
+        }
+    }
 
+    fn prepare_seek(&mut self) -> DecodeResult<Option<DemuxSeekOutcome>> {
+        self.prepare_seek_with_wait(PrepareWait::Wait)
+    }
+
+    fn prepare_seek_with_wait(
+        &mut self,
+        wait: PrepareWait,
+    ) -> DecodeResult<Option<DemuxSeekOutcome>> {
+        let Some(priming) = self.pending_seek else {
+            return Ok(None);
+        };
+        match self
+            .format_reader
+            .prepare_seek(wait)
+            .map_err(|e| classify_seek_err(&e))?
+        {
+            Some(seeked) => {
+                self.pending_seek = None;
+                self.settle_seek(seeked, priming).map(Some)
+            }
+            None => Ok(Some(DemuxSeekOutcome::Pending(
+                self.format_reader.pending_reason(),
+            ))),
+        }
+    }
+
+    fn media_origin(&self) -> Option<Duration> {
+        self.media_origin
+    }
+
+    fn track_info(&self) -> &TrackInfo {
+        &self.track_info
+    }
+}
+
+impl SymphoniaDemuxer {
+    fn settle_seek(
+        &mut self,
+        seeked: symphonia_core::formats::SeekedTo,
+        priming: CodecPriming,
+    ) -> DecodeResult<DemuxSeekOutcome> {
         let landed_at = self.ts_to_duration(seeked.actual_ts)?;
-
-        self.resume_ts = seeked.actual_ts.get();
-        self.resume_pending = None;
-
         if let Some(crate::DecoderDuration::RawLength(duration)) = self.track_info.duration
             && landed_at >= duration
         {
             return Ok(DemuxSeekOutcome::PastEof { duration });
         }
-
         let landed_byte = self.current_byte();
         let preroll = match landed_byte {
             Some(lb) if priming.byte_margin > 0 => {
@@ -752,109 +839,35 @@ impl Demuxer for SymphoniaDemuxer {
         })
     }
 
-    fn media_origin(&self) -> Option<Duration> {
-        self.media_origin
-    }
-
-    fn track_info(&self) -> &TrackInfo {
-        &self.track_info
-    }
-}
-
-fn packet_ends_at_or_before(pts: Timestamp, dur: SymphoniaDuration, timestamp: i64) -> bool {
-    pts.get()
-        .saturating_add(i64::try_from(dur.get()).unwrap_or(i64::MAX))
-        <= timestamp
-}
-
-impl SymphoniaDemuxer {
-    /// A read interrupted at a not-ready boundary can strand bytes `MediaSourceStream` already
-    /// consumed into a packet that was then discarded, advancing its read position without emitting
-    /// the packet.
     #[kithara::probe]
     #[kithara::measure(label = "decode.symphonia.demux")]
-    fn read_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
-        let resume_floor = if let Some(reason) = self.resume_pending {
-            match self.reseek_to_resume() {
-                Ok(()) => {
-                    self.resume_pending = None;
-                    Some(self.resume_ts)
-                }
-                Err(error) => {
-                    if pending_reason(&error).is_some() {
-                        return Ok(DemuxOutcome::Pending(reason));
-                    }
-                    let failure = classify_seek_err(&error);
-                    if resume_point_is_past_the_end(&failure) {
-                        return Ok(DemuxOutcome::Eof);
-                    }
-                    return Err(failure);
-                }
-            }
-        } else {
-            None
-        };
+    fn read_frame(&mut self, wait: PrepareWait) -> DecodeResult<DemuxOutcome<'_>> {
         loop {
-            let packet = match self.format_reader.read() {
-                Ok(Some(p)) => p,
+            let packet = match self.format_reader.read(wait) {
+                Ok(Some(packet)) => packet,
                 Ok(None) => return Ok(DemuxOutcome::Eof),
-                Err(SymphoniaError::ResetRequired) => continue,
-                Err(SymphoniaError::IoError(e)) if e.kind() == ErrorKind::UnexpectedEof => {
+                Err(SymphoniaError::IoError(error)) if error.kind() == ErrorKind::UnexpectedEof => {
                     return Ok(DemuxOutcome::Eof);
                 }
                 Err(error) => {
-                    let Some(reason) = pending_reason(&error) else {
-                        return Err(DecodeError::backend(error));
-                    };
-                    if !self.format_reader.restores_interrupted_packet() {
-                        self.resume_pending = Some(reason);
-                    }
-                    return Ok(DemuxOutcome::Pending(reason));
+                    return pending_reason(&error).map_or_else(
+                        || Err(DecodeError::backend(error)),
+                        |reason| Ok(DemuxOutcome::Pending(reason)),
+                    );
                 }
             };
             if packet.track_id != self.track_id {
                 continue;
             }
-            if resume_floor
-                .is_some_and(|floor| packet_ends_at_or_before(packet.pts, packet.dur, floor))
-            {
-                continue;
-            }
-            self.resume_ts = packet
-                .pts
-                .get()
-                .saturating_add(i64::try_from(packet.dur.get()).unwrap_or(i64::MAX));
-            self.resume_pending = None;
             let pts = self.ts_to_duration(packet.pts)?;
             let duration = self.dur_to_duration(packet.dur)?;
-            let data = self.format_reader.data();
             return Ok(DemuxOutcome::Frame(Frame {
-                data,
+                data: self.format_reader.data(),
                 duration,
                 pts,
                 packet_desc: &[],
             }));
         }
-    }
-
-    /// Re-seek the reader back to the last authoritative timestamp
-    /// (`resume_ts`) after a read-ahead strand. Unlike [`Demuxer::seek`]
-    /// this applies no pre-roll back-off and no codec flush — it is a
-    /// position restore, not a user seek: the goal is to re-read the exact
-    /// packet whose in-flight read was interrupted at a not-ready boundary
-    /// so its bytes are re-delivered rather than skipped. `Accurate` mode
-    /// lands at or before `resume_ts`; for the packet-quantised readers
-    /// that strand (WAV/PCM) the landing is the same packet boundary, so no
-    /// audio is re-emitted twice (the decoder's leading-trim guard already
-    /// gates on the seek target).
-    fn reseek_to_resume(&mut self) -> Result<(), SymphoniaError> {
-        let seek_to = SeekTo::Timestamp {
-            ts: Timestamp::new(self.resume_ts),
-            track_id: self.track_id,
-        };
-        self.format_reader
-            .seek(SeekMode::Accurate, seek_to)
-            .map(|_| ())
     }
 
     /// Set encoder trim obtained from container metadata.
@@ -904,27 +917,11 @@ mod tests {
             formats::{FormatOptions, probe::Hint},
             io::{MediaSource, MediaSourceStream, MediaSourceStreamOptions},
             meta::MetadataOptions,
-            units::{Duration as SymphoniaDuration, Timestamp},
         },
         default,
     };
 
-    use super::{
-        DemuxOutcome, Demuxer, Packet, SymphoniaDemuxer, packet_ends_at_or_before, pending_reason,
-    };
-
-    #[kithara::test(native, flash(false))]
-    fn resume_floor_rejects_the_packet_before_the_authoritative_timestamp() {
-        let packet = Packet::new(
-            0,
-            Timestamp::new(1_000),
-            SymphoniaDuration::new(1_152),
-            Vec::new(),
-        );
-
-        assert!(packet_ends_at_or_before(packet.pts, packet.dur, 2_152));
-        assert!(!packet_ends_at_or_before(packet.pts, packet.dur, 2_151));
-    }
+    use super::{DemuxOutcome, Demuxer, SymphoniaDemuxer, pending_reason};
 
     /// Source modelling a reader that publishes an exact length and refuses
     /// any seek beyond it, the way the HLS session reader does once every
@@ -1006,32 +1003,36 @@ mod tests {
                 MetadataOptions::default(),
             )
             .expect("WAV fixture must probe");
-        SymphoniaDemuxer::from_reader_with_layout(format_reader, None, None)
-            .expect("WAV demuxer must build")
-    }
-
-    fn track_frames(demuxer: &SymphoniaDemuxer) -> i64 {
-        let info = demuxer.track_info();
-        let crate::DecoderDuration::RawLength(duration) =
-            info.duration.expect("WAV fixture must publish a duration")
-        else {
-            panic!("WAV duration must describe a raw span");
-        };
-        let millis = i64::try_from(duration.as_millis()).unwrap_or(i64::MAX);
-        millis * i64::from(info.sample_rate) / 1000
+        SymphoniaDemuxer::from_reader_with_layout(
+            format_reader,
+            None,
+            None,
+            None,
+            kithara_stream::ReaderControl::new(None),
+        )
+        .expect("WAV demuxer must build")
     }
 
     #[kithara::test]
-    fn a_resume_point_past_the_published_end_ends_the_stream(tone_wav: &'static [u8]) {
+    fn physical_eof_precedes_a_truncated_wav_declared_extent(tone_wav: &'static [u8]) {
         let mut demuxer = wav_demuxer(tone_wav);
-        demuxer.resume_ts = track_frames(&demuxer).saturating_sub(1);
-        demuxer.resume_pending = Some(PendingReason::NotReady(NotReadyCause::SourcePending));
-
-        match demuxer.next_frame() {
-            Ok(DemuxOutcome::Eof) => {}
-            Ok(_) => panic!("a resume point past the published end must end the stream"),
-            Err(error) => panic!("a resume point past the published end must not fail: {error}"),
+        let declared = demuxer.duration().expect("declared WAV extent");
+        let mut end = kithara_platform::time::Duration::ZERO;
+        loop {
+            match demuxer.next_frame().expect("physical WAV packet") {
+                DemuxOutcome::Frame(frame) => end = frame.pts + frame.duration,
+                DemuxOutcome::Eof => break,
+                DemuxOutcome::Pending(reason) => panic!("resident WAV is pending: {reason:?}"),
+            }
         }
+        let crate::DecoderDuration::RawLength(declared) = declared else {
+            panic!("WAV raw extent");
+        };
+        assert!(end > kithara_platform::time::Duration::ZERO && end < declared);
+        assert!(matches!(
+            demuxer.next_frame().expect("settled physical EOF"),
+            DemuxOutcome::Eof
+        ));
     }
 
     #[kithara::test(native, flash(false))]

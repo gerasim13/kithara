@@ -2,7 +2,7 @@
 
 use std::{io, ops::Range};
 
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 
 use super::{super::format_change_segment_range, contract::StreamType};
 use crate::{
@@ -65,6 +65,8 @@ impl<T: StreamType> Stream<T> {
 
     delegate::delegate! {
         to self.source {
+            /// Source-owned cancellation parent for opened decoder readers.
+            pub fn cancel_token(&self) -> Option<CancelToken>;
             /// Overall source readiness at current position.
             pub fn phase(&self) -> SourcePhase;
             /// Point-in-time readiness for a specific byte range.

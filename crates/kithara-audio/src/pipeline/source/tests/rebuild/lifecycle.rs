@@ -1,6 +1,6 @@
 use std::panic::catch_unwind;
 
-use super::*;
+use super::{super::transition::wait_for_retired_decoder, *};
 use crate::pipeline::stream::shared::SharedStream;
 
 #[kithara::test(tokio)]
@@ -68,15 +68,15 @@ async fn checked_seek_defers_more_than_64_pcm_chunks_without_leaking() {
     let old = source.decode.replace_active(generation);
     drop(old);
     source.finish_deferred();
-    assert!(pools.stats().allocated_bytes > baseline);
-
     assert!(
         pools.stats().allocated_bytes > baseline,
         "owner retains all 65 chunks before seek"
     );
+    let wake = PreparationWake::install(&mut source);
     source
         .seek(Duration::from_secs(1))
-        .expect("synchronous owner seek");
+        .expect("owner seek admission");
+    wait_for_source_change(&mut source, &wake).await;
     source.finish_deferred();
     assert_eq!(pools.stats().allocated_bytes, baseline);
 }
@@ -94,7 +94,8 @@ async fn decoder_readers_have_isolated_construction_gates() {
     };
     let shared_stream = SharedStream::new(stream);
     let initial = shared_stream.open_initial_reader();
-    let rebuild = shared_stream.open_rebuild_reader(0);
+    let rebuild =
+        shared_stream.open_rebuild_reader_with_control(0, shared_stream.new_reader_control());
     let Some(initial_gate) = initial.construction_gate() else {
         panic!("initial reader must carry a construction gate");
     };
@@ -178,10 +179,12 @@ async fn matching_replacement_aborts_primed_incoming_before_profile_prepare(rout
     assert!(source.decode.incoming_is_preparing(transition));
     let incoming = route_generation(&route_pcm, &pools, 8, 1, drops.clone());
     assert!(
-        source
-            .decode
-            .install_incoming(transition, incoming)
-            .is_none()
+        crate::pipeline::decode::transition_promotion::preparation::fixtures::install(
+            &mut source.decode,
+            transition,
+            incoming
+        )
+        .is_none()
     );
     assert!(source.decode.incoming_is_priming(transition));
     let factory_control = control.clone();
@@ -203,7 +206,7 @@ async fn matching_replacement_aborts_primed_incoming_before_profile_prepare(rout
         },
         None,
     );
-    enter_rebuilding(&mut source, recreate_state(1));
+    enter_rebuilding(&mut source, recreate_state(1)).await;
 
     assert_eq!(source.decode.incoming_transition(), None);
     assert_eq!(control.aborted_transition(), Some(transition));
@@ -224,26 +227,31 @@ async fn replacement_aborts_building_incoming_and_retires_its_late_completion(ro
     let plan = exact_incoming_plan();
     let transition = plan.transition();
     control.set_exact_plan(plan);
-    assert!(
-        source
-            .decode
-            .begin_incoming(transition, OutgoingFrontier::Awaiting)
-            .is_none()
-    );
-    assert!(source.decode.incoming_is_preparing(transition));
+    control.set_exact_reader_ready();
+    let mut gate = gate_incoming_factory(&mut source);
+    source.prepare_deferred();
+    gate.wait_entered().await;
+    assert_eq!(source.decode.incoming_transition(), Some(transition));
+    assert!(!source.decode.incoming_is_preparing(transition));
     let incoming = route_generation(&route_pcm, &pools, 8, 1, drops.clone());
 
     install_route_factory(&route_pcm, &pools, &mut source, 2, drops.clone());
-    enter_rebuilding(&mut source, recreate_state(1));
-    let rejected = source.decode.install_incoming(transition, incoming);
+    enter_rebuilding(&mut source, recreate_state(1)).await;
+    gate.release();
+    wait_for_retired_decoder(&drops, 99).await;
+    let rejected = crate::pipeline::decode::transition_promotion::preparation::fixtures::install(
+        &mut source.decode,
+        transition,
+        incoming,
+    );
     assert!(rejected.is_some());
     drop(rejected);
     assert_eq!(source.decode.incoming_transition(), None);
     assert_eq!(control.aborted_transition(), Some(transition));
-    assert_eq!(drops.lock().as_slice(), &[1, 8]);
+    assert_eq!(drops.lock().as_slice(), &[1, 99, 8]);
     assert_replacement_decodes(&mut source);
     source.finish_deferred();
-    assert_eq!(drops.lock().as_slice(), &[1, 8]);
+    assert_eq!(drops.lock().as_slice(), &[1, 99, 8]);
 }
 
 #[kithara::test(tokio)]
@@ -323,7 +331,7 @@ async fn rebuilding_decoder_completion_waits_for_shell_routing() {
     );
     assert!(drops.lock().is_empty());
     install_test_factory(&mut source, 2, drops.clone());
-    enter_rebuilding(&mut source, recreate_state(1));
+    enter_rebuilding(&mut source, recreate_state(1)).await;
     assert!(matches!(
         source.phase,
         crate::pipeline::source::core::OwnerPhase::Decoding
@@ -357,7 +365,7 @@ async fn rebuild_prepares_generation_profiles_before_rt_install() {
         None,
     );
     assert_eq!(profile_reads.load(Ordering::Acquire), 0);
-    enter_rebuilding(&mut source, recreate_state(1));
+    enter_rebuilding(&mut source, recreate_state(1)).await;
     assert_eq!(profile_reads.load(Ordering::Acquire), 1);
     source.finish_deferred();
     assert!(matches!(
@@ -373,7 +381,7 @@ async fn rebuilding_decoder_completion_installs_once() {
         drops, mut source, ..
     } = test_source(1).await;
     install_test_factory(&mut source, 2, drops.clone());
-    enter_rebuilding(&mut source, recreate_state(1));
+    enter_rebuilding(&mut source, recreate_state(1)).await;
     assert!(matches!(
         source.phase,
         crate::pipeline::source::core::OwnerPhase::Decoding
@@ -427,6 +435,7 @@ async fn format_boundary_rebuild_rebases_decode_head_to_rendered_source(route_pc
         .expect("rendered position");
     control.set_media_info(media_info(1));
     install_route_factory(&route_pcm, &pools, &mut source, 2, drops);
+    let wake = PreparationWake::install(&mut source);
     source
         .install_replacement(
             recreate_state(1),
@@ -436,6 +445,7 @@ async fn format_boundary_rebuild_rebases_decode_head_to_rendered_source(route_pc
             ))),
         )
         .expect("replacement at rendered frontier");
+    wait_for_source_change(&mut source, &wake).await;
     assert!(matches!(
         source.phase,
         crate::pipeline::source::core::OwnerPhase::Decoding
@@ -472,7 +482,7 @@ async fn rebuilding_decoder_completion_emits_decoder_changed_cause() {
     let bus = EventBus::new(16);
     let mut events = bus.subscribe();
     source.emit = Arc::new(DeferredBus::new(bus, 16));
-    enter_rebuilding(&mut source, recreate_state(1));
+    enter_rebuilding(&mut source, recreate_state(1)).await;
     assert!(matches!(
         source.phase,
         crate::pipeline::source::core::OwnerPhase::Decoding

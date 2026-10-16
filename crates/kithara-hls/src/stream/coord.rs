@@ -279,12 +279,15 @@ where
         &self,
         range: Range<u64>,
         timeout: Option<Duration>,
+        reader_cancel: Option<&kithara_stream::ReaderControl>,
     ) -> StreamResult<WaitOutcome> {
         match timeout {
             Some(_) => self.probe_range(range, timeout),
-            None => self.signal.wait_range_blocking(&self.cancel, || {
-                self.probe_range(range.clone(), Some(Duration::ZERO))
-            }),
+            None => self
+                .signal
+                .wait_range_blocking(&self.cancel, reader_cancel, || {
+                    self.probe_range(range.clone(), Some(Duration::ZERO))
+                }),
         }
     }
 
@@ -482,12 +485,13 @@ pub(super) mod tests {
     use kithara_download::RequestPriority;
     use kithara_events::EventBus;
     use kithara_platform::{
-        sync::{Arc, ThreadGate},
-        time::Instant,
+        sync::{Arc, Mutex, Notify, mpsc},
+        time::{Instant, timeout},
+        tokio::{runtime::Handle, task::spawn_blocking_on},
     };
     use kithara_stream::{
-        AudioCodec, ContainerFormat, OutgoingDisposition, PlayheadWrite, ReaderInput, ReaderWarmup,
-        SourceError, WorkerWake,
+        AudioCodec, ContainerFormat, NotReadyCause, OutgoingDisposition, PendingReason,
+        PlayheadWrite, ReaderInput, ReaderWarmup, SourceError, WorkerWake,
     };
     use unimock::{MockFn, Unimock, matching};
 
@@ -550,7 +554,10 @@ pub(super) mod tests {
                 .cancel(cancel.clone())
                 .build(),
         );
-        let signal = SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new()));
+        let signal = SizeSignal::new(
+            Arc::new(kithara_platform::sync::CondvarGate::default()),
+            Arc::new(OnceLock::new()),
+        );
         let ctx = PlanCtx {
             bus: bus.clone(),
             scope: store
@@ -1002,12 +1009,15 @@ pub(super) mod tests {
 
         assert_eq!(coord.variant_index(), 0);
         assert_eq!(coord.position(), 17);
-        assert!(matches!(
-            coord
-                .take_prepared_variant_reader(transition)
-                .expect("probe incoming"),
-            VariantReaderTake::Preparing
-        ));
+        let VariantReaderTake::Ready(reader) = coord
+            .take_prepared_variant_reader(transition)
+            .expect("probe incoming")
+        else {
+            panic!("the exact Incremental reader must remain transferable without media");
+        };
+        assert_eq!(reader.transition(), transition);
+        assert_eq!(coord.variant_index(), 0);
+        assert_eq!(coord.position(), 17);
         assert!(coord.abort_variant(transition));
         assert_eq!(coord.sessions.resident_count(), 1);
         assert_eq!(coord.variant_index(), 0);
@@ -1083,21 +1093,18 @@ pub(super) mod tests {
     async fn incoming_readiness_tracks_required_bytes_not_delivery_chunks() {
         let (coord, _bus, ctx, _abr_state) = switch_coord();
         coord.set_position(17);
-        let transition = prepare_incoming(&coord, incremental_profile(32))
+        let profile = ReaderProfile::new(
+            ReaderInput::InitOnly,
+            ReaderWarmup::None,
+            NonZeroU64::new(32).expect("read-ahead bytes"),
+        );
+        let transition = prepare_incoming(&coord, profile)
             .expect("prepare incoming")
             .expect("pending switch");
         let mut commands = coord.dispatch_incoming(&ctx, 1);
         assert_eq!(commands.len(), 1);
         let mut command = commands.pop().expect("target fetch");
-        // Construction fetches outrank speculation. The peer's budget decides
-        // how many a poll may emit; it cannot decide when the downloader runs
-        // them, and that queue is first-in-first-out within a priority slot. The
-        // audible variant appends to it on every poll, so an untagged
-        // construction pack is never reached: measured on a cross-codec switch,
-        // the incoming variant started exactly two fetches all test — its
-        // playlist and its init — while both of its media segments sat queued
-        // until teardown and readiness stayed false on all 216 polls. Tagged,
-        // both segments start and the reader becomes readable.
+        // With no separate init, the declared header covers the first media segment.
         assert_eq!(command.priority(), Some(RequestPriority::High));
         assert_eq!(command.url().as_str(), "https://example.com/v1-seg0.m4s");
         let mut writer = command.take_writer().expect("streaming writer");
@@ -1111,6 +1118,14 @@ pub(super) mod tests {
         ));
 
         writer(&[2; 25]).expect("second delivery chunk");
+        assert!(matches!(
+            coord
+                .take_prepared_variant_reader(transition)
+                .expect("probe incomplete header after read-ahead bytes"),
+            VariantReaderTake::Preparing
+        ));
+        writer(&[3; 68]).expect("remaining header bytes");
+        command.take_on_complete().expect("completion handler")(100, None, None);
         let VariantReaderTake::Ready(reader) = coord
             .take_prepared_variant_reader(transition)
             .expect("take ready incoming")
@@ -1132,8 +1147,6 @@ pub(super) mod tests {
             VariantReaderTake::Taken
         ));
 
-        writer(&[3; 68]).expect("remaining delivery body");
-        command.take_on_complete().expect("completion handler")(100, None, None);
         let mut first = [0_u8; 8];
         assert_eq!(input.read(&mut first).expect("read incoming"), first.len());
         assert_eq!(coord.position(), 17);
@@ -1221,12 +1234,13 @@ pub(super) mod tests {
             StreamError::Source(SourceError::Io(ref error))
                 if error.kind() == ErrorKind::InvalidInput
         ));
-        assert!(matches!(
-            coord
-                .take_prepared_variant_reader(transition)
-                .expect("original transition remains live"),
-            VariantReaderTake::Preparing
-        ));
+        let VariantReaderTake::Ready(reader) = coord
+            .take_prepared_variant_reader(transition)
+            .expect("original transition remains live")
+        else {
+            panic!("the exact Incremental reader must remain transferable without media");
+        };
+        assert_eq!(reader.transition(), transition);
         assert!(coord.abort_variant(transition));
     }
 
@@ -1269,12 +1283,13 @@ pub(super) mod tests {
         );
         assert!(!coord.abort_variant(stale));
         assert!(!current_cancel.is_cancelled());
-        assert!(matches!(
-            coord
-                .take_prepared_variant_reader(current)
-                .expect("replacement remains live"),
-            VariantReaderTake::Preparing
-        ));
+        let VariantReaderTake::Ready(reader) = coord
+            .take_prepared_variant_reader(current)
+            .expect("replacement remains live")
+        else {
+            panic!("the exact Incremental reader must remain transferable without media");
+        };
+        assert_eq!(reader.transition(), current);
         assert!(coord.abort_variant(current));
         assert!(current_cancel.is_cancelled());
     }
@@ -1495,22 +1510,102 @@ pub(super) mod tests {
         assert_eq!(coord.position(), anchor.byte_offset);
     }
 
-    #[kithara::test]
-    fn seek_aborts_the_exact_incoming_session() {
-        let (coord, _bus, _ctx, _abr_state) = switch_coord();
-        let transition = prepare_incoming(&coord, incremental_profile(32))
-            .expect("prepare incoming")
-            .expect("pending switch");
+    #[kithara::test(tokio)]
+    async fn seek_aborts_the_exact_incoming_session() {
+        struct ReadEntered {
+            entered: Notify,
+            release: Mutex<Option<mpsc::Receiver<()>>>,
+        }
 
-        coord.prepare_for_seek();
+        impl WorkerWake for ReadEntered {
+            fn defer(&self) {
+                self.entered.notify_one();
+            }
 
-        assert!(matches!(
-            coord
+            fn wake(&self) {
+                let release = self.release.lock().take();
+                if let Some(release) = release {
+                    self.entered.notify_one();
+                    let _ = release.recv();
+                }
+            }
+        }
+
+        for seek in [true, false] {
+            let (coord, _bus, _ctx, _abr_state) = switch_coord();
+            let transition = prepare_incoming(&coord, incremental_profile(32))
+                .expect("prepare incoming")
+                .expect("pending switch");
+            let VariantReaderTake::Ready(opened) = coord
                 .take_prepared_variant_reader(transition)
-                .expect("probe stale incoming"),
-            VariantReaderTake::Stale
-        ));
-        assert_eq!(coord.variant_index(), 0);
+                .expect("transfer the incremental reader without media bytes")
+            else {
+                panic!("Incremental construction must not wait for media");
+            };
+            let (_, reader) = opened.split();
+            let gate = reader
+                .construction_gate()
+                .expect("real HLS construction gate");
+            gate.arm();
+            let mut reader = reader.into_inner();
+            let (release, released) = mpsc::channel::<()>();
+            let entered = Arc::new(ReadEntered {
+                entered: Notify::default(),
+                release: Mutex::new(Some(released)),
+            });
+            coord.set_peer_wake(Arc::new(DeferredWake::default()), entered.clone());
+            let (complete, completion) = mpsc::channel();
+            let runtime = Handle::try_current().expect("reader test runtime");
+            let owner = spawn_blocking_on(&runtime, move || {
+                let mut bytes = [0xa5; 16];
+                let result = reader.read(&mut bytes);
+                let _ = complete.send((result, bytes));
+            });
+            let entered = timeout(Duration::from_secs(1), entered.entered.notified()).await;
+            let before_abort = completion.try_recv();
+            let exact_abort = if seek {
+                coord.prepare_for_seek();
+                None
+            } else {
+                Some(VariantControl::abort_variant(coord.as_ref(), transition))
+            };
+            drop(release);
+            let joined = owner.await;
+            gate.disarm();
+            let was_pending = matches!(before_abort, Err(mpsc::TryRecvError::Empty));
+            let (result, bytes) = before_abort
+                .or_else(|_| completion.try_recv())
+                .expect("aborted real construction read must return");
+
+            assert!(
+                entered.is_ok(),
+                "real reader must reach its unavailable-range probe"
+            );
+            assert!(
+                was_pending,
+                "real construction read must remain pending before abort"
+            );
+            assert!(joined.is_ok());
+            assert!(exact_abort.is_none_or(|aborted| aborted));
+            let error = result.expect_err("cancelled construction read must not produce PCM bytes");
+            assert!(matches!(
+                error
+                    .get_ref()
+                    .and_then(|error| error.downcast_ref::<PendingReason>()),
+                Some(
+                    PendingReason::SessionRetired
+                        | PendingReason::NotReady(NotReadyCause::WaitInterrupted)
+                )
+            ));
+            assert_eq!(bytes, [0xa5; 16]);
+            assert!(matches!(
+                coord
+                    .take_prepared_variant_reader(transition)
+                    .expect("probe stale incoming"),
+                VariantReaderTake::Stale
+            ));
+            assert_eq!(coord.variant_index(), 0);
+        }
     }
 
     #[kithara::test]
@@ -1533,7 +1628,7 @@ pub(super) mod tests {
             .expect("manual selection survives seek");
         assert_eq!(replacement.id().abr_ticket(), stale.id().abr_ticket());
         assert!(matches!(
-            retired.wait_range(0..1, Some(Duration::ZERO)),
+            retired.wait_range(0..1, Some(Duration::ZERO), None),
             Ok(WaitOutcome::Interrupted)
         ));
         assert!(!Arc::ptr_eq(
@@ -1567,7 +1662,7 @@ pub(super) mod tests {
             .expect("automatic selection survives seek");
         assert_eq!(replacement.id().abr_ticket(), stale.id().abr_ticket());
         assert!(matches!(
-            retired.wait_range(0..1, Some(Duration::ZERO)),
+            retired.wait_range(0..1, Some(Duration::ZERO), None),
             Ok(WaitOutcome::Interrupted)
         ));
         assert!(!Arc::ptr_eq(
@@ -1605,7 +1700,7 @@ pub(super) mod tests {
             .expect("manual selection survives epoch change");
         assert_eq!(replacement.id().abr_ticket(), stale.id().abr_ticket());
         assert!(matches!(
-            retired.wait_range(0..1, Some(Duration::ZERO)),
+            retired.wait_range(0..1, Some(Duration::ZERO), None),
             Ok(WaitOutcome::Interrupted)
         ));
     }
@@ -1641,7 +1736,7 @@ pub(super) mod tests {
         assert!(!matches!(
             coord
                 .active_session()
-                .wait_range(0..1, Some(Duration::ZERO)),
+                .wait_range(0..1, Some(Duration::ZERO), None),
             Ok(WaitOutcome::Interrupted)
         ));
         let command = commands

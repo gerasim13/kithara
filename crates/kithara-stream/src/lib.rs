@@ -35,8 +35,8 @@ pub use playhead::{ChunkPosition, PlayheadRead, PlayheadState, PlayheadWrite};
 pub use preroll::PrerollHint;
 pub use profile::{ReaderInput, ReaderProfile, ReaderWarmup};
 pub use reader::{
-    ConstructionGate, OpenedReader, OpenedVariantReader, SessionReader, VariantReaderPlan,
-    VariantReaderTake,
+    ConstructionGate, OpenedReader, OpenedVariantReader, ReaderControl, SessionReader,
+    VariantReaderPlan, VariantReaderTake,
 };
 pub use source::{
     ByteMap, NotReadyCause, PendingReason, ReadOutcome, SegmentDescriptor, Source, SourcePhase,

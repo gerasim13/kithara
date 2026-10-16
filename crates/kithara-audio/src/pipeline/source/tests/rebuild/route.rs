@@ -1,13 +1,30 @@
-use super::*;
+use super::{
+    super::transition::{
+        wait_for_incoming_priming, wait_for_retired_decoder, wait_for_transition_settled,
+    },
+    *,
+};
 use crate::pipeline::{seek::ResumeTarget, source::StreamAudioSource};
 
 #[kithara::test(tokio)]
 async fn route_change_host_rate_delta_starts_decoder_recreate(route_pcm: RoutePcm) {
-    let RouteFixture { mut source, .. } =
-        route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
+    let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
+    let plan = exact_incoming_plan();
+    let transition = plan.transition();
+    fixture.control.set_exact_plan(plan);
+    fixture.control.set_exact_reader_ready();
+    let mut gate = gate_incoming_factory(&mut fixture.source);
+    fixture.source.prepare_deferred();
+    gate.wait_entered().await;
+    let source = &mut fixture.source;
     let origin = source.decode.active().base_offset();
     let position = source.playhead.position();
+    let wake = PreparationWake::install(source);
     source.set_host_sample_rate(NonZeroU32::new(48_000).expect("host rate"));
+    wait_for_source_change(source, &wake).await;
+    gate.release();
+    wait_for_retired_decoder(&fixture.drops, 99).await;
+    let source = &mut fixture.source;
     assert!(matches!(
         source.phase,
         crate::pipeline::source::core::OwnerPhase::Decoding
@@ -20,6 +37,9 @@ async fn route_change_host_rate_delta_starts_decoder_recreate(route_pcm: RoutePc
     );
     assert!(source.decode.incoming_transition().is_none());
     assert_eq!(source.decode.active().base_offset(), origin);
+    assert_eq!(fixture.control.aborted_transition(), Some(transition));
+    assert_eq!(fixture.control.promote_calls(), 0);
+    assert_eq!(fixture.drops.lock().as_slice(), &[1, 99]);
     assert_eq!(
         source
             .decode
@@ -64,7 +84,9 @@ async fn route_change_resumes_from_the_rendered_source_frontier(route_pcm: Route
         chunk.meta,
     );
 
+    let wake = PreparationWake::install(&mut source);
     source.set_host_sample_rate(NonZeroU32::new(consts::ROUTE_SAMPLE_RATE).expect("host rate"));
+    wait_for_source_change(&mut source, &wake).await;
     assert!(matches!(
         source.phase,
         crate::pipeline::source::core::OwnerPhase::Decoding
@@ -198,7 +220,9 @@ async fn route_change_recreate_roots_the_demuxer_at_the_container_origin(route_p
         "fixture precondition: the resume anchor must be a media byte, not the container origin"
     );
 
+    let wake = PreparationWake::install(&mut source);
     source.set_host_sample_rate(NonZeroU32::new(consts::ROUTE_SAMPLE_RATE).expect("host rate"));
+    wait_for_source_change(&mut source, &wake).await;
     assert!(matches!(
         source.phase,
         crate::pipeline::source::core::OwnerPhase::Decoding
@@ -228,33 +252,82 @@ async fn route_change_recreate_roots_the_demuxer_at_the_container_origin(route_p
 }
 
 #[kithara::test(tokio)]
-async fn equal_host_rate_does_not_start_route_recreate() {
-    let RebuildFixture {
-        drops, mut source, ..
-    } = test_source(0).await;
-    source.set_host_sample_rate(NonZeroU32::new(consts::SAMPLE_RATE).expect("host rate"));
-    assert!(drops.lock().is_empty());
+async fn equal_host_rate_does_not_start_route_recreate(route_pcm: RoutePcm) {
+    let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
+    let plan = exact_incoming_plan();
+    let transition = plan.transition();
+    fixture.control.set_exact_plan(plan);
+    fixture.control.set_exact_reader_ready();
+    let mut gate = gate_incoming_factory(&mut fixture.source);
+    fixture.source.prepare_deferred();
+    gate.wait_entered().await;
+    fixture
+        .source
+        .set_host_sample_rate(NonZeroU32::new(consts::SAMPLE_RATE).expect("host rate"));
+    let pending = fixture.source.decode.incoming_transition();
+    let aborted = fixture.control.aborted_transition();
+    let retired = fixture.drops.lock().clone();
+    gate.release();
+    wait_for_incoming_priming(&mut fixture, transition).await;
+
+    assert_eq!(pending, Some(transition));
+    assert_eq!(aborted, None);
+    assert!(retired.is_empty());
+    assert!(fixture.drops.lock().is_empty());
     assert!(matches!(
-        source.phase,
+        fixture.source.phase,
         crate::pipeline::source::core::OwnerPhase::Decoding
     ));
 }
 
 #[kithara::test(tokio)]
 async fn first_matching_host_rate_latches_without_route_recreate(route_pcm: RoutePcm) {
-    let RouteFixture {
-        drops, mut source, ..
-    } = route_signal_source(&route_pcm, 0).await;
-    source.set_host_sample_rate(NonZeroU32::new(consts::SAMPLE_RATE).expect("host rate"));
-    assert!(drops.lock().is_empty());
-    assert_eq!(
-        source.host_sample_rate().map(NonZeroU32::get),
-        Some(consts::SAMPLE_RATE)
-    );
-    assert!(matches!(
-        source.phase,
-        crate::pipeline::source::core::OwnerPhase::Decoding
-    ));
+    for building in [false, true] {
+        let mut fixture = route_signal_source(&route_pcm, 0).await;
+        let plan = exact_incoming_plan();
+        let transition = plan.transition();
+        let mut gate = if building {
+            fixture.control.set_exact_plan(plan);
+            fixture.control.set_exact_reader_ready();
+            Some(gate_incoming_factory(&mut fixture.source))
+        } else {
+            None
+        };
+        if let Some(gate) = &mut gate {
+            fixture.source.prepare_deferred();
+            gate.wait_entered().await;
+        }
+        fixture
+            .source
+            .set_host_sample_rate(NonZeroU32::new(consts::SAMPLE_RATE).expect("host rate"));
+        let retired = fixture.drops.lock().clone();
+        drop(gate);
+        if building {
+            wait_for_retired_decoder(&fixture.drops, 99).await;
+        }
+        fixture.source.prepare_deferred();
+        fixture.source.finish_deferred();
+
+        assert!(retired.is_empty());
+        assert_eq!(
+            fixture.drops.lock().as_slice(),
+            if building { &[99][..] } else { &[] }
+        );
+        assert_eq!(
+            fixture.source.host_sample_rate().map(NonZeroU32::get),
+            Some(consts::SAMPLE_RATE)
+        );
+        assert!(matches!(
+            fixture.source.phase,
+            crate::pipeline::source::core::OwnerPhase::Decoding
+        ));
+        assert!(fixture.source.decode.incoming_transition().is_none());
+        assert_eq!(
+            fixture.control.aborted_transition(),
+            building.then_some(transition)
+        );
+        assert_eq!(fixture.control.promote_calls(), 0);
+    }
 }
 
 #[kithara::test(tokio)]
@@ -262,7 +335,9 @@ async fn first_mismatched_host_rate_still_starts_route_recreate(route_pcm: Route
     let RouteFixture {
         drops, mut source, ..
     } = route_signal_source(&route_pcm, 0).await;
+    let wake = PreparationWake::install(&mut source);
     source.set_host_sample_rate(NonZeroU32::new(consts::ROUTE_SAMPLE_RATE).expect("host rate"));
+    wait_for_source_change(&mut source, &wake).await;
     assert_eq!(drops.lock().as_slice(), &[1]);
     assert_eq!(
         source.decode.output_spec().sample_rate.get(),
@@ -282,7 +357,7 @@ async fn rebuilding_decoder_seek_epoch_supersedes_completion() {
     install_test_factory(&mut source, 2, drops.clone());
     let target = Duration::from_secs(3);
 
-    enter_rebuilding(&mut source, recreate_state(1));
+    enter_rebuilding(&mut source, recreate_state(1)).await;
     let outcome = source.seek(target).expect("owning-thread seek");
     assert!(matches!(outcome, crate::SeekOutcome::Landed { .. }));
     assert!(
@@ -552,12 +627,17 @@ async fn rebuilding_decoder_variant_change_supersedes_completion() {
     install_test_factory(&mut source, 2, drops.clone());
     let target = Duration::from_secs(3);
     control.set_media_info(media_info(2));
-    enter_rebuilding(&mut source, recreate_state(1));
+    enter_rebuilding(&mut source, recreate_state(1)).await;
+    let wake = PreparationWake::install(&mut source);
     let outcome = source.seek(target).expect("owning-thread seek");
-    assert!(matches!(outcome, crate::SeekOutcome::Landed { .. }));
     assert!(
-        matches!(outcome, crate::SeekOutcome::Landed { target: actual, .. } if actual == target)
+        matches!(outcome, crate::SeekOutcome::Pending { target: actual, .. } if actual == target)
     );
+    wait_for_source_change(&mut source, &wake).await;
+    assert!(matches!(
+        source.phase,
+        crate::pipeline::source::core::OwnerPhase::Decoding
+    ));
     assert_eq!(source.playhead.position(), target);
     assert_eq!(
         source
@@ -586,12 +666,17 @@ async fn rebuilding_decoder_variant_change_preserves_inflight_seek(route_pcm: Ro
     install_test_factory(&mut source, 2, drops.clone());
     let target = Duration::from_secs(3);
     control.set_media_info(media_info(2));
-    enter_rebuilding(&mut source, recreate_state(1));
+    enter_rebuilding(&mut source, recreate_state(1)).await;
+    let wake = PreparationWake::install(&mut source);
     let outcome = source.seek(target).expect("owning-thread seek");
-    assert!(matches!(outcome, crate::SeekOutcome::Landed { .. }));
     assert!(
-        matches!(outcome, crate::SeekOutcome::Landed { target: actual, .. } if actual == target)
+        matches!(outcome, crate::SeekOutcome::Pending { target: actual, .. } if actual == target)
     );
+    wait_for_source_change(&mut source, &wake).await;
+    assert!(matches!(
+        source.phase,
+        crate::pipeline::source::core::OwnerPhase::Decoding
+    ));
     assert_eq!(source.playhead.position(), target);
     assert_eq!(
         source
@@ -629,7 +714,11 @@ async fn stale_rebuild_completion_retires_decoder_shell_side() {
         GaplessMode::Disabled,
     );
     assert!(drops.lock().is_empty());
-    let rejected = source.decode.install_incoming(transition, stale);
+    let rejected = crate::pipeline::decode::transition_promotion::preparation::fixtures::install(
+        &mut source.decode,
+        transition,
+        stale,
+    );
     assert!(rejected.is_some());
     drop(rejected);
     assert_eq!(drops.lock().as_slice(), &[3]);
@@ -644,13 +733,15 @@ async fn stale_rebuild_completion_retires_decoder_shell_side() {
 /// FSM in `RebuildingDecoder` forever. The rebuild port catches the panic,
 /// pushes a `SoftFailed` completion, and wakes the worker.
 #[kithara::test(tokio)]
-async fn rebuild_factory_panic_fails_track_without_hang() {
+async fn rebuild_factory_panic_fails_track_without_hang(route_pcm: RoutePcm) {
     let RebuildFixture { mut source, .. } = test_source(1).await;
     source.factory = DecoderFactory::new(
         |_reader, _info, _rate| panic!("decoder construction blew up"),
         None,
     );
+    let wake = PreparationWake::install(&mut source);
     source.set_host_sample_rate(NonZeroU32::new(consts::ROUTE_SAMPLE_RATE).expect("host rate"));
+    wait_for_source_change(&mut source, &wake).await;
     assert!(matches!(
         source.phase,
         crate::pipeline::source::core::OwnerPhase::Failed {
@@ -672,6 +763,42 @@ async fn rebuild_factory_panic_fails_track_without_hang() {
             error: None
         }
     ));
+
+    for panics in [false, true] {
+        let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
+        let plan = exact_incoming_plan();
+        let transition = plan.transition();
+        fixture.control.set_exact_plan(plan);
+        fixture.control.set_exact_reader_ready();
+        fixture.source.factory = DecoderFactory::new(
+            move |_, _, _| {
+                if panics {
+                    panic!("incoming factory failure witness");
+                }
+                Err(DecodeError::InvalidData {
+                    detail: "incoming factory failure witness",
+                })
+            },
+            None,
+        );
+        let mut gate = gate_incoming_factory(&mut fixture.source);
+        fixture.source.prepare_deferred();
+        gate.wait_entered().await;
+        gate.release();
+        wait_for_transition_settled(&mut fixture).await;
+        assert_eq!(fixture.control.aborted_transition(), Some(transition));
+        assert!(fixture.source.decode.incoming_transition().is_none());
+        assert!(fixture.drops.lock().is_empty());
+        assert_eq!(fixture.control.promote_calls(), 0);
+        assert!(matches!(
+            fixture.source.step_track(),
+            TrackStep::Produced(_)
+        ));
+        assert!(matches!(
+            fixture.source.phase,
+            crate::pipeline::source::core::OwnerPhase::Decoding
+        ));
+    }
 }
 
 #[kithara::test]
@@ -781,6 +908,7 @@ async fn assert_retired_active_rebind(route_pcm: &RoutePcm, for_render: bool) {
         None,
     );
     let target = Duration::from_millis(20);
+    let wake = PreparationWake::install(&mut source);
     let outcome = if for_render {
         source.seek_for_render(target)
     } else {
@@ -798,7 +926,7 @@ async fn assert_retired_active_rebind(route_pcm: &RoutePcm, for_render: bool) {
     assert_eq!(stale_seek_preparations.load(Ordering::Relaxed), 0);
     assert_eq!(stale_preparations.load(Ordering::Relaxed), 0);
     assert!(matches!(source.step_track(), TrackStep::Blocked(_)));
-    source.prepare_deferred();
+    wait_for_source_change(&mut source, &wake).await;
     assert!(matches!(
         source.phase,
         crate::pipeline::source::core::OwnerPhase::Decoding
@@ -849,6 +977,7 @@ async fn assert_retired_active_rebind(route_pcm: &RoutePcm, for_render: bool) {
 }
 
 #[kithara::test(tokio)]
+#[kithara::hang_watchdog]
 async fn incoming_retired_seek_fails_only_its_slot_before_publication(route_pcm: RoutePcm) {
     let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
     let plan = exact_incoming_plan();
@@ -901,14 +1030,28 @@ async fn incoming_retired_seek_fails_only_its_slot_before_publication(route_pcm:
             .is_none()
     );
     assert!(
-        fixture
-            .source
-            .decode
-            .install_incoming(transition, incoming)
-            .is_none()
+        crate::pipeline::decode::transition_promotion::preparation::fixtures::install(
+            &mut fixture.source.decode,
+            transition,
+            incoming
+        )
+        .is_none()
     );
     let mut events = fixture.source.emit.bus().subscribe::<AudioEvent>();
     fixture.source.prepare_deferred();
+    let (completed_transition, prepared) = loop {
+        hang_tick!();
+        if let Some(completed) = fixture.source.decode.poll_incoming_build() {
+            break completed;
+        }
+        kithara_platform::tokio::task::yield_now().await;
+    };
+    assert_eq!(completed_transition, transition);
+    let prepared = prepared.expect("retired incoming preparation must return its owned generation");
+    assert!(matches!(
+        &prepared.outcome,
+        Ok(crate::pipeline::decode::transition::IncomingPrime::Failed)
+    ));
     assert_eq!(seek_calls.load(Ordering::Relaxed), 1);
     assert_eq!(seek_preparations.load(Ordering::Relaxed), 1);
     assert_eq!(preparations.load(Ordering::Relaxed), 0);
@@ -921,6 +1064,17 @@ async fn incoming_retired_seek_fails_only_its_slot_before_publication(route_pcm:
     assert_eq!(fixture.control.promote_calls(), 0);
     assert_eq!(fixture.control.aborted_transition(), None);
     assert!(fixture.drops.lock().is_empty());
+    assert!(
+        fixture
+            .source
+            .decode
+            .install_incoming(transition, prepared.generation)
+            .is_none()
+    );
+    fixture
+        .source
+        .decode
+        .finish_incoming_preparation(prepared.outcome);
     fixture.source.prepare_deferred();
     fixture.source.finish_deferred();
     assert_eq!(fixture.control.aborted_transition(), Some(transition));

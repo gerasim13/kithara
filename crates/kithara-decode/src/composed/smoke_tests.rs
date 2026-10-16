@@ -75,6 +75,7 @@ fn symphonia_mp3_demuxer_emits_notneeded_preroll_after_seek(tone_mp3: &'static [
     let (demuxer, _byte_len_handle) = SymphoniaDemuxer::open_file(
         Cursor::new(tone_mp3),
         FileOpen {
+            control: kithara_stream::ReaderControl::new(None),
             hint: Some("mp3".into()),
             container: None,
             byte_len_handle: None,
