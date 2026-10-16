@@ -2,12 +2,7 @@ use std::task::Poll;
 
 use kithara_abr::AbrPeerId;
 use kithara_events::EventBus;
-use kithara_platform::{
-    CancelGroup, CancelToken,
-    sync::{Arc, RwLock},
-    time::Instant,
-    tokio::sync::mpsc,
-};
+use kithara_platform::{CancelGroup, CancelToken, sync::Arc, time::Instant, tokio::sync::mpsc};
 use thunderdome::{Arena, Index};
 
 use super::slots::{Slots, slot_index};
@@ -32,10 +27,8 @@ struct PeerEntry {
     /// so the Downloader can credit bandwidth samples when the fetch
     /// completes.
     peer_id: AbrPeerId,
-    /// Same Arc as the owning [`PeerHandle`]'s bus. Read-snapshot on
-    /// every proactive poll so `PeerHandle::with_bus` takes effect
-    /// immediately.
-    bus: Arc<RwLock<Option<EventBus>>>,
+    /// Event destination captured before registration becomes visible.
+    bus: Option<EventBus>,
     peer: Arc<dyn Peer>,
     peer_cancel: CancelToken,
     cmd_rx: mpsc::Receiver<InternalCmd>,
@@ -111,7 +104,7 @@ impl Peers {
             match entry.peer.poll_next(cx) {
                 Poll::Ready(Some(batch)) => {
                     let peer_prio = entry.peer.priority();
-                    let bus = entry.bus.read().clone();
+                    let bus = entry.bus.clone();
                     let batch_had_cmds = !batch.is_empty();
                     for cmd in batch {
                         let epoch_cancel = cmd.cancel.clone();

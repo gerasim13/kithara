@@ -19,6 +19,10 @@ pub(super) struct TrackFade {
     settled: bool,
     frame: u64,
     frames: u64,
+    /// Gain the current fade started from.
+    from: f32,
+    /// Gain applied to the last mixed frame.
+    gain: f32,
 }
 
 impl TrackFade {
@@ -30,6 +34,8 @@ impl TrackFade {
             frame: 0,
             frames,
             settled: frames == 0,
+            from: 0.0,
+            gain: 0.0,
         }
     }
 
@@ -81,11 +87,12 @@ impl TrackFade {
                 let frames = cast::<u64, f32>(self.frames - 1).unwrap_or(f32::MAX);
                 (frame / frames).min(1.0)
             };
-            let gains = self.settings.gains(progress);
+            let (out, into) = self.settings.gains(progress);
             let gain = match self.direction {
-                Direction::In => gains.1,
-                Direction::Out => gains.0,
+                Direction::In => (1.0 - self.from).mul_add(into, self.from),
+                Direction::Out => self.from * out,
             };
+            self.gain = gain;
             if gain == 1.0 {
                 *out_l += in_l;
                 *out_r += in_r;
@@ -103,8 +110,12 @@ impl TrackFade {
         self.frame = 1;
         self.frames = 0;
         self.settled = true;
+        self.from = 1.0;
+        self.gain = 1.0;
     }
 
+    /// Starts a fade from the gain the last mixed frame had, so a fade that
+    /// reverses another one continues from where it was instead of stepping.
     fn start(
         &mut self,
         direction: Direction,
@@ -113,6 +124,7 @@ impl TrackFade {
     ) {
         self.settings = settings;
         self.direction = direction;
+        self.from = self.gain;
         self.frame = 0;
         self.frames = Self::frames(settings.duration, sample_rate);
         self.settled = self.frames == 0;
@@ -123,6 +135,8 @@ impl TrackFade {
         self.frame = 1;
         self.frames = 0;
         self.settled = true;
+        self.from = 0.0;
+        self.gain = 0.0;
     }
 
     pub(super) fn update_sample_rate(&mut self, sample_rate: NonZeroU32) {
@@ -170,5 +184,47 @@ mod tests {
         assert_eq!(output_l[3], 1.0);
         assert_eq!(output_l, output_r);
         assert!(fade.settled());
+    }
+
+    /// Frame `i` of a fade over `n` frames sounds `gains(i / (n − 1))` of its input: the incoming
+    /// gain on the way up from silence, the outgoing one on the way down from full level.
+    #[kithara::test]
+    fn a_fade_sounds_its_crossfade_gains_frame_by_frame() {
+        const LAW_FRAMES: usize = 16;
+
+        fn sounded(fade: &mut TrackFade) -> [f32; LAW_FRAMES] {
+            let mut input_l = [1.0; LAW_FRAMES];
+            let mut input_r = [1.0; LAW_FRAMES];
+            let mut output_l = [0.0; LAW_FRAMES];
+            let mut output_r = [0.0; LAW_FRAMES];
+            fade.mix_range(
+                &mut [&mut input_l, &mut input_r],
+                &mut [&mut output_l, &mut output_r],
+                0..LAW_FRAMES,
+                LAW_FRAMES,
+            );
+            output_l
+        }
+
+        let sample_rate = NonZeroU32::new(1_000).expect("nonzero");
+        let settings = CrossfadeSettings::new(0.016, CrossfadeCurve::EqualPower, 0.7, 0.3)
+            .expect("valid settings");
+        let law = |frame: usize| {
+            let frame = cast::<usize, f32>(frame).unwrap_or(f32::MAX);
+            let last = cast::<usize, f32>(LAW_FRAMES - 1).unwrap_or(f32::MAX);
+            settings.gains(frame / last)
+        };
+        let mut fade = TrackFade::new(settings, sample_rate);
+
+        fade.fade_in(settings, sample_rate);
+        let rising = sounded(&mut fade);
+        fade.fade_out(settings, sample_rate);
+        let falling = sounded(&mut fade);
+
+        for frame in 0..LAW_FRAMES {
+            let (out, into) = law(frame);
+            assert_eq!(rising[frame], into, "fade-in frame {frame}");
+            assert_eq!(falling[frame], out, "fade-out frame {frame}");
+        }
     }
 }

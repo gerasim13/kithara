@@ -33,6 +33,10 @@ impl<S> PlayerConfig<S> {
         to self.default_rate {
             #[call(load)]
             pub(crate) fn default_rate(&self) -> f32;
+            /// Keeps `rate`, a speed the track settings already accepted, for
+            /// the next `play()` and `select()`.
+            #[call(store)]
+            pub(crate) fn set_default_rate(&self, rate: f32);
         }
         to self.muted {
             #[call(load)]
@@ -60,12 +64,6 @@ impl<S> PlayerConfig<S> {
         }
         self.crossfade_duration.store(clamped);
         Ok(())
-    }
-
-    pub(crate) fn set_default_rate(&self, rate: f32) -> f32 {
-        let clamped = rate.max(Self::MIN_PLAYBACK_RATE);
-        self.default_rate.store(clamped);
-        clamped
     }
 
     pub(crate) fn set_muted(

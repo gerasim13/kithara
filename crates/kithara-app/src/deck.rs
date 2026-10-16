@@ -292,6 +292,15 @@ impl Drop for DeckSet {
     }
 }
 
+#[cfg(all(test, feature = "mock", feature = "gui"))]
+pub(crate) mod mock {
+    use super::{AppHost, DeckSet};
+
+    pub(crate) fn host(set: &mut DeckSet) -> &mut AppHost {
+        &mut set.host
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use kithara::{host::HostConfig, play::PlayWorkerConfig, queue::QueueConfig};

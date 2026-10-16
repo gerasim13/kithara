@@ -481,6 +481,14 @@ b",
         assert!(!trusted.contains("source-snapshots/*"));
     }
 
+    /// kache, like sccache, writes and reads only its own scope's bucket.
+    #[test]
+    fn no_scope_reaches_another_scopes_kache() {
+        let review = policy("review", "kithara-review").to_string();
+        assert!(!review.contains("kithara-trusted/kache"));
+        assert!(!review.contains(r#""kache/*""#));
+    }
+
     #[test]
     fn credential_initialization_preserves_existing_values() {
         let root = tempfile::tempdir().unwrap();

@@ -9,6 +9,7 @@ mod environment;
 mod github;
 mod host;
 mod image;
+mod kache;
 mod lane;
 #[cfg(test)]
 pub(crate) mod previous_layout;

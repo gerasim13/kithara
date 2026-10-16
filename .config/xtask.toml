@@ -2058,7 +2058,7 @@ timeout_minutes = 15
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-tools = ["cargo", "just", "sccache"]
+tools = ["cargo", "just", "sccache", "kache"]
 program = "just"
 steps = [{ args = ["check", "workspace"], label = "Linux workspace check" }]
 role = "gate"
@@ -2078,7 +2078,7 @@ timeout_minutes = 60
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-tools = ["cargo", "just", "sccache"]
+tools = ["cargo", "just", "sccache", "kache"]
 program = "just"
 steps = [{ args = ["platform", "wasm"], label = "WASM portability check" }]
 role = "gate"
@@ -2114,7 +2114,7 @@ github_runner = "kithara-test-simulated"
 github_runner_main = "kithara-trusted-snapshot"
 label = "Linux"
 os = "linux"
-tools = ["cargo", "just", "sccache"]
+tools = ["cargo", "just", "sccache", "kache"]
 program = "just"
 # A virtual-clock wedge outlives the `ci` profile's 120s backstop and is then
 # killed from outside the process, so the test writes nothing about itself.
@@ -2151,7 +2151,7 @@ timeout_minutes = 120
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-tools = ["cargo", "just", "sccache"]
+tools = ["cargo", "just", "sccache", "kache"]
 program = "just"
 steps = [
   { args = [
@@ -2169,7 +2169,7 @@ timeout_minutes = 180
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-tools = ["cargo", "just", "sccache"]
+tools = ["cargo", "just", "sccache", "kache"]
 program = "just"
 steps = [
   { args = [
@@ -2193,7 +2193,7 @@ timeout_minutes = 180
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-tools = ["cargo", "just", "sccache"]
+tools = ["cargo", "just", "sccache", "kache"]
 program = "just"
 steps = [
   { args = [
@@ -2211,7 +2211,7 @@ timeout_minutes = 180
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-tools = ["cargo", "just", "sccache"]
+tools = ["cargo", "just", "sccache", "kache"]
 program = "just"
 steps = [
   { args = [
@@ -2229,7 +2229,7 @@ timeout_minutes = 180
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-tools = ["cargo", "just", "sccache"]
+tools = ["cargo", "just", "sccache", "kache"]
 program = "just"
 steps = [
   { args = [
@@ -2253,7 +2253,7 @@ timeout_minutes = 180
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-tools = ["cargo", "just", "sccache"]
+tools = ["cargo", "just", "sccache", "kache"]
 program = "just"
 steps = [
   { args = [
@@ -2276,7 +2276,7 @@ timeout_minutes = 180
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-tools = ["cargo", "just", "sccache"]
+tools = ["cargo", "just", "sccache", "kache"]
 program = "just"
 steps = [
   { args = [
@@ -2293,7 +2293,7 @@ timeout_minutes = 60
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-tools = ["cargo", "just", "sccache"]
+tools = ["cargo", "just", "sccache", "kache"]
 program = "just"
 steps = [
   { args = [
@@ -2314,7 +2314,7 @@ timeout_minutes = 180
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-tools = ["cargo", "just", "sccache"]
+tools = ["cargo", "just", "sccache", "kache"]
 program = "just"
 steps = [
   { args = [
@@ -2341,7 +2341,7 @@ timeout_minutes = 180
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-tools = ["cargo", "just", "sccache"]
+tools = ["cargo", "just", "sccache", "kache"]
 program = "just"
 steps = [
   { args = [
@@ -2427,7 +2427,7 @@ cache_group = "linux"
 github_runner = "kithara-test-real"
 label = "Linux"
 os = "linux"
-tools = ["cargo", "just", "sccache"]
+tools = ["cargo", "just", "sccache", "kache"]
 program = "just"
 artifact = { name = "hang-dumps-real-clock", path = "target/hang", when = "failure" }
 steps = [
@@ -2466,7 +2466,7 @@ timeout_minutes = 120
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-tools = ["cargo", "just", "sccache"]
+tools = ["cargo", "just", "sccache", "kache"]
 program = "just"
 steps = [
   { args = [
@@ -2488,7 +2488,7 @@ timeout_minutes = 180
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-tools = ["cargo", "just", "sccache"]
+tools = ["cargo", "just", "sccache", "kache"]
 program = "just"
 steps = [
   { args = [
@@ -2784,7 +2784,7 @@ timeout_minutes = 120
 cache_group = "host"
 label = "Android"
 os = ["macos", "linux"]
-tools = ["cargo", "java", "just", "sccache"]
+tools = ["cargo", "java", "just", "sccache", "kache"]
 program = "just"
 steps = [
   { args = [
@@ -2837,7 +2837,7 @@ timeout_minutes = 90
 cache_group = "macos"
 label = "Apple"
 os = "macos"
-tools = ["cargo", "just", "sccache", "swift", "xcodebuild", "xcodegen"]
+tools = ["cargo", "just", "sccache", "kache", "swift", "xcodebuild", "xcodegen"]
 pinned = [
   { tool = "xcodebuild", args = [
     "-version",
@@ -2882,7 +2882,7 @@ timeout_minutes = 60
 cache_group = "macos"
 label = "Apple"
 os = "macos"
-tools = ["cargo", "just", "sccache", "swift", "xcodebuild", "xcodegen"]
+tools = ["cargo", "just", "sccache", "kache", "swift", "xcodebuild", "xcodegen"]
 pinned = [
   { tool = "xcodebuild", args = [
     "-version",
@@ -2905,7 +2905,7 @@ timeout_minutes = 60
 cache_group = "macos"
 label = "Apple"
 os = "macos"
-tools = ["cargo", "just", "sccache", "swift", "xcodebuild", "xcodegen"]
+tools = ["cargo", "just", "sccache", "kache", "swift", "xcodebuild", "xcodegen"]
 pinned = [
   { tool = "xcodebuild", args = [
     "-version",
@@ -2949,7 +2949,7 @@ timeout_minutes = 60
 cache_group = "macos"
 label = "Apple"
 os = "macos"
-tools = ["cargo", "just", "sccache", "swift", "xcodebuild", "xcodegen"]
+tools = ["cargo", "just", "sccache", "kache", "swift", "xcodebuild", "xcodegen"]
 pinned = [
   { tool = "xcodebuild", args = [
     "-version",
@@ -2973,7 +2973,7 @@ timeout_minutes = 60
 cache_group = "macos"
 label = "Apple"
 os = "macos"
-tools = ["cargo", "just", "sccache", "swift", "xcodebuild", "xcodegen"]
+tools = ["cargo", "just", "sccache", "kache", "swift", "xcodebuild", "xcodegen"]
 pinned = [
   { tool = "xcodebuild", args = [
     "-version",
@@ -3005,7 +3005,7 @@ timeout_minutes = 60
 cache_group = "macos"
 label = "Apple"
 os = "macos"
-tools = ["cargo", "just", "sccache", "swift", "xcodebuild", "xcodegen"]
+tools = ["cargo", "just", "sccache", "kache", "swift", "xcodebuild", "xcodegen"]
 pinned = [
   { tool = "xcodebuild", args = [
     "-version",
@@ -3332,6 +3332,9 @@ install_hint = "cargo install similarity-rs"
 
 [tools.sccache]
 pin = "sccache"
+
+[tools.kache]
+pin = "kache"
 
 [tools.cargo-modules]
 pin = "cargo-modules"

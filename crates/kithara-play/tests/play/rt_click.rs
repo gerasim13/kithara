@@ -195,7 +195,9 @@ fn resuming_fades_the_output_in(constant_half: &'static [u8]) {
     );
 }
 
-fn fading_in(constant_half: &'static [u8]) -> (PlayerNodeProcessor, SlotControl, Vec<f32>) {
+fn fading_in(
+    constant_half: &'static [u8],
+) -> (PlayerNodeProcessor, SlotControl, Vec<f32>, TrackId) {
     let (mut processor, mut control) = processor();
     let item_id = load(&mut control, "a.mp3", constant_half);
     push(&mut control, PlayerCmd::SetFadeDuration(FADE_SECONDS));
@@ -216,12 +218,79 @@ fn fading_in(constant_half: &'static [u8]) -> (PlayerNodeProcessor, SlotControl,
         "the fade-in is still climbing ({level})"
     );
 
-    (processor, control, fading)
+    (processor, control, fading, item_id)
+}
+
+#[kithara::test]
+fn reversing_a_fade_in_continues_from_the_gain_it_reached(constant_half: &'static [u8]) {
+    let (mut processor, mut control, fading, item_id) = fading_in(constant_half);
+
+    push(
+        &mut control,
+        PlayerCmd::Transition(TrackTransition::FadeOut {
+            item_id,
+            settings: crossfade(FADE_SECONDS),
+        }),
+    );
+    let reversed = pump(&mut processor, SETTLE_BLOCKS * 3);
+
+    let step = max_step(&across(&fading, &reversed));
+    assert!(
+        step <= MAX_STEP,
+        "a cancelled fade-in fades out from the gain it reached, not from full level (step {step})"
+    );
+    assert!(
+        last(&reversed) == 0.0,
+        "the reversed fade still reaches silence ({})",
+        last(&reversed)
+    );
+}
+
+#[kithara::test]
+fn reversing_a_fade_out_continues_from_the_gain_it_reached(constant_half: &'static [u8]) {
+    let (mut processor, mut control, _, item_id) = fading_in(constant_half);
+    pump(&mut processor, SETTLE_BLOCKS * 20);
+
+    push(
+        &mut control,
+        PlayerCmd::Transition(TrackTransition::FadeOut {
+            item_id,
+            settings: crossfade(FADE_SECONDS),
+        }),
+    );
+    let fading_out = pump(&mut processor, WARMUP_BLOCKS);
+    let level = last(&fading_out);
+    assert!(
+        level > TEST_PCM_DEFAULT_VALUE * 0.1 && level < TEST_PCM_DEFAULT_VALUE,
+        "the fade-out is still falling ({level})"
+    );
+
+    push(
+        &mut control,
+        PlayerCmd::Transition(TrackTransition::FadeIn {
+            item_id,
+            settings: crossfade(FADE_SECONDS),
+            epoch: 0,
+        }),
+    );
+    let reversed = pump(&mut processor, SETTLE_BLOCKS * 3);
+
+    let step = max_step(&across(&fading_out, &reversed));
+    assert!(
+        step <= MAX_STEP,
+        "a cancelled fade-out fades back in from the gain it reached, not from silence \
+         (step {step})"
+    );
+    assert!(
+        (last(&reversed) - TEST_PCM_DEFAULT_VALUE).abs() < EXACT,
+        "the reversed fade reaches full level ({})",
+        last(&reversed)
+    );
 }
 
 #[kithara::test]
 fn seeking_a_fading_track_does_not_snap_the_mix(constant_half: &'static [u8]) {
-    let (mut processor, mut control, fading) = fading_in(constant_half);
+    let (mut processor, mut control, fading, _) = fading_in(constant_half);
 
     let seek_epoch = processor.playback().next_seek_epoch();
     push(
@@ -242,7 +311,7 @@ fn seeking_a_fading_track_does_not_snap_the_mix(constant_half: &'static [u8]) {
 
 #[kithara::test]
 fn resending_the_crossfade_duration_does_not_snap_the_mix(constant_half: &'static [u8]) {
-    let (mut processor, mut control, fading) = fading_in(constant_half);
+    let (mut processor, mut control, fading, _) = fading_in(constant_half);
 
     push(&mut control, PlayerCmd::SetFadeDuration(FADE_SECONDS));
     let resent = pump(&mut processor, WARMUP_BLOCKS);
@@ -256,7 +325,7 @@ fn resending_the_crossfade_duration_does_not_snap_the_mix(constant_half: &'stati
 
 #[kithara::test]
 fn changing_the_crossfade_duration_mid_fade_keeps_the_running_fade(constant_half: &'static [u8]) {
-    let (mut processor, mut control, fading) = fading_in(constant_half);
+    let (mut processor, mut control, fading, _) = fading_in(constant_half);
 
     push(
         &mut control,
@@ -282,7 +351,7 @@ fn a_changed_crossfade_duration_applies_to_the_next_fade(
     constant_half: &'static [u8],
     constant_quarter: &'static [u8],
 ) {
-    let (mut processor, mut control, _) = fading_in(constant_half);
+    let (mut processor, mut control, _, _) = fading_in(constant_half);
     let settled = pump(&mut processor, SETTLE_BLOCKS * 20);
     assert!(
         (last(&settled) - TEST_PCM_DEFAULT_VALUE).abs() < EXACT,

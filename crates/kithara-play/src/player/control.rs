@@ -180,8 +180,12 @@ where
     }
 
     /// Update the default playback rate unless the owning player is closed.
-    pub fn set_default_rate(&self, rate: f32) {
-        self.command(|runtime| runtime.set_default_rate(rate));
+    ///
+    /// # Errors
+    /// Returns a closed-owner error or the player's refusal of the change.
+    pub fn set_default_rate(&self, rate: f32) -> Result<(), PlayError> {
+        self.runtime
+            .with_open_result(|runtime| runtime.set_default_rate(rate))
     }
 
     /// Update one EQ band.
@@ -197,13 +201,21 @@ where
     }
 
     /// Update mute state unless the owning player is closed.
-    pub fn set_muted(&self, muted: bool) {
-        self.command(|runtime| runtime.set_muted(muted));
+    ///
+    /// # Errors
+    /// Returns a closed-owner error or the player's refusal of the change.
+    pub fn set_muted(&self, muted: bool) -> Result<(), PlayError> {
+        self.runtime
+            .with_open_result(|runtime| runtime.set_muted(muted))
     }
 
     /// Update live playback rate unless the owning player is closed.
-    pub fn set_rate(&self, rate: f32) {
-        self.command(|runtime| runtime.set_rate(rate));
+    ///
+    /// # Errors
+    /// Returns a closed-owner error or the player's refusal of the change.
+    pub fn set_rate(&self, rate: f32) -> Result<(), PlayError> {
+        self.runtime
+            .with_open_result(|runtime| runtime.set_rate(rate))
     }
 
     /// Lower or restore the whole session output under a competing sound.
@@ -213,8 +225,12 @@ where
     }
 
     /// Update output volume unless the owning player is closed.
-    pub fn set_volume(&self, volume: f32) {
-        self.command(|runtime| runtime.set_volume(volume));
+    ///
+    /// # Errors
+    /// Returns a closed-owner error or the player's refusal of the change.
+    pub fn set_volume(&self, volume: f32) -> Result<(), PlayError> {
+        self.runtime
+            .with_open_result(|runtime| runtime.set_volume(volume))
     }
 
     /// Advance player control-plane work.

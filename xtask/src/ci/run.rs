@@ -17,6 +17,7 @@ use super::{
     build_dir::LaneTarget,
     config::CiConfig,
     environment::CiEnvironment,
+    kache::KacheJob,
     process::{Process, Recording},
     verdict,
 };
@@ -256,12 +257,12 @@ fn retire_sccache_server(process: &Process, tools: &ToolsConfig) -> Result<()> {
 fn execute_lane(
     process: &Process,
     tools: &ToolsConfig,
-    uses_sccache: bool,
+    kache: Option<&KacheJob>,
     lane: &str,
     dispatch: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
     journalled(process, lane, || {
-        if uses_sccache {
+        if kache.is_some() {
             retire_sccache_server(process, tools)?;
             process.run(
                 tools.program("sccache"),
@@ -270,8 +271,9 @@ fn execute_lane(
             )?;
         }
         let result = dispatch();
-        if uses_sccache {
-            note_compiler_cache(process, tools.program("sccache"), crate::job::is_github());
+        if let Some(kache) = kache {
+            note_compiler_cache(process, tools, crate::job::is_github());
+            kache.stop(process, tools);
         }
         result
     })
@@ -297,18 +299,25 @@ pub(crate) fn journalled(
     result
 }
 
-/// Say what the compiler cache carried for the lane, from the counts its
-/// server kept while the lane ran. `sccache` is the program the lane's
-/// compilations went through.
+/// Say what the compiler cache carried for the lane.
 ///
-/// A cache that stores nothing looks like a working one in every number but
-/// one: its build takes as long as a cold one, and only the write errors say
-/// that nothing it compiled will be there for the next job. That number is
-/// raised to the job's summary rather than left in a table of thirty.
-pub(crate) fn note_compiler_cache(process: &Process, sccache: &str, on_github: bool) {
+/// kache answers from the events of this job's own daemon, and sccache from
+/// the counts its server kept for what kache handed on to it. A cache that
+/// stores nothing looks like a working one in every number but one: its
+/// build takes as long as a cold one, and only the write errors say that
+/// nothing it compiled will be there for the next job. That number is raised
+/// to the job's summary rather than left in a table of thirty.
+pub(crate) fn note_compiler_cache(process: &Process, tools: &ToolsConfig, on_github: bool) {
     if process.is_recording() {
         return;
     }
+    let kache = tools.program("kache");
+    let (event, detail) = match process.capture(kache, &["stats", "--json"], "kache statistics") {
+        Ok(stats) => kache_note(&stats),
+        Err(error) => (CompilerCache::Unreadable, format!("{error:#}")),
+    };
+    process.note_cache("compiler cache", event.name(), detail);
+    let sccache = tools.program("sccache");
     let (event, detail) = match process.capture(sccache, &["--show-stats"], "sccache statistics") {
         Ok(stats) => {
             println!("{stats}");
@@ -325,7 +334,7 @@ pub(crate) fn note_compiler_cache(process: &Process, sccache: &str, on_github: b
             );
         }
     }
-    process.note_cache("compiler cache", event.name(), detail);
+    process.note_cache("compiler cache fallback", event.name(), detail);
 }
 
 /// What the compiler cache did for a lane, as its counts tell it.
@@ -353,6 +362,35 @@ impl CompilerCache {
             Self::Unreadable => "unreadable",
         }
     }
+}
+
+/// The journal entry for what `kache stats --json` counted.
+fn kache_note(stats: &str) -> (CompilerCache, String) {
+    let counts = serde_json::from_str::<serde_json::Value>(stats).ok();
+    let count = |name: &str| counts.as_ref()?.get(name)?.as_u64();
+    let (Some(local), Some(prefetched), Some(remote), Some(misses)) = (
+        count("local_hits"),
+        count("prefetch_hits"),
+        count("remote_hits"),
+        count("misses"),
+    ) else {
+        return (
+            CompilerCache::Unreadable,
+            "kache counted no hits or misses".to_owned(),
+        );
+    };
+    let remote = remote.saturating_add(prefetched);
+    let event = if local.saturating_add(remote) > 0 {
+        CompilerCache::Reused
+    } else if misses > 0 {
+        CompilerCache::Miss
+    } else {
+        CompilerCache::Idle
+    };
+    (
+        event,
+        format!("{local} local hits, {remote} remote hits, {misses} misses"),
+    )
 }
 
 /// The journal entry for what `sccache --show-stats` counted.
@@ -437,7 +475,6 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     );
     let swiftpm_cache = environment.swiftpm_cache.clone();
     let temp = environment.temp.clone();
-    let uses_sccache = environment.uses_sccache();
     let vars = environment.vars();
     let process = Process::new(&ctx.root, vars);
     // sccache is a daemon, and a running one keeps the cache directory it was
@@ -462,7 +499,7 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     execute_lane(
         &process,
         &ctx.config.tools,
-        uses_sccache,
+        environment.kache(),
         &args.lane,
         || match lane {
             Lane::ReleaseXcframework => {
@@ -594,9 +631,9 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        super::{config::fixture, process::Step},
+        super::{config::fixture, kache::KacheJob, process::Step},
         CacheGroup, CompilerCache, Lane, PipelineKind, command_lane, compiler_cache_note,
-        execute_lane, executor_replies, sccache_server_is_stopped,
+        execute_lane, executor_replies, kache_note, sccache_server_is_stopped,
     };
     use crate::{
         Cli,
@@ -650,6 +687,42 @@ mod tests {
     #[test]
     fn a_lane_that_compiled_nothing_is_not_named_reused() {
         assert_eq!(compiler_cache_note(&stats(0, 0, 0)).0, CompilerCache::Idle);
+    }
+
+    /// `kache stats --json` as a job's daemon answers it, with the counts of
+    /// that job's own events.
+    fn kache_stats(local: u32, remote: u32, misses: u32) -> String {
+        serde_json::json!({
+            "schema_version": 1,
+            "command": "stats",
+            "success": true,
+            "local_hits": local,
+            "prefetch_hits": 0,
+            "remote_hits": remote,
+            "misses": misses,
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn a_lane_says_where_kache_found_what_it_reused() {
+        assert_eq!(
+            kache_note(&kache_stats(40, 2, 15)),
+            (
+                CompilerCache::Reused,
+                "40 local hits, 2 remote hits, 15 misses".to_owned()
+            )
+        );
+        assert_eq!(kache_note(&kache_stats(0, 0, 15)).0, CompilerCache::Miss);
+        assert_eq!(kache_note(&kache_stats(0, 0, 0)).0, CompilerCache::Idle);
+    }
+
+    #[test]
+    fn kache_statistics_without_counts_are_named_unreadable() {
+        assert_eq!(
+            kache_note("kache: daemon unavailable").0,
+            CompilerCache::Unreadable
+        );
     }
 
     #[test]
@@ -1023,16 +1096,23 @@ mod tests {
 
     #[test]
     fn sccache_lifecycle_precedes_real_lane_dispatch() {
-        const READY: &str = "--stop-server\n--start-server\nlane\n--show-stats\n";
+        const READY: &str =
+            "--stop-server\n--start-server\nlane\nstats --json\n--show-stats\ndaemon stop\n";
 
         let directory = tempfile::tempdir().unwrap();
         let bin = directory.path().join("bin");
         crate::testing::install_double(&bin, "sccache");
+        crate::testing::install_double(&bin, "kache");
         let trace = directory.path().join("trace");
 
-        for (scenario, uses_sccache, expected_trace) in [
+        let kache = KacheJob::prepare(directory.path().join("kache"), None, &|_| None).unwrap();
+
+        for (scenario, uses_kache, expected_trace) in [
             ("success", true, READY),
             ("already-stopped", true, READY),
+            // What kache did not upload is lost to the next job, not to this
+            // one: the lane's own outcome stands.
+            ("daemon-stop-failure", true, READY),
             ("stop-failure", true, "--stop-server\n"),
             ("start-failure", true, "--stop-server\n--start-server\n"),
             ("success", false, "lane\n"),
@@ -1053,7 +1133,8 @@ mod tests {
                     OsString::from(
                         "sccache:--stop-server:stop-failure=7,\
                          sccache:--start-server:start-failure=8,\
-                         sccache:--stop-server:already-stopped=2",
+                         sccache:--stop-server:already-stopped=2,\
+                         kache:daemon:daemon-stop-failure=1",
                     ),
                 ),
             ]);
@@ -1078,7 +1159,7 @@ mod tests {
             let outcome = execute_lane(
                 &process,
                 &ToolsConfig::default(),
-                uses_sccache,
+                uses_kache.then_some(&kache),
                 "recorded",
                 || {
                     let mut sequence = fs::read_to_string(&trace).unwrap_or_default();
@@ -1088,7 +1169,7 @@ mod tests {
                 },
             );
 
-            let succeeds = !scenario.ends_with("failure");
+            let succeeds = !scenario.ends_with("failure") || scenario.starts_with("daemon");
             assert_eq!(outcome.is_ok(), succeeds, "{scenario}: {outcome:?}");
             assert_eq!(
                 fs::read_to_string(&trace).unwrap(),

@@ -30,6 +30,7 @@ ARG GITLEAKS_AMD64_SHA256
 ARG GITLEAKS_ARM64_SHA256
 ARG GITLEAKS_VERSION
 ARG JUST_VERSION
+ARG KACHE_VERSION
 ARG LOCKBUD_REV
 ARG LOCKBUD_TOOLCHAIN
 ARG MD_FORMATTER_VERSION
@@ -199,6 +200,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
  && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${CARGO_WORKSPACE_UNUSED_PUB_VERSION}" \
       cargo-workspace-unused-pub \
  && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${JUST_VERSION}" just \
+ && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${KACHE_VERSION}" kache \
  && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${MD_FORMATTER_VERSION}" md-formatter \
  && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${SCCACHE_VERSION}" sccache \
  && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${SIMILARITY_RS_VERSION}" similarity-rs \

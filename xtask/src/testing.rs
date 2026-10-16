@@ -82,6 +82,26 @@ pub(crate) fn install_script(path: &Path, body: &str) {
     assert!(status.success(), "write the script {}", path.display());
 }
 
+/// Copy the program at `source` to `path`, for a double that must be a file of
+/// its own rather than a link the test may later overwrite through.
+///
+/// A copy written from this process opens the window [`install_script`] closes,
+/// so a child `cp` writes it and is reaped before this returns.
+#[cfg(unix)]
+pub(crate) fn install_copy(source: &Path, path: &Path) {
+    let status = Command::new("cp")
+        .arg(source)
+        .arg(path)
+        .status()
+        .expect("spawn the program copier");
+    assert!(
+        status.success(),
+        "copy {} to {}",
+        source.display(),
+        path.display()
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn executable_alias_preserves_the_tool_role() {

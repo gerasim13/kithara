@@ -314,14 +314,17 @@ mod tests {
     mod writes {
         use std::convert::Infallible;
 
-        use ::kithara::ui::render::{
-            ControlAction, DEFAULT_ZOOM, UiEvent, WindowCommand, WriteValue,
+        use ::kithara::{
+            platform::tokio::sync::broadcast::error::TryRecvError,
+            play::{CrossfadeCurve, CrossfadeSettings, PlayerStatus},
+            queue::QueueEvent,
+            ui::render::{ControlAction, DEFAULT_ZOOM, UiEvent, WindowCommand, WriteValue},
         };
         use kithara_test_utils::{kithara, off_thread::OffThread};
 
         use super::super::translate;
         use crate::{
-            analysis::fixtures::{short_wav, tone_mp3},
+            analysis::fixtures::{long_wav, short_wav, tone_mp3},
             deck::{DeckId, EqMode, TempoPercent},
             engine::MixCmd,
             gui::{app::Kithara, deck::DeckMsg, message::Message, rig::Rig, ui::cache::DeckLayout},
@@ -535,14 +538,167 @@ mod tests {
         }
 
         #[kithara::test(native, tokio, flash(false))]
-        async fn a_row_dropped_on_deck_b_loads_onto_deck_b(tone_mp3: String) {
+        async fn a_row_dropped_on_deck_b_loads_onto_deck_b(tone_mp3: String, long_wav: String) {
             with_rig(move |rig| {
-                rig.drop_on("b", &tone_mp3);
+                rig.drop_on("b", &long_wav);
                 let [name] = names(rig, 1)
                     .try_into()
                     .expect("deck B holds the dropped track");
-
                 until_current(rig, 1, &name);
+
+                let queue = rig.queues[1].clone();
+                let outgoing = queue.current().expect("the first drop is current").id;
+                let settings = CrossfadeSettings::new(0.125, CrossfadeCurve::Linear, 1.0, 0.5)
+                    .expect("a nonzero crossfade fits both fixtures");
+                queue
+                    .set_crossfade_settings(settings)
+                    .expect("the deck accepts its crossfade profile");
+                rig.until(
+                    "the first dropped track is playing before the next drop",
+                    Rig::DEADLINE,
+                    |_| {},
+                    |_| {
+                        queue.is_playing()
+                            && queue
+                                .position_seconds()
+                                .is_some_and(|position| position > 0.0)
+                    },
+                );
+
+                let mut events = queue.subscribe::<QueueEvent>();
+                rig.drop_on("b", &tone_mp3);
+                let incoming = queue
+                    .tracks()
+                    .into_iter()
+                    .find(|track| track.id != outgoing)
+                    .expect("the playing deck takes the second dropped track")
+                    .id;
+                let mut crossfades = 0;
+                let mut changed = false;
+                rig.until(
+                    "a drop on the playing deck crossfades and hands over its transport",
+                    Rig::DEADLINE,
+                    |_| {},
+                    |_| {
+                        loop {
+                            let event = match events.try_recv() {
+                                Ok(event) => event,
+                                Err(TryRecvError::Empty) => break,
+                                Err(error) => {
+                                    panic!("the drop event stream lost evidence: {error}")
+                                }
+                            };
+                            match event.event {
+                                QueueEvent::CrossfadeStarted { settings: applied } => {
+                                    assert_eq!(applied, settings);
+                                    crossfades += 1;
+                                }
+                                QueueEvent::CurrentTrackChanged { id: Some(id) }
+                                    if id == incoming =>
+                                {
+                                    assert_eq!(
+                                        crossfades, 1,
+                                        "the real fade starts before handover"
+                                    );
+                                    changed = true;
+                                }
+                                _ => {}
+                            }
+                        }
+                        changed && queue.is_playing()
+                    },
+                );
+                assert_eq!(
+                    queue.current().expect("the incoming track is current").id,
+                    incoming
+                );
+                rig.until(
+                    "the incoming track plays beyond the short fade",
+                    Rig::DEADLINE,
+                    |_| {},
+                    |_| {
+                        queue
+                            .position_seconds()
+                            .is_some_and(|position| position > 0.25)
+                    },
+                );
+
+                queue.pause();
+                rig.until(
+                    "the dropped track still answers Pause",
+                    Rig::DEADLINE,
+                    |_| {},
+                    |_| !queue.is_playing(),
+                );
+                queue
+                    .seek(0.5)
+                    .expect("the dropped track still accepts seek");
+                rig.until(
+                    "the paused dropped track reaches the requested cue",
+                    Rig::DEADLINE,
+                    |_| {},
+                    |_| {
+                        queue
+                            .position_seconds()
+                            .is_some_and(|position| (position - 0.5).abs() < 0.05)
+                    },
+                );
+                queue.play();
+                rig.until(
+                    "the dropped track still answers Play and advances from its cue",
+                    Rig::DEADLINE,
+                    |_| {},
+                    |_| {
+                        queue.is_playing()
+                            && queue
+                                .position_seconds()
+                                .is_some_and(|position| position > 0.625)
+                    },
+                );
+                queue.pause();
+                rig.until(
+                    "the deck is actually paused before another drop",
+                    Rig::DEADLINE,
+                    |_| {},
+                    |_| !queue.is_playing(),
+                );
+
+                assert_eq!(
+                    queue.current().expect("the paused item remains current").id,
+                    incoming
+                );
+                assert_eq!(queue.status(), PlayerStatus::ReadyToPlay);
+                let duration = queue
+                    .duration_seconds()
+                    .expect("the incoming duration is known");
+                assert!(
+                    queue
+                        .position_seconds()
+                        .is_some_and(|position| position < duration - 0.25),
+                    "the nonplaying item is paused before its end"
+                );
+                rig.drop_on("b", &long_wav);
+                until_current(rig, 1, &name);
+                loop {
+                    let event = match events.try_recv() {
+                        Ok(event) => event,
+                        Err(TryRecvError::Empty) => break,
+                        Err(error) => panic!("the paused drop event stream lost evidence: {error}"),
+                    };
+                    assert!(
+                        !matches!(event.event, QueueEvent::CrossfadeStarted { .. }),
+                        "a drop on a paused deck selects without a crossfade"
+                    );
+                }
+                assert_eq!(
+                    queue.current().expect("the paused selection completes").id,
+                    outgoing
+                );
+                assert_eq!(
+                    queue.tracks().len(),
+                    2,
+                    "dropping a queued source does not duplicate it"
+                );
                 assert!(names(rig, 0).is_empty(), "deck A was not the target");
             })
             .await;

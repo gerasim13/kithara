@@ -112,7 +112,7 @@ async fn red_registry_never_unregisters_pending_peer() -> Result<(), Box<dyn Std
 
     let peer: Arc<ImmortalPeer> = Arc::new(ImmortalPeer::new());
     let peer_dyn: Arc<dyn Peer> = peer.clone();
-    let handle = downloader.register(peer_dyn.clone());
+    let handle = downloader.register(peer_dyn.clone(), None);
     drop(peer_dyn);
 
     assert!(

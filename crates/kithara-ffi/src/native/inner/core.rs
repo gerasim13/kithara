@@ -164,7 +164,7 @@ impl NativeInner {
             items: Arc::new(Mutex::default()),
         };
         inner.setup_network(auth_token);
-        inner.set_playing_rate(playing_rate);
+        inner.set_playing_rate(playing_rate)?;
         Ok(inner)
     }
 

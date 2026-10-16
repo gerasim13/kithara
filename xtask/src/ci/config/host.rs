@@ -102,7 +102,8 @@ pub(crate) struct CiHost {
     /// The trees directly below a CI root that cleanup may remove whole.
     #[serde(default = "default_removable_roots")]
     pub(crate) removable_roots: Vec<String>,
-    /// Aggregate whole-gigabyte sccache budget, divided between host jobs.
+    /// Whole-gigabyte budget of each local compiler-cache store of one trust:
+    /// kache's, and sccache's when no bucket is named.
     pub(crate) sccache_size: String,
     /// A mode-0600 file with the scoped S3 settings real jobs inherit.
     #[serde(default)]

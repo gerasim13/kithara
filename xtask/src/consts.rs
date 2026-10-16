@@ -205,6 +205,9 @@ pub(crate) const CACHE_REGION: &str = "us-east-1";
 /// are not read again.
 pub(crate) const SCCACHE_PREFIX: &str = "sccache";
 
+/// Where kache keeps its objects inside a scope's bucket, beside sccache's.
+pub(crate) const KACHE_PREFIX: &str = "kache";
+
 /// Directory every Unix executor reads the installed host profile from.
 pub(crate) const LANE_CONFIG_DIR: &str = "/etc/kithara-ci";
 
@@ -342,7 +345,7 @@ pub(crate) const PREVIOUS_CACHE_NAMESPACES: [&str; 3] = [
 ];
 
 /// What a job reuses, before its build paths and linker entries are added.
-pub(crate) const CACHE_ENVIRONMENT: [&str; 5] = [
+pub(crate) const CACHE_ENVIRONMENT: [&str; 6] = [
     // Encoded audio fixtures. Their default home is the container's own temp
     // directory, and a container serves one job and is thrown away — so every
     // job re-encoded every fixture it touched, and a test that builds one
@@ -356,7 +359,10 @@ pub(crate) const CACHE_ENVIRONMENT: [&str; 5] = [
     // every test binary above those: minutes of a test lane for a commit that
     // changed no Rust. A model is placed only once its SHA-256 checks out.
     "KITHARA_BEAT_MODEL_CACHE=/cache/fixtures/beat-models",
-    "RUSTC_WRAPPER=sccache",
+    // kache keys a compile without the checkout's path and hands what it
+    // cannot cache to sccache, whose daemon the runner starts.
+    "RUSTC_WRAPPER=kache",
+    "KACHE_FALLBACK=sccache",
     // Without this the wrapper is inert: sccache declines to cache an
     // incremental compilation, and cargo leaves incremental on by default.
     // Setting the wrapper and not this is how a cache gets installed, enabled,

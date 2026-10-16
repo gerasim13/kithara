@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     convert::Infallible,
+    net::ToSocketAddrs,
     path::Path,
     sync::mpsc::{self, Receiver, RecvTimeoutError},
     thread,
@@ -15,19 +16,17 @@ use super::{
     super::{provision, required},
     audit::{self, Delivery, Event},
     entry::Entry,
-    plan::{self, Listing, Stored, Victim},
+    plan::{self, Listing, Victim},
     record,
     store::Store,
 };
 use crate::{ci::host::mac::read_secret, consts};
 
-/// Keeps each scope's compiler cache under the quota the host's environment
-/// names for it by evicting the entries used longest ago, as the store's audit
-/// log reports their use. The store's buckets carry no quota of their own, so
-/// this is the only bound on them.
-pub(in crate::ci::cache) fn run() -> Result<Infallible> {
+/// The scopes this stack provisions, each with the bucket that holds its
+/// compiler cache and the quota the host's environment names for it.
+pub(in crate::ci::cache) fn buckets() -> Result<Vec<(String, u64)>> {
     let shared = required("CACHE_BUCKET_QUOTA")?;
-    let buckets = required("CACHE_SCOPES")?
+    required("CACHE_SCOPES")?
         .split_whitespace()
         .map(|scope| {
             Ok((
@@ -35,22 +34,50 @@ pub(in crate::ci::cache) fn run() -> Result<Infallible> {
                 provision::scope_quota(scope, &shared)?,
             ))
         })
-        .collect::<Result<Vec<_>>>()?;
-    let server = Server::http(consts::EVICT_LISTEN)
-        .map_err(|error| anyhow!("listen for the store's audit log: {error}"))?;
-    let (sender, deliveries) = mpsc::sync_channel(Owner::CHANNEL);
-    let managed = buckets
-        .iter()
-        .map(|(bucket, _)| bucket.clone())
-        .collect::<Vec<_>>();
-    thread::spawn(move || audit::receive(&server, &managed, &sender));
-    let config = Path::new("/config");
-    let store = Store::connect(
-        Path::new("rc"),
-        &read_secret(&config.join("admin-user"))?,
-        &read_secret(&config.join("admin-password"))?,
-    )?;
-    Owner::start(store, buckets, deliveries)?.serve()
+        .collect()
+}
+
+/// Keeps each scope's compiler cache under its quota by evicting the entries
+/// used longest ago, as the store's audit log reports their use. The store's
+/// buckets carry no quota of their own, so this is the only bound on them.
+pub(in crate::ci::cache) struct Evictor {
+    buckets: Vec<(String, u64)>,
+    deliveries: Receiver<Delivery>,
+}
+
+impl Evictor {
+    /// Starts hearing the store's audit log at `address`. The store checks
+    /// its webhook once, as it starts, and never again, so the stack listens
+    /// before it starts the store; what the log reports until [`Self::run`]
+    /// reaches the store waits for it.
+    pub(in crate::ci::cache) fn listen(
+        address: impl ToSocketAddrs,
+        buckets: Vec<(String, u64)>,
+    ) -> Result<Self> {
+        let server = Server::http(address)
+            .map_err(|error| anyhow!("listen for the store's audit log: {error}"))?;
+        let (sender, deliveries) = mpsc::sync_channel(Owner::CHANNEL);
+        let managed = buckets
+            .iter()
+            .map(|(bucket, _)| bucket.clone())
+            .collect::<Vec<_>>();
+        thread::spawn(move || audit::receive(&server, &managed, &sender));
+        Ok(Self {
+            buckets,
+            deliveries,
+        })
+    }
+
+    /// Evicts from the store the stack has brought up.
+    pub(in crate::ci::cache) fn run(self) -> Result<Infallible> {
+        let config = Path::new("/config");
+        let store = Store::connect(
+            Path::new("rc"),
+            &read_secret(&config.join("admin-user"))?,
+            &read_secret(&config.join("admin-password"))?,
+        )?;
+        Owner::start(store, self.buckets, self.deliveries)?.serve()
+    }
 }
 
 struct Scope {
@@ -179,7 +206,7 @@ impl Owner {
         let scope = &mut self.scopes[index];
         plan::prune(&mut scope.reads, &listing);
         let chosen = plan::victims(&listing, &scope.reads, quota);
-        let evicted = self.evict(index, &chosen)?;
+        let evicted = self.evict(index, &listing, &chosen)?;
         let scope = &self.scopes[index];
         self.store.put(
             consts::RECENCY_BUCKET,
@@ -215,13 +242,7 @@ impl Owner {
             let page = self.store.list(bucket, &prefix, recursive)?;
             self.drain();
             for object in page.objects {
-                listing.insert(
-                    &object.key,
-                    Stored {
-                        size: object.size,
-                        written_s: object.written_s,
-                    },
-                );
+                listing.insert(&object.key, object.size, object.written_s);
             }
             pending.extend(page.prefixes.into_iter().map(|child| {
                 let recursive = child != compiler;
@@ -231,9 +252,9 @@ impl Owner {
         Ok(listing)
     }
 
-    /// Removes the chosen entries a chunk at a time, sparing any the log has
-    /// seen used since they were chosen.
-    fn evict(&mut self, index: usize, chosen: &[Victim]) -> Result<Vec<Victim>> {
+    /// Removes the chosen entries, every object of each, a chunk at a time,
+    /// sparing any the log has seen used since they were chosen.
+    fn evict(&mut self, index: usize, listing: &Listing, chosen: &[Victim]) -> Result<Vec<Victim>> {
         let mut evicted = Vec::new();
         for chunk in chosen.chunks(Self::CHUNK) {
             self.drain();
@@ -244,7 +265,8 @@ impl Owner {
             }
             let objects = unused
                 .iter()
-                .map(|victim| victim.entry.object())
+                .filter_map(|victim| listing.entries.get(&victim.entry))
+                .flat_map(|stored| stored.objects.iter().cloned())
                 .collect::<Vec<_>>();
             self.store.remove(&scope.bucket, &objects)?;
             evicted.extend(unused);
@@ -354,6 +376,48 @@ esac
             .expect("the owner holds the receiving end");
     }
 
+    /// The store checks its audit webhook once, as it starts, and never
+    /// again: a listener that is not up by then leaves the evictor blind for
+    /// good. What the store reports before the evictor reaches the store
+    /// waits for it.
+    #[test]
+    fn the_audit_log_is_heard_from_the_moment_the_evictor_listens() {
+        let address = std::net::TcpListener::bind("127.0.0.1:0")
+            .and_then(|probe| probe.local_addr())
+            .unwrap();
+        let evictor = Evictor::listen(address, vec![("kithara-review".to_owned(), 1000)])
+            .expect("the evictor listens on a free address");
+        let body = serde_json::json!({"Records": [{
+            "time": 400_000_u64,
+            "api": {
+                "name": "s3:GetObject",
+                "bucket": "kithara-review",
+                "object": object('a', '1'),
+                "status_code": 200,
+            },
+        }]});
+
+        let response = reqwest::blocking::Client::new()
+            .post(format!("http://{address}/"))
+            .body(body.to_string())
+            .send()
+            .expect("the evictor answers the store");
+
+        assert!(response.status().is_success(), "{}", response.status());
+        let delivery = evictor
+            .deliveries
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the delivery waits for the evictor");
+        assert_eq!(
+            delivery.events,
+            [Event {
+                scope: 0,
+                entry: entry('a', '1'),
+                at_s: 400,
+            }]
+        );
+    }
+
     /// The age rule this replaces expired the entry every build reads. Here
     /// the oldest write survives because it was read last, and the two
     /// entries nothing read since go in one request.
@@ -387,6 +451,49 @@ esac
         );
         let record = record::decode(&fs::read(directory.path().join("record")).unwrap()).unwrap();
         assert_eq!(record, HashMap::from([(entry('a', '1'), 400)]));
+    }
+
+    /// A kache entry evicted by its manifest alone would leave its pack in
+    /// the bucket for good, read by nothing and counted against the budget.
+    #[test]
+    fn a_kache_entry_goes_with_both_of_its_objects() {
+        let hash = hash('c', '3');
+        let manifest = format!("kache/v3/manifests/serde/{hash}.json");
+        let pack = format!("kache/v3/packs/serde/{hash}.tar.zst");
+        let item = |key: &str, size: u64| {
+            format!(
+                r#"{{"key":"{key}","size_bytes":{size},"last_modified":"1970-01-01T00:01:40Z","is_dir":false}}"#
+            )
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let program = rc(
+            directory.path(),
+            &format!(
+                r#""--json object list ci/kithara-review/") printf '%s' '{{"items":[{{"key":"kache/","is_dir":true}}],"truncated":false}}' ;;
+"--json object list --recursive ci/kithara-review/kache/") printf '%s' '{{"items":[{m},{p},{i}],"truncated":false}}' ;;
+"object remove --force "*) ;;"#,
+                m = item(&manifest, 500),
+                p = item(&pack, 400),
+                i = item(
+                    "kache/_manifests/id/7544/aarch64-apple-darwin/debug.json",
+                    10
+                ),
+            ),
+        );
+        let (mut owner, _sender) = owner(&program);
+
+        owner.pass(0).unwrap();
+
+        let removals = calls(directory.path())
+            .into_iter()
+            .filter(|call| call.starts_with("object remove"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            removals,
+            [format!(
+                "object remove --force ci/kithara-review/{manifest} ci/kithara-review/{pack}"
+            )]
+        );
     }
 
     #[test]

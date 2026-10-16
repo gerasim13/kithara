@@ -3,7 +3,6 @@ use std::{
     env, fs,
     io::{self, Write},
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
 };
 
 pub use kithara::assets::{AssetReader, ReadSide};
@@ -27,7 +26,6 @@ use crate::{
 };
 
 const ARTIFACT_DIR_ENV: &str = "KITHARA_AUDIO_ARTIFACT_DIR";
-static ATTEMPT: AtomicU64 = AtomicU64::new(0);
 
 pub type AudioArtifactRecording = RecordingCore<AssetPartSink<TestPools>>;
 
@@ -267,14 +265,16 @@ impl AudioArtifactSet {
             ));
         }
         validate_label(case)?;
-        let attempt = ATTEMPT.fetch_add(1, Ordering::Relaxed);
+        fs::create_dir_all(root)?;
+        let namespace = tempfile::Builder::new()
+            .prefix("capture-")
+            .tempdir_in(root)?
+            .keep();
         let source = AssetSource::Local {
-            path: root.join(format!("{case}-{}-{attempt}", std::process::id())),
+            path: namespace.join(case),
         };
         let store = AssetStore::builder(pools())
-            .backend(StorageBackend::Disk {
-                root: root.to_path_buf(),
-            })
+            .backend(StorageBackend::Disk { root: namespace })
             .build();
         let scope = store.scope::<Self>(&source).map_err(io::Error::other)?;
         Ok(Self {

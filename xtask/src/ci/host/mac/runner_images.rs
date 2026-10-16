@@ -152,6 +152,7 @@ impl RunnerManager<'_> {
                 "--version".to_owned(),
             ],
             vec!["wasm-pack".to_owned(), "--version".to_owned()],
+            vec!["kache".to_owned(), "--version".to_owned()],
             vec!["sccache".to_owned(), "--version".to_owned()],
             vec!["ld.lld".to_owned(), "--version".to_owned()],
             vec!["mold".to_owned(), "--version".to_owned()],

@@ -18,6 +18,7 @@ use super::{
     build_dir::{LaneTarget, Target},
     cache::missing_defaults,
     config::CiConfig,
+    kache::{KacheJob, LocalStore},
     run::CacheGroup,
 };
 use crate::{consts, job::is_gitlab};
@@ -81,14 +82,18 @@ fn lease_owner(job_id: Option<&str>, pid: u32) -> Result<String> {
     }
 }
 
-fn cache_lease(cache_root: &FsPath) -> Result<PathBuf> {
+/// The name this job holds what is its own under.
+pub(crate) fn job_owner() -> Result<String> {
     let job_id = if is_gitlab() {
         Some(env::var("CI_JOB_ID").context("CI_JOB_ID must identify the GitLab job")?)
     } else {
         None
     };
-    let owner = lease_owner(job_id.as_deref(), std::process::id())?;
-    Ok(cache_root.join(".kithara-ci-leases").join(owner))
+    lease_owner(job_id.as_deref(), std::process::id())
+}
+
+fn cache_lease(cache_root: &FsPath) -> Result<PathBuf> {
+    Ok(cache_root.join(".kithara-ci-leases").join(job_owner()?))
 }
 
 /// Where the compiler cache keeps its local store, and how large it may grow.
@@ -122,7 +127,8 @@ pub(crate) struct CiEnvironment {
     pub(crate) swiftpm_cache: PathBuf,
     pub(crate) temp: PathBuf,
     leases: [PathBuf; 2],
-    sccache: Option<SccachePaths>,
+    /// The job's own kache, its directory removed when the job ends.
+    kache: Option<KacheJob>,
     /// Held for the life of the job so a reclaim — this job's own or a sibling
     /// job's — leaves the directory this one builds into alone. The ceiling
     /// still charges its bytes; the claim only says they cannot be taken back.
@@ -242,14 +248,29 @@ impl CiEnvironment {
             "RUSTUP_HOME",
             env::var_os("RUSTUP_HOME").unwrap_or_else(|| home.join(".rustup").into_os_string()),
         );
-        if let Some(sccache) = &sccache {
-            insert_sccache_environment(
-                &mut vars,
-                sccache,
-                &project_root,
-                ctx.config.tools.program("sccache"),
-            );
-        }
+        let kache = match &sccache {
+            Some(sccache) => {
+                insert_sccache_environment(
+                    &mut vars,
+                    sccache,
+                    &project_root,
+                    ctx.config.tools.program("sccache"),
+                );
+                let kache = KacheJob::prepare(
+                    temp.join("kache").join(job_owner()?),
+                    Some(LocalStore {
+                        directory: &cache_root.join("kache"),
+                        max_size: &sccache.cache_size,
+                    }),
+                    &|name| env::var(name).ok(),
+                )?;
+                for (name, value) in kache.environment(&ctx.config.tools) {
+                    insert(&mut vars, name, value);
+                }
+                Some(kache)
+            }
+            None => None,
+        };
         insert(&mut vars, "SWIFTPM_CACHE_PATH", &swiftpm_cache);
         insert(&mut vars, "TMPDIR", &temp);
         insert(
@@ -277,7 +298,7 @@ impl CiEnvironment {
             swiftpm_cache,
             temp,
             leases,
-            sccache,
+            kache,
             _target: target,
             vars,
         })
@@ -287,8 +308,9 @@ impl CiEnvironment {
         self.vars.clone()
     }
 
-    pub(crate) const fn uses_sccache(&self) -> bool {
-        self.sccache.is_some()
+    /// The kache the job compiles through, when it compiles through one.
+    pub(crate) const fn kache(&self) -> Option<&KacheJob> {
+        self.kache.as_ref()
     }
 }
 
@@ -306,7 +328,7 @@ impl Drop for CiEnvironment {
 /// because macOS caps Unix socket paths at `SUN_LEN` and the suite binds
 /// sockets here. And it lives on local storage: the macOS guest reaches the
 /// shared cache over virtiofs, which cannot bind a socket at all.
-pub(super) fn scratch_root() -> PathBuf {
+pub(crate) fn scratch_root() -> PathBuf {
     PathBuf::from("/tmp/kithara-ci")
 }
 
@@ -670,6 +692,53 @@ mod tests {
         assert_eq!(paths.cache_size, config.host.sccache_size);
     }
 
+    /// A job compiles through kache, keeps what it compiled in its trust's
+    /// store, shares it through its own scope's bucket, and returns where
+    /// kache's configuration is.
+    #[cfg(unix)]
+    fn compiles_through_kache(
+        vars: &BTreeMap<OsString, OsString>,
+        ctx: &Ctx,
+        config: &CiConfig,
+        cache_root: &std::path::Path,
+    ) -> PathBuf {
+        assert_eq!(
+            vars.get(OsStr::new("RUSTC_WRAPPER"))
+                .map(OsString::as_os_str),
+            Some(OsStr::new(ctx.config.tools.program("kache")))
+        );
+        assert_eq!(
+            vars.get(OsStr::new("KACHE_FALLBACK"))
+                .map(OsString::as_os_str),
+            Some(OsStr::new(ctx.config.tools.program("sccache")))
+        );
+        let kache_config = PathBuf::from(
+            vars.get(OsStr::new("KACHE_CONFIG"))
+                .expect("a job tells kache where its configuration is"),
+        );
+        let kache: toml::Table =
+            toml::from_str(&fs::read_to_string(&kache_config).unwrap()).unwrap();
+        assert_eq!(
+            kache["cache"]["local_store"].as_str().map(PathBuf::from),
+            Some(cache_root.join("kache")),
+            "what a job compiled stays for the next job of its trust"
+        );
+        assert_eq!(
+            kache["cache"]["local_max_size"].as_str(),
+            Some(config.host.sccache_size.as_str())
+        );
+        assert_eq!(
+            kache["cache"]["remote"]["bucket"].as_str(),
+            Some("kithara-review")
+        );
+        assert!(kache["cache"].get("remote_readonly").is_none());
+        assert!(
+            kache_config.starts_with(scratch_root()),
+            "kache's socket is bound on local storage"
+        );
+        kache_config
+    }
+
     /// A GitLab lane builds in a directory of its own beside the checkout,
     /// behind the alias its executor names: Cargo is told the alias, so every
     /// compilation is keyed on one path whichever lane ran there last, and the
@@ -728,14 +797,10 @@ mod tests {
                     "{name} is the executor's to name, or nobody's"
                 );
             }
-            assert_eq!(
-                vars.get(OsStr::new("RUSTC_WRAPPER"))
-                    .map(OsString::as_os_str),
-                Some(OsStr::new(ctx.config.tools.program("sccache")))
-            );
             let cache_root =
                 root.join("review")
                     .join(format!("{}-{}", env::consts::OS, env::consts::ARCH));
+            let kache_config = compiles_through_kache(&vars, &ctx, &config, &cache_root);
             assert_eq!(
                 vars.get(OsStr::new("SCCACHE_DIR")).map(OsString::as_os_str),
                 Some(cache_root.join("sccache").as_os_str())
@@ -778,6 +843,10 @@ mod tests {
                 "fixture readers must outlive host cleanup"
             );
             drop(environment);
+            assert!(
+                !kache_config.exists(),
+                "a finished job's daemon directory is gone"
+            );
             assert!(!lease.exists());
             assert!(!fixture_lease.exists());
             assert!(

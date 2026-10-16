@@ -20,6 +20,7 @@ fn preflight(process: &Process, config: &CiConfig, tools: &ToolsConfig) -> Resul
     process.require_tools(&[
         "cargo",
         tools.program("just"),
+        tools.program("kache"),
         tools.program("sccache"),
         tools.program("swift"),
         xcodebuild,

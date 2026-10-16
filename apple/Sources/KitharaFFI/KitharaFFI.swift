@@ -761,11 +761,24 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      */
     func setEqGain(band: UInt32, gainDb: Float) throws
 
-    func setMuted(muted: Bool)
+    /**
+     * # Errors
+     *
+     * Returns the player's refusal of the change; the state stays as it
+     * was then.
+     */
+    func setMuted(muted: Bool) throws
 
     func setObserver(observer: PlayerObserver)
 
-    func setPlayingRate(rate: Float)
+    /**
+     * # Errors
+     *
+     * Returns [`FfiError::InvalidArgument`] for a rate that is not a finite
+     * number, and the player's refusal of the new rate; the playing rate
+     * stays as it was then.
+     */
+    func setPlayingRate(rate: Float) throws
 
     /**
      * Change the queue repeat mode.
@@ -777,7 +790,13 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      */
     func setRepeatMode(mode: FfiRepeatMode) throws
 
-    func setVolume(volume: Float)
+    /**
+     * # Errors
+     *
+     * Returns the player's refusal of the change; the volume stays as it
+     * was then.
+     */
+    func setVolume(volume: Float) throws
 
     /**
      * Register a runtime DRM key processor for every host (`"*"`).
@@ -1271,7 +1290,13 @@ open func setEqGain(band: UInt32, gainDb: Float)throws   {try rustCallWithError(
 }
 }
 
-open func setMuted(muted: Bool)  {try! rustCall() {
+    /**
+     * # Errors
+     *
+     * Returns the player's refusal of the change; the state stays as it
+     * was then.
+     */
+open func setMuted(muted: Bool)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
     uniffi_kithara_ffi_fn_method_audioplayer_set_muted(
             self.uniffiCloneHandle(),
         FfiConverterBool.lower(muted),$0
@@ -1287,7 +1312,14 @@ open func setObserver(observer: PlayerObserver)  {try! rustCall() {
 }
 }
 
-open func setPlayingRate(rate: Float)  {try! rustCall() {
+    /**
+     * # Errors
+     *
+     * Returns [`FfiError::InvalidArgument`] for a rate that is not a finite
+     * number, and the player's refusal of the new rate; the playing rate
+     * stays as it was then.
+     */
+open func setPlayingRate(rate: Float)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
     uniffi_kithara_ffi_fn_method_audioplayer_set_playing_rate(
             self.uniffiCloneHandle(),
         FfiConverterFloat.lower(rate),$0
@@ -1311,7 +1343,13 @@ open func setRepeatMode(mode: FfiRepeatMode)throws   {try rustCallWithError(FfiC
 }
 }
 
-open func setVolume(volume: Float)  {try! rustCall() {
+    /**
+     * # Errors
+     *
+     * Returns the player's refusal of the change; the volume stays as it
+     * was then.
+     */
+open func setVolume(volume: Float)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
     uniffi_kithara_ffi_fn_method_audioplayer_set_volume(
             self.uniffiCloneHandle(),
         FfiConverterFloat.lower(volume),$0
@@ -9485,19 +9523,19 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_eq_gain() != 47120) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_muted() != 56476) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_muted() != 45697) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_observer() != 22809) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_playing_rate() != 63075) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_playing_rate() != 33742) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_repeat_mode() != 42867) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_volume() != 21146) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_volume() != 51882) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_setup_hls_aes() != 49387) {

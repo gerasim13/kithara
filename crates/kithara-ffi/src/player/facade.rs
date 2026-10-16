@@ -226,17 +226,26 @@ impl AudioPlayer {
         self.inner.set_eq_gain(band, gain_db)
     }
 
-    pub fn set_muted(&self, muted: bool) {
-        self.inner.set_muted(muted);
+    /// # Errors
+    ///
+    /// Returns the player's refusal of the change; the state stays as it
+    /// was then.
+    pub fn set_muted(&self, muted: bool) -> Result<(), FfiError> {
+        self.inner.set_muted(muted)
     }
 
     pub fn set_observer(self: &Arc<Self>, observer: Arc<dyn PlayerObserver>) {
         self.inner.set_observer(observer);
     }
 
+    /// # Errors
+    ///
+    /// Returns [`FfiError::InvalidArgument`] for a rate that is not a finite
+    /// number, and the player's refusal of the new rate; the playing rate
+    /// stays as it was then.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn set_playing_rate(&self, rate: f32) {
-        self.inner.set_playing_rate(rate);
+    pub fn set_playing_rate(&self, rate: f32) -> Result<(), FfiError> {
+        self.inner.set_playing_rate(rate)
     }
 
     /// Change the queue repeat mode.
@@ -249,8 +258,12 @@ impl AudioPlayer {
         self.inner.set_repeat_mode(mode)
     }
 
-    pub fn set_volume(&self, volume: f32) {
-        self.inner.set_volume(volume);
+    /// # Errors
+    ///
+    /// Returns the player's refusal of the change; the volume stays as it
+    /// was then.
+    pub fn set_volume(&self, volume: f32) -> Result<(), FfiError> {
+        self.inner.set_volume(volume)
     }
 
     /// Register a runtime DRM key processor for every host (`"*"`).
