@@ -29,7 +29,6 @@ impl Read for Source {
         self.reads.fetch_add(1, Ordering::Relaxed);
         let remaining = self.remaining.load(Ordering::Relaxed);
         if remaining == 0 {
-            self.remaining.store(usize::MAX, Ordering::Relaxed);
             return Err(io::ErrorKind::WouldBlock.into());
         }
         let len = out.len().min(remaining).min(53);
@@ -146,6 +145,7 @@ fn packet_retry_preserves_bytes_and_timestamps_after_partial_read(#[case] signal
         let packet = match actual.next_frame().expect("packet read") {
             DemuxOutcome::Pending(_) => {
                 interrupted = true;
+                remaining.store(usize::MAX, Ordering::Relaxed);
                 continue;
             }
             DemuxOutcome::Frame(frame) => frame,

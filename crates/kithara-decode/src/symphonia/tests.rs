@@ -218,6 +218,7 @@ mod flac {
 
 struct SourceState {
     interrupt_at: Option<usize>,
+    interrupt_kind: ErrorKind,
     bytes: Vec<u8>,
     interrupts_remaining: usize,
     pos: usize,
@@ -232,6 +233,11 @@ struct SourceControl {
 impl SourceControl {
     fn make_seekable(&self) {
         lock(&self.state).seekable = true;
+    }
+
+    fn block_after(&self, offset: usize) {
+        self.arm_after(offset, usize::MAX);
+        lock(&self.state).interrupt_kind = ErrorKind::WouldBlock;
     }
 
     fn release(&self) {
@@ -272,6 +278,7 @@ impl InterruptingSource {
         let state = Arc::new(Mutex::new(SourceState {
             bytes,
             interrupt_at: None,
+            interrupt_kind: ErrorKind::Interrupted,
             interrupts_remaining: 0,
             pos: 0,
             seekable: false,
@@ -291,7 +298,7 @@ impl Read for InterruptingSource {
         if state.interrupts_remaining > 0 && state.interrupt_at == Some(state.pos) {
             state.interrupts_remaining -= 1;
             return Err(io::Error::new(
-                ErrorKind::Interrupted,
+                state.interrupt_kind,
                 consts::INTERRUPTED_MESSAGE,
             ));
         }
@@ -587,4 +594,133 @@ fn mpa_seek_preserves_packet_position(mpeg_eight: &'static [u8]) {
     assert_eq!(actual.pts, expected.pts);
     assert_eq!(actual.dur, expected.dur);
     assert_eq!(packets.data(), expected.data.as_ref());
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+mod wav {
+    use kithara_platform::time::Duration;
+    use kithara_test_fixtures::fixtures::tone_wav;
+    use symphonia::{
+        core::{
+            errors::Error,
+            formats::{FormatOptions, FormatReader},
+            io::{MediaSourceStream, MediaSourceStreamOptions},
+        },
+        default::formats::WavReader,
+    };
+
+    use super::{InterruptingSource, SourceControl, kithara};
+    use crate::{
+        CodecPriming,
+        demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer},
+        symphonia::SymphoniaDemuxer,
+    };
+
+    fn native_reader(bytes: &[u8]) -> (WavReader<'static>, SourceControl) {
+        let (source, control) = InterruptingSource::new(bytes.to_vec());
+        control.make_seekable();
+        let stream = MediaSourceStream::new(Box::new(source), MediaSourceStreamOptions::default());
+        let reader = WavReader::try_new(stream, FormatOptions::default()).expect("WAV reader");
+        (reader, control)
+    }
+
+    fn reader(bytes: &[u8]) -> (SymphoniaDemuxer, SourceControl) {
+        let (reader, control) = native_reader(bytes);
+        let demuxer = SymphoniaDemuxer::from_reader_with_layout(Box::new(reader), None, None)
+            .expect("WAV demuxer");
+        (demuxer, control)
+    }
+
+    fn frame(demuxer: &mut SymphoniaDemuxer) -> Option<(Duration, Duration, Vec<u8>)> {
+        match demuxer.next_frame().expect("WAV packet") {
+            DemuxOutcome::Frame(frame) => Some((frame.pts, frame.duration, frame.data.to_vec())),
+            DemuxOutcome::Eof => None,
+            DemuxOutcome::Pending(reason) => {
+                panic!("released WAV source is still pending: {reason:?}")
+            }
+        }
+    }
+
+    #[kithara::test]
+    fn wav_seek_pending_preserves_every_packet_byte_and_timestamp(tone_wav: &'static [u8]) {
+        let (mut fault, gate) = reader(tone_wav);
+        let (mut reference, _) = reader(tone_wav);
+        let target = Duration::from_millis(500);
+        for demuxer in [&mut fault, &mut reference] {
+            assert!(matches!(
+                demuxer
+                    .seek(target, CodecPriming::default())
+                    .expect("WAV seek"),
+                DemuxSeekOutcome::Landed { .. }
+            ));
+        }
+        gate.block_after(128);
+        match fault.next_frame().expect("interrupted WAV packet") {
+            DemuxOutcome::Pending(_) => {}
+            DemuxOutcome::Frame(frame) => panic!(
+                "partial WAV packet was published: pts={:?} duration={:?} bytes={}",
+                frame.pts,
+                frame.duration,
+                frame.data.len()
+            ),
+            DemuxOutcome::Eof => panic!("pending WAV source was reported as EOF"),
+        }
+        gate.release();
+        let mut packets = 0;
+        loop {
+            let expected = frame(&mut reference);
+            let actual = frame(&mut fault);
+            assert_eq!(actual, expected, "WAV packet {packets} after Pending");
+            if expected.is_none() {
+                break;
+            }
+            packets += 1;
+        }
+        assert!(
+            packets > 1,
+            "seek must leave multiple WAV packets to verify"
+        );
+    }
+
+    #[kithara::test]
+    fn wav_truncated_eof_preserves_every_complete_frame(tone_wav: &'static [u8]) {
+        let (mut complete, _) = native_reader(tone_wav);
+        let declared_frames = complete.tracks()[0].num_frames.expect("WAV frame count");
+        let first = complete
+            .next_packet()
+            .expect("WAV head")
+            .expect("WAV head packet");
+        let block_size = first.data.len() / usize::try_from(first.dur.get()).expect("head frames");
+        assert!(block_size > 0);
+        let mut expected = first.data.into_vec();
+        while let Some(packet) = complete.next_packet().expect("complete WAV packet") {
+            expected.extend_from_slice(&packet.data);
+        }
+        let removed_frames = 3;
+        let removed_bytes = removed_frames * block_size;
+        expected.truncate(expected.len() - removed_bytes);
+        let (mut truncated, _) = native_reader(&tone_wav[..tone_wav.len() - removed_bytes]);
+        let mut actual = Vec::new();
+        let mut frames = 0;
+        loop {
+            let packet = match truncated.next_packet() {
+                Ok(Some(packet)) => packet,
+                Ok(None) => break,
+                Err(Error::IoError(error)) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
+                    break;
+                }
+                Err(error) => panic!("truncated WAV packet: {error}"),
+            };
+            let packet_frames = u64::try_from(packet.data.len() / block_size).expect("PCM frames");
+            assert_eq!(
+                packet.dur.get(),
+                packet_frames,
+                "WAV duration must match actual PCM"
+            );
+            frames += packet_frames;
+            actual.extend_from_slice(&packet.data);
+        }
+        assert_eq!(frames, declared_frames - removed_frames as u64);
+        assert_eq!(actual, expected);
+    }
 }
