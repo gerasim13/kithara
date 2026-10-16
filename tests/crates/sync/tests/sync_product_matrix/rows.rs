@@ -27,12 +27,12 @@ async fn provider_tempo_controls_measure_without_sync(
         if prepared.2[..deck].contains(source) {
             continue;
         }
-        let ArtifactSource::Value(grid) = prepared.0.beat_grid(deck) else {
+        let ArtifactSource::Value(mut grid) = prepared.0.beat_grid(deck) else {
             panic!("control has a known fixture grid");
         };
         let native_bpm = grid.as_raw().bpm;
         #[cfg(not(target_os = "android"))]
-        let reference = match prepared.0.control_reference(deck) {
+        let mut reference = match prepared.0.control_reference(deck) {
             Some(asset) => Some(
                 kithara_integration_tests::pcm_oracle::decode_native(asset.bytes())
                     .await
@@ -41,15 +41,15 @@ async fn provider_tempo_controls_measure_without_sync(
             None => None,
         };
         #[cfg(target_os = "android")]
-        let reference: Option<kithara_integration_tests::pcm_oracle::Audio> = None;
+        let mut reference: Option<kithara_integration_tests::pcm_oracle::Audio> = None;
         let wrong_asset = prepared.0.wrong_control_reference(deck);
         #[cfg(not(target_os = "android"))]
-        let wrong_source =
+        let mut wrong_source =
             kithara_integration_tests::pcm_oracle::decode_native(wrong_asset.bytes())
                 .await
                 .expect("independent wrong-source control reference");
         #[cfg(target_os = "android")]
-        let wrong_source = kithara_integration_tests::pcm_oracle::Audio {
+        let mut wrong_source = kithara_integration_tests::pcm_oracle::Audio {
             samples: kithara_integration_tests::pcm_oracle::decode(wrong_asset.bytes())
                 .await
                 .expect("independent 48 kHz stereo wrong-source fixture"),
@@ -61,7 +61,7 @@ async fn provider_tempo_controls_measure_without_sync(
                 "{:?}: deck {deck}, native {native_bpm}, target {target}",
                 prepared.0
             ));
-            let captured = super::control::capture(
+            let (trace, captured) = super::control::capture(
                 source.clone(),
                 48_000,
                 native_bpm,
@@ -69,38 +69,54 @@ async fn provider_tempo_controls_measure_without_sync(
                 prepared.0.start_seconds(deck, start),
             )
             .await;
-            let pcm = captured.pcm.as_slice();
             let label = format!(
                 "{:?} deck {deck} native {native_bpm} target {target}",
                 prepared.0
             );
-            let measured = reference.as_ref().map_or_else(
-                || captured.observed_content_failures(&wrong_source, &grid),
-                |reference| captured.source_content_failures(reference, &wrong_source, &grid),
-            );
-            if !measured.is_empty() {
-                let diagnostic = serde_json::json!({
-                    "label": label,
-                    "source": source,
-                    "requested_start_seconds": prepared.0.start_seconds(deck, start),
-                    "failures": measured,
-                    "flight_events": kithara_test_utils::flight::tail(),
-                    "flight_probes": kithara_test_utils::flight::probes_tail(),
-                });
-                eprintln!("ORACLE_CONTROL_FAILURE {diagnostic}");
-            }
-            let supplemental = if prepared.0.has_score_markers() {
-                marked_synchronization_failures(&label, &[pcm], CHANNELS, 48_000, target)
-            } else {
-                synchronization_failures(&label, &[pcm], CHANNELS, 48_000, target)
-            };
-            eprintln!("ORACLE_SUPPLEMENTAL_PEAKS {label}: {supplemental:?}");
-            let (markers, downbeats) =
-                kithara_integration_tests::cochlea::marked_rhythm_markers(pcm, CHANNELS, 48_000);
-            eprintln!(
-                "ORACLE_PCM source={source} start={} markers={markers:?} downbeats={downbeats:?}",
-                prepared.0.start_seconds(deck, start)
-            );
+            let analysis_label = label.clone();
+            let analysis_source = source.clone();
+            let requested_start_seconds = prepared.0.start_seconds(deck, start);
+            let has_score_markers = prepared.0.has_score_markers();
+            let (captured, returned_reference, returned_wrong_source, returned_grid, measured) =
+                kithara::platform::tokio::task::spawn_blocking(move || {
+                    let label = analysis_label;
+                    let source = analysis_source;
+                    let pcm = captured.pcm.as_slice();
+                    let measured = reference.as_ref().map_or_else(
+                        || captured.observed_content_failures(&wrong_source, &grid),
+                        |reference| captured.source_content_failures(reference, &wrong_source, &grid),
+                    );
+                    if !measured.is_empty() {
+                        let diagnostic = serde_json::json!({
+                            "label": label,
+                            "source": source,
+                            "requested_start_seconds": requested_start_seconds,
+                            "failures": measured,
+                            "flight_events": kithara_test_utils::flight::tail(),
+                            "flight_probes": kithara_test_utils::flight::probes_tail(),
+                        });
+                        eprintln!("ORACLE_CONTROL_FAILURE {diagnostic}");
+                    }
+                    let supplemental = if has_score_markers {
+                        marked_synchronization_failures(&label, &[pcm], CHANNELS, 48_000, target)
+                    } else {
+                        synchronization_failures(&label, &[pcm], CHANNELS, 48_000, target)
+                    };
+                    eprintln!("ORACLE_SUPPLEMENTAL_PEAKS {label}: {supplemental:?}");
+                    let (markers, downbeats) =
+                        kithara_integration_tests::cochlea::marked_rhythm_markers(pcm, CHANNELS, 48_000);
+                    eprintln!(
+                        "ORACLE_PCM source={source} start={} markers={markers:?} downbeats={downbeats:?}",
+                        requested_start_seconds
+                    );
+                    (captured, reference, wrong_source, grid, measured)
+                })
+                .await
+                .expect("provider control reference analysis must join");
+            reference = returned_reference;
+            wrong_source = returned_wrong_source;
+            grid = returned_grid;
+            let pcm = captured.pcm.as_slice();
             let artifact = format!(
                 "{}-{deck}-{target}",
                 kithara_integration_tests::audio_artifact::artifact_label()
@@ -126,6 +142,7 @@ async fn provider_tempo_controls_measure_without_sync(
                 );
             }
             drop(captured);
+            drop(trace);
             eprintln!("ORACLE_CONTROL {label}: {measured:?}");
             failures.extend(measured);
             hang_reset!();

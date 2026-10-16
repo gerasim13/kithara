@@ -23,7 +23,6 @@ pub(super) struct ControlCapture {
     landing: Result<(SessionFrame, u64), String>,
     source: Result<(), String>,
     decoded: Arc<Mutex<DecodedCapture>>,
-    _trace: kithara_test_utils::test::usdt::Scope,
 }
 
 #[derive(Clone)]
@@ -733,7 +732,7 @@ pub(super) async fn capture(
     native_bpm: f64,
     target_bpm: f64,
     start: f64,
-) -> ControlCapture {
+) -> (kithara_test_utils::test::usdt::Scope, ControlCapture) {
     let trace = kithara_test_utils::test::usdt::scope();
     let observation = Arc::new(Mutex::new(LinkObservation::default()));
     let session = HostConfig::offline(pools())
@@ -911,17 +910,19 @@ pub(super) async fn capture(
             )),
         }
     })();
-    ControlCapture {
-        _trace: trace,
-        pcm: captured,
-        item: u64::from(id),
-        rate,
-        points,
-        requested,
-        landing,
-        source: source_custody,
-        decoded,
-    }
+    (
+        trace,
+        ControlCapture {
+            pcm: captured,
+            item: u64::from(id),
+            rate,
+            points,
+            requested,
+            landing,
+            source: source_custody,
+            decoded,
+        },
+    )
 }
 
 type DecodedChunk = (kithara::signal::AudioChunkInfo, Vec<f32>);
