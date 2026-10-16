@@ -102,9 +102,9 @@ pub(crate) struct CiHost {
     /// The trees directly below a CI root that cleanup may remove whole.
     #[serde(default = "default_removable_roots")]
     pub(crate) removable_roots: Vec<String>,
-    /// Whole-gigabyte budget of the store a job keeps what it compiled in:
-    /// kache's, shared by the jobs of one trust.
-    pub(crate) compiler_cache_size: String,
+    /// Whole-gigabyte budget of each local compiler-cache store of one trust:
+    /// kache's, and sccache's when no bucket is named.
+    pub(crate) sccache_size: String,
     /// A mode-0600 file with the scoped S3 settings real jobs inherit.
     #[serde(default)]
     pub(crate) sccache_s3_env_file: Option<PathBuf>,
@@ -188,17 +188,12 @@ impl CiHost {
                 self.job_concurrency
             );
         }
-        let whole_gigabytes = self
-            .compiler_cache_size
-            .strip_suffix('G')
-            .is_some_and(|digits| {
-                digits.bytes().all(|byte| byte.is_ascii_digit())
-                    && digits.bytes().any(|byte| byte != b'0')
-            });
+        let whole_gigabytes = self.sccache_size.strip_suffix('G').is_some_and(|digits| {
+            digits.bytes().all(|byte| byte.is_ascii_digit())
+                && digits.bytes().any(|byte| byte != b'0')
+        });
         if !whole_gigabytes {
-            bail!(
-                "CI host profile compiler_cache_size must be a positive whole number followed by G"
-            );
+            bail!("CI host profile sccache_size must be a positive whole number followed by G");
         }
         if self.build_cache_size.trim().is_empty() {
             bail!("CI host profile build_cache_size must not be empty");
@@ -517,7 +512,7 @@ mod tests {
     #[test]
     fn ci_host_rejects_a_zero_sccache_budget() {
         let mut host = super::super::fixture().host;
-        host.compiler_cache_size = "0G".to_owned();
+        host.sccache_size = "0G".to_owned();
 
         assert!(host.validate().is_err());
     }
@@ -525,7 +520,7 @@ mod tests {
     #[test]
     fn ci_host_rejects_a_non_whole_g_sccache_budget() {
         let mut host = super::super::fixture().host;
-        host.compiler_cache_size = "50GB".to_owned();
+        host.sccache_size = "50GB".to_owned();
 
         assert!(host.validate().is_err());
     }

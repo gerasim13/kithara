@@ -113,7 +113,7 @@ impl SccachePaths {
     ) -> Option<Self> {
         (!target_is_windows && cache_group.uses_sccache()).then(|| Self {
             directory: cache_root.join("sccache"),
-            cache_size: config.host.compiler_cache_size.clone(),
+            cache_size: config.host.sccache_size.clone(),
         })
     }
 }
@@ -689,7 +689,7 @@ mod tests {
             .expect("a macOS job compiles through the cache");
 
         assert_eq!(paths.directory, root.join("sccache"));
-        assert_eq!(paths.cache_size, config.host.compiler_cache_size);
+        assert_eq!(paths.cache_size, config.host.sccache_size);
     }
 
     /// A job compiles through kache, keeps what it compiled in its trust's
@@ -725,7 +725,7 @@ mod tests {
         );
         assert_eq!(
             kache["cache"]["local_max_size"].as_str(),
-            Some(config.host.compiler_cache_size.as_str())
+            Some(config.host.sccache_size.as_str())
         );
         assert_eq!(
             kache["cache"]["remote"]["bucket"].as_str(),
@@ -808,7 +808,7 @@ mod tests {
             assert_eq!(
                 vars.get(OsStr::new("SCCACHE_CACHE_SIZE"))
                     .map(OsString::as_os_str),
-                Some(OsStr::new(&config.host.compiler_cache_size))
+                Some(OsStr::new(&config.host.sccache_size))
             );
             assert_eq!(
                 vars.get(OsStr::new("SCCACHE_IDLE_TIMEOUT"))
