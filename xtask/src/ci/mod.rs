@@ -1,3 +1,4 @@
+mod baseline;
 mod bridge;
 mod build_cache;
 mod build_dir;
@@ -5,6 +6,7 @@ mod cache;
 mod command;
 mod config;
 mod environment;
+mod github;
 mod host;
 mod image;
 mod lane;

@@ -259,6 +259,7 @@ fn run_invocations(
     invocations: &mut Vec<InvocationManifest>,
 ) -> (Status, Option<String>) {
     let mut status = Status::Clean;
+    let mut note = None;
     for invocation in &spec.invocations {
         let remaining = budget.saturating_sub(started.elapsed());
         if remaining.is_zero() {
@@ -323,10 +324,11 @@ fn run_invocations(
             );
         }
         match native::validate_report(&artifact, invocation) {
-            Ok(report_has_findings) => {
-                if exit_has_findings || report_has_findings {
+            Ok(findings) => {
+                if exit_has_findings || findings.is_some() {
                     status = Status::Findings;
                 }
+                note = findings.or(note);
             }
             Err(error) => {
                 return (
@@ -339,7 +341,7 @@ fn run_invocations(
             }
         }
     }
-    (status, None)
+    (status, note)
 }
 
 fn contains_exact_version(output: &str, expected: &str) -> bool {

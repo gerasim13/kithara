@@ -288,6 +288,8 @@ pub(crate) const CHA_PLUGINS: &str = "data_clumps,feature_envy,inappropriate_int
                            divergent_change,speculative_generality,async_callback_leak";
 
 pub(crate) const CRAP_THRESHOLD: f64 = 30.0;
+/// Cyclomatic complexity above which a function may not be new or grow.
+pub(crate) const CYCLOMATIC_LIMIT: f64 = 15.0;
 pub(crate) const QUALITY_LAB_CONFIG_REL: &str = ".config/quality-lab.toml";
 
 #[cfg(test)]

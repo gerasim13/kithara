@@ -54,6 +54,7 @@ pub(crate) struct Entry {
     pub(crate) timeout: u32,
     pub(crate) history: bool,
     pub(crate) artifact: Option<CiLaneArtifact>,
+    pub(crate) baseline: bool,
     pub(crate) queue: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) runner: Option<String>,
@@ -154,6 +155,7 @@ pub(crate) fn render(
             timeout: lane.timeout_minutes,
             history: lane.history,
             artifact: lane.artifact.clone(),
+            baseline: lane.baseline,
             queue: lane.queue.clone(),
             runner: github_runner(lane, args.kind),
         })

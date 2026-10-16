@@ -43,6 +43,13 @@ on:
           runs on the tip alone.
         default: false
         type: boolean
+      baseline:
+        description: >-
+          Whether the lane compares against its own artifact from the last
+          attempt in which it succeeded on the default branch. The artifact is
+          downloaded to `baseline` in the checkout.
+        default: false
+        type: boolean
       artifact-name:
         description: Name of the artifact to upload, when the lane leaves one.
         default: ''
@@ -124,6 +131,30 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: artifacts
+
+      # A lane with a baseline is judged against its own artifact from the last
+      # attempt in which it succeeded on the default branch, whichever branch
+      # this run started from. `ci baseline` finds that attempt; the artifact
+      # keeps the name the upload below gave it. A lane that never succeeded
+      # there fails here, since it has nothing to be judged against.
+      - name: Find this lane's last success on the default branch
+        id: baseline
+        if: ${{ inputs.baseline }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          LANE: ${{ inputs.lane }}
+        run: just ci baseline --repository "$REPOSITORY" --workflow-ref "$WORKFLOW_REF" --lane "$LANE" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch this lane's baseline
+        if: ${{ inputs.baseline }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.artifact-name }}-${{ steps.baseline.outputs.run-id }}-${{ steps.baseline.outputs.attempt }}
+          run-id: ${{ steps.baseline.outputs.run-id }}
+          github-token: ${{ github.token }}
+          path: baseline
 
       - name: Run the lane
         env:

@@ -121,6 +121,10 @@ pub(crate) struct CiLaneConfig {
     /// on the tip alone.
     pub(crate) history: bool,
     pub(crate) artifact: Option<CiLaneArtifact>,
+    /// Whether the lane compares against its own artifact from its last
+    /// successful run on the default branch, which the executor downloads to
+    /// `{root}/baseline` before the lane runs.
+    pub(crate) baseline: bool,
     /// The concurrency group a lane wanting the whole host queues in.
     pub(crate) queue: Option<String>,
     /// Lanes whose artifacts this one consumes. A lane with needs runs after
@@ -337,6 +341,9 @@ impl CiProjectConfig {
             }
             if lane.timeout_minutes == 0 {
                 bail!("ext.ci.lanes.{name} must declare a non-zero timeout_minutes");
+            }
+            if lane.baseline && lane.artifact.is_none() {
+                bail!("ext.ci.lanes.{name} compares against a baseline but leaves no artifact");
             }
         }
         for (name, lane) in &self.lanes {
@@ -1495,6 +1502,43 @@ lane_unit_window_hours = 0
             error.to_string().contains("lane_unit_window_hours"),
             "the error must name the key: {error}"
         );
+    }
+
+    #[test]
+    fn a_lane_compares_only_against_an_artifact_it_leaves() {
+        let lane = |artifact: &str| {
+            ctx_from_config(&format!(
+                r#"
+[ext.ci]
+pins = "ci-pins.toml"
+
+[ext.ci.lanes.measured]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+program = "just"
+steps = [{{ args = ["measure"], label = "measure" }}]
+role = "quality"
+timeout_minutes = 30
+baseline = true
+{artifact}
+"#
+            ))
+        };
+        let validate = |ctx| {
+            KitharaExt::from_ctx(&ctx)
+                .expect("parse kithara extension")
+                .ci
+                .validate()
+        };
+
+        let error = validate(lane(""))
+            .expect_err("a baseline is the lane's own artifact from an earlier run");
+        assert!(error.to_string().contains("leaves no artifact"), "{error}");
+        validate(lane(
+            r#"artifact = { name = "measure", path = "target/measure" }"#,
+        ))
+        .expect("a lane that leaves an artifact can compare against it");
     }
 
     #[test]

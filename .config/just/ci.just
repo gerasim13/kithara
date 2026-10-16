@@ -11,6 +11,11 @@ run *ARGS:
 lanes *ARGS:
     just _xtask ci lanes "$@"
 
+# Print the run and attempt in which a lane last succeeded on the default branch.
+[positional-arguments]
+baseline *ARGS:
+    just _xtask ci baseline "$@"
+
 # Print whether the branch changes any scoped test lane's owned paths.
 [positional-arguments]
 touched *ARGS:

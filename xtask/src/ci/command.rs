@@ -3,6 +3,7 @@ use clap::{Args, Subcommand};
 use kithara_devtools::Ctx;
 
 use super::{
+    baseline::BaselineArgs,
     bridge::BridgeArgs,
     cache::CacheArgs,
     host::HostArgs,
@@ -20,6 +21,9 @@ pub(crate) struct CiArgs {
 
 #[derive(Debug, Subcommand)]
 enum CiCommand {
+    /// Print the run and attempt in which a lane last succeeded on the
+    /// default branch, as workflow outputs.
+    Baseline(BaselineArgs),
     /// Provision and verify the shared compiler cache.
     Cache(CacheArgs),
     /// Reconcile the public GitHub and private `GitLab` repositories.
@@ -50,7 +54,8 @@ struct TouchedArgs {
 pub(crate) const fn is_standalone(args: &CiArgs) -> bool {
     matches!(
         args.command,
-        CiCommand::Cache(_)
+        CiCommand::Baseline(_)
+            | CiCommand::Cache(_)
             | CiCommand::Bridge(_)
             | CiCommand::Host(_)
             | CiCommand::Image(_)
@@ -60,6 +65,7 @@ pub(crate) const fn is_standalone(args: &CiArgs) -> bool {
 
 pub(crate) fn run_standalone(args: &CiArgs) -> Result<()> {
     match &args.command {
+        CiCommand::Baseline(args) => super::baseline::run(args),
         CiCommand::Cache(args) => super::cache::run(args),
         CiCommand::Bridge(args) => super::bridge::run(args),
         CiCommand::Host(args) => super::host::run(args),
@@ -73,7 +79,8 @@ pub(crate) fn run_standalone(args: &CiArgs) -> Result<()> {
 
 pub(crate) fn run(args: &CiArgs, ctx: &Ctx) -> Result<()> {
     match &args.command {
-        CiCommand::Cache(_)
+        CiCommand::Baseline(_)
+        | CiCommand::Cache(_)
         | CiCommand::Bridge(_)
         | CiCommand::Host(_)
         | CiCommand::Image(_)
