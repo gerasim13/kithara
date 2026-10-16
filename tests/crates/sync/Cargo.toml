@@ -40,6 +40,7 @@ kithara = { workspace = true, features = ["full", "symphonia", "fdk-aac"] }
 kithara-app = { workspace = true, features = ["analysis-waveform", "beat-nn-small", "lib-only"] }
 
 [dev-dependencies]
+kithara-derive = { workspace = true }
 kithara-render = { workspace = true }
 
 [lints]

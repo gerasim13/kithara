@@ -16,21 +16,12 @@ use kithara_test_utils::{
 
 use super::cases::CHANNELS;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, kithara_derive::Mirror)]
+#[mirror(from = AudioChunkInfo)]
 pub(super) struct SourceIdentity {
     pub(super) spec: AudioSpec,
     pub(super) source_revision: u64,
     pub(super) media_origin: Option<Duration>,
-}
-
-impl From<AudioChunkInfo> for SourceIdentity {
-    fn from(info: AudioChunkInfo) -> Self {
-        Self {
-            spec: info.spec,
-            source_revision: info.source_revision,
-            media_origin: info.media_origin,
-        }
-    }
 }
 
 #[derive(Clone, Copy)]
