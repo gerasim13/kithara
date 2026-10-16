@@ -97,7 +97,7 @@ fn ends_within_cases(
 pub(super) struct Rig {
     deck: DeckRig<TestPools>,
     sources: Vec<TestTempDir>,
-    worker: crate::PlayWorker<TestPools>,
+    worker: std::cell::OnceCell<crate::PlayWorker<TestPools>>,
     runtime: kithara_platform::tokio::runtime::Runtime,
 }
 
@@ -137,6 +137,13 @@ impl From<Receipt<DeckProtocol>> for Answer {
 }
 
 impl Rig {
+    fn worker(&self) -> &crate::PlayWorker<TestPools> {
+        self.worker.get_or_init(|| {
+            let _runtime = self.runtime.enter();
+            crate::PlayWorker::new(crate::PlayWorkerConfig::builder(pools()).build())
+        })
+    }
+
     pub(super) fn block(&mut self, at: SessionFrame, stopped_at: f64) -> Vec<Answer> {
         self.deck
             .block(at, stopped_at)
@@ -162,14 +169,10 @@ pub(super) fn rig() -> Rig {
         .enable_all()
         .build()
         .expect("fixture runtime starts");
-    let worker = {
-        let _runtime = runtime.enter();
-        crate::PlayWorker::new(crate::PlayWorkerConfig::builder(pools()).build())
-    };
     Rig {
         deck: DeckRig::new(DeckMixerConfig::default()).expect("deck scope opens"),
         sources: Vec::new(),
-        worker,
+        worker: std::cell::OnceCell::new(),
         runtime,
     }
 }
@@ -458,8 +461,9 @@ fn a_rejected_launch_leaves_the_member_silent() {
         AudioSpec::new(2, mock::SAMPLE_RATE),
     )
     .expect("audible source fixture");
+    let worker = rig.worker().clone();
     let prep = crate::ResourcePrep::builder()
-        .worker(rig.worker.clone())
+        .worker(worker.clone())
         .build();
     let config: ResourceConfig<TestPools> = prep
         .prepare(
@@ -477,7 +481,7 @@ fn a_rejected_launch_leaves_the_member_silent() {
     hang_tick!("rejected launch: opening audible fixture".to_owned());
     let opened = rig
         .runtime
-        .block_on(rig.deck.load_fixture(&rig.worker, load, Position::ZERO))
+        .block_on(rig.deck.load_fixture(&worker, load, Position::ZERO))
         .expect("dispatcher prepares the audible source")
         .opened;
     hang_reset!();
@@ -1560,7 +1564,7 @@ pub(super) fn opened_fixture(rig: &mut Rig, src: &str) -> Loaded<OpenedTrack> {
         usize::try_from(mock::SAMPLE_RATE.get()).expect("sample rate") / 100 * 2
     ];
     mock::write_pcm_wav(&path, &samples, spec).expect("generated float WAV");
-    let worker = rig.worker.clone();
+    let worker = rig.worker().clone();
     let config: ResourceConfig<TestPools> = ResourceConfig::for_src(ResourceSrc::Path(path))
         .store(AssetStore::builder(pools()).build())
         .worker(worker.clone())
@@ -1581,7 +1585,7 @@ pub(super) fn opened_fixture(rig: &mut Rig, src: &str) -> Loaded<OpenedTrack> {
     );
     let opened = rig
         .runtime
-        .block_on(rig.deck.load_fixture(&rig.worker, load, Position::ZERO))
+        .block_on(rig.deck.load_fixture(&worker, load, Position::ZERO))
         .expect("real dispatcher opens the WAV once");
     rig.sources.push(dir);
     opened

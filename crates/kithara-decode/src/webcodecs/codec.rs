@@ -63,7 +63,7 @@ struct PcmOut {
     frames: u32,
     sample_rate: u32,
     generation: u64,
-    pts_us: u64,
+    pts: Duration,
 }
 
 pub(crate) struct WebCodecsCodec<S> {
@@ -112,7 +112,7 @@ where
                     frames,
                     sample_rate,
                     channels,
-                    pts_us,
+                    pts,
                     generation,
                 } if generation == self.generation => {
                     let pcm = PcmOut {
@@ -121,7 +121,7 @@ where
                         frames,
                         sample_rate,
                         generation,
-                        pts_us,
+                        pts,
                     };
                     return self.write_pcm(out, pcm);
                 }
@@ -240,7 +240,7 @@ where
                     frames,
                     sample_rate,
                     channels,
-                    pts_us,
+                    pts,
                     generation,
                 } if generation == self.generation => {
                     let pcm = PcmOut {
@@ -249,7 +249,7 @@ where
                         frames,
                         sample_rate,
                         generation,
-                        pts_us,
+                        pts,
                     };
                     return self.write_pcm(out, pcm);
                 }
@@ -293,7 +293,7 @@ where
             frames,
             sample_rate,
             generation,
-            pts_us,
+            pts,
         } = pcm;
         let expected = usize::try_from(frames)
             .ok()
@@ -306,11 +306,11 @@ where
             }));
         }
         *out = interleaved;
-        self.decoded_pts = Duration::from_micros(pts_us);
+        self.decoded_pts = pts;
         tracing::debug!(
             generation,
             decoder_id = self.decoder_id,
-            pts_us,
+            pts = ?pts,
             sample_rate,
             channels,
             frames,
@@ -332,7 +332,7 @@ where
     ) -> DecodeResult<crate::codec::DecodedPacket> {
         let crate::demuxer::Frame {
             data: frame_data,
-            pts: pts,
+            pts,
             packet_desc: _packet_desc,
             ..
         } = frame;
@@ -355,11 +355,10 @@ where
 
         self.eof_draining = false;
         self.eof_flushed = false;
-        let pts_us = u64::try_from(pts.as_micros()).unwrap_or(u64::MAX);
         let mut data = self.pools.get_with_len::<u8>(frame_data.len())?;
         data.copy_from_slice(frame_data);
         self.send(HostCmd::Decode {
-            pts_us,
+            pts,
             data,
             decoder_id: self.decoder_id,
             key: true,
