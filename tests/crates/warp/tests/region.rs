@@ -164,7 +164,9 @@ fn rms_profile(mono: &[f32]) -> (f32, f32) {
     );
     let body = &mono[start..end];
     let mut rms: Vec<f32> = body
-        .chunks_exact(WIN)
+        .as_chunks::<WIN>()
+        .0
+        .iter()
         .map(|w| (w.iter().map(|s| s * s).sum::<f32>() / f32_of(f64_of(WIN))).sqrt())
         .collect();
     assert!(!rms.is_empty(), "the steady audible body has an RMS window");

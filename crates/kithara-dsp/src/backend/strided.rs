@@ -41,11 +41,11 @@ fn scatter_quads(plane: &[f32], output: &mut [f32], stride: NonZeroUsize) -> usi
     };
     let quads = output
         .chunks_exact_mut(group)
-        .zip(plane.chunks_exact(consts::LANES));
+        .zip(plane.as_chunks::<{ consts::LANES }>().0);
     let frames = quads.len().saturating_mul(consts::LANES);
     for (slots, samples) in quads {
-        if let [a, b, c, d] = samples
-            && let Some((slot_a, rest)) = slots.split_at_mut_checked(step)
+        let [a, b, c, d] = samples;
+        if let Some((slot_a, rest)) = slots.split_at_mut_checked(step)
             && let Some((slot_b, rest)) = rest.split_at_mut_checked(step)
             && let Some((slot_c, slot_d)) = rest.split_at_mut_checked(step)
             && let (Some(slot_a), Some(slot_b), Some(slot_c), Some(slot_d)) = (
@@ -72,7 +72,9 @@ fn gather_quads(input: &[f32], stride: NonZeroUsize, plane: &mut [f32]) -> usize
         return 0;
     };
     let quads = plane
-        .chunks_exact_mut(consts::LANES)
+        .as_chunks_mut::<{ consts::LANES }>()
+        .0
+        .iter_mut()
         .zip(input.chunks_exact(group));
     let frames = quads.len().saturating_mul(consts::LANES);
     for (slots, samples) in quads {

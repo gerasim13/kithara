@@ -88,7 +88,7 @@ impl MultichannelBiquad {
             .chunks_exact_mut(span)
             .nth(section)
             .ok_or(BiquadError::Shape)?;
-        for slot in block.chunks_exact_mut(consts::SECTION) {
+        for slot in block.as_chunks_mut::<{ consts::SECTION }>().0 {
             for (target, value) in slot.iter_mut().zip(coefficients) {
                 *target = f64::from(value);
             }

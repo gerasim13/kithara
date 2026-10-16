@@ -83,7 +83,9 @@ async fn nonuniform_gapless_hls_is_continuous_at_every_boundary(
 
     assert!(pcm.len().is_multiple_of(consts::CHANNELS));
     let left = pcm
-        .chunks_exact(consts::CHANNELS)
+        .as_chunks::<{ consts::CHANNELS }>()
+        .0
+        .iter()
         .map(|frame| frame[0])
         .collect::<Vec<_>>();
     let whole = ascending_phase_replays(&left, 0, left.len(), consts::PHASE_TOLERANCE);

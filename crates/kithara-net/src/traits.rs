@@ -60,7 +60,6 @@ impl ByteStream {
     }
 
     /// Consume the wrapper, returning just the raw byte stream.
-    #[must_use]
     pub fn into_inner(self) -> RawByteStream {
         self.inner
     }

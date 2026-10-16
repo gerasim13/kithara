@@ -11,7 +11,9 @@ pub async fn decode(bytes: &[u8]) -> Result<Vec<f32>> {
         "FFmpeg returned non-f32le output"
     );
     Ok(pcm
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|sample| f32::from_le_bytes([sample[0], sample[1], sample[2], sample[3]]))
         .collect())
 }

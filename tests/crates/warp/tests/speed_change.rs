@@ -210,7 +210,9 @@ async fn play(temp_dir: &TestTempDir, backend: StretchKind, keylock: bool) -> Ta
 
 fn onsets(master: &[f32]) -> Vec<Onset> {
     let left: Vec<f32> = master
-        .chunks_exact(CHANNELS)
+        .as_chunks::<CHANNELS>()
+        .0
+        .iter()
         .map(|frame| frame[0])
         .collect();
     let mut found = Vec::new();

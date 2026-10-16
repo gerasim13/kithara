@@ -43,13 +43,14 @@ pub fn channel_signals() -> [Vec<f32>; 9] {
 
 pub(crate) fn samples(asset: &Asset) -> Vec<f32> {
     let bytes = asset.bytes();
-    let chunks = bytes.chunks_exact(size_of::<f32>());
+    let (chunks, remainder) = bytes.as_chunks::<{ size_of::<f32>() }>();
     assert!(
-        chunks.remainder().is_empty(),
+        remainder.is_empty(),
         "fixture contains complete f32 samples"
     );
     chunks
-        .map(|chunk| f32::from_le_bytes(chunk.try_into().expect("one f32 sample")))
+        .iter()
+        .map(|chunk| f32::from_le_bytes(*chunk))
         .collect()
 }
 

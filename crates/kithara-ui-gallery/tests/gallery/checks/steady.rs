@@ -93,8 +93,10 @@ impl Picture {
 fn pixels_differ(first: &[u8], second: &[u8]) -> Option<String> {
     let width = physical().0;
     let differing: Vec<usize> = first
-        .chunks_exact(4)
-        .zip(second.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(second.as_chunks::<4>().0)
         .enumerate()
         .filter_map(|(index, (left, right))| (left != right).then_some(index))
         .collect();

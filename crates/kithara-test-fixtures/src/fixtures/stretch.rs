@@ -59,8 +59,10 @@ pub fn stretch_pcm() -> &'static StretchPcm {
         half: samples(&assets::stretch_pcm_half()),
         four_fifths: samples(&assets::stretch_pcm_four_fifths()),
         tones: samples(&assets::stretch_pcm_tones())
-            .chunks_exact(65_536 * 2)
-            .map(<[f32]>::to_vec)
+            .as_chunks::<{ 65_536 * 2 }>()
+            .0
+            .iter()
+            .map(|tone| tone.to_vec())
             .collect(),
     })
 }

@@ -191,7 +191,9 @@ impl Decoded {
     fn onsets(&self) -> Vec<usize> {
         let levels: Vec<f64> = self
             .mono
-            .chunks_exact(consts::ONSET_WINDOW_FRAMES)
+            .as_chunks::<{ consts::ONSET_WINDOW_FRAMES }>()
+            .0
+            .iter()
             .map(|window| f64::from(rms(window)))
             .collect();
         let threshold = levels.iter().copied().fold(0.0_f64, f64::max) / 2.0;

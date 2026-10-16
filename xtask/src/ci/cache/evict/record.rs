@@ -25,12 +25,13 @@ pub(super) fn decode(bytes: &[u8]) -> Result<HashMap<Entry, u64>> {
         version == RECENCY_RECORD_VERSION,
         "the record is format {version}, not {RECENCY_RECORD_VERSION}"
     );
-    let records = body.chunks_exact(RECENCY_RECORD_BYTES);
+    let (records, remainder) = body.as_chunks::<RECENCY_RECORD_BYTES>();
     ensure!(
-        records.remainder().is_empty(),
+        remainder.is_empty(),
         "the record ends partway through an entry"
     );
     records
+        .iter()
         .map(|record| {
             let (hash, read) = record.split_at(32);
             Ok((

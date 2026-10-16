@@ -50,7 +50,9 @@ pub fn mpeg_eight() -> &'static [u8] {
 pub fn i16_ramp() -> Vec<i16> {
     assets::mock_packet_ramp()
         .bytes()
-        .chunks_exact(2)
-        .map(|sample| i16::from_le_bytes([sample[0], sample[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|sample| i16::from_le_bytes(*sample))
         .collect()
 }

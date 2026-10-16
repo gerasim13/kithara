@@ -20,7 +20,9 @@ fn samples(asset: &Asset) -> Vec<f32> {
     let bytes = asset.bytes();
     let header = kithara_test_fixtures::signal::header(SAMPLE_RATE, CHANNELS, Some(0));
     bytes[header.len()..]
-        .chunks_exact(size_of::<i16>())
+        .as_chunks::<{ size_of::<i16>() }>()
+        .0
+        .iter()
         .map(|sample| f32::from(i16::from_le_bytes([sample[0], sample[1]])) / f32::from(i16::MAX))
         .collect()
 }
