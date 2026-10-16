@@ -17,7 +17,7 @@ use tracing::warn;
 use super::{
     Linked, LinkedPlayer, LinkedSnapshot, SyncMode, SyncStatus, Waiting,
     geometry::cue_position,
-    state::{RunningCorrection, SpeedOperation},
+    state::{CorrectionState, RunningCorrection, SpeedOperation},
 };
 use crate::{GridAnswer, TempoTrajectory, covers, entry, jump_target};
 
@@ -104,6 +104,14 @@ impl<P> Linked<P> {
         let Some(grid) = self.grid.as_ref() else {
             return Err(PlayError::NotReady);
         };
+        let segment = self
+            .inner
+            .snapshot()
+            .as_ref()
+            .mark
+            .ok_or(PlayError::NotReady)?
+            .lane
+            .segment;
         let (position, from) = self.planned::<S>(at)?;
         if !covers(grid, position) {
             return Err(PlayError::NotReady);
@@ -135,9 +143,17 @@ impl<P> Linked<P> {
             out,
         )?;
         if let Some(seq) = sent {
-            self.speeds
-                .push((seq, SpeedOperation::Correction { commanded }));
-            self.correction = Some(RunningCorrection { at, frames });
+            self.speeds.push((
+                seq,
+                SpeedOperation::Correction {
+                    commanded,
+                    state: CorrectionState::Pending(RunningCorrection {
+                        at,
+                        frames,
+                        segment,
+                    }),
+                },
+            ));
         }
         Ok(sent)
     }
@@ -511,6 +527,7 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
     }
 
     fn tick(&mut self, now: SessionFrame, out: &mut Outbox<'_, S>) {
+        self.inner.tick(now, out);
         if !self.speeds.is_empty() {
             while let Some(receipt) = self.inner.speed_receipt() {
                 let seq = match &receipt {
@@ -521,6 +538,17 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
                 else {
                     continue;
                 };
+                if let Settled::Applied { at, .. } = receipt {
+                    if let SpeedOperation::Correction { state, .. } = &mut self.speeds[index].1 {
+                        if let CorrectionState::Pending(correction) = state {
+                            *state =
+                                CorrectionState::Applied(RunningCorrection { at, ..*correction });
+                        }
+                    } else {
+                        self.speeds.remove(index);
+                    }
+                    continue;
+                }
                 let (_, operation) = self.speeds.remove(index);
                 if self.synced()
                     && matches!(
@@ -531,9 +559,8 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
                         }
                     )
                 {
-                    self.correction = None;
                     match operation {
-                        SpeedOperation::Correction { commanded } => {
+                        SpeedOperation::Correction { commanded, .. } => {
                             self.alignment = Some(commanded);
                         }
                         SpeedOperation::Alignment => {
@@ -548,14 +575,7 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
                 }
             }
         }
-        self.inner.tick(now, out);
-        if let Some(correction) = &self.correction
-            && now
-                .frames_since(correction.at)
-                .is_some_and(|elapsed| elapsed >= correction.frames.get() as u64)
-        {
-            self.correction = None;
-        }
+        self.update_correction::<S>();
         if self.synced() {
             self.realign(out);
         }
@@ -568,36 +588,31 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
     }
 
     fn snapshot(&self) -> Self::Snapshot {
+        let track = self.inner.snapshot();
+        let remaining = self.correction.as_ref().and_then(|(_, correction)| {
+            let mark = track
+                .as_ref()
+                .mark
+                .filter(|mark| mark.lane.segment == correction.segment)?;
+            let elapsed = usize::try_from(mark.session.frames_since(correction.at)?).ok()?;
+            let frames = correction.frames.get().checked_sub(elapsed)?;
+            (frames > 0).then_some(FrameCount::new(frames))
+        });
         let sync = match self.mode {
             SyncMode::Off => SyncStatus::Off,
             SyncMode::Unsyncable => SyncStatus::Unsyncable,
-            SyncMode::On => match self.waiting {
-                Some(waiting) => SyncStatus::WaitingForGrid {
+            SyncMode::On => self.waiting.map_or_else(
+                || {
+                    remaining.map_or(SyncStatus::On, |remaining| SyncStatus::Correcting {
+                        remaining,
+                    })
+                },
+                |waiting| SyncStatus::WaitingForGrid {
                     required: waiting.required(),
                 },
-                None if self.correction.is_some() => {
-                    let remaining = self.correction.as_ref().map_or(0, |correction| {
-                        let elapsed = self
-                            .inner
-                            .snapshot()
-                            .as_ref()
-                            .mark
-                            .and_then(|mark| mark.session.frames_since(correction.at))
-                            .unwrap_or(0);
-                        usize::try_from(elapsed)
-                            .map_or(0, |elapsed| correction.frames.get().saturating_sub(elapsed))
-                    });
-                    SyncStatus::Correcting {
-                        remaining: FrameCount::new(remaining),
-                    }
-                }
-                None => SyncStatus::On,
-            },
+            ),
         };
-        LinkedSnapshot {
-            track: self.inner.snapshot(),
-            sync,
-        }
+        LinkedSnapshot { track, sync }
     }
 }
 

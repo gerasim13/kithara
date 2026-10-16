@@ -1,10 +1,13 @@
 use kithara_beat::{BeatGridModel, BeatGridState};
+use kithara_command::When;
 use kithara_events::TrackId;
-use kithara_play::{Bound, Player, TrackCommand};
+use kithara_play::{Bound, HostedDeck, Player, TrackCommand};
 use kithara_signal::SessionFrame;
 use kithara_test_utils::{bufpool::TestPools, kithara};
 
-use super::fixtures::{answer, grid, load, loaded, position, sounding, source_grid, trajectory};
+use super::fixtures::{
+    Command, answer, grid, load, loaded, position, sounding, source_grid, trajectory,
+};
 use crate::{GridAnswer, LinkedPlayer, SyncStatus};
 
 fn served_grid() -> BeatGridModel {
@@ -217,8 +220,7 @@ fn releasing_a_track_leaves_the_grid_unavailable() {
         control
             .commands()
             .iter()
-            .any(|(seq, command)| *seq == released
-                && matches!(command, super::fixtures::Command::Release)),
+            .any(|(seq, command)| *seq == released && matches!(command, Command::Release)),
         "letting go is a later command, never a rewind"
     );
 }
@@ -315,12 +317,37 @@ fn repeating_the_same_grid_does_not_restart_a_correction() {
     let revised = grid(23_999, 0, Some((4, 0)), 960_000);
     answer(&mut deck, &mut rig, load, revised.clone());
     assert!(!control.commands().is_empty());
+    let pending = control.commands();
     let before = deck.snapshot().sync;
-    assert!(matches!(before, SyncStatus::Correcting { remaining } if remaining.get() > 0));
+    assert_eq!(
+        before, unchanged.sync,
+        "revised grid submission remains pending"
+    );
     control.clear();
-    answer(&mut deck, &mut rig, load, revised);
+    answer(&mut deck, &mut rig, load, revised.clone());
     assert!(control.commands().is_empty());
     assert_eq!(deck.snapshot().sync, before);
+    let Command::Speed(_, When::At(start)) = &pending[0].1 else {
+        panic!("timed correction");
+    };
+    let start = *start;
+    rig.apply(&mut deck, pending[0].0, i64::from(start));
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    assert_eq!(
+        deck.snapshot().sync,
+        before,
+        "future Applied remains pending"
+    );
+    super::fixtures::consume(
+        &control,
+        u32::try_from(i64::from(start)).expect("correction start"),
+    );
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    let active = deck.snapshot().sync;
+    assert!(matches!(active, SyncStatus::Correcting { remaining } if remaining.get() > 0));
+    answer(&mut deck, &mut rig, load, revised);
+    assert!(control.commands().is_empty());
+    assert_eq!(deck.snapshot().sync, active);
 }
 
 #[kithara::test]
@@ -527,12 +554,9 @@ fn group_accepts_latest_grid_after_unpublished_revisions() {
         [
             (
                 seq,
-                super::fixtures::Command::Speed(
-                    kithara_warp::SpeedCurve::Constant(1.0),
-                    kithara_command::When::Next
-                )
+                Command::Speed(kithara_warp::SpeedCurve::Constant(1.0), When::Next)
             ),
-            (seq, super::fixtures::Command::Seek(position(0)))
+            (seq, Command::Seek(position(0)))
         ]
     );
 }

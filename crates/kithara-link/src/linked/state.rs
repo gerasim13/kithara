@@ -1,8 +1,8 @@
 use kithara_beat::BeatGridModel;
 use kithara_command::{Seq, When};
 use kithara_config::Config;
-use kithara_play::{Outbox, PlayError, Player, Position, TrackSnapshot};
-use kithara_signal::{FrameCount, SessionFrame};
+use kithara_play::{Outbox, PlayError, Player, Position, Track, TrackSnapshot};
+use kithara_signal::{FrameCount, SegmentId, SessionFrame};
 
 use crate::{GridAnswer, LinkError, LinkedConfig, TempoTrajectory};
 
@@ -129,7 +129,7 @@ pub struct Linked<P> {
     pub(crate) mode: SyncMode,
     pub(super) load: Option<Seq>,
     pub(super) waiting: Option<Waiting>,
-    pub(super) correction: Option<RunningCorrection>,
+    pub(super) correction: Option<(Seq, RunningCorrection)>,
     pub(super) alignment: Option<bool>,
     pub(super) speeds: Vec<(Seq, SpeedOperation)>,
     pub(super) start: Option<Seq>,
@@ -139,15 +139,27 @@ pub struct Linked<P> {
     pub(super) cue: Option<Position>,
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct RunningCorrection {
     pub(super) at: SessionFrame,
     pub(super) frames: FrameCount,
+    pub(super) segment: SegmentId,
+}
+
+pub(super) enum CorrectionState {
+    Pending(RunningCorrection),
+    Applied(RunningCorrection),
 }
 
 pub(super) enum SpeedOperation {
-    Correction { commanded: bool },
+    Correction {
+        commanded: bool,
+        state: CorrectionState,
+    },
     Alignment,
-    Relocation { to: Position },
+    Relocation {
+        to: Position,
+    },
 }
 
 impl<P> Linked<P> {
@@ -175,6 +187,60 @@ impl<P> Linked<P> {
             withdrawn: Vec::new(),
             retimes: Vec::new(),
             cue: None,
+        }
+    }
+
+    pub(super) fn update_correction<S>(&mut self)
+    where
+        P: Track<S>,
+    {
+        let snapshot = self.inner.snapshot();
+        let Some(mark) = snapshot.as_ref().mark else {
+            return;
+        };
+        let eligible = self
+            .speeds
+            .iter()
+            .filter_map(|(seq, operation)| {
+                let SpeedOperation::Correction {
+                    state: CorrectionState::Applied(correction),
+                    ..
+                } = operation
+                else {
+                    return None;
+                };
+                (correction.segment == mark.lane.segment
+                    && mark.session >= correction.at
+                    && self.correction.as_ref().is_none_or(|(active_seq, active)| {
+                        (correction.at, *seq) > (active.at, *active_seq)
+                    }))
+                .then_some((*seq, *correction))
+            })
+            .max_by_key(|(seq, correction)| (correction.at, *seq));
+        if let Some((seq, correction)) = eligible {
+            self.correction = Some((seq, correction));
+        }
+        let active = self.correction;
+        self.speeds.retain(|(seq, operation)| {
+            let SpeedOperation::Correction { state, .. } = operation else {
+                return true;
+            };
+            let (CorrectionState::Pending(correction) | CorrectionState::Applied(correction)) =
+                state;
+            correction.segment > mark.lane.segment
+                || correction.segment == mark.lane.segment
+                    && active.as_ref().is_none_or(|(active_seq, active)| {
+                        (correction.at, *seq) > (active.at, *active_seq)
+                    })
+        });
+        if let Some((_, correction)) = &self.correction
+            && (mark.lane.segment != correction.segment
+                || mark
+                    .session
+                    .frames_since(correction.at)
+                    .is_some_and(|elapsed| elapsed >= correction.frames.get() as u64))
+        {
+            self.correction = None;
         }
     }
 }

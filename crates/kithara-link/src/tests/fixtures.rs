@@ -19,10 +19,10 @@ use kithara_play::{
     TrackReceipt, TrackSettings, TrackSettingsChange, TrackSnapshot, TrackStatus, mock::DeckRig,
 };
 use kithara_render::{
-    bridge::{DeckPart, DeckProtocol, DeckSnapshot, Slot},
+    bridge::{DeckPart, DeckProtocol, DeckSnapshot, Slot, SlotMark},
     rt::DeckMixerConfig,
 };
-use kithara_signal::{FrameCount, SessionFrame};
+use kithara_signal::{FrameCount, SegmentId, SessionFrame};
 use kithara_test_utils::bufpool::{TestPools, pools};
 use kithara_warp::{SessionBeat, SpeedCurve};
 use num_traits::AsPrimitive;
@@ -701,10 +701,31 @@ pub(super) fn sounding() -> (Deck, Control, Rig, Seq) {
     control.edit(|script| {
         script.snapshot.status = TrackStatus::Playing {
             since: SessionFrame::new(0),
-        }
+        };
+        script.snapshot.mark = Some(SlotMark {
+            session: SessionFrame::new(0),
+            lane: kithara_render::LaneFrame {
+                segment: SegmentId::FIRST,
+                frame: 0,
+            },
+            position: Position::ZERO,
+        });
     });
     control.clear();
     (deck, control, rig, load)
+}
+
+pub(super) fn consume(control: &Control, frame: u32) {
+    control.edit(|script| {
+        let mark = script
+            .snapshot
+            .mark
+            .as_mut()
+            .expect("sounding source has a consumed mark");
+        mark.session = SessionFrame::new(i64::from(frame));
+        mark.lane.frame = u64::from(frame);
+        mark.position = position(frame);
+    });
 }
 
 pub(super) fn source_grid(model: &BeatGridModel) -> kithara_sync::SourceGrid {

@@ -5,8 +5,8 @@ use kithara_test_utils::{bufpool::TestPools, kithara};
 use kithara_warp::SpeedCurve;
 
 use super::fixtures::{
-    Command, Control, Deck, Rig, answer, grid, load, loaded, position, sounding, source_grid,
-    trajectory,
+    Command, Control, Deck, Rig, answer, consume, grid, load, loaded, position, sounding,
+    source_grid, trajectory,
 };
 use crate::{LinkedPlayer, SyncStatus};
 
@@ -245,6 +245,7 @@ fn a_tempo_retarget_continues_the_audible_source_without_a_new_beat() {
             since: SessionFrame::new(48_000),
         };
     });
+    consume(&control, 48_000);
     let before = deck.snapshot();
     rig.run(|out| {
         LinkedPlayer::retime(
@@ -260,7 +261,19 @@ fn a_tempo_retarget_continues_the_audible_source_without_a_new_beat() {
         matches!(commands[0].1, Command::Speed(_, When::At(frame)) if frame == SessionFrame::new(96_000))
     );
     assert_track_unchanged(deck.snapshot().as_ref(), before.as_ref());
+    assert_eq!(
+        deck.snapshot().sync,
+        before.sync,
+        "submission is not consumption"
+    );
     rig.apply(&mut deck, commands[0].0, 96_000);
+    rig.now = SessionFrame::new(192_000);
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    assert_eq!(
+        deck.snapshot().sync,
+        before.sync,
+        "future Applied is not consumed"
+    );
     assert_eq!(deck.snapshot().as_ref().position, position(48_000));
     assert_eq!(deck.snapshot().as_ref().status, before.as_ref().status);
     assert_eq!(deck.snapshot().as_ref().speed, 1.0);
@@ -287,10 +300,11 @@ fn a_rejected_retarget_returns_the_member_to_its_applied_map() {
     assert_track_unchanged(deck.snapshot().as_ref(), before.as_ref());
     control.clear();
     rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
-    assert!(matches!(
+    assert_eq!(
         deck.snapshot().sync,
-        SyncStatus::Correcting { .. }
-    ));
+        before.sync,
+        "retry submission is not consumed"
+    );
     assert_eq!(control.commands().len(), 1);
     assert!(matches!(control.commands()[0].1, Command::Speed(_, _)));
     assert!(matches!(
@@ -363,7 +377,20 @@ fn a_presented_retarget_locks_the_member_on_its_new_map() {
     });
     let commands = control.commands();
     assert_eq!(commands.len(), 1);
+    assert_eq!(deck.snapshot().sync, SyncStatus::On);
     rig.apply(&mut deck, commands[0].0, 96_000);
+    rig.now = SessionFrame::new(192_000);
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    assert_eq!(
+        deck.snapshot().sync,
+        SyncStatus::On,
+        "Applied may precede its audible frame"
+    );
+    consume(&control, 95_999);
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    assert_eq!(deck.snapshot().sync, SyncStatus::On);
+    consume(&control, 96_000);
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
     assert_eq!(deck.snapshot().as_ref().speed, 1.25);
     assert_eq!(deck.snapshot().as_ref().position, position(0));
     assert_eq!(
@@ -378,8 +405,335 @@ fn a_presented_retarget_locks_the_member_on_its_new_map() {
     };
     rig.now = SessionFrame::new(96_000) + frames;
     rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    assert_eq!(
+        deck.snapshot().sync,
+        SyncStatus::Correcting { remaining: frames },
+        "owner clock cannot retire unconsumed correction"
+    );
+    consume(
+        &control,
+        u32::try_from(i64::from(rig.now)).expect("correction endpoint"),
+    );
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
     assert_eq!(deck.snapshot().sync, SyncStatus::On);
     assert_eq!(deck.snapshot().as_ref().speed, 1.25);
+}
+
+fn active_refinement() -> (Deck, Control, Rig, Seq, FrameCount) {
+    let (mut deck, control, mut rig, load) = sounding();
+    answer(
+        &mut deck,
+        &mut rig,
+        load,
+        grid(24_000, 12, Some((4, 0)), 960_000),
+    );
+    let sent = control.commands();
+    let Command::Speed(_, When::At(at)) = &sent[0].1 else {
+        panic!("timed source refinement");
+    };
+    let at = *at;
+    assert_eq!(deck.snapshot().sync, SyncStatus::On);
+    rig.apply(&mut deck, sent[0].0, i64::from(at));
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    assert_eq!(deck.snapshot().sync, SyncStatus::On);
+    consume(
+        &control,
+        u32::try_from(i64::from(at)).expect("refinement frame"),
+    );
+    rig.now = at;
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    let SyncStatus::Correcting { remaining } = deck.snapshot().sync else {
+        panic!("consumed source refinement");
+    };
+    assert!(
+        remaining.get() > 256,
+        "fixture must leave room for its pending replacement"
+    );
+    control.clear();
+    (deck, control, rig, load, remaining)
+}
+
+#[kithara::test]
+fn a_pending_refinement_preserves_the_current_correction() {
+    for rejected in [false, true] {
+        let (mut deck, control, mut rig, load, first_frames) = active_refinement();
+        let first_at = rig.now;
+        let active = deck.snapshot().sync;
+        let observed = deck.snapshot().as_ref().mark;
+        control.edit(|script| script.snapshot.mark = None);
+        assert_eq!(
+            deck.snapshot().sync,
+            SyncStatus::On,
+            "missing mark cannot publish active correction"
+        );
+        control.edit(|script| script.snapshot.mark = observed);
+        assert_eq!(
+            deck.snapshot().sync,
+            active,
+            "retaining metadata permits the same consumed law to return"
+        );
+        control.edit(|script| {
+            script
+                .snapshot
+                .mark
+                .as_mut()
+                .expect("consumed mark")
+                .lane
+                .segment = kithara_signal::SegmentId::FIRST.next();
+        });
+        assert_eq!(
+            deck.snapshot().sync,
+            SyncStatus::On,
+            "foreign mark cannot publish active correction"
+        );
+        control.edit(|script| script.snapshot.mark = observed);
+        assert_eq!(deck.snapshot().sync, active);
+        answer(
+            &mut deck,
+            &mut rig,
+            load,
+            grid(24_000, 24, Some((4, 0)), 960_000),
+        );
+        let sent = control.commands();
+        let Command::Speed(_, When::At(at)) = &sent[0].1 else {
+            panic!("timed replacement");
+        };
+        let at = *at;
+        assert!(at > first_at);
+        assert_eq!(
+            deck.snapshot().sync,
+            active,
+            "pending replacement must preserve the consumed law"
+        );
+        if rejected {
+            rig.settle(&mut deck, sent[0].0, &Outcome::Rejected(Rejection::Late));
+            control.clear();
+            rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+            assert_eq!(
+                deck.snapshot().sync,
+                active,
+                "rejected replacement must preserve the consumed law"
+            );
+            assert_eq!(
+                control.commands().len(),
+                1,
+                "Late still replans its own correction"
+            );
+        } else {
+            rig.apply(&mut deck, sent[0].0, i64::from(at));
+            rig.now = at + FrameCount::new(48_000);
+            rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+            assert_eq!(
+                deck.snapshot().sync,
+                active,
+                "future Applied and owner time cannot replace consumed law"
+            );
+        }
+        let elapsed = usize::try_from(at.frames_since(first_at).expect("ordered replacement"))
+            .expect("elapsed");
+        consume(
+            &control,
+            u32::try_from(i64::from(at) - 1).expect("before replacement"),
+        );
+        rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+        assert_eq!(
+            deck.snapshot().sync,
+            SyncStatus::Correcting {
+                remaining: FrameCount::new(first_frames.get() - elapsed + 1)
+            }
+        );
+        consume(&control, u32::try_from(i64::from(at)).expect("replacement"));
+        rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+        if rejected {
+            assert_eq!(
+                deck.snapshot().sync,
+                SyncStatus::Correcting {
+                    remaining: FrameCount::new(first_frames.get() - elapsed)
+                }
+            );
+        } else {
+            let SyncStatus::Correcting { remaining } = deck.snapshot().sync else {
+                panic!("replacement must activate at its consumed frame");
+            };
+            assert_ne!(
+                remaining.get(),
+                first_frames.get() - elapsed,
+                "fixture must distinguish replacement law"
+            );
+        }
+    }
+}
+
+#[kithara::test]
+fn a_correction_follows_its_actual_applied_receipt_frame() {
+    let (mut deck, control, mut rig, load) = sounding();
+    answer(
+        &mut deck,
+        &mut rig,
+        load,
+        grid(24_000, 12, Some((4, 0)), 960_000),
+    );
+    let sent = control.commands();
+    let Command::Speed(_, When::At(requested)) = &sent[0].1 else {
+        panic!("timed correction");
+    };
+    let requested = *requested;
+    let actual = requested + FrameCount::new(7);
+    rig.apply(&mut deck, sent[0].0, i64::from(actual));
+    consume(
+        &control,
+        u32::try_from(i64::from(requested)).expect("requested correction frame"),
+    );
+    rig.now = actual + FrameCount::new(48_000);
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    assert_eq!(
+        deck.snapshot().sync,
+        SyncStatus::On,
+        "requested frame is not evidence of actual application"
+    );
+    consume(
+        &control,
+        u32::try_from(i64::from(actual) - 1).expect("before actual correction"),
+    );
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    assert_eq!(deck.snapshot().sync, SyncStatus::On);
+    consume(
+        &control,
+        u32::try_from(i64::from(actual)).expect("actual correction frame"),
+    );
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    assert!(
+        matches!(deck.snapshot().sync, SyncStatus::Correcting { remaining } if remaining.get() > 0)
+    );
+    assert!(
+        matches!(&control.commands()[0].1, Command::Speed(_, When::At(at)) if *at == requested),
+        "command target remains independently observable"
+    );
+}
+
+#[kithara::test]
+fn a_foreign_consumed_segment_cannot_activate_a_correction() {
+    let (mut deck, control, mut rig, load) = sounding();
+    let mark = deck.snapshot().as_ref().mark;
+    control.edit(|script| script.snapshot.mark = None);
+    answer(
+        &mut deck,
+        &mut rig,
+        load,
+        grid(24_000, 12, Some((4, 0)), 960_000),
+    );
+    assert!(
+        control.commands().is_empty(),
+        "no correction can invent a missing consumed Segment"
+    );
+    assert_eq!(deck.snapshot().sync, SyncStatus::On);
+    control.edit(|script| script.snapshot.mark = mark);
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    let sent = control.commands();
+    let Command::Speed(_, When::At(at)) = &sent[0].1 else {
+        panic!("timed correction");
+    };
+    let at = *at;
+    rig.apply(&mut deck, sent[0].0, i64::from(at));
+    consume(
+        &control,
+        u32::try_from(i64::from(at)).expect("correction frame"),
+    );
+    control.edit(|script| {
+        script
+            .snapshot
+            .mark
+            .as_mut()
+            .expect("consumed mark")
+            .lane
+            .segment = kithara_signal::SegmentId::FIRST.next();
+    });
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    assert_eq!(deck.snapshot().sync, SyncStatus::On);
+    control.edit(|script| {
+        script
+            .snapshot
+            .mark
+            .as_mut()
+            .expect("consumed mark")
+            .lane
+            .segment = kithara_signal::SegmentId::FIRST;
+    });
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    assert_eq!(
+        deck.snapshot().sync,
+        SyncStatus::On,
+        "obsolete segment correction cannot return"
+    );
+}
+
+#[kithara::test]
+fn an_older_applied_receipt_cannot_replace_a_newer_consumed_correction() {
+    for (delay, after_expiry) in [(0, false), (0, true), (64, false), (64, true)] {
+        let (mut deck, control, mut rig, load) = sounding();
+        answer(
+            &mut deck,
+            &mut rig,
+            load,
+            grid(24_000, 12, Some((4, 0)), 960_000),
+        );
+        let older = control.commands()[0].0;
+        rig.now = SessionFrame::new(delay);
+        answer(
+            &mut deck,
+            &mut rig,
+            load,
+            grid(24_000, 24, Some((4, 0)), 960_000),
+        );
+        let sent = control.commands();
+        let Command::Speed(_, When::At(at)) = &sent[1].1 else {
+            panic!("timed replacement");
+        };
+        let at = *at;
+        rig.apply(&mut deck, sent[1].0, i64::from(at));
+        consume(
+            &control,
+            u32::try_from(i64::from(at)).expect("replacement frame"),
+        );
+        rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+        let active = deck.snapshot().sync;
+        let SyncStatus::Correcting { remaining } = active else {
+            panic!("newer consumed correction");
+        };
+        let Command::Speed(_, When::At(older_at)) = &sent[0].1 else {
+            panic!("older timed correction");
+        };
+        if after_expiry {
+            consume(
+                &control,
+                u32::try_from(i64::from(at + remaining)).expect("correction endpoint"),
+            );
+            rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+            assert_eq!(deck.snapshot().sync, SyncStatus::On);
+            rig.apply(&mut deck, older, i64::from(*older_at));
+            rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+            assert_eq!(
+                deck.snapshot().sync,
+                SyncStatus::On,
+                "older receipt cannot reactivate after consumed expiry"
+            );
+            continue;
+        }
+        rig.apply(&mut deck, older, i64::from(*older_at));
+        rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+        assert_eq!(
+            deck.snapshot().sync,
+            active,
+            "order is physical frame then Seq, independent of receipt order"
+        );
+        let end = at + remaining;
+        consume(
+            &control,
+            u32::try_from(i64::from(end)).expect("correction endpoint"),
+        );
+        rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+        assert_eq!(deck.snapshot().sync, SyncStatus::On);
+    }
 }
 
 // Ruling: spec 4.8 removes armed preparation immunity; a tempo commit withdraws and replaces the pending entry.
@@ -581,10 +935,36 @@ fn an_armed_member_keeps_its_arm_across_a_grid_replacement() {
     assert!((law.rate_at(240.0).expect("5ms rate") - reached).abs() < 1e-12);
     assert_eq!(steps.last().expect("final law").1.target(), 130.0 / 120.0);
     assert_track_unchanged(deck.snapshot().as_ref(), applied.as_ref());
-    let SyncStatus::Correcting { remaining } = deck.snapshot().sync else {
-        panic!("nonzero source refinement must retain finite correction");
-    };
+    assert_eq!(
+        deck.snapshot().sync,
+        applied.sync,
+        "grid refinement remains pending"
+    );
+    let (_, frame_count) = kithara_sync::corrected_speed_curve(
+        &host,
+        &source_grid(&revised),
+        media,
+        start,
+        from,
+        0.001,
+        false,
+    )
+    .expect("bounded revised correction");
+    let remaining = FrameCount::new(usize::try_from(frame_count).expect("correction frames"));
     assert!(remaining.get() > 0);
+    rig.apply(&mut deck, replacement[0].0, i64::from(start));
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    assert_eq!(
+        deck.snapshot().sync,
+        applied.sync,
+        "future grid Applied remains pending"
+    );
+    consume(
+        &control,
+        u32::try_from(i64::from(start)).expect("correction start"),
+    );
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    assert_eq!(deck.snapshot().sync, SyncStatus::Correcting { remaining });
     let end = start + remaining;
     assert!(end < at);
     let frames = u64::try_from(remaining.get()).expect("correction frame count");
