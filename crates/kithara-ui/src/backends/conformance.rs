@@ -332,9 +332,13 @@ fn vello_paints_what_a_clip_contains() {
 
 #[kithara::test]
 fn vello_leaves_the_hole_an_outline_asked_for() {
+    let rgba = through_vello(&ring());
+    let middle = consts::HOLE.y + consts::HOLE.h / 2.0;
     assert!(
-        ring_has_a_hole(&through_vello(&ring())),
-        "the Vello backend ignored the outline's fill rule"
+        ring_has_a_hole(&rgba),
+        "the Vello backend ignored the outline's fill rule: ring={}, hole={}",
+        sample(&rgba, consts::OUTER.x + 4.0, middle),
+        sample(&rgba, consts::HOLE.x + consts::HOLE.w / 2.0, middle)
     );
 }
 
