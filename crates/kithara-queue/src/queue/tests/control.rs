@@ -177,7 +177,8 @@ async fn seek_frame_index_clamps_unrepresentable_targets(
         .find_map(|active| active.load)
         .expect("selected load")
         .seq();
-    let mut loaded = crate::mock::loaded_request(&mut rig, seq).await;
+    let mut loaded =
+        crate::mock::loaded_request(queue.worker().expect("fixture worker"), &mut rig, seq).await;
     let source = loaded
         .opened
         .pcm

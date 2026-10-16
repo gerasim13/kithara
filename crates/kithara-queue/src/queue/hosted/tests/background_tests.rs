@@ -161,7 +161,7 @@ async fn prefetch_lane_caps_concurrent_loads() {
             hang_tick!(format!("answering held background load {seq:?}"));
             kithara_platform::time::timeout(
                 __hang_detector.remaining(),
-                loaded_fixture(&mut rig, &dir),
+                loaded_fixture(queue.worker().expect("fixture worker"), &mut rig, &dir),
             )
             .await
             .unwrap_or_else(|error| {
@@ -234,7 +234,7 @@ async fn an_appended_track_loads_without_a_select() {
     let mut receiver = queue.subscribe::<QueueEvent>();
     let loads = hold_loads(&mut queue, &mut rig).0;
     assert!(loads.contains(&(seq, ServiceClass::Idle)));
-    let loaded = loaded_fixture(&mut rig, &dir).await;
+    let loaded = loaded_fixture(queue.worker().expect("fixture worker"), &mut rig, &dir).await;
     answer(&mut queue, &mut rig, seq, loaded);
     assert_eq!(
         queue.track(ids[1]).expect("record").status,
@@ -286,7 +286,7 @@ async fn background_loads_stay_within_max_concurrent_loads() {
     for id in &ids[1..3] {
         hang_tick!();
         let seq = load_seq(&queue, *id);
-        let loaded = loaded_fixture(&mut rig, &dir).await;
+        let loaded = loaded_fixture(queue.worker().expect("fixture worker"), &mut rig, &dir).await;
         hang_reset!();
         answer(&mut queue, &mut rig, seq, loaded);
         assert!(
@@ -313,7 +313,7 @@ async fn selecting_a_background_loaded_track_opens_nothing_new() {
     let ids = append(&mut queue, &mut rig, &dir, 2);
     let seq = load_seq(&queue, ids[1]);
     hold_loads(&mut queue, &mut rig);
-    let loaded = loaded_fixture(&mut rig, &dir).await;
+    let loaded = loaded_fixture(queue.worker().expect("fixture worker"), &mut rig, &dir).await;
     answer(&mut queue, &mut rig, seq, loaded);
     select(&mut queue, &mut rig, ids[1]);
     let (loads, priorities) = hold_loads(&mut queue, &mut rig);
@@ -378,7 +378,7 @@ async fn the_first_append_arms_a_paused_initial_load() {
         hold_loads(&mut queue, &mut rig).0,
         vec![(seq, ServiceClass::Warm)]
     );
-    let loaded = loaded_fixture(&mut rig, &dir).await;
+    let loaded = loaded_fixture(queue.worker().expect("fixture worker"), &mut rig, &dir).await;
     answer(&mut queue, &mut rig, seq, loaded);
     crate::mock::finish(&mut queue, &mut rig);
     assert_eq!(queue.current, Some(id));
@@ -412,7 +412,7 @@ async fn the_first_append_plays_with_autoplay() {
         hold_loads(&mut queue, &mut rig).0,
         vec![(seq, ServiceClass::Warm)]
     );
-    let loaded = loaded_fixture(&mut rig, &dir).await;
+    let loaded = loaded_fixture(queue.worker().expect("fixture worker"), &mut rig, &dir).await;
     answer(&mut queue, &mut rig, seq, loaded);
     crate::mock::finish(&mut queue, &mut rig);
     assert_eq!(queue.current, Some(id));
@@ -444,7 +444,7 @@ async fn selecting_another_track_consumes_the_opened_initial_resource() {
     let ids = append(&mut queue, &mut rig, &dir, 2);
     let seq = load_seq(&queue, ids[0]);
     hold_loads(&mut queue, &mut rig);
-    let loaded = loaded_fixture(&mut rig, &dir).await;
+    let loaded = loaded_fixture(queue.worker().expect("fixture worker"), &mut rig, &dir).await;
     answer(&mut queue, &mut rig, seq, loaded);
     select(&mut queue, &mut rig, ids[1]);
     assert_eq!(
@@ -490,7 +490,7 @@ async fn a_track_setting_reaches_background_loaded_tracks() {
     let (mut queue, mut rig, dir) = empty_queue();
     let ids = append(&mut queue, &mut rig, &dir, 2);
     hold_loads(&mut queue, &mut rig);
-    let loaded = loaded_fixture(&mut rig, &dir).await;
+    let loaded = loaded_fixture(queue.worker().expect("fixture worker"), &mut rig, &dir).await;
     let seq = load_seq(&queue, ids[1]);
     let mut due = rig.opens.resume(seq, (), ()).expect("held background open");
     let held = std::mem::take(due.commands_mut());
@@ -519,7 +519,7 @@ async fn a_selected_background_track_announces_loaded_once() {
     let seq = load_seq(&queue, ids[1]);
     let mut receiver = queue.subscribe::<QueueEvent>();
     hold_loads(&mut queue, &mut rig);
-    let loaded = loaded_fixture(&mut rig, &dir).await;
+    let loaded = loaded_fixture(queue.worker().expect("fixture worker"), &mut rig, &dir).await;
     answer(&mut queue, &mut rig, seq, loaded);
     select(&mut queue, &mut rig, ids[1]);
     crate::mock::finish(&mut queue, &mut rig);
@@ -553,7 +553,7 @@ async fn a_failed_replacement_release_keeps_the_taken_background_track() {
     for id in &ids[1..] {
         hang_tick!();
         let seq = load_seq(&queue, *id);
-        let loaded = loaded_fixture(&mut rig, &dir).await;
+        let loaded = loaded_fixture(queue.worker().expect("fixture worker"), &mut rig, &dir).await;
         answer(&mut queue, &mut rig, seq, loaded);
         hang_reset!();
     }
@@ -634,7 +634,7 @@ async fn a_stale_load_completion_does_not_cancel_the_live_target() {
         TrackStatus::Loading
     );
     let seq = load_seq(&queue, ids[1]);
-    let loaded = loaded_fixture(&mut rig, &dir).await;
+    let loaded = loaded_fixture(queue.worker().expect("fixture worker"), &mut rig, &dir).await;
     answer(&mut queue, &mut rig, seq, loaded);
     crate::mock::finish(&mut queue, &mut rig);
     assert_eq!(queue.current, Some(ids[1]));
@@ -648,7 +648,7 @@ async fn a_superseded_initial_open_releases_its_answered_lane() {
     hold_loads(&mut queue, &mut rig);
     select(&mut queue, &mut rig, ids[1]);
     assert_eq!(load_seq(&queue, ids[0]), seq);
-    let loaded = loaded_fixture(&mut rig, &dir).await;
+    let loaded = loaded_fixture(queue.worker().expect("fixture worker"), &mut rig, &dir).await;
     let lane = loaded.lane;
     answer(&mut queue, &mut rig, seq, loaded);
     rig.opens.drain();

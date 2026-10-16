@@ -28,6 +28,7 @@ async fn load_track_propagates_host_sample_rate() {
     let mut rig = DeckRig::new(DeckMixerConfig::default()).expect("deck scope");
     let loaded = rig
         .load_fixture(
+            &prep.worker,
             ResourceLoad::new(prepared, Box::new(AudioObserverSlot::default().relay())),
             Duration::ZERO,
         )

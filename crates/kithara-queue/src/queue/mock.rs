@@ -91,12 +91,11 @@ pub fn pending_selection() -> (
 #[kithara::flash(io)]
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 pub async fn loaded_fixture(
+    worker: &PlayWorker<TestPools>,
     rig: &mut DeckRig<TestPools>,
     dir: &TestTempDir,
 ) -> kithara_render::Loaded<kithara_play::OpenedTrack> {
-    let prep = ResourcePrep::builder()
-        .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
-        .build();
+    let prep = ResourcePrep::builder().worker(worker.clone()).build();
     let config = ResourceConfig::for_src(ResourceSrc::Path(dir.path().join("entry.wav")))
         .store(
             AssetStore::builder(pools())
@@ -108,7 +107,7 @@ pub async fn loaded_fixture(
         .prepare(config, &mock::output(None).get())
         .expect("prepared fixture");
     let item = ResourceLoad::new(prepared, Box::new(AudioObserverSlot::default().relay()));
-    let mut opening = std::pin::pin!(rig.load_fixture(item, Duration::ZERO));
+    let mut opening = std::pin::pin!(rig.load_fixture(worker, item, Duration::ZERO));
     let mut loaded = loop {
         hang_tick!();
         if let Ok(loaded) = timeout(Duration::from_millis(10), opening.as_mut()).await {
@@ -173,7 +172,7 @@ pub async fn answer_load(
         .and_then(|active| active.load)
         .expect("selected load")
         .seq();
-    let mut loaded = loaded_request(rig, seq).await;
+    let mut loaded = loaded_request(queue.worker().expect("fixture worker"), rig, seq).await;
     loaded.opened.metadata.title = Some("Loaded fixture".to_owned());
     hang_reset!();
     answer_loaded(queue, rig, loaded);
@@ -186,6 +185,7 @@ pub async fn answer_load(
 #[kithara::flash(io)]
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 pub async fn loaded_request(
+    worker: &PlayWorker<TestPools>,
     rig: &mut DeckRig<TestPools>,
     seq: Seq,
 ) -> kithara_render::Loaded<kithara_play::OpenedTrack> {
@@ -205,7 +205,7 @@ pub async fn loaded_request(
     due.defer();
     hang_tick!();
     let loaded = rig
-        .load_request_fixture(*request)
+        .load_request_fixture(worker, *request)
         .await
         .expect("opened owner source");
     hang_reset!();

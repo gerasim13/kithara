@@ -202,10 +202,11 @@ fn rejected_slot_volume_leaves_live_values_unchanged() {
 #[kithara::flash(io)]
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn arm_current_fixture(
+    worker: &PlayWorker<TestPools>,
     rig: &mut mock::DeckRig<TestPools>,
     dir: &TestTempDir,
 ) -> kithara_render::Loaded<kithara_play::OpenedTrack> {
-    let mut loaded = std::pin::pin!(loaded_fixture(rig, dir));
+    let mut loaded = std::pin::pin!(loaded_fixture(worker, rig, dir));
     loop {
         hang_tick!();
         if let Ok(loaded) =
@@ -266,7 +267,7 @@ async fn finish_disarms_and_ignores_stale_ticket() {
         .apply_report(crate::loading::LoadReport::Slow { id, watch });
     assert_eq!(queue.tracks.records()[0].status, TrackStatus::Slow);
     assert!(!current.is_cancelled());
-    let loaded = arm_current_fixture(&mut rig, &dir).await;
+    let loaded = arm_current_fixture(queue.worker().expect("fixture worker"), &mut rig, &dir).await;
     answer_loaded(&mut queue, &mut rig, loaded);
     assert!(
         queue.tracks.records()[0].load.is_none(),
@@ -311,7 +312,8 @@ async fn selected_source_clock() -> (
         .find_map(|active| active.load)
         .expect("selected load")
         .seq();
-    let loaded = crate::mock::loaded_request(&mut rig, seq).await;
+    let loaded =
+        crate::mock::loaded_request(queue.worker().expect("fixture worker"), &mut rig, seq).await;
     let clock = loaded
         .opened
         .pcm
@@ -566,7 +568,7 @@ async fn atomic_track_id_cas_arm_then_disarm() {
         )
         .expect("select sounding predecessor");
     });
-    let loaded = arm_current_fixture(&mut rig, &dir).await;
+    let loaded = arm_current_fixture(queue.worker().expect("fixture worker"), &mut rig, &dir).await;
     let source = loaded
         .opened
         .pcm

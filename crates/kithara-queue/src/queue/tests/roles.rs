@@ -1,7 +1,9 @@
 use kithara_command::Seq;
 use kithara_events::TrackId;
 use kithara_platform::time::Duration;
-use kithara_play::{OpenedTrack, Player, TrackReceipt, TrackStatus as PlayingStatus, mock};
+use kithara_play::{
+    HostedDeck, OpenedTrack, Player, TrackReceipt, TrackStatus as PlayingStatus, mock,
+};
 use kithara_render::{
     Dispatched, DispatcherCommand, LaneId, Loaded, ServiceClass,
     bridge::{DeckEvent, DeckPart, Fade, FadeDir},
@@ -146,7 +148,8 @@ async fn open(
         .last()
         .expect("fixture load")
         .seq();
-    let mut loaded = crate::mock::loaded_request(rig, seq).await;
+    let mut loaded =
+        crate::mock::loaded_request(queue.worker().expect("fixture worker"), rig, seq).await;
     hang_reset!();
     let source = loaded
         .opened

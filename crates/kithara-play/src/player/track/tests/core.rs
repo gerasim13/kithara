@@ -97,6 +97,7 @@ fn ends_within_cases(
 pub(super) struct Rig {
     deck: DeckRig<TestPools>,
     sources: Vec<TestTempDir>,
+    worker: crate::PlayWorker<TestPools>,
     runtime: kithara_platform::tokio::runtime::Runtime,
 }
 
@@ -157,13 +158,19 @@ impl Rig {
 pub(super) type Track = PlayerImpl<TestPools>;
 
 pub(super) fn rig() -> Rig {
+    let runtime = kithara_platform::tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("fixture runtime starts");
+    let worker = {
+        let _runtime = runtime.enter();
+        crate::PlayWorker::new(crate::PlayWorkerConfig::builder(pools()).build())
+    };
     Rig {
         deck: DeckRig::new(DeckMixerConfig::default()).expect("deck scope opens"),
         sources: Vec::new(),
-        runtime: kithara_platform::tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("fixture runtime starts"),
+        worker,
+        runtime,
     }
 }
 
@@ -451,8 +458,9 @@ fn a_rejected_launch_leaves_the_member_silent() {
         AudioSpec::new(2, mock::SAMPLE_RATE),
     )
     .expect("audible source fixture");
-    let worker = crate::PlayWorker::new(crate::PlayWorkerConfig::builder(pools.clone()).build());
-    let prep = crate::ResourcePrep::builder().worker(worker).build();
+    let prep = crate::ResourcePrep::builder()
+        .worker(rig.worker.clone())
+        .build();
     let config: ResourceConfig<TestPools> = prep
         .prepare(
             ResourceConfig::for_src(ResourceSrc::Path(path))
@@ -469,7 +477,7 @@ fn a_rejected_launch_leaves_the_member_silent() {
     hang_tick!("rejected launch: opening audible fixture".to_owned());
     let opened = rig
         .runtime
-        .block_on(rig.deck.load_fixture(load, Position::ZERO))
+        .block_on(rig.deck.load_fixture(&rig.worker, load, Position::ZERO))
         .expect("dispatcher prepares the audible source")
         .opened;
     hang_reset!();
@@ -1552,7 +1560,7 @@ pub(super) fn opened_fixture(rig: &mut Rig, src: &str) -> Loaded<OpenedTrack> {
         usize::try_from(mock::SAMPLE_RATE.get()).expect("sample rate") / 100 * 2
     ];
     mock::write_pcm_wav(&path, &samples, spec).expect("generated float WAV");
-    let worker = crate::PlayWorker::new(crate::PlayWorkerConfig::builder(pools()).build());
+    let worker = rig.worker.clone();
     let config: ResourceConfig<TestPools> = ResourceConfig::for_src(ResourceSrc::Path(path))
         .store(AssetStore::builder(pools()).build())
         .worker(worker.clone())
@@ -1565,7 +1573,7 @@ pub(super) fn opened_fixture(rig: &mut Rig, src: &str) -> Loaded<OpenedTrack> {
     let load = mock::track_load(
         config,
         Arc::from(src),
-        worker,
+        worker.clone(),
         mock::SAMPLE_RATE,
         |worker, config, position, start, inbox| {
             Box::pin(async move { worker.load(config, position, start, inbox).await })
@@ -1573,7 +1581,7 @@ pub(super) fn opened_fixture(rig: &mut Rig, src: &str) -> Loaded<OpenedTrack> {
     );
     let opened = rig
         .runtime
-        .block_on(rig.deck.load_fixture(load, Position::ZERO))
+        .block_on(rig.deck.load_fixture(&rig.worker, load, Position::ZERO))
         .expect("real dispatcher opens the WAV once");
     rig.sources.push(dir);
     opened

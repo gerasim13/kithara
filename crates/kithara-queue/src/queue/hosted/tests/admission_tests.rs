@@ -58,7 +58,8 @@ async fn admission_fills_unset_metadata_from_the_decoder(cancel_token: CancelTok
             )
         })
         .expect("select admission fixture");
-        let mut loaded = loaded_fixture(&mut rig, &dir).await;
+        let mut loaded =
+            loaded_fixture(queue.worker().expect("fixture worker"), &mut rig, &dir).await;
         loaded.opened.metadata.title = Some("Mock".to_owned());
         answer_loaded(&mut queue, &mut rig, loaded);
         crate::mock::finish(&mut queue, &mut rig);

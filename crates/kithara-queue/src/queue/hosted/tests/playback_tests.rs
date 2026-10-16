@@ -192,7 +192,9 @@ async fn play_retries_the_current_track_after_its_prefetch_failed() {
         .expect("Play opens the retained source again")
         .seq();
     assert_ne!(retry_seq, failed_seq, "Play must start a new open");
-    let loaded = crate::mock::loaded_request(&mut rig, retry_seq).await;
+    let loaded =
+        crate::mock::loaded_request(queue.worker().expect("fixture worker"), &mut rig, retry_seq)
+            .await;
     assert_eq!(loaded.opened.pcm.src().as_ref(), source);
     assert_eq!(
         loaded.opened.pcm.spec(),

@@ -1,4 +1,4 @@
-use std::{future::Future, num::NonZeroU32, pin::Pin, task::Poll};
+use std::{future::Future, num::NonZeroU32, task::Poll};
 
 use firewheel::{
     clock::InstantSamples,
@@ -521,7 +521,8 @@ pub struct DeckRig<S> {
 
 struct FixtureDispatcher<S> {
     sender: Sender<DispatcherProtocol<ResourceLoad<S>>>,
-    driver: Pin<Box<dyn Future<Output = ()>>>,
+    _driver: kithara_worker::TaskHandle,
+    _worker: crate::PlayWorker<S>,
 }
 
 impl<S> DeckRig<S> {
@@ -659,8 +660,11 @@ impl<S> DeckRig<S> {
     }
 }
 
-impl<S: 'static> DeckRig<S> {
-    /// Opens a fixture through the real dispatcher and retains its resident lane.
+impl<S> DeckRig<S>
+where
+    S: kithara_bufpool::HasPool<u8> + kithara_bufpool::HasPool<f32> + Send + Sync + 'static,
+{
+    /// Opens a fixture on the worker shared by this rig's prepared resources.
     ///
     /// # Errors
     /// Returns the source, lane, or dispatcher admission failure.
@@ -669,41 +673,54 @@ impl<S: 'static> DeckRig<S> {
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     pub async fn load_fixture(
         &mut self,
+        worker: &crate::PlayWorker<S>,
         item: ResourceLoad<S>,
         position: Duration,
     ) -> Result<Loaded<OpenedTrack>, PlayError> {
         let _io = kithara_platform::flash::real_io();
         let (lane_sender, lane) = item.lane_channel()?;
         let loaded = self
-            .load_request_fixture(LoadRequest {
-                item,
-                class: kithara_render::ServiceClass::Warm,
-                position,
-                start: TrackSettings::default().lane_start(),
-                inbox: lane,
-            })
+            .load_request_fixture(
+                worker,
+                LoadRequest {
+                    item,
+                    class: kithara_render::ServiceClass::Warm,
+                    position,
+                    start: TrackSettings::default().lane_start(),
+                    inbox: lane,
+                },
+            )
             .await?;
         self.fixture_lanes.push(lane_sender);
         Ok(loaded)
     }
 
-    /// Opens an owner's actual request without replacing its source or lane inbox.
+    /// Opens an owner's request on this rig's worker, retaining its source and inbox.
     ///
     /// # Errors
     /// Returns source, lane, or dispatcher admission failure.
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     pub async fn load_request_fixture(
         &mut self,
+        worker: &crate::PlayWorker<S>,
         request: LoadRequest<ResourceLoad<S>>,
     ) -> Result<Loaded<OpenedTrack>, PlayError> {
-        let dispatcher = self.fixture_dispatcher.get_or_insert_with(|| {
-            let (sender, inbox) =
-                channel::<DispatcherProtocol<ResourceLoad<S>>>(ChannelConfig::builder().build());
-            FixtureDispatcher {
-                sender,
-                driver: Box::pin(kithara_render::dispatch(inbox)),
+        let dispatcher = match &mut self.fixture_dispatcher {
+            Some(dispatcher) => dispatcher,
+            missing @ None => {
+                let (sender, inbox) = channel::<DispatcherProtocol<ResourceLoad<S>>>(
+                    ChannelConfig::builder().build(),
+                );
+                let driver = worker
+                    .start_dispatcher(inbox)
+                    .map_err(|error| PlayError::Internal(format!("{error:?}")))?;
+                missing.insert(FixtureDispatcher {
+                    sender,
+                    _driver: driver,
+                    _worker: worker.clone(),
+                })
             }
-        });
+        };
         dispatcher
             .sender
             .send(
@@ -717,7 +734,7 @@ impl<S: 'static> DeckRig<S> {
         let mut deadline = None;
         let receipt = poll_fn(|context| {
             hang_tick!();
-            let _ = dispatcher.driver.as_mut().poll(context);
+            dispatcher.sender.hold(context.waker().clone());
             if let Some(receipt) = dispatcher.sender.receipts().next() {
                 hang_reset!();
                 Poll::Ready(receipt)
@@ -731,6 +748,7 @@ impl<S: 'static> DeckRig<S> {
             }
         })
         .await;
+        dispatcher.sender.release();
         let (outcome, _) = receipt.into();
         match outcome {
             Outcome::Applied {
@@ -741,21 +759,5 @@ impl<S: 'static> DeckRig<S> {
                 "fixture load refused: {outcome:?}"
             ))),
         }
-    }
-
-    /// Gives the retained fixture decoder executor one scheduling turn.
-    #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-    pub async fn poll_fixture(&mut self) {
-        hang_tick!();
-        poll_fn(|context| {
-            if let Some(dispatcher) = &mut self.fixture_dispatcher {
-                let _ = dispatcher.driver.as_mut().poll(context);
-            }
-            Poll::Ready(())
-        })
-        .await;
-        hang_reset!();
-        yield_now().await;
-        hang_reset!();
     }
 }

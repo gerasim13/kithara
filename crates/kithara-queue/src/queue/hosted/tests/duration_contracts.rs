@@ -150,7 +150,10 @@ impl DurationRig {
             hang_reset!();
         };
         let loaded = {
-            let mut opening = std::pin::pin!(self.loads.load_request_fixture(*request));
+            let mut opening = std::pin::pin!(
+                self.loads
+                    .load_request_fixture(self.queue.worker().expect("fixture worker"), *request)
+            );
             loop {
                 hang_tick!();
                 if let Ok(loaded) =
@@ -177,44 +180,49 @@ impl DurationRig {
     }
 
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-    async fn pump(&mut self, blocks: usize) -> Vec<f32> {
-        let mut rendered = Vec::with_capacity(blocks * BLOCK_FRAMES);
-        for _ in 0..blocks {
-            hang_tick!();
-            self.loads.poll_fixture().await;
-            let mut pcm = [vec![0.0; BLOCK_FRAMES], vec![0.0; BLOCK_FRAMES]];
-            let [left, right] = &mut pcm;
-            self.mixer
-                .block_frames(SessionFrame::new(self.frame), [left, right])
-                .expect("real mixer block");
-            while let Some(ScopedReceipt::Scope(_, receipt)) = self.mixer.ring.receipt() {
+    async fn pump(mut self, blocks: usize) -> (Self, Vec<f32>) {
+        kithara_platform::tokio::task::spawn_blocking(move || {
+            let mut rendered = Vec::with_capacity(blocks * BLOCK_FRAMES);
+            for _ in 0..blocks {
                 hang_tick!();
-                let seq = receipt.seq();
-                let (outcome, mut batch) = receipt.into();
-                self.in_pass(|queue, out| {
-                    Player::settle(
-                        queue,
-                        TrackReceipt::Deck {
-                            seq,
-                            outcome: &outcome,
-                            batch: &mut batch,
-                        },
-                        out,
-                    )
-                });
+                let mut pcm = [vec![0.0; BLOCK_FRAMES], vec![0.0; BLOCK_FRAMES]];
+                let [left, right] = &mut pcm;
+                self.mixer
+                    .block_frames(SessionFrame::new(self.frame), [left, right])
+                    .expect("real mixer block");
+                while let Some(ScopedReceipt::Scope(_, receipt)) = self.mixer.ring.receipt() {
+                    hang_tick!();
+                    let seq = receipt.seq();
+                    let (outcome, mut batch) = receipt.into();
+                    self.in_pass(|queue, out| {
+                        Player::settle(
+                            queue,
+                            TrackReceipt::Deck {
+                                seq,
+                                outcome: &outcome,
+                                batch: &mut batch,
+                            },
+                            out,
+                        )
+                    });
+                    hang_reset!();
+                }
+                let events = self.mixer.ends.events.drain().collect::<Vec<_>>();
+                for event in events {
+                    hang_tick!();
+                    self.in_pass(|queue, out| {
+                        Player::settle(queue, TrackReceipt::Event(event), out)
+                    });
+                    hang_reset!();
+                }
+                self.frame += 128;
+                rendered.extend_from_slice(&pcm[0]);
                 hang_reset!();
             }
-            let events = self.mixer.ends.events.drain().collect::<Vec<_>>();
-            for event in events {
-                hang_tick!();
-                self.in_pass(|queue, out| Player::settle(queue, TrackReceipt::Event(event), out));
-                hang_reset!();
-            }
-            self.frame += 128;
-            rendered.extend_from_slice(&pcm[0]);
-            hang_reset!();
-        }
-        rendered
+            (self, rendered)
+        })
+        .await
+        .expect("duration render must join")
     }
 
     fn configure_duration(&mut self, duration: f32) {
@@ -244,7 +252,7 @@ fn max_step_across(before: &[f32], after: &[f32]) -> f32 {
 async fn fading_in() -> (DurationRig, Vec<f32>) {
     let mut rig = DurationRig::new();
     rig.select(0.5, "first.wav").await;
-    let fading = rig.pump(WARMUP_BLOCKS).await;
+    let (rig, fading) = rig.pump(WARMUP_BLOCKS).await;
     let level = last(&fading);
     assert!(
         level > 0.0 && level < 0.5 * 0.9,
@@ -257,7 +265,7 @@ async fn fading_in() -> (DurationRig, Vec<f32>) {
 async fn resending_the_crossfade_duration_does_not_snap_the_mix() {
     let (mut rig, fading) = fading_in().await;
     rig.configure_duration(FADE_SECONDS);
-    let resent = rig.pump(WARMUP_BLOCKS).await;
+    let (_, resent) = rig.pump(WARMUP_BLOCKS).await;
     let step = max_step_across(&fading, &resent);
     assert!(
         step <= MAX_STEP,
@@ -269,7 +277,7 @@ async fn resending_the_crossfade_duration_does_not_snap_the_mix() {
 async fn changing_the_crossfade_duration_mid_fade_keeps_the_running_fade() {
     let (mut rig, fading) = fading_in().await;
     rig.configure_duration(FADE_SECONDS / 10.0);
-    let changed = rig.pump(WARMUP_BLOCKS).await;
+    let (_, changed) = rig.pump(WARMUP_BLOCKS).await;
     let step = max_step_across(&fading, &changed);
     assert!(
         step <= MAX_STEP,
@@ -284,8 +292,8 @@ async fn changing_the_crossfade_duration_mid_fade_keeps_the_running_fade() {
 
 #[kithara::test(tokio)]
 async fn a_changed_crossfade_duration_applies_to_the_next_fade() {
-    let (mut rig, _) = fading_in().await;
-    let settled = rig.pump(SETTLE_BLOCKS * 20).await;
+    let (rig, _) = fading_in().await;
+    let (mut rig, settled) = rig.pump(SETTLE_BLOCKS * 20).await;
     assert!(
         (last(&settled) - 0.5).abs() < EXACT,
         "the first fade has settled under its original duration before the change ({})",
@@ -293,7 +301,7 @@ async fn a_changed_crossfade_duration_applies_to_the_next_fade() {
     );
     rig.configure_duration(FADE_SECONDS / 10.0);
     rig.select(0.25, "second.wav").await;
-    let handed_over = rig.pump(SETTLE_BLOCKS * 3).await;
+    let (_, handed_over) = rig.pump(SETTLE_BLOCKS * 3).await;
     assert!(
         (last(&handed_over) - 0.25).abs() < EXACT,
         "the next fade runs under the new duration: a tenth of the original settles within three settle windows, the original would not ({})",

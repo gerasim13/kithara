@@ -218,7 +218,10 @@ impl HandoverRig {
                     }
                     let loaded = self
                         .loader
-                        .load_request_fixture(*request)
+                        .load_request_fixture(
+                            self.queue.worker().expect("fixture worker"),
+                            *request,
+                        )
                         .await
                         .expect("actual queued source");
                     let source = loaded

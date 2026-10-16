@@ -71,7 +71,7 @@ async fn a_lane_dropped_before_its_turn_is_reported_only_by_its_cancellation() {
     let fixture = mock::track_load(
         source,
         Arc::from("resident"),
-        worker,
+        worker.clone(),
         mock::SAMPLE_RATE,
         |worker, config, position, start, inbox| {
             Box::pin(async move { worker.load(config, position, start, inbox).await })
@@ -103,7 +103,7 @@ async fn a_lane_dropped_before_its_turn_is_reported_only_by_its_cancellation() {
     .expect("scope")
     .expect("one load");
     let opened = rig
-        .load_fixture(fixture, position(0))
+        .load_fixture(&worker, fixture, position(0))
         .await
         .expect("resident lane");
     let receipt = rig.open(Ok(opened)).expect("one dispatcher receipt");
@@ -352,7 +352,7 @@ async fn native_linked(
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
     let config: ResourceConfig<TestPools> = ResourceConfig::for_src(ResourceSrc::Path(path))
         .store(AssetStore::builder(pools()).build())
-        .worker(worker)
+        .worker(worker.clone())
         .host_sample_rate(mock::SAMPLE_RATE)
         .build();
     let track: PlayerImpl<TestPools> = PlayerImpl::new(PlayerConfig {
@@ -390,7 +390,7 @@ async fn native_linked(
     due.defer();
     let inbox = request.inbox;
     let opened = rig
-        .load_fixture(request.item, request.position)
+        .load_fixture(&worker, request.item, request.position)
         .await
         .expect("PCM fixture");
     assert_eq!(

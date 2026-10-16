@@ -787,7 +787,7 @@ async fn answer_duration(
     dir: &TestTempDir,
     duration: f64,
 ) -> kithara_render::mock::PacketRing {
-    let mut loaded = loaded_fixture(rig, dir).await;
+    let mut loaded = loaded_fixture(queue.worker().expect("fixture worker"), rig, dir).await;
     let source = loaded
         .opened
         .pcm
@@ -931,7 +931,7 @@ async fn cancel_preload_unloads_a_successor_only_while_it_preloads(
                 .expect("prepare paused leading");
         },
     );
-    let leading = loaded_fixture(&mut rig, &dir).await;
+    let leading = loaded_fixture(queue.worker().expect("fixture worker"), &mut rig, &dir).await;
     let receipt = rig.open(Ok(leading)).expect("leading load");
     real_outbox(
         &mut queue,
@@ -974,7 +974,12 @@ async fn cancel_preload_unloads_a_successor_only_while_it_preloads(
         },
     )
     .expect("gapless successor");
-    let successor = loaded_fixture(&mut rig, &successor_dir).await;
+    let successor = loaded_fixture(
+        queue.worker().expect("fixture worker"),
+        &mut rig,
+        &successor_dir,
+    )
+    .await;
     let receipt = rig.open(Ok(successor)).expect("successor load");
     real_outbox(
         &mut queue,
