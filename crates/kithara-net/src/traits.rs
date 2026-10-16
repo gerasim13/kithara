@@ -60,6 +60,7 @@ impl ByteStream {
     }
 
     /// Consume the wrapper, returning just the raw byte stream.
+    #[must_use = "the wrapper is consumed; dropping the stream discards the response body"]
     pub fn into_inner(self) -> RawByteStream {
         self.inner
     }
