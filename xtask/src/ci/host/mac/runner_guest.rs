@@ -167,6 +167,7 @@ impl RunnerManager<'_> {
             "cmake",
             "ffmpeg",
             "just",
+            "kache",
             "pkg-config",
             "sccache",
             "xcodegen",

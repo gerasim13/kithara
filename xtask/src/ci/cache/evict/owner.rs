@@ -15,7 +15,7 @@ use super::{
     super::{provision, required},
     audit::{self, Delivery, Event},
     entry::Entry,
-    plan::{self, Listing, Stored, Victim},
+    plan::{self, Listing, Victim},
     record,
     store::Store,
 };
@@ -179,7 +179,7 @@ impl Owner {
         let scope = &mut self.scopes[index];
         plan::prune(&mut scope.reads, &listing);
         let chosen = plan::victims(&listing, &scope.reads, quota);
-        let evicted = self.evict(index, &chosen)?;
+        let evicted = self.evict(index, &listing, &chosen)?;
         let scope = &self.scopes[index];
         self.store.put(
             consts::RECENCY_BUCKET,
@@ -215,13 +215,7 @@ impl Owner {
             let page = self.store.list(bucket, &prefix, recursive)?;
             self.drain();
             for object in page.objects {
-                listing.insert(
-                    &object.key,
-                    Stored {
-                        size: object.size,
-                        written_s: object.written_s,
-                    },
-                );
+                listing.insert(&object.key, object.size, object.written_s);
             }
             pending.extend(page.prefixes.into_iter().map(|child| {
                 let recursive = child != compiler;
@@ -231,9 +225,9 @@ impl Owner {
         Ok(listing)
     }
 
-    /// Removes the chosen entries a chunk at a time, sparing any the log has
-    /// seen used since they were chosen.
-    fn evict(&mut self, index: usize, chosen: &[Victim]) -> Result<Vec<Victim>> {
+    /// Removes the chosen entries, every object of each, a chunk at a time,
+    /// sparing any the log has seen used since they were chosen.
+    fn evict(&mut self, index: usize, listing: &Listing, chosen: &[Victim]) -> Result<Vec<Victim>> {
         let mut evicted = Vec::new();
         for chunk in chosen.chunks(Self::CHUNK) {
             self.drain();
@@ -244,7 +238,8 @@ impl Owner {
             }
             let objects = unused
                 .iter()
-                .map(|victim| victim.entry.object())
+                .filter_map(|victim| listing.entries.get(&victim.entry))
+                .flat_map(|stored| stored.objects.iter().cloned())
                 .collect::<Vec<_>>();
             self.store.remove(&scope.bucket, &objects)?;
             evicted.extend(unused);
@@ -387,6 +382,49 @@ esac
         );
         let record = record::decode(&fs::read(directory.path().join("record")).unwrap()).unwrap();
         assert_eq!(record, HashMap::from([(entry('a', '1'), 400)]));
+    }
+
+    /// A kache entry evicted by its manifest alone would leave its pack in
+    /// the bucket for good, read by nothing and counted against the budget.
+    #[test]
+    fn a_kache_entry_goes_with_both_of_its_objects() {
+        let hash = hash('c', '3');
+        let manifest = format!("kache/v3/manifests/serde/{hash}.json");
+        let pack = format!("kache/v3/packs/serde/{hash}.tar.zst");
+        let item = |key: &str, size: u64| {
+            format!(
+                r#"{{"key":"{key}","size_bytes":{size},"last_modified":"1970-01-01T00:01:40Z","is_dir":false}}"#
+            )
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let program = rc(
+            directory.path(),
+            &format!(
+                r#""--json object list ci/kithara-review/") printf '%s' '{{"items":[{{"key":"kache/","is_dir":true}}],"truncated":false}}' ;;
+"--json object list --recursive ci/kithara-review/kache/") printf '%s' '{{"items":[{m},{p},{i}],"truncated":false}}' ;;
+"object remove --force "*) ;;"#,
+                m = item(&manifest, 500),
+                p = item(&pack, 400),
+                i = item(
+                    "kache/_manifests/id/7544/aarch64-apple-darwin/debug.json",
+                    10
+                ),
+            ),
+        );
+        let (mut owner, _sender) = owner(&program);
+
+        owner.pass(0).unwrap();
+
+        let removals = calls(directory.path())
+            .into_iter()
+            .filter(|call| call.starts_with("object remove"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            removals,
+            [format!(
+                "object remove --force ci/kithara-review/{manifest} ci/kithara-review/{pack}"
+            )]
+        );
     }
 
     #[test]

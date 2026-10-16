@@ -3,10 +3,13 @@ use std::collections::HashMap;
 use super::entry::Entry;
 
 /// What one listing found of an entry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Stored {
     pub(super) size: u64,
+    /// The latest write of any of its objects.
     pub(super) written_s: u64,
+    /// The objects it is stored as, all removed together.
+    pub(super) objects: Vec<String>,
 }
 
 /// Everything a scope's bucket holds, as one complete listing saw it.
@@ -19,15 +22,21 @@ pub(super) struct Listing {
 }
 
 impl Listing {
-    /// Counts one listed object: an entry by its hash, anything else by its
-    /// size alone.
-    pub(super) fn insert(&mut self, object: &str, stored: Stored) {
-        match Entry::parse(object) {
-            Some(entry) => {
-                self.entries.insert(entry, stored);
-            }
-            None => self.other_bytes = self.other_bytes.saturating_add(stored.size),
-        }
+    /// Counts one listed object: as part of the entry its hash names, or,
+    /// when it is no entry, by its size alone.
+    pub(super) fn insert(&mut self, object: &str, size: u64, written_s: u64) {
+        let Some(entry) = Entry::parse(object) else {
+            self.other_bytes = self.other_bytes.saturating_add(size);
+            return;
+        };
+        let stored = self.entries.entry(entry).or_insert_with(|| Stored {
+            size: 0,
+            written_s,
+            objects: Vec::new(),
+        });
+        stored.size = stored.size.saturating_add(size);
+        stored.written_s = stored.written_s.max(written_s);
+        stored.objects.push(object.to_owned());
     }
 
     pub(super) fn used(&self) -> u64 {
@@ -122,7 +131,16 @@ mod tests {
         Listing {
             entries: entries
                 .iter()
-                .map(|&(byte, size, written_s)| (entry(byte), Stored { size, written_s }))
+                .map(|&(byte, size, written_s)| {
+                    (
+                        entry(byte),
+                        Stored {
+                            size,
+                            written_s,
+                            objects: Vec::new(),
+                        },
+                    )
+                })
                 .collect(),
             other_bytes,
         }
@@ -133,24 +151,30 @@ mod tests {
         let hash = crate::consts::ENTRY_HASH;
         let mut listing = Listing::default();
 
-        listing.insert(
-            &format!("sccache/a/b/c/{hash}"),
-            Stored {
-                size: 300,
-                written_s: 100,
-            },
-        );
-        listing.insert(
-            "sccache/.sccache_check",
-            Stored {
-                size: 13,
-                written_s: 100,
-            },
-        );
+        listing.insert(&format!("sccache/a/b/c/{hash}"), 300, 100);
+        listing.insert("sccache/.sccache_check", 13, 100);
 
         assert_eq!(listing.entries.len(), 1);
         assert_eq!(listing.other_bytes, 13);
         assert_eq!(listing.used(), 313);
+    }
+
+    #[test]
+    fn a_kache_entry_is_both_of_its_objects() {
+        let hash = crate::consts::ENTRY_HASH;
+        let manifest = format!("kache/v3/manifests/serde/{hash}.json");
+        let pack = format!("kache/v3/packs/serde/{hash}.tar.zst");
+        let mut listing = Listing::default();
+
+        listing.insert(&manifest, 10, 100);
+        listing.insert(&pack, 290, 101);
+
+        let [(_, stored)] = listing.entries.iter().collect::<Vec<_>>()[..] else {
+            panic!("one entry: {:?}", listing.entries);
+        };
+        assert_eq!((stored.size, stored.written_s), (300, 101));
+        assert_eq!(stored.objects, [manifest, pack]);
+        assert_eq!(listing.used(), 300);
     }
 
     #[test]

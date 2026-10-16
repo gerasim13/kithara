@@ -109,7 +109,7 @@ fn size(value: &str) -> Result<u64> {
     Ok(bytes)
 }
 
-pub(super) fn scope_bucket(scope: &str) -> Result<String> {
+pub(crate) fn scope_bucket(scope: &str) -> Result<String> {
     ensure!(
         !scope.is_empty()
             && scope.len() <= 48
@@ -295,19 +295,21 @@ fn policy(scope: &str, bucket: &str) -> serde_json::Value {
     ];
     if scope != "trusted" {
         let trusted = "kithara-trusted";
+        let kache = format!("{}/*", consts::KACHE_PREFIX);
         statements.extend([
             json!({
                 "Effect": "Allow",
                 "Action": ["s3:ListBucket"],
                 "Resource": [format!("arn:aws:s3:::{trusted}")],
-                "Condition": {"StringLike": {"s3:prefix": ["target-snapshots/*", "source-snapshots/*"]}}
+                "Condition": {"StringLike": {"s3:prefix": ["target-snapshots/*", "source-snapshots/*", kache]}}
             }),
             json!({
                 "Effect": "Allow",
                 "Action": ["s3:GetObject"],
                 "Resource": [
                     format!("arn:aws:s3:::{trusted}/target-snapshots/*"),
-                    format!("arn:aws:s3:::{trusted}/source-snapshots/*")
+                    format!("arn:aws:s3:::{trusted}/source-snapshots/*"),
+                    format!("arn:aws:s3:::{trusted}/{kache}")
                 ]
             }),
         ]);
@@ -479,6 +481,25 @@ b",
 
         let trusted = policy("trusted", "kithara-trusted").to_string();
         assert!(!trusted.contains("source-snapshots/*"));
+    }
+
+    /// kache stores only what a protected branch's push compiled, in the
+    /// trusted bucket, and every other job compiles from it.
+    #[test]
+    fn untrusted_scopes_read_but_never_write_the_trusted_kache() {
+        let review = policy("review", "kithara-review");
+        let statements = review["Statement"].as_array().unwrap();
+        let read = statements
+            .iter()
+            .map(serde_json::Value::to_string)
+            .find(|statement| statement.contains("kithara-trusted/kache/*"))
+            .expect("a review job may read the trusted kache");
+        assert!(read.contains("s3:GetObject"));
+        assert!(!read.contains("s3:PutObject"));
+        assert!(review.to_string().contains(r#""kache/*""#), "nor list it");
+
+        let trusted = policy("trusted", "kithara-trusted").to_string();
+        assert!(!trusted.contains("kache/*"));
     }
 
     #[test]

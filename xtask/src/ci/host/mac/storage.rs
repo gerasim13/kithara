@@ -185,7 +185,7 @@ impl<'a> HostStorage<'a> {
             bail!("missing CI directory: {}", workspaces.display());
         }
         writable_probe(&workspaces)?;
-        self.process.require_tools(&["git", "sccache"])?;
+        self.process.require_tools(&["git", "kache", "sccache"])?;
         info!(free_bytes = free, ?pressure, "host preflight passed");
         Ok(())
     }

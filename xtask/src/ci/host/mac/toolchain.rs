@@ -247,7 +247,7 @@ impl<'a> ToolchainInstaller<'a> {
             self.process
                 .run_command(&mut command, "install pinned Cargo tool")?;
         }
-        Ok(())
+        install_kache_shims(self.process, &home.join(".cargo/bin/kache"))
     }
 
     fn install_android(&self) -> Result<()> {
@@ -504,6 +504,39 @@ fn stable_targets() -> Vec<&'static str> {
         .collect()
 }
 
+/// Links the C and C++ compiler names to kache in `lib/kache/shims` of its
+/// install root, where the recipes put them first on their path: cc-rs hands a
+/// build script's C compile to kache only through such a name. kache's `cargo`
+/// and `rustdoc` links go: the `cargo` one would move every build directory
+/// into its checkout.
+fn install_kache_shims(process: &Process, kache: &Path) -> Result<()> {
+    let shims = kache
+        .parent()
+        .and_then(Path::parent)
+        .with_context(|| format!("{} has no install root", kache.display()))?
+        .join("lib/kache/shims");
+    process.run(
+        path_text(kache)?,
+        &[
+            "install-shims",
+            path_text(&shims)?,
+            "--canonical-only",
+            "--force",
+        ],
+        "link the compilers to kache",
+    )?;
+    for name in ["cargo", "rustdoc"] {
+        let link = shims.join(name);
+        match fs::remove_file(&link) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                return Err(error).with_context(|| format!("removing {}", link.display()));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 fn path_text(path: &Path) -> Result<&str> {
     path.to_str()
         .with_context(|| format!("path is not UTF-8: {}", path.display()))
@@ -558,6 +591,42 @@ mod tests {
                 "{target} is built for an Apple slice but the host never installs it"
             );
         }
+    }
+
+    /// The recipes find the links beside kache's install root; a `cargo`
+    /// link there would move every build directory into its checkout.
+    #[cfg(unix)]
+    #[test]
+    fn kache_links_only_the_compilers_beside_its_install_root() {
+        let directory = tempfile::tempdir().unwrap();
+        let kache = directory.path().join(".cargo/bin/kache");
+        fs::create_dir_all(kache.parent().unwrap()).unwrap();
+        crate::testing::install_script(
+            &kache,
+            "#!/bin/sh\n[ \"$1 $3 $4\" = 'install-shims --canonical-only --force' ] || exit 1\nmkdir -p \"$2\" && cd \"$2\" && touch .kache-shims cc c++ clang clang++ gcc g++ cargo rustdoc\n",
+        );
+        let process = Process::new(directory.path(), std::collections::BTreeMap::new());
+
+        install_kache_shims(&process, &kache).unwrap();
+
+        let shims = directory.path().join(".cargo/lib/kache/shims");
+        let mut names = fs::read_dir(&shims)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect::<Vec<_>>();
+        names.sort();
+        assert_eq!(
+            names,
+            [
+                ".kache-shims",
+                "c++",
+                "cc",
+                "clang",
+                "clang++",
+                "g++",
+                "gcc"
+            ]
+        );
     }
 
     #[test]

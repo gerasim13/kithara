@@ -16,10 +16,12 @@ export RUSTC_WRAPPER := if kache == "" { sccache } else { kache }
 export KACHE_FALLBACK := if kache == "" { "" } else { sccache }
 
 # cc-rs hands a build script's C compile to the Rust wrapper only when that is
-# named after sccache, so with kache it reaches the cache through the
-# compiler-name links `kache install-shims` puts in its default directory. They
-# go first on the path of these recipes only, never of the whole machine.
-kache_shims := if kache == "" { "" } else { home_directory() / ".local/lib/kache/shims" }
+# named after sccache, so with kache it reaches the cache through compiler-name
+# links to kache, installed beside it in `lib/kache/shims` of its install root.
+# Only the C and C++ compilers are linked: kache's `cargo` link would move the
+# build directory into the checkout. They go first on the path of these recipes
+# only, never of the whole machine.
+kache_shims := if kache == "" { "" } else { parent_directory(parent_directory(kache)) / "lib/kache/shims" }
 export PATH := if kache_shims != "" { if path_exists(kache_shims) == "true" { kache_shims + ":" + env("PATH") } else { env("PATH") } } else { env("PATH") }
 
 # A C compile's cache key includes the absolute paths in its preprocessor

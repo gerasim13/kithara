@@ -612,6 +612,8 @@ mod tests {
             text.contains("--env SCCACHE_SERVER_UDS=/tmp/kithara-ci-octocat.sock"),
             "{text}"
         );
+        assert!(text.contains("--env RUSTC_WRAPPER=kache"), "{text}");
+        assert!(text.contains("--env KACHE_FALLBACK=sccache"), "{text}");
     }
 
     /// The store's host file is completed where the runner starts, so the unit

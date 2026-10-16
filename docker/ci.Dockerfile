@@ -30,6 +30,7 @@ ARG GITLEAKS_AMD64_SHA256
 ARG GITLEAKS_ARM64_SHA256
 ARG GITLEAKS_VERSION
 ARG JUST_VERSION
+ARG KACHE_VERSION
 ARG LOCKBUD_REV
 ARG LOCKBUD_TOOLCHAIN
 ARG MD_FORMATTER_VERSION
@@ -199,6 +200,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
  && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${CARGO_WORKSPACE_UNUSED_PUB_VERSION}" \
       cargo-workspace-unused-pub \
  && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${JUST_VERSION}" just \
+ && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${KACHE_VERSION}" kache \
  && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${MD_FORMATTER_VERSION}" md-formatter \
  && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${SCCACHE_VERSION}" sccache \
  && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${SIMILARITY_RS_VERSION}" similarity-rs \
@@ -227,6 +229,13 @@ FROM ci-base
 # its target-scoped Cargo Rust flags, while `ninja` is available to native
 # dependencies that select it.
 COPY --from=tool-builder /opt/kithara-ci-tools/bin/ /usr/local/cargo/bin/
+
+# cc-rs hands a build script's C compile to kache only through compiler-name
+# links, which the recipes put first on their path from `lib/kache/shims` beside
+# kache's install root. Only the C and C++ compilers are linked: kache's `cargo`
+# link would move the build directory into the checkout.
+RUN kache install-shims /usr/local/cargo/lib/kache/shims --canonical-only \
+ && rm /usr/local/cargo/lib/kache/shims/cargo /usr/local/cargo/lib/kache/shims/rustdoc
 
 # The object store client the target and source snapshots travel through.
 # It is statically linked, so it runs as copied, and digest-pinned in ci-pins.
