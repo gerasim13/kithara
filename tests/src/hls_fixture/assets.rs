@@ -136,9 +136,12 @@ fn create_test_peer_handle(pools: &Pools) -> PeerHandle {
             .cancel(cancel.child())
             .build(),
     );
-    dl.register(Arc::new(TestPeer {
-        cancel: cancel.clone(),
-    }))
+    dl.register(
+        Arc::new(TestPeer {
+            cancel: cancel.clone(),
+        }),
+        None,
+    )
 }
 
 /// Build a test [`PlaylistCache`] backed by the supplied

@@ -87,7 +87,7 @@ async fn registry_releases_peer_when_teardown_clears_self_stored_handle()
 
     let peer: Arc<SelfReferencingPeer> = Arc::new(SelfReferencingPeer::new());
     let peer_dyn: Arc<dyn Peer> = peer.clone();
-    let external_handle = downloader.register(peer_dyn);
+    let external_handle = downloader.register(peer_dyn, None);
     peer.stash_handle(external_handle.clone());
 
     peer.teardown();
@@ -130,7 +130,7 @@ async fn registry_leaks_peer_without_teardown_when_handle_is_self_stored()
 
     let peer: Arc<SelfReferencingPeer> = Arc::new(SelfReferencingPeer::new());
     let peer_dyn: Arc<dyn Peer> = peer.clone();
-    let external_handle = downloader.register(peer_dyn);
+    let external_handle = downloader.register(peer_dyn, None);
     peer.stash_handle(external_handle.clone());
 
     drop(external_handle);

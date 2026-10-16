@@ -7,7 +7,7 @@ use kithara_events::EventBus;
 use kithara_platform::thread::{keep_worker_alive, spawn};
 use kithara_platform::{
     CancelScope, CancelToken,
-    sync::{Arc, Mutex, Notify, RwLock},
+    sync::{Arc, Mutex, Notify},
     time::Duration,
     tokio,
     tokio::{sync::mpsc, task},
@@ -55,11 +55,8 @@ pub(super) struct RegisteredPeerEntry {
     /// every proactively-scheduled `InternalCmd` with this id so the
     /// Downloader can credit bandwidth samples to the right peer.
     pub(super) peer_id: AbrPeerId,
-    /// Shared bus reference. Written by
-    /// [`PeerHandle::with_bus`](super::peer::PeerHandle::with_bus), read
-    /// by the Registry when dispatching fetches so that
-    /// `DownloaderEvent::LoadSlow` lands on the owning track's bus.
-    pub(super) bus: Arc<RwLock<Option<EventBus>>>,
+    /// Initial event destination supplied by the registering owner.
+    pub(super) bus: Option<EventBus>,
     pub(super) peer: Arc<dyn Peer>,
     /// Handle's cancel token. Fires from `PeerInner::Drop` when the last
     /// `PeerHandle` clone is released, letting the [`Registry`] drop the
@@ -164,16 +161,19 @@ impl Downloader {
     ///
     /// Double-registers the peer: fetch channel through the download loop
     /// and ABR state through the shared controller. The returned handle's
-    /// `Drop` unregisters both.
-    pub fn register(&self, peer: Arc<dyn Peer>) -> PeerHandle {
+    /// `Drop` unregisters both. The initial `bus` is installed before the
+    /// download loop can poll the peer.
+    pub fn register(&self, peer: Arc<dyn Peer>, bus: Option<EventBus>) -> PeerHandle {
         self.ensure_spawned();
         let cancel = CancelScope::new(Some(self.inner.cancel.clone()));
         let cancel_token = cancel.token();
         let (cmd_tx, cmd_rx) = mpsc::channel(self.inner.config.peer_cmd_channel_capacity);
-        let bus: Arc<RwLock<Option<EventBus>>> = Arc::new(RwLock::default());
 
         let abr_peer: Arc<dyn Abr> = Arc::clone(&peer) as Arc<dyn Abr>;
-        let abr_handle = self.inner.abr.register(&abr_peer);
+        let mut abr_handle = self.inner.abr.register(&abr_peer);
+        if let Some(bus) = &bus {
+            abr_handle = abr_handle.with_bus(bus.clone());
+        }
         let peer_id = abr_handle.peer_id();
 
         let entry = RegisteredPeerEntry {
@@ -181,7 +181,7 @@ impl Downloader {
             cmd_rx,
             peer_id,
             cancel: cancel_token,
-            bus: Arc::clone(&bus),
+            bus: bus.clone(),
         };
         self.inner.register_tx.send(entry).ok();
         PeerHandle::new(
@@ -189,7 +189,7 @@ impl Downloader {
                 .downloader(self.clone())
                 .cancel(cancel)
                 .cmd_tx(cmd_tx)
-                .bus(bus)
+                .maybe_bus(bus)
                 .abr(abr_handle)
                 .build(),
         )

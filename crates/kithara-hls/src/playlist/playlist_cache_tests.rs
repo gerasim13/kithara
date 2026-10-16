@@ -98,9 +98,12 @@ fn test_cache(scope: TestAssetScope) -> TestPlaylistCache {
         ))
         .build(),
     );
-    let handle = downloader.register(Arc::new(MockPeer {
-        cancel: CancelToken::never(),
-    }));
+    let handle = downloader.register(
+        Arc::new(MockPeer {
+            cancel: CancelToken::never(),
+        }),
+        None,
+    );
     PlaylistCache::new(scope, handle, crate::test_pools::pools())
 }
 

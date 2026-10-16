@@ -183,9 +183,7 @@ where
             Some(resource_lease),
         ));
 
-        let peer_handle = downloader
-            .register(Arc::new(FilePeer::new(&inner, writer)))
-            .with_bus(bus);
+        let peer_handle = downloader.register(Arc::new(FilePeer::new(&inner, writer)), Some(bus));
 
         inner.arm_reader_waker();
         let mut source = FileSource::with_inner(inner, coord);
