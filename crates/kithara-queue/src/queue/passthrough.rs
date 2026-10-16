@@ -52,8 +52,11 @@ where
     }
 
     /// Set the default playback rate.
-    pub fn set_default_rate(&self, rate: f32) {
-        self.command(|queue| queue.player.set_default_rate(rate));
+    ///
+    /// # Errors
+    /// Forwards the player's refusal of the change.
+    pub fn set_default_rate(&self, rate: f32) -> Result<(), PlayError> {
+        self.with_open_result(|queue| queue.player.set_default_rate(rate))
     }
 
     /// Set gain for an EQ band.
@@ -73,19 +76,28 @@ where
     }
 
     /// Set the mute flag.
-    pub fn set_muted(&self, muted: bool) {
-        self.command(|queue| queue.player.set_muted(muted));
+    ///
+    /// # Errors
+    /// Forwards the player's refusal of the change.
+    pub fn set_muted(&self, muted: bool) -> Result<(), PlayError> {
+        self.with_open_result(|queue| queue.player.set_muted(muted))
     }
 
     /// Set the live playback rate (mirrors into the tempo-mode sibling
     /// so a running key-locked stretch tracks the move).
-    pub fn set_rate(&self, rate: f32) {
-        self.command(|queue| queue.player.set_rate(rate));
+    ///
+    /// # Errors
+    /// Forwards the player's refusal of the change.
+    pub fn set_rate(&self, rate: f32) -> Result<(), PlayError> {
+        self.with_open_result(|queue| queue.player.set_rate(rate))
     }
 
     /// Set the volume (0.0..=1.0).
-    pub fn set_volume(&self, volume: f32) {
-        self.command(|queue| queue.player.set_volume(volume));
+    ///
+    /// # Errors
+    /// Forwards the player's refusal of the change.
+    pub fn set_volume(&self, volume: f32) -> Result<(), PlayError> {
+        self.with_open_result(|queue| queue.player.set_volume(volume))
     }
 
     delegate! {

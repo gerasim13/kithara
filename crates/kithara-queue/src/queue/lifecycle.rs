@@ -387,7 +387,10 @@ mod tests {
         queue
             .lock_navigation_mut()
             .select(replacement, &[replacement]);
-        queue.player.set_rate(1.0);
+        queue
+            .player
+            .set_rate(1.0)
+            .expect("a finite rate is accepted");
 
         queue
             .tick()

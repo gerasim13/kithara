@@ -122,7 +122,7 @@ async fn churn_rates(queue: QueueControl<TestPools>, seed: u64, stop: CancelToke
     while !stop.is_cancelled() {
         let random_byte = rng.next_u64().to_le_bytes()[0];
         let rate = consts::RATE_PATTERN[usize::from(random_byte) % consts::RATE_PATTERN.len()];
-        queue.set_rate(rate);
+        queue.set_rate(rate).expect("a finite rate is accepted");
         changes += 1;
         sleep(consts::RATE_CHANGE_INTERVAL).await;
     }

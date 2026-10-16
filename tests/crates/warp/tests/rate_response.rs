@@ -349,7 +349,8 @@ async fn playing_queue(
     let queue = harness.insert(queue).await;
     harness
         .run(queue.control(), move |q| {
-            q.set_default_rate(case.initial_rate);
+            q.set_default_rate(case.initial_rate)
+                .expect("a finite rate is accepted");
         })
         .await;
     let path = response_source;
@@ -535,9 +536,11 @@ async fn run_case(
     harness
         .run(queue.control(), move |q| {
             for command in 0..case.burst {
-                q.set_rate(if command.is_multiple_of(2) { 4.0 } else { 0.5 });
+                q.set_rate(if command.is_multiple_of(2) { 4.0 } else { 0.5 })
+                    .expect("a finite rate is accepted");
             }
-            q.set_rate(case.target_rate);
+            q.set_rate(case.target_rate)
+                .expect("a finite rate is accepted");
         })
         .await;
     let (acknowledged, revision, at_apply) = capture_until_applied(&harness, &trace, case).await;
@@ -826,9 +829,11 @@ async fn run_strict_case(
     harness
         .run(queue.control(), move |q| {
             for command in 0..case.burst {
-                q.set_rate(if command.is_multiple_of(2) { 4.0 } else { 0.5 });
+                q.set_rate(if command.is_multiple_of(2) { 4.0 } else { 0.5 })
+                    .expect("a finite rate is accepted");
             }
-            q.set_rate(case.target_rate);
+            q.set_rate(case.target_rate)
+                .expect("a finite rate is accepted");
         })
         .await;
     samples.extend(capture_frames(&harness, case.observation_frames(), case.callback_frames).await);
@@ -928,7 +933,8 @@ async fn rate_multiplier_step_is_ramped_across_blocks(
     let before_applied = trace.events_of("rate_applied").len();
     harness
         .run(queue.control(), move |q| q.set_rate(case.target_rate))
-        .await;
+        .await
+        .expect("a finite rate is accepted");
     samples.extend(capture_frames(&harness, case.smooth_frames * 12, case.callback_frames).await);
     save_response_audio(backend, case, command_frame, &samples);
     let smoothing_events = trace.events_of("rate_smoothed");

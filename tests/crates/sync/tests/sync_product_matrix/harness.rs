@@ -164,7 +164,9 @@ impl ProductHarness {
                     .build(),
             );
             let queue = Queue::new(QueueConfig::builder().player(player).build());
-            queue.set_muted(!audible.hears(index));
+            queue
+                .set_muted(!audible.hears(index))
+                .expect("the player takes the mute");
             let deck = host
                 .insert(queue)
                 .await

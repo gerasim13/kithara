@@ -972,7 +972,7 @@ mod tests {
             .expect("INVARIANT: the FFI test Host accepts its allocated Queue");
         let queue = owner.control().clone();
         queue.set_repeat(kithara::queue::RepeatMode::One);
-        queue.set_rate(1.0);
+        queue.set_rate(1.0).expect("a finite rate is accepted");
         let mut events = queue.subscribe();
         let track = assets::sine_wav_a440_100_frames()
             .path()

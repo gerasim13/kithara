@@ -25,7 +25,7 @@ use crate::{
     broadcast::Broadcaster,
     catalog,
     config::AppConfig,
-    deck::{Deck, DeckId, DeckSet, EqMode},
+    deck::{Deck, DeckId, DeckSet, EqMode, TempoPercent},
     state::StateController,
 };
 
@@ -338,10 +338,7 @@ impl EngineDeck {
                     error!(?track, error = %e, "remove failed");
                 }
             }
-            DeckCmd::SetTempo(tempo) => {
-                self.settings.tempo = tempo;
-                queue.set_rate(tempo.speed());
-            }
+            DeckCmd::SetTempo(tempo) => self.set_tempo(tempo),
             DeckCmd::SetQuality(variant) => self.set_quality(variant),
         }
     }
@@ -358,6 +355,15 @@ impl EngineDeck {
         let target = fraction.clamp(0.0, 1.0) * duration.max(0.0);
         if let Err(e) = queue.seek(target) {
             error!("seek failed: {e:?}");
+        }
+    }
+
+    /// Records the tempo only once the queue takes its speed, so the deck never
+    /// shows a tempo the player refused.
+    fn set_tempo(&mut self, tempo: TempoPercent) {
+        match self.controller.queue().set_rate(tempo.speed()) {
+            Ok(()) => self.settings.tempo = tempo,
+            Err(e) => error!(speed = tempo.speed(), error = %e, "tempo refused"),
         }
     }
 

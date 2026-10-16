@@ -4,10 +4,7 @@ use kithara::{
     queue::{ActionAtItemEnd, PlaybackOrder, RepeatMode},
 };
 
-use super::{
-    WasmInner,
-    core::{send, try_send},
-};
+use super::{WasmInner, core::try_send};
 use crate::{
     types::{
         FfiActionAtItemEnd, FfiCrossfadeSettings, FfiDuckingMode, FfiError, FfiPlaybackOrder,
@@ -141,10 +138,11 @@ impl Settings {
         try_send(bridge, WorkerCmd::SetEqGain { band, gain_db })
     }
 
-    pub(super) fn set_muted(&self, bridge: &WorkerBridge, muted: bool) {
-        *self.muted.lock() = muted;
+    pub(super) fn set_muted(&self, bridge: &WorkerBridge, muted: bool) -> Result<(), FfiError> {
         let volume = if muted { 0.0 } else { self.volume.load() };
-        send(bridge, WorkerCmd::SetVolume(volume));
+        try_send(bridge, WorkerCmd::SetVolume(volume))?;
+        *self.muted.lock() = muted;
+        Ok(())
     }
 
     pub(super) fn set_playback_order(
@@ -187,11 +185,12 @@ impl Settings {
         Ok(())
     }
 
-    pub(super) fn set_volume(&self, bridge: &WorkerBridge, volume: f32) {
-        self.volume.store(volume);
+    pub(super) fn set_volume(&self, bridge: &WorkerBridge, volume: f32) -> Result<(), FfiError> {
         if !*self.muted.lock() {
-            send(bridge, WorkerCmd::SetVolume(volume));
+            try_send(bridge, WorkerCmd::SetVolume(volume))?;
         }
+        self.volume.store(volume);
+        Ok(())
     }
 
     delegate::delegate! {
@@ -233,8 +232,8 @@ impl WasmInner {
         self.settings.set_eq_gain(&self.bridge, band, gain_db)
     }
 
-    pub(crate) fn set_muted(&self, muted: bool) {
-        self.settings.set_muted(&self.bridge, muted);
+    pub(crate) fn set_muted(&self, muted: bool) -> Result<(), FfiError> {
+        self.settings.set_muted(&self.bridge, muted)
     }
 
     pub(crate) fn set_playback_order(&self, order: FfiPlaybackOrder) -> Result<(), FfiError> {
@@ -249,8 +248,8 @@ impl WasmInner {
         self.settings.set_repeat_mode(&self.bridge, mode)
     }
 
-    pub(crate) fn set_volume(&self, volume: f32) {
-        self.settings.set_volume(&self.bridge, volume);
+    pub(crate) fn set_volume(&self, volume: f32) -> Result<(), FfiError> {
+        self.settings.set_volume(&self.bridge, volume)
     }
 
     delegate::delegate! {
