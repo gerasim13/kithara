@@ -8,18 +8,16 @@ use anyhow::{Context, Result};
 use kithara_devtools::common::tools::ToolsConfig;
 use tracing::warn;
 
-use super::{cache::scope_bucket, environment::CacheTrust, process::Process};
+use super::process::Process;
 use crate::consts;
 
 /// The kache one CI job compiles through.
 ///
 /// kache's daemon takes its remote only from a configuration file, so the job
 /// writes one into a directory of its own, which is also where the daemon
-/// keeps its socket and the job's events. The remote is the trusted scope's
-/// bucket for every job: kache itself writes only from a protected branch's
-/// push, so a review job's own bucket would never hold anything to read. A job
-/// whose credentials name another bucket reads it and never writes, because
-/// the store would refuse every write and kache would retry each one.
+/// keeps its socket and the job's events. The remote is the bucket the job's
+/// credentials name, the one sccache shares its compiles through: each scope
+/// reads what its own jobs wrote and never another scope's.
 pub(crate) struct KacheJob {
     directory: PathBuf,
 }
@@ -53,11 +51,9 @@ impl KacheJob {
         if let (Some(bucket), Some(endpoint)) =
             (present("SCCACHE_BUCKET"), present("SCCACHE_ENDPOINT"))
         {
-            let remote_bucket = scope_bucket(CacheTrust::Trusted.as_str())?;
-            cache.insert("remote_readonly".into(), (bucket != remote_bucket).into());
             let mut remote = toml::Table::new();
             remote.insert("type".into(), "s3".into());
-            remote.insert("bucket".into(), remote_bucket.into());
+            remote.insert("bucket".into(), bucket.into());
             remote.insert("endpoint".into(), endpoint.into());
             remote.insert("region".into(), consts::CACHE_REGION.into());
             remote.insert("prefix".into(), consts::KACHE_PREFIX.into());
@@ -149,10 +145,13 @@ mod tests {
         ]
     }
 
+    /// A job keeps kache's objects in the bucket its credentials write, as
+    /// sccache does: a remote the job may only read would never fill, because
+    /// no host runs every lane as a protected branch's push.
     #[test]
-    fn every_job_reads_the_trusted_scopes_kache_and_only_its_credentials_write_it() {
+    fn every_job_shares_its_compiles_through_its_own_scopes_bucket() {
         let directory = tempfile::tempdir().unwrap();
-        for (credentials, readonly) in [("kithara-trusted", false), ("kithara-review", true)] {
+        for credentials in ["kithara-trusted", "kithara-review"] {
             let pairs = store(credentials);
             let pairs = pairs
                 .iter()
@@ -164,14 +163,10 @@ mod tests {
 
             let config = written(&job);
             let cache = config["cache"].as_table().unwrap();
-            assert_eq!(
-                cache["remote_readonly"].as_bool(),
-                Some(readonly),
-                "{credentials}"
-            );
+            assert!(!cache.contains_key("remote_readonly"), "{credentials}");
             let remote = cache["remote"].as_table().unwrap();
             assert_eq!(remote["type"].as_str(), Some("s3"));
-            assert_eq!(remote["bucket"].as_str(), Some("kithara-trusted"));
+            assert_eq!(remote["bucket"].as_str(), Some(credentials));
             assert_eq!(remote["prefix"].as_str(), Some(consts::KACHE_PREFIX));
             assert_eq!(
                 remote["endpoint"].as_str(),

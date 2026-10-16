@@ -693,8 +693,8 @@ mod tests {
     }
 
     /// A job compiles through kache, keeps what it compiled in its trust's
-    /// store, reads the trusted scope's remote, and returns where kache's
-    /// configuration is.
+    /// store, shares it through its own scope's bucket, and returns where
+    /// kache's configuration is.
     #[cfg(unix)]
     fn compiles_through_kache(
         vars: &BTreeMap<OsString, OsString>,
@@ -729,9 +729,9 @@ mod tests {
         );
         assert_eq!(
             kache["cache"]["remote"]["bucket"].as_str(),
-            Some("kithara-trusted")
+            Some("kithara-review")
         );
-        assert_eq!(kache["cache"]["remote_readonly"].as_bool(), Some(true));
+        assert!(kache["cache"].get("remote_readonly").is_none());
         assert!(
             kache_config.starts_with(scratch_root()),
             "kache's socket is bound on local storage"
