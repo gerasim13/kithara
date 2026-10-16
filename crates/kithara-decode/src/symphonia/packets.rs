@@ -2,7 +2,7 @@ use symphonia_core::{
     errors::Result,
     formats::{
         FormatReader, SeekMode, SeekTo, SeekedTo,
-        well_known::{FORMAT_ID_MP1, FORMAT_ID_MP2, FORMAT_ID_MP3},
+        well_known::{FORMAT_ID_FLAC, FORMAT_ID_MP1, FORMAT_ID_MP2, FORMAT_ID_MP3},
     },
     packet::Packet,
     units::{Duration, Timestamp},
@@ -47,7 +47,7 @@ impl Packets {
     pub(super) fn restores_interrupted_packet(&self) -> bool {
         matches!(
             self.reader.format_info().format,
-            FORMAT_ID_MP1 | FORMAT_ID_MP2 | FORMAT_ID_MP3
+            FORMAT_ID_FLAC | FORMAT_ID_MP1 | FORMAT_ID_MP2 | FORMAT_ID_MP3
         )
     }
 
