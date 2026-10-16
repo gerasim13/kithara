@@ -165,6 +165,7 @@ impl SizeSignal {
                             kithara_stream::NotReadyCause::WaitBudgetExhausted,
                         ));
                     }
+                    self.wake_peer();
                 }
                 Err(e) => return Err(e),
             }
@@ -182,5 +183,76 @@ impl SizeSignal {
             /// [`WaitGate::wait_timeout`].
             pub(crate) fn wait_timeout(&self, since: u64, timeout: Duration) -> bool;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_platform::{
+        sync::{
+            Arc, CondvarGate, WaitGate,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
+    use kithara_storage::WaitOutcome;
+    use kithara_stream::{DeferredWake, SourceError, StreamError, WorkerWake};
+    use kithara_test_utils::{cancel_token, kithara};
+
+    use super::SizeSignal;
+
+    struct ReadyPeer {
+        ready: Arc<AtomicBool>,
+        gate: Arc<CondvarGate<u64>>,
+        wakes: Arc<AtomicUsize>,
+    }
+
+    impl WorkerWake for ReadyPeer {
+        fn defer(&self) {
+            panic!("a blocking reader must wake its peer immediately");
+        }
+
+        fn wake(&self) {
+            self.wakes.fetch_add(1, Ordering::Relaxed);
+            self.ready.store(true, Ordering::Release);
+            self.gate.signal();
+        }
+    }
+
+    #[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+    fn blocking_wait_wakes_the_peer_before_parking_on_unready_bytes() {
+        let gate = Arc::new(CondvarGate::default());
+        let ready = Arc::new(AtomicBool::new(false));
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let signal = SizeSignal::new(Arc::clone(&gate), Arc::default());
+        signal.set_peer_wake(
+            Arc::new(DeferredWake::default()),
+            Arc::new(ReadyPeer {
+                ready: Arc::clone(&ready),
+                gate,
+                wakes: Arc::clone(&wakes),
+            }),
+        );
+        let cancel = cancel_token();
+        let mut probes = 0;
+        let result = signal.wait_range_blocking(&cancel, None, || {
+            probes += 1;
+            if ready.load(Ordering::Acquire) {
+                Ok(WaitOutcome::Ready)
+            } else {
+                Err(StreamError::Source(SourceError::WaitBudgetExceeded))
+            }
+        });
+
+        assert!(matches!(result, Ok(WaitOutcome::Ready)), "{result:?}");
+        assert_eq!(
+            probes, 2,
+            "the actual wait rechecks the peer's readiness signal"
+        );
+        assert_eq!(
+            wakes.load(Ordering::Relaxed),
+            1,
+            "one unready probe wakes the peer once"
+        );
     }
 }

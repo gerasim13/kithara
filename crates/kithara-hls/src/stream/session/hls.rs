@@ -356,7 +356,6 @@ where
                             phase = ?self.variant.phase_at(range.clone()),
                             "construction wait parked on an unready range"
                         );
-                        self.signal.wake_peer();
                     }
                     outcome
                 }),
