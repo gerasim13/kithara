@@ -72,10 +72,17 @@ impl KacheJob {
     /// wrapper; a `CMake` build takes it as its compiler launcher, so the
     /// compiler `CMake` records stays the real one whichever job configured the
     /// build directory.
-    pub(crate) fn environment(&self, tools: &ToolsConfig) -> [(&'static str, OsString); 5] {
+    ///
+    /// The compilations see no CI system: kache keeps a GitHub or GitLab job
+    /// that is not a push to a protected branch from writing, whatever its
+    /// credentials allow, and every branch job of the fork is such a job. The
+    /// scope's credentials are what decide where a job writes.
+    pub(crate) fn environment(&self, tools: &ToolsConfig) -> [(&'static str, OsString); 7] {
         [
             ("CMAKE_CXX_COMPILER_LAUNCHER", tools.program("kache").into()),
             ("CMAKE_C_COMPILER_LAUNCHER", tools.program("kache").into()),
+            ("GITHUB_ACTIONS", OsString::new()),
+            ("GITLAB_CI", OsString::new()),
             ("KACHE_CONFIG", self.config().into_os_string()),
             ("KACHE_FALLBACK", tools.program("sccache").into()),
             ("RUSTC_WRAPPER", tools.program("kache").into()),
@@ -119,7 +126,7 @@ impl Drop for KacheJob {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::{collections::HashMap, ffi::OsStr};
 
     use super::*;
 
@@ -226,11 +233,35 @@ mod tests {
                     "CMAKE_C_COMPILER_LAUNCHER",
                     OsString::from(tools.program("kache"))
                 ),
+                ("GITHUB_ACTIONS", OsString::new()),
+                ("GITLAB_CI", OsString::new()),
                 ("KACHE_CONFIG", job.config().into_os_string()),
                 ("KACHE_FALLBACK", OsString::from(tools.program("sccache"))),
                 ("RUSTC_WRAPPER", OsString::from(tools.program("kache"))),
             ]
         );
+    }
+
+    /// kache keeps a GitHub or GitLab job read-only unless it is a push to a
+    /// protected branch, and every branch job of the fork is a push to an
+    /// unprotected one. The scope's credentials decide what a job may write.
+    #[test]
+    fn kache_sees_no_ci_system_whose_policy_would_keep_a_job_read_only() {
+        let directory = tempfile::tempdir().unwrap();
+        let job = KacheJob::prepare(directory.path().join("job"), None, &lookup(&[])).unwrap();
+
+        let environment = job.environment(&ToolsConfig::default());
+
+        for marker in ["GITHUB_ACTIONS", "GITLAB_CI"] {
+            assert_eq!(
+                environment
+                    .iter()
+                    .find(|(name, _)| *name == marker)
+                    .map(|(_, value)| value.as_os_str()),
+                Some(OsStr::new("")),
+                "{marker}"
+            );
+        }
     }
 
     #[test]
