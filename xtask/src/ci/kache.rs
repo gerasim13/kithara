@@ -71,9 +71,15 @@ impl KacheJob {
     }
 
     /// What the job's compilations are told: the configuration, kache as
-    /// the wrapper, and sccache for what kache hands on.
-    pub(crate) fn environment(&self, tools: &ToolsConfig) -> [(&'static str, OsString); 3] {
+    /// the wrapper, and sccache for what kache hands on. cc-rs puts kache in
+    /// front of a build script's C compile on its own, seeing it as the Rust
+    /// wrapper; a `CMake` build takes it as its compiler launcher, so the
+    /// compiler `CMake` records stays the real one whichever job configured the
+    /// build directory.
+    pub(crate) fn environment(&self, tools: &ToolsConfig) -> [(&'static str, OsString); 5] {
         [
+            ("CMAKE_CXX_COMPILER_LAUNCHER", tools.program("kache").into()),
+            ("CMAKE_C_COMPILER_LAUNCHER", tools.program("kache").into()),
             ("KACHE_CONFIG", self.config().into_os_string()),
             ("KACHE_FALLBACK", tools.program("sccache").into()),
             ("RUSTC_WRAPPER", tools.program("kache").into()),
@@ -201,6 +207,11 @@ mod tests {
         );
     }
 
+    /// A `CMake` build reaches kache as its compiler launcher, never as its
+    /// compiler: a build directory another job configured with the real
+    /// compiler would otherwise see the compiler change, and `CMake` then
+    /// deletes its cache and configures without the flags `cmake-rs` passed,
+    /// `-fPIC` among them.
     #[test]
     fn a_job_compiles_through_kache_and_hands_on_to_sccache() {
         let directory = tempfile::tempdir().unwrap();
@@ -212,6 +223,14 @@ mod tests {
         assert_eq!(
             environment,
             [
+                (
+                    "CMAKE_CXX_COMPILER_LAUNCHER",
+                    OsString::from(tools.program("kache"))
+                ),
+                (
+                    "CMAKE_C_COMPILER_LAUNCHER",
+                    OsString::from(tools.program("kache"))
+                ),
                 ("KACHE_CONFIG", job.config().into_os_string()),
                 ("KACHE_FALLBACK", OsString::from(tools.program("sccache"))),
                 ("RUSTC_WRAPPER", OsString::from(tools.program("kache"))),

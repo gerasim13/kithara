@@ -15,14 +15,11 @@ kache := if os_family() == "windows" { "" } else { `command -v kache 2>/dev/null
 export RUSTC_WRAPPER := if kache == "" { sccache } else { kache }
 export KACHE_FALLBACK := if kache == "" { "" } else { sccache }
 
-# cc-rs hands a build script's C compile to the Rust wrapper only when that is
-# named after sccache, so with kache it reaches the cache through compiler-name
-# links to kache, installed beside it in `lib/kache/shims` of its install root.
-# Only the C and C++ compilers are linked: kache's `cargo` link would move the
-# build directory into the checkout. They go first on the path of these recipes
-# only, never of the whole machine.
-kache_shims := if kache == "" { "" } else { parent_directory(parent_directory(kache)) / "lib/kache/shims" }
-export PATH := if kache_shims != "" { if path_exists(kache_shims) == "true" { kache_shims + ":" + env("PATH") } else { env("PATH") } } else { env("PATH") }
+# cc-rs puts kache in front of a build script's C compile on its own; a CMake
+# build takes it as its compiler launcher, so the compiler CMake records stays
+# the real one and a build directory configured without kache keeps its cache.
+export CMAKE_C_COMPILER_LAUNCHER := kache
+export CMAKE_CXX_COMPILER_LAUNCHER := kache
 
 # A C compile's cache key includes the absolute paths in its preprocessor
 # output, so the same C source built in two worktrees hashes twice and neither

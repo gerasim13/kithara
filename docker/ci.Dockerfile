@@ -230,13 +230,6 @@ FROM ci-base
 # dependencies that select it.
 COPY --from=tool-builder /opt/kithara-ci-tools/bin/ /usr/local/cargo/bin/
 
-# cc-rs hands a build script's C compile to kache only through compiler-name
-# links, which the recipes put first on their path from `lib/kache/shims` beside
-# kache's install root. Only the C and C++ compilers are linked: kache's `cargo`
-# link would move the build directory into the checkout.
-RUN kache install-shims /usr/local/cargo/lib/kache/shims --canonical-only \
- && rm /usr/local/cargo/lib/kache/shims/cargo /usr/local/cargo/lib/kache/shims/rustdoc
-
 # The object store client the target and source snapshots travel through.
 # It is statically linked, so it runs as copied, and digest-pinned in ci-pins.
 COPY --from=cache-client /usr/bin/rc /usr/local/bin/rc
