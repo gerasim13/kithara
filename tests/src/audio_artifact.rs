@@ -265,15 +265,16 @@ impl AudioArtifactSet {
             ));
         }
         validate_label(case)?;
-        // The root outlives the process: CI runners keep it between jobs and
-        // reuse process ids, so only a random identity is fresh in it.
+        fs::create_dir_all(root)?;
+        let namespace = tempfile::Builder::new()
+            .prefix("capture-")
+            .tempdir_in(root)?
+            .keep();
         let source = AssetSource::Local {
-            path: root.join(format!("{case}-{}", uuid::Uuid::new_v4())),
+            path: namespace.join(case),
         };
         let store = AssetStore::builder(pools())
-            .backend(StorageBackend::Disk {
-                root: root.to_path_buf(),
-            })
+            .backend(StorageBackend::Disk { root: namespace })
             .build();
         let scope = store.scope::<Self>(&source).map_err(io::Error::other)?;
         Ok(Self {
