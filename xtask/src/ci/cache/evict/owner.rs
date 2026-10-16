@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     convert::Infallible,
+    net::ToSocketAddrs,
     path::Path,
     sync::mpsc::{self, Receiver, RecvTimeoutError},
     thread,
@@ -21,13 +22,11 @@ use super::{
 };
 use crate::{ci::host::mac::read_secret, consts};
 
-/// Keeps each scope's compiler cache under the quota the host's environment
-/// names for it by evicting the entries used longest ago, as the store's audit
-/// log reports their use. The store's buckets carry no quota of their own, so
-/// this is the only bound on them.
-pub(in crate::ci::cache) fn run() -> Result<Infallible> {
+/// The scopes this stack provisions, each with the bucket that holds its
+/// compiler cache and the quota the host's environment names for it.
+pub(in crate::ci::cache) fn buckets() -> Result<Vec<(String, u64)>> {
     let shared = required("CACHE_BUCKET_QUOTA")?;
-    let buckets = required("CACHE_SCOPES")?
+    required("CACHE_SCOPES")?
         .split_whitespace()
         .map(|scope| {
             Ok((
@@ -35,22 +34,50 @@ pub(in crate::ci::cache) fn run() -> Result<Infallible> {
                 provision::scope_quota(scope, &shared)?,
             ))
         })
-        .collect::<Result<Vec<_>>>()?;
-    let server = Server::http(consts::EVICT_LISTEN)
-        .map_err(|error| anyhow!("listen for the store's audit log: {error}"))?;
-    let (sender, deliveries) = mpsc::sync_channel(Owner::CHANNEL);
-    let managed = buckets
-        .iter()
-        .map(|(bucket, _)| bucket.clone())
-        .collect::<Vec<_>>();
-    thread::spawn(move || audit::receive(&server, &managed, &sender));
-    let config = Path::new("/config");
-    let store = Store::connect(
-        Path::new("rc"),
-        &read_secret(&config.join("admin-user"))?,
-        &read_secret(&config.join("admin-password"))?,
-    )?;
-    Owner::start(store, buckets, deliveries)?.serve()
+        .collect()
+}
+
+/// Keeps each scope's compiler cache under its quota by evicting the entries
+/// used longest ago, as the store's audit log reports their use. The store's
+/// buckets carry no quota of their own, so this is the only bound on them.
+pub(in crate::ci::cache) struct Evictor {
+    buckets: Vec<(String, u64)>,
+    deliveries: Receiver<Delivery>,
+}
+
+impl Evictor {
+    /// Starts hearing the store's audit log at `address`. The store checks
+    /// its webhook once, as it starts, and never again, so the stack listens
+    /// before it starts the store; what the log reports until [`Self::run`]
+    /// reaches the store waits for it.
+    pub(in crate::ci::cache) fn listen(
+        address: impl ToSocketAddrs,
+        buckets: Vec<(String, u64)>,
+    ) -> Result<Self> {
+        let server = Server::http(address)
+            .map_err(|error| anyhow!("listen for the store's audit log: {error}"))?;
+        let (sender, deliveries) = mpsc::sync_channel(Owner::CHANNEL);
+        let managed = buckets
+            .iter()
+            .map(|(bucket, _)| bucket.clone())
+            .collect::<Vec<_>>();
+        thread::spawn(move || audit::receive(&server, &managed, &sender));
+        Ok(Self {
+            buckets,
+            deliveries,
+        })
+    }
+
+    /// Evicts from the store the stack has brought up.
+    pub(in crate::ci::cache) fn run(self) -> Result<Infallible> {
+        let config = Path::new("/config");
+        let store = Store::connect(
+            Path::new("rc"),
+            &read_secret(&config.join("admin-user"))?,
+            &read_secret(&config.join("admin-password"))?,
+        )?;
+        Owner::start(store, self.buckets, self.deliveries)?.serve()
+    }
 }
 
 struct Scope {
@@ -347,6 +374,48 @@ esac
         sender
             .send(Delivery { events, dropped: 0 })
             .expect("the owner holds the receiving end");
+    }
+
+    /// The store checks its audit webhook once, as it starts, and never
+    /// again: a listener that is not up by then leaves the evictor blind for
+    /// good. What the store reports before the evictor reaches the store
+    /// waits for it.
+    #[test]
+    fn the_audit_log_is_heard_from_the_moment_the_evictor_listens() {
+        let address = std::net::TcpListener::bind("127.0.0.1:0")
+            .and_then(|probe| probe.local_addr())
+            .unwrap();
+        let evictor = Evictor::listen(address, vec![("kithara-review".to_owned(), 1000)])
+            .expect("the evictor listens on a free address");
+        let body = serde_json::json!({"Records": [{
+            "time": 400_000_u64,
+            "api": {
+                "name": "s3:GetObject",
+                "bucket": "kithara-review",
+                "object": object('a', '1'),
+                "status_code": 200,
+            },
+        }]});
+
+        let response = reqwest::blocking::Client::new()
+            .post(format!("http://{address}/"))
+            .body(body.to_string())
+            .send()
+            .expect("the evictor answers the store");
+
+        assert!(response.status().is_success(), "{}", response.status());
+        let delivery = evictor
+            .deliveries
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the delivery waits for the evictor");
+        assert_eq!(
+            delivery.events,
+            [Event {
+                scope: 0,
+                entry: entry('a', '1'),
+                at_s: 400,
+            }]
+        );
     }
 
     /// The age rule this replaces expired the entry every build reads. Here

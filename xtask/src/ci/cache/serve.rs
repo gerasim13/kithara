@@ -8,7 +8,10 @@ use anyhow::{Context, Result, anyhow, bail};
 use reqwest::blocking::Client;
 use tracing::info;
 
-use super::{evict, provision};
+use super::{
+    evict::{self, Evictor},
+    provision,
+};
 use crate::{
     child::{self, Cancel},
     consts,
@@ -16,10 +19,13 @@ use crate::{
 
 /// Runs the cache stack whole: the store, the setup it is served with, and
 /// the evictor that keeps it under its quotas, in one process tree that
-/// starts and stops together.
+/// starts and stops together. The evictor listens for the store's audit log
+/// before the store starts, since the store gives up on a webhook that does
+/// not answer as it starts.
 pub(super) fn run() -> Result<()> {
     let cancel = Cancel::install()?;
     provision::credentials()?;
+    let evictor = Evictor::listen(consts::EVICT_LISTEN, evict::buckets()?)?;
     let mut store = child::spawn(Command::new("rustfs").args(["server", "/data"]))?;
     let ready_url = format!("{}/health/ready", consts::CACHE_STORE_URL);
     if let Err(error) =
@@ -30,7 +36,7 @@ pub(super) fn run() -> Result<()> {
             Err(stop) => error.context(stop),
         });
     }
-    watch(&mut store, thread::spawn(evict::run), &cancel)
+    watch(&mut store, thread::spawn(|| evictor.run()), &cancel)
 }
 
 /// Waits until the store answers ready: the setup that follows talks to it.
