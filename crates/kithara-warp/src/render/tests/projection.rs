@@ -2,6 +2,7 @@ use std::num::{NonZero, NonZeroU64};
 
 use kithara_platform::sync::Arc;
 use kithara_signal::{AudioChunkInfo, OutputContext, SessionEpoch, SessionFrame};
+use kithara_sync::SpeedCurve;
 use kithara_test_fixtures::unit_fixtures::warp_pair;
 #[cfg(any(
     feature = "stretch-signalsmith",
@@ -13,10 +14,7 @@ use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
 use super::*;
-use crate::{
-    PresentationFrontier, RenderContext, RenderSnapshot, SpeedCurve, Warp, consts,
-    test_pools::pools,
-};
+use crate::{PresentationFrontier, RenderContext, RenderSnapshot, Warp, consts, test_pools::pools};
 
 #[cfg(any(
     feature = "stretch-signalsmith",
@@ -281,8 +279,8 @@ fn planned_renderer_with_publisher(config: &WarpConfig) -> (WarpRenderer, crate:
     let context = RenderContext::new_linear(
         output,
         Some(
-            crate::SessionBeat::new(0.0).expect("beat")
-                ..crate::SessionBeat::new(1.0).expect("beat"),
+            kithara_sync::SessionBeat::new(0.0).expect("beat")
+                ..kithara_sync::SessionBeat::new(1.0).expect("beat"),
         ),
     )
     .expect("fixture context");
@@ -894,9 +892,9 @@ fn a_finite_projected_recording_shorter_than_backend_latency_renders_its_covered
     warp_sine: Vec<f32>,
 ) {
     let bps = f64::from(spec().sample_rate.get()) / 256.0;
-    let anchor = crate::SessionAnchor::new(
+    let anchor = kithara_sync::SessionAnchor::new(
         SessionFrame::new(0),
-        crate::SessionBeat::default(),
+        kithara_sync::SessionBeat::default(),
         bps,
         spec().sample_rate,
     )
@@ -911,7 +909,7 @@ fn a_finite_projected_recording_shorter_than_backend_latency_renders_its_covered
     let expected_frames = if ramp {
         usize::try_from(i64::from(
             anchor
-                .frame_at(crate::SessionBeat::new(1.0).expect("last beat"))
+                .frame_at(kithara_sync::SessionBeat::new(1.0).expect("last beat"))
                 .expect("covered endpoint"),
         ))
         .expect("output frame")

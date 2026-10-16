@@ -10,7 +10,8 @@ use kithara::{
         DispatcherProtocol, LoadRefusal, PlayWorker, PlayWorkerConfig, ResourceConfig,
         ResourceLoad, ResourceSrc,
     },
-    warp::{SpeedCurve, WarpConfig},
+    sync::SpeedCurve,
+    warp::WarpConfig,
 };
 use kithara_command::{Batch, ChannelConfig, Outcome, Receipt, Rejection, Sender, When, channel};
 use kithara_integration_tests::usdt_trace::{self, Scope};

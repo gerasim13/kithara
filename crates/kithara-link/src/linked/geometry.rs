@@ -2,7 +2,6 @@ use kithara_beat::BeatGridModel;
 use kithara_play::{Outbox, PlayError, Position, Track, TrackSnapshot, TrackStatus};
 use kithara_signal::{AudioSpec, SessionFrame};
 use kithara_sync::{SourceGrid, speed_curve};
-use kithara_warp::{AssetAxis, AssetExtent};
 
 use super::{Linked, LinkedPlayer};
 
@@ -43,7 +42,7 @@ impl<P> Linked<P> {
     {
         let rate = self.host.sample_rate();
         let extent = match self.inner.snapshot().as_ref().duration {
-            Some(duration) => AssetExtent::Bounded(
+            Some(duration) => Some(
                 u64::try_from(
                     AudioSpec::new(1, rate)
                         .frames_for(duration)
@@ -52,9 +51,15 @@ impl<P> Linked<P> {
                 )
                 .map_err(|_| PlayError::Untimed)?,
             ),
-            None => AssetExtent::Unknown,
+            None => None,
         };
-        SourceGrid::new(grid, AssetAxis::new(rate, extent)).ok_or(PlayError::NotReady)
+        SourceGrid::new(
+            grid.geometry(),
+            rate,
+            extent,
+            matches!(grid.as_raw().state, kithara_beat::BeatGridState::Final) && extent.is_some(),
+        )
+        .map_err(|_| PlayError::NotReady)
     }
 
     pub(super) fn curve(
@@ -63,7 +68,7 @@ impl<P> Linked<P> {
         position: Position,
         at: SessionFrame,
         landing: Option<(Position, SessionFrame)>,
-    ) -> Result<kithara_warp::SpeedCurve, PlayError> {
+    ) -> Result<kithara_sync::SpeedCurve, PlayError> {
         speed_curve(&self.host, grid, position, at, landing).ok_or_else(|| {
             PlayError::Internal("Host speed law is not representable on the track axis".into())
         })

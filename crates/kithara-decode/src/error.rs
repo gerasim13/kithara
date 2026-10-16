@@ -250,12 +250,6 @@ impl DecodeError {
         }
     }
 
-    /// Returns `true` if the error is an [`Interrupted`](Self::Interrupted) variant.
-    #[must_use]
-    pub fn is_interrupted(&self) -> bool {
-        matches!(self.classify(), ErrorClass::Interrupted)
-    }
-
     /// Wrap an upstream parser / io error as a [`DecodeError::Parse`] with a
     /// `&'static str` site tag. For off-RT init-segment / box parsing only —
     /// preserves the typed source chain without stringifying it.
@@ -418,7 +412,10 @@ mod tests {
         false
     )]
     fn test_backend_is_interrupted(#[case] decode_err: DecodeError, #[case] expected: bool) {
-        assert_eq!(decode_err.is_interrupted(), expected);
+        assert_eq!(
+            matches!(decode_err.classify(), ErrorClass::Interrupted),
+            expected
+        );
     }
 
     #[kithara::test]
@@ -427,7 +424,7 @@ mod tests {
             source: IoError::other(VariantChangeError),
         };
         assert_eq!(decode_err.classify(), ErrorClass::VariantChange);
-        assert!(!decode_err.is_interrupted());
+        assert_ne!(decode_err.classify(), ErrorClass::Interrupted);
     }
 }
 
@@ -469,7 +466,7 @@ mod symphonia {
 
         use kithara_test_utils::kithara;
 
-        use crate::error::DecodeError;
+        use crate::error::{DecodeError, ErrorClass};
 
         #[kithara::test]
         fn test_backend_symphonia_seek_pending_counts_as_interrupted() {
@@ -477,7 +474,7 @@ mod symphonia {
                 std::io::ErrorKind::Interrupted,
                 "interrupted",
             )));
-            assert!(decode_err.is_interrupted());
+            assert_eq!(decode_err.classify(), ErrorClass::Interrupted);
         }
     }
 }

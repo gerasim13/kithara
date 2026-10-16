@@ -107,27 +107,6 @@ impl MapSegment {
         Self::with_beats(start, end, start_beat, end_beat, facts)
     }
 
-    pub(crate) fn partial_start(
-        position: MapPosition,
-        beat: Beat,
-        end: BeatMarker,
-        facts: SegmentFacts,
-    ) -> Result<Self, SegmentError> {
-        let ordinal = end.ordinal.ok_or(SegmentError::MissingOrdinal {
-            endpoint: SegmentEndpoint::End,
-        })?;
-        let end_beat = Beat::try_from(ordinal).map_err(|_| SegmentError::InexactOrdinal {
-            endpoint: SegmentEndpoint::End,
-        })?;
-        Self::with_beats(
-            BeatMarker::new(position, None, facts.evidence, facts.uncertainty),
-            end,
-            beat,
-            end_beat,
-            facts,
-        )
-    }
-
     fn with_beats(
         start: BeatMarker,
         end: BeatMarker,
@@ -258,6 +237,28 @@ impl MapSegment {
         self.tempo(axis)
             .map(|tempo| (tempo, self.facts.evidence, self.facts.uncertainty))
     }
+}
+
+#[cfg(test)]
+pub(crate) fn partial_start(
+    position: MapPosition,
+    beat: Beat,
+    end: BeatMarker,
+    facts: SegmentFacts,
+) -> Result<MapSegment, SegmentError> {
+    let ordinal = end.ordinal.ok_or(SegmentError::MissingOrdinal {
+        endpoint: SegmentEndpoint::End,
+    })?;
+    let end_beat = Beat::try_from(ordinal).map_err(|_| SegmentError::InexactOrdinal {
+        endpoint: SegmentEndpoint::End,
+    })?;
+    MapSegment::with_beats(
+        BeatMarker::new(position, None, facts.evidence, facts.uncertainty),
+        end,
+        beat,
+        end_beat,
+        facts,
+    )
 }
 
 /// An inclusive grid-native position region.

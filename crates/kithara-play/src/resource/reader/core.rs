@@ -388,9 +388,10 @@ mod tests {
         rt::{DeckMixerConfig, StreamShape},
     };
     use kithara_signal::{AudioSpec, SegmentId, SessionFrame};
+    use kithara_sync::SpeedCurve;
     use kithara_test_fixtures::play_fixtures::half;
     use kithara_test_utils::{TestTempDir, kithara};
-    use kithara_warp::{SpeedCurve, StretchKind, WarpConfig};
+    use kithara_warp::{StretchKind, WarpConfig};
     use num_traits::ToPrimitive;
 
     use super::*;

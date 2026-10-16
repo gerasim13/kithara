@@ -2,8 +2,8 @@ use kithara_command::{Seq, When};
 use kithara_host::{HostOwner, api::Tempo};
 use kithara_play::{Bound, HostedDeck, PlayError, Player, Settled, TrackCommand, TrackStatus};
 use kithara_signal::{FrameCount, SessionFrame};
+use kithara_sync::SpeedCurve;
 use kithara_test_utils::kithara;
-use kithara_warp::SpeedCurve;
 
 use super::{
     fixtures::{Command, Control, Deck, Rig, answer, deck, grid, load, position, trajectory},
@@ -204,7 +204,7 @@ fn a_local_tempo_commit_moves_the_pending_member() {
     assert_eq!(
         probe
             .trajectory()
-            .frame_at(kithara_warp::SessionBeat::new(2.0).expect("entry beat")),
+            .frame_at(kithara_sync::SessionBeat::new(2.0).expect("entry beat")),
         SessionFrame::new(45_648)
     );
 }

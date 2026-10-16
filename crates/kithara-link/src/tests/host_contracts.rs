@@ -23,7 +23,7 @@ fn assert_track_unchanged(actual: &TrackSnapshot, expected: &TrackSnapshot) {
 #[kithara::test]
 fn an_earlier_tempo_replaces_the_deck_law_of_an_accepted_future_target() {
     use kithara_command::When;
-    use kithara_warp::SpeedCurve;
+    use kithara_sync::SpeedCurve;
 
     use super::fixtures::Command;
 
@@ -174,7 +174,7 @@ fn enabling_sync_observes_tempo_changes_made_while_unlinked() {
     let reached = (2.0 - (2.2 - 2.0) * (-128.0_f64 / 240.0).exp_m1()) * 0.5;
     assert!(control.commands().iter().any(|(_, command)| matches!(
         command,
-        super::fixtures::Command::Speed(kithara_warp::SpeedCurve::Approach(curve), kithara_command::When::At(at))
+        super::fixtures::Command::Speed(kithara_sync::SpeedCurve::Approach(curve), kithara_command::When::At(at))
             if *at == SessionFrame::new(48_128)
                 && curve.initial() == reached
                 && curve.target() == 132.0 / 120.0

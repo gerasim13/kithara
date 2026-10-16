@@ -6,9 +6,10 @@ use kithara::{
     signal::{
         AudioChunkInfo, AudioSpec, ExponentialApproach, SegmentId, SessionEpoch, SessionFrame,
     },
+    sync::{SessionAnchor, SpeedCurve},
     warp::{
         AssetAxis, AssetExtent, AssetFrame, Beat, BeatGridId, BeatGridQuery, BeatGridRevision,
-        BeatGridSnapshot, MapPoint, MapPosition, SessionAnchor, SpeedCurve,
+        BeatGridSnapshot, MapPoint, MapPosition,
     },
 };
 use kithara_command::When;
@@ -306,7 +307,9 @@ fn analytic_parts(curve: &SpeedCurve) -> Result<Vec<(u64, ExponentialApproach)>,
             .iter()
             .map(|(at, speed)| Ok((*at, constant(*speed)?)))
             .collect(),
-        _ => Err("SYNC emitted a curve outside its analytic law contract".to_owned()),
+        SpeedCurve::Ramp { .. } => {
+            Err("SYNC emitted a curve outside its analytic law contract".to_owned())
+        }
     }
 }
 
@@ -3046,11 +3049,11 @@ fn direct_grid_anchor_rejects_a_whole_bar_and_a_wrong_selected_cue() {
                 at: None,
                 trajectory: None,
                 kind: LinkOwnerInputKind::Grid {
-                    answer: GridAnswer {
+                    answer: Box::new(GridAnswer {
                         item,
                         load: seq,
                         model: Ok(shifted.clone()),
-                    },
+                    }),
                 },
             },
             LinkOwnerInput {

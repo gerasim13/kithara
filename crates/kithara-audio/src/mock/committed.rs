@@ -1,6 +1,6 @@
 use kithara_assets::{AssetStore, StorageBackend};
 use kithara_file::{File, FileConfig, FileSrc};
-use kithara_platform::sync::Arc;
+use kithara_platform::{sync::Arc, tokio::task::yield_runnable};
 use kithara_resampler::NoResamplerBackend;
 use kithara_signal::AudioChunk;
 use kithara_stream::{Stream, mock::NoopWorkerWake};
@@ -32,10 +32,10 @@ pub(crate) async fn prepared_audio() -> Audio<Stream<File<TestPools>>> {
 
 #[kithara_test_utils::kithara::hang_watchdog]
 #[kithara_test_utils::kithara::flash(io)]
-pub(crate) fn produced_audio(audio: &mut Audio<Stream<File<TestPools>>>) -> AudioChunk {
+pub(crate) async fn produced_audio(audio: &mut Audio<Stream<File<TestPools>>>) -> AudioChunk {
     use crate::{AudioSource, Fetch, TrackStep};
 
-    for _ in 0..64 {
+    loop {
         hang_tick!();
         let _ = audio.prepare_deferred();
         match audio.step_track() {
@@ -50,6 +50,6 @@ pub(crate) fn produced_audio(audio: &mut Audio<Stream<File<TestPools>>>) -> Audi
             _ => panic!("expected decoded output"),
         }
         audio.finish_deferred();
+        yield_runnable().await;
     }
-    panic!("decoded fixture did not produce output");
 }

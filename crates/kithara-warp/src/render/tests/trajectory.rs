@@ -1,10 +1,10 @@
 use std::num::{NonZeroU32, NonZeroU64, NonZeroU128};
 
 use kithara_signal::ExponentialApproach;
+use kithara_sync::SpeedCurve;
 use kithara_test_utils::kithara;
 
 use super::super::trajectory::{Fraction, Trajectory};
-use crate::SpeedCurve;
 
 fn interrupted_ramps() -> Vec<(u128, NonZeroU128)> {
     let mut trajectory = Trajectory::new(1.0);

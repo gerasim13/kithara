@@ -11,7 +11,8 @@ use futures::{FutureExt, StreamExt, future::LocalBoxFuture, stream::FuturesUnord
 use kithara_command::{Inbox, Protocol, Seq};
 use kithara_platform::{time::Duration, tokio::runtime::Handle};
 use kithara_signal::FrameCount;
-use kithara_warp::{SpeedCurve, StretchKind};
+use kithara_sync::SpeedCurve;
+use kithara_warp::StretchKind;
 use kithara_worker::{Priority, Task, TickResult};
 use tracing::Instrument as _;
 

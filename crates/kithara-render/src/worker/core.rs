@@ -352,8 +352,9 @@ mod tests {
     use kithara_audio::{AudioConfig, NoResamplerBackend};
     use kithara_file::{File, FileConfig, FileSrc};
     use kithara_platform::CancelScope;
+    use kithara_sync::SpeedCurve;
     use kithara_test_utils::kithara;
-    use kithara_warp::{SpeedCurve, StretchKind};
+    use kithara_warp::StretchKind;
 
     use super::*;
     use crate::test_pools::pools;

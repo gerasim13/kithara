@@ -85,7 +85,7 @@ fn a_supplied_grid_reaches_the_decoded_axis_in_media_seconds() {
 fn a_rate_change_reprojects_the_model_it_already_holds() {
     use std::num::NonZeroU16;
 
-    use kithara_warp::SessionBeat;
+    use kithara_sync::SessionBeat;
 
     let (mut deck, control, mut rig, _) = loaded(served_grid());
     let seq = rig
@@ -554,7 +554,7 @@ fn group_accepts_latest_grid_after_unpublished_revisions() {
         [
             (
                 seq,
-                Command::Speed(kithara_warp::SpeedCurve::Constant(1.0), When::Next)
+                Command::Speed(kithara_sync::SpeedCurve::Constant(1.0), When::Next)
             ),
             (seq, Command::Seek(position(0)))
         ]

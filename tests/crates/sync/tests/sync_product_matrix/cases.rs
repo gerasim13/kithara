@@ -53,7 +53,7 @@ pub(crate) fn synthetic_grid() -> ArtifactSource<BeatGridModel> {
                 confidence: Some(1.0),
             })
             .collect(),
-        meter: Some(kithara::beat::Meter {
+        meter: Some(kithara::sync::Meter {
             beats_per_bar: std::num::NonZeroU16::new(4).expect("fixture meter"),
             origin_beat_ordinal: 1,
         }),

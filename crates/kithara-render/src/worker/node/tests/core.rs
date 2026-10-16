@@ -55,7 +55,7 @@ pub(in crate::worker) fn segment(lane: &mut Sender<LaneProtocol>) -> SegmentId {
             commands: vec![LaneCommand::Segment {
                 id,
                 from: SEGMENT_FROM,
-                speed: kithara_warp::SpeedCurve::Constant(1.0),
+                speed: kithara_sync::SpeedCurve::Constant(1.0),
             }],
         },
     )

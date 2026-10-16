@@ -4,8 +4,9 @@ use kithara_audio::{AudioReadError, AudioSource, SeekOutcome, TrackFailureKind, 
 use kithara_command::{Batch, ChannelConfig, Outcome, Rejection, Sender, Seq, When, channel};
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, SegmentId, SourceSpan};
+use kithara_sync::SpeedCurve;
 use kithara_test_utils::kithara;
-use kithara_warp::{SpeedCurve, Warp, WarpConfig, WarpRenderer};
+use kithara_warp::{Warp, WarpConfig, WarpRenderer};
 
 use crate::{
     LaneCommand, LaneFrame, LaneProtocol,

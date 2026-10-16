@@ -1,16 +1,16 @@
 use std::num::{NonZeroU16, NonZeroU32};
 
-use kithara_beat::BeatGridState;
 use kithara_signal::{ExponentialApproach, SessionFrame};
 use kithara_test_utils::kithara;
-use kithara_warp::{SessionBeat, SpeedCurve};
 use num_traits::ToPrimitive;
 
 use super::{
     super::source::{self, SourceGrid},
     fixtures::{grid, host, position, source_grid},
 };
-use crate::{Tempo, TempoStep, TempoTrajectory, corrected_speed_curve, speed_curve};
+use crate::{
+    SessionBeat, SpeedCurve, Tempo, TempoStep, TempoTrajectory, corrected_speed_curve, speed_curve,
+};
 
 fn approached(initial: f64, target: f64, frames: u64) -> f64 {
     target + (initial - target) * (-frames.to_f64().expect("fixture offset") / 240.0).exp()
@@ -74,7 +74,7 @@ fn pending_targets() -> TempoTrajectory {
 #[kithara::test]
 fn future_targets_are_projected_in_frame_order_after_out_of_order_acceptance() {
     let trajectory = pending_targets();
-    let model = grid(480_000, 480_000, 24_000, 0, None, BeatGridState::Final);
+    let model = grid(480_000, 480_000, 24_000, 0, None);
     let curve = speed_curve(
         &trajectory,
         &source_grid(&model),
@@ -129,7 +129,7 @@ fn future_targets_are_projected_in_frame_order_after_out_of_order_acceptance() {
 fn withdrawing_an_earlier_target_removes_it_from_the_future_projection() {
     let mut trajectory = pending_targets();
     trajectory.withdraw(SessionFrame::new(1_000));
-    let model = grid(480_000, 480_000, 24_000, 0, None, BeatGridState::Final);
+    let model = grid(480_000, 480_000, 24_000, 0, None);
     let curve = speed_curve(
         &trajectory,
         &source_grid(&model),
@@ -173,7 +173,7 @@ fn projection_keeps_exact_frame_offsets_beyond_f64_integer_precision(#[case] ori
             Tempo::new(180.0).expect("tempo"),
         )
         .expect("earlier target");
-    let model = grid(480_000, 480_000, 24_000, 0, None, BeatGridState::Final);
+    let model = grid(480_000, 480_000, 24_000, 0, None);
     let curve = speed_curve(
         &trajectory,
         &source_grid(&model),
@@ -196,7 +196,7 @@ fn projection_keeps_exact_frame_offsets_beyond_f64_integer_precision(#[case] ori
 
 #[kithara::test]
 fn zero_correction_preserves_the_complete_future_law() {
-    let model = grid(480_000, 480_000, 24_000, 0, None, BeatGridState::Final);
+    let model = grid(480_000, 480_000, 24_000, 0, None);
     let at = SessionFrame::new(480);
     let base = speed_curve(
         &pending_targets(),
@@ -226,10 +226,16 @@ fn zero_correction_preserves_the_complete_future_law() {
     assert_eq!(end, 0);
     assert_eq!(actual, base);
 
-    let model = grid(576_000, 555_417, 20_571, 20_571, None, BeatGridState::Final);
-    let mut raw = model.as_raw().clone();
-    raw.bpm = 140.0;
-    let source = source_grid(&kithara_beat::BeatGridModel::try_from(raw).expect("pickup grid"));
+    let model = grid(576_000, 555_417, 20_571, 20_571, None);
+    let model = crate::TrackGrid::new(
+        model.beats().to_vec(),
+        model.downbeats().to_vec(),
+        model.meter(),
+        140.0,
+        model.duration(),
+    )
+    .expect("pickup grid");
+    let source = source_grid(&model);
     let cue = position(4_096);
     assert!(!source.covers(cue), "the pickup is no observed beat span");
     assert!(source.beat_at(0.0).is_some());
@@ -262,7 +268,7 @@ fn zero_correction_preserves_the_complete_future_law() {
 
 #[kithara::test]
 fn correction_restores_an_approach_between_two_host_commands() {
-    let model = grid(480_000, 480_000, 24_000, 0, None, BeatGridState::Final);
+    let model = grid(480_000, 480_000, 24_000, 0, None);
     let base = speed_curve(
         &pending_targets(),
         &source_grid(&model),
@@ -272,14 +278,8 @@ fn correction_restores_an_approach_between_two_host_commands() {
     )
     .expect("future trajectory");
     let at = SessionFrame::new(800);
-    let source = SourceGrid::new(
-        &model,
-        kithara_warp::AssetAxis::new(
-            NonZeroU32::new(48_000).expect("rate"),
-            kithara_warp::AssetExtent::Unknown,
-        ),
-    )
-    .expect("source geometry");
+    let source = SourceGrid::new(&model, NonZeroU32::new(48_000).expect("rate"), None, false)
+        .expect("source geometry");
     let end = 240;
     let actual = source::curve(
         &pending_targets(),
@@ -308,23 +308,24 @@ fn correction_restores_an_approach_between_two_host_commands() {
     }
     assert!((advance(&actual, 0, 700) - advance(&base, 0, 700) - 60.0).abs() < 1e-9);
     assert!((advance(&actual, end, 700) - advance(&base, end, 700)).abs() < 1e-9);
-    let mut raw = model.as_raw().clone();
-    raw.duration = Some(40.0);
-    raw.beats.truncate(11);
-    for beat in &mut raw.beats {
+    let mut beats = model.beats()[..11].to_vec();
+    for beat in &mut beats {
         beat.at = (beat.ordinal / 2).to_f64().expect("paired ordinal")
             + if beat.ordinal % 2 == 0 { 0.0 } else { 0.4 };
     }
-    let model = kithara_beat::BeatGridModel::try_from(raw).expect("nonuniform source");
+    let model = crate::TrackGrid::new(
+        beats,
+        model.downbeats().to_vec(),
+        model.meter(),
+        model.bpm(),
+        Some(40.0),
+    )
+    .expect("nonuniform source");
     let host = host(120.0, 4);
     let cue = position(480);
     let (base, _) = source::curve(
         &host,
-        &SourceGrid::new(
-            &model,
-            kithara_warp::AssetAxis::new(host.sample_rate(), kithara_warp::AssetExtent::Unknown),
-        )
-        .expect("source"),
+        &SourceGrid::new(&model, host.sample_rate(), None, false).expect("source"),
         cue,
         SessionFrame::new(0),
         None,
@@ -353,11 +354,7 @@ fn correction_restores_an_approach_between_two_host_commands() {
         .expect("corrected slope change")
         .0;
     assert!(corrected_boundary > base_boundary);
-    let source = SourceGrid::new(
-        &model,
-        kithara_warp::AssetAxis::new(host.sample_rate(), kithara_warp::AssetExtent::Unknown),
-    )
-    .expect("source");
+    let source = SourceGrid::new(&model, host.sample_rate(), None, false).expect("source");
     let actual = cue.as_secs_f64() + advance(&corrected, 0, end) / 48_000.0;
     let expected = source
         .media_at(f64::from(host.beat_at(SessionFrame::new(
@@ -386,7 +383,7 @@ fn correction_collisions_preserve_host_targets_and_restore_the_remaining_law() {
     trajectory
         .push(SessionFrame::new(1_800), Tempo::new(150.0).expect("tempo"))
         .expect("target after correction ends");
-    let model = grid(480_000, 480_000, 24_000, 0, None, BeatGridState::Final);
+    let model = grid(480_000, 480_000, 24_000, 0, None);
     let base = speed_curve(
         &trajectory,
         &source_grid(&model),
@@ -396,14 +393,8 @@ fn correction_collisions_preserve_host_targets_and_restore_the_remaining_law() {
     )
     .expect("future trajectory");
     let at = SessionFrame::new(800);
-    let source = SourceGrid::new(
-        &model,
-        kithara_warp::AssetAxis::new(
-            NonZeroU32::new(48_000).expect("rate"),
-            kithara_warp::AssetExtent::Unknown,
-        ),
-    )
-    .expect("source geometry");
+    let source = SourceGrid::new(&model, NonZeroU32::new(48_000).expect("rate"), None, false)
+        .expect("source geometry");
     let end = 328;
     let actual = source::curve(
         &trajectory,

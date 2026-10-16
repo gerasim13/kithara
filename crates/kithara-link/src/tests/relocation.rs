@@ -1,8 +1,8 @@
 use kithara_command::{Rejection, When};
 use kithara_play::{HostedDeck, PlayError, Player, Settled, TrackCommand, TrackStatus};
 use kithara_signal::{ExponentialApproach, FrameCount, SessionFrame};
+use kithara_sync::SpeedCurve;
 use kithara_test_utils::kithara;
-use kithara_warp::SpeedCurve;
 
 use super::fixtures::{Command, answer, grid, load, loaded, position, sounding, trajectory};
 use crate::{LinkedPlayer, SyncStatus};

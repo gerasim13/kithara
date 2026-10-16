@@ -545,12 +545,11 @@ pub(super) fn classify_incoming_preparation(
             PendingReason::VariantChange | PendingReason::SessionRetired,
         )))
         | Err(_) => Some(IncomingPrime::Failed),
-        Ok(Some(DecoderSeekOutcome::Pending(PendingReason::Retry))) => {
-            Some(IncomingPrime::Advanced)
-        }
+        Ok(Some(
+            DecoderSeekOutcome::Pending(PendingReason::Retry) | DecoderSeekOutcome::Landed { .. },
+        )) => Some(IncomingPrime::Advanced),
         Ok(Some(DecoderSeekOutcome::Pending(_))) => Some(IncomingPrime::Pending),
-        Ok(Some(DecoderSeekOutcome::Landed { .. } | DecoderSeekOutcome::PastEof { .. }))
-        | Ok(None) => None,
+        Ok(Some(DecoderSeekOutcome::PastEof { .. })) | Ok(None) => None,
     }
 }
 

@@ -10,12 +10,15 @@ keywords = ["audio", "beatgrid", "tempo", "sync"]
 categories = ["multimedia::audio"]
 
 [dependencies]
-kithara-beat = { workspace = true }
+kithara-derive = { workspace = true, features = ["ranged"] }
 kithara-platform = { workspace = true }
 kithara-signal = { workspace = true }
-kithara-warp = { workspace = true }
 
+delegate = { workspace = true }
+derive_more = { workspace = true }
+fieldwork = { workspace = true }
 num-traits = { workspace = true }
+serde = { workspace = true }
 thiserror = { workspace = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
@@ -23,7 +26,6 @@ kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspac
 
 [dev-dependencies]
 kithara-test-utils = { workspace = true }
-kithara-warp = { workspace = true, features = ["stretch-identity"] }
 
 [lints]
 workspace = true

@@ -15,7 +15,7 @@ use kithara::{
         TrackSettingsChange, TrackSnapshot,
     },
     signal::SessionFrame,
-    warp::SpeedCurve,
+    sync::SpeedCurve,
 };
 use kithara_command::{Seq, When};
 use kithara_render::bridge::DeckPart;

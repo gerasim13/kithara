@@ -63,75 +63,79 @@ impl<T: StreamType> StreamAudioSource<T> {
                 return Ok(());
             }
         }
-        let seeking = match self.phase {
-            OwnerPhase::Seeking { target, .. } => Some(target),
-            _ => None,
-        };
-        if let OwnerPhase::Seeking {
-            target,
-            reason: PendingReason::SessionRetired,
-        } = self.phase
-        {
-            self.replace_retired_reader(target)?;
-            return Ok(());
-        }
-        let outcome = self.decode.prepare_deferred(true).map_err(|error| {
-            let failure = if self.shared_stream.phase() == SourcePhase::Cancelled {
-                TrackFailureKind::SourceCancelled
-            } else {
-                TrackFailureKind::Decode {
-                    kind: crate::map_decode_error_kind(&error),
-                }
+        loop {
+            let seeking = match self.phase {
+                OwnerPhase::Seeking { target, .. } => Some(target),
+                _ => None,
             };
-            (failure, error)
-        })?;
-        if self.shared_stream.phase() == SourcePhase::Cancelled {
-            return Err((TrackFailureKind::SourceCancelled, DecodeError::Interrupted));
-        }
-        let Some(outcome) = outcome else {
-            return if seeking.is_some() {
-                Err((
-                    TrackFailureKind::Decode {
-                        kind: crate::DecodeErrorKind::InvalidData,
-                    },
-                    DecodeError::InvalidData {
-                        detail: "pending seek has no decoder continuation",
-                    },
-                ))
-            } else {
-                Ok(())
-            };
-        };
-        let target = self.resume_target();
-        if matches!(
-            outcome,
-            DecoderSeekOutcome::Pending(PendingReason::SessionRetired)
-        ) {
-            self.replace_retired_reader(target)?;
-            return Ok(());
-        }
-        if matches!(
-            outcome,
-            DecoderSeekOutcome::Pending(PendingReason::VariantChange)
-        ) && let FormatDecision::Recreate(recreate) =
-            detect(&self.shared_stream, self.decode.active())
-        {
-            let offset = recreate.offset;
-            self.install_replacement(recreate, Some(target))
-                .map_err(|error| (TrackFailureKind::RecreateFailed { offset }, error))?;
-            return Ok(());
-        }
-        if let Some(target) = seeking {
-            self.accept_seek_outcome(target, outcome).map_err(|error| {
-                (
+            if let OwnerPhase::Seeking {
+                target,
+                reason: PendingReason::SessionRetired,
+            } = self.phase
+            {
+                self.replace_retired_reader(target)?;
+                return Ok(());
+            }
+            let outcome = self.decode.prepare_deferred(true).map_err(|error| {
+                let failure = if self.shared_stream.phase() == SourcePhase::Cancelled {
+                    TrackFailureKind::SourceCancelled
+                } else {
                     TrackFailureKind::Decode {
                         kind: crate::map_decode_error_kind(&error),
-                    },
-                    error,
-                )
+                    }
+                };
+                (failure, error)
             })?;
+            if self.shared_stream.phase() == SourcePhase::Cancelled {
+                return Err((TrackFailureKind::SourceCancelled, DecodeError::Interrupted));
+            }
+            let Some(outcome) = outcome else {
+                return if seeking.is_some() {
+                    Err((
+                        TrackFailureKind::Decode {
+                            kind: crate::DecodeErrorKind::InvalidData,
+                        },
+                        DecodeError::InvalidData {
+                            detail: "pending seek has no decoder continuation",
+                        },
+                    ))
+                } else {
+                    Ok(())
+                };
+            };
+            let target = self.resume_target();
+            if matches!(
+                outcome,
+                DecoderSeekOutcome::Pending(PendingReason::SessionRetired)
+            ) {
+                self.replace_retired_reader(target)?;
+                return Ok(());
+            }
+            if matches!(
+                outcome,
+                DecoderSeekOutcome::Pending(PendingReason::VariantChange)
+            ) && let FormatDecision::Recreate(recreate) =
+                detect(&self.shared_stream, self.decode.active())
+            {
+                let offset = recreate.offset;
+                self.install_replacement(recreate, Some(target))
+                    .map_err(|error| (TrackFailureKind::RecreateFailed { offset }, error))?;
+                return Ok(());
+            }
+            if let Some(target) = seeking {
+                self.accept_seek_outcome(target, outcome).map_err(|error| {
+                    (
+                        TrackFailureKind::Decode {
+                            kind: crate::map_decode_error_kind(&error),
+                        },
+                        error,
+                    )
+                })?;
+            }
+            if !matches!(outcome, DecoderSeekOutcome::Landed { .. }) {
+                return Ok(());
+            }
         }
-        Ok(())
     }
 
     pub(super) fn replace_retired_reader(

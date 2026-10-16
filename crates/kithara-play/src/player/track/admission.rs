@@ -4,7 +4,8 @@ use kithara_command::{Seq, When};
 use kithara_config::LiveConfig;
 use kithara_render::{LaneCommand, LaneFrame, bridge::DeckPart};
 use kithara_signal::{AudioChunkInfo, SessionFrame, SourceSpan};
-use kithara_warp::{SourceTrajectory, SpeedCurve};
+use kithara_sync::SpeedCurve;
+use kithara_warp::SourceTrajectory;
 use tracing::warn;
 
 use super::{

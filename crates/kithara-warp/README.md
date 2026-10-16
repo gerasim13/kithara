@@ -16,7 +16,7 @@
 
 Beat-map geometry and the source-generic resident Warp decorator for Kithara.
 
-The crate owns musical coordinates, immutable beat-map snapshots, beat
+The crate owns native map coordinates, immutable beat-map snapshots, beat
 alignment edges, the presentation frontier, `Warp<S>`, `WarpConfig`, live
 temporal controls, and the synchronous `WarpRenderer<S>` that drives a
 `kithara-stretch::ElasticEngine`. Select at least one backend feature:
@@ -34,7 +34,7 @@ output-to-source mapping in every `AudioChunkInfo::source_span`. Fractional phas
 survives quantum boundaries, EOF draining and backend changes; region boundaries
 split mapped runs rather than interpolating source endpoints in consumers.
 
-`SpeedCurve::Constant`, `Ramp { to, frames }` and `Steps` count integer output
+The `kithara-sync` values `SpeedCurve::Constant`, `Ramp { to, frames }` and `Steps` count integer output
 frames from acceptance. A replacement starts at the current position and speed;
 ramps integrate linearly and the final speed holds. Engine latency is discarded
 during preparation/re-priming, not subtracted by the PCM consumer. Worker-side

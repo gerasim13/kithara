@@ -7,11 +7,11 @@ use kithara::{
         SessionEpoch, SessionFrame, TransportRevision,
     },
     stretch::StretchKind,
+    sync::{SessionAnchor, SessionBeat, SpeedCurve},
     warp::{
         AssetAxis, AssetExtent, Beat, BeatAlignment, BeatGridId, BeatGridQuery, BeatGridRevision,
         BeatGridSnapshot, GridSegment, MapPoint, PresentationFrontier, RegionPlan, RegionPlanError,
-        RenderContext, SessionAnchor, SessionBeat, SpeedCurve, Warp, WarpConfig, WarpMap,
-        WarpMapRevision, mock::asset_grid,
+        RenderContext, Warp, WarpConfig, WarpMap, WarpMapRevision, mock::asset_grid,
     },
 };
 use kithara_test_fixtures::unit_fixtures::{warp_clicks, warp_nominal_clicks, warp_sine};

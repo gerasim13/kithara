@@ -634,6 +634,7 @@ impl<S: 'static> AudioSource for Audio<S> {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
+    use kithara_platform::tokio::task::yield_runnable;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -648,7 +649,7 @@ mod tests {
         audio.warm_up();
         let mut events = audio.events::<AudioEvent>();
         audio.seek(Duration::ZERO).expect("open-time positioning");
-        let chunk = produced_audio(&mut audio);
+        let chunk = produced_audio(&mut audio).await;
         let end = source_end(&chunk.meta, u64::from(chunk.meta.frames)).expect("source boundary");
         audio.commit_source_end(end, chunk.meta);
         audio.finish_deferred();
@@ -668,9 +669,10 @@ mod tests {
         for target in [Duration::from_millis(20), Duration::from_millis(40)] {
             assert!(matches!(
                 AudioSource::seek(&mut audio, target),
-                Ok(SeekOutcome::Landed { .. })
+                Ok(SeekOutcome::Landed { target: accepted, .. }
+                    | SeekOutcome::Pending { target: accepted, .. }) if accepted == target
             ));
-            let chunk = produced_audio(&mut audio);
+            let chunk = produced_audio(&mut audio).await;
             audio.finish_deferred();
             let mut stages = Vec::new();
             while let Ok(envelope) = events.try_recv() {
@@ -736,7 +738,7 @@ mod tests {
 
         let mut audio = prepared_audio().await;
         audio.warm_up();
-        let chunk = produced_audio(&mut audio);
+        let chunk = produced_audio(&mut audio).await;
         audio.finish_deferred();
         let mut events = audio.events::<AudioEvent>();
         audio
@@ -782,7 +784,7 @@ mod tests {
 
         let mut audio = prepared_audio().await;
         audio.warm_up();
-        let first = produced_audio(&mut audio);
+        let first = produced_audio(&mut audio).await;
         audio.finish_deferred();
         let duration = audio.duration().expect("WAV duration");
         let chunk = first.meta.end_timestamp - first.meta.timestamp;
@@ -791,10 +793,11 @@ mod tests {
         let target = duration - chunk * 3 / 2;
         assert!(matches!(
             AudioSource::seek(&mut audio, target),
-            Ok(SeekOutcome::Landed { .. })
+            Ok(SeekOutcome::Landed { target: accepted, .. }
+                | SeekOutcome::Pending { target: accepted, .. }) if accepted == target
         ));
         let mut events = audio.events::<AudioEvent>();
-        drain_to_end(&mut audio, consumer);
+        drain_to_end(&mut audio, consumer).await;
         audio.finish_deferred();
         let mut published = Vec::new();
         while let Ok(envelope) = events.try_recv() {
@@ -812,7 +815,7 @@ mod tests {
 
     #[kithara::hang_watchdog]
     #[kithara::flash(io)]
-    fn drain_to_end<S: 'static>(audio: &mut Audio<S>, consumer: Consumer) {
+    async fn drain_to_end<S: 'static>(audio: &mut Audio<S>, consumer: Consumer) {
         use crate::{AudioSource, Fetch, TrackStep};
 
         loop {
@@ -841,6 +844,7 @@ mod tests {
                     ChunkOutcome::Pending { .. } => {}
                 },
             }
+            yield_runnable().await;
         }
     }
 }

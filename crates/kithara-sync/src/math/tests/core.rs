@@ -1,13 +1,10 @@
 pub(super) use std::num::{NonZeroU16, NonZeroU32};
 
-pub(super) use kithara_beat::{
-    BeatGridModel, BeatGridState, GridBeat, GridDownbeat, Meter, RawBeatGrid,
-};
 pub(super) use kithara_platform::time::Duration as Position;
 pub(super) use kithara_test_utils::kithara;
 
 use super::{fixtures::source_grid, *};
-pub(super) use crate::{Tempo, TempoStep};
+pub(super) use crate::{Meter, Tempo, TempoStep, TrackBeat, TrackGrid};
 
 #[kithara::test]
 fn entry_family_uses_the_media_offset_and_the_requested_side() {
@@ -20,35 +17,29 @@ fn entry_family_uses_the_media_offset_and_the_requested_side() {
         NonZeroU16::new(4).expect("meter"),
         NonZeroU32::new(48_000).expect("rate"),
     );
-    let model = BeatGridModel::try_from(RawBeatGrid {
-        state: BeatGridState::Final,
-        duration: Some(8.0),
-        meter: Some(Meter {
-            beats_per_bar: NonZeroU16::new(4).expect("meter"),
-            origin_beat_ordinal: 0,
-        }),
-        model_id: "constant".into(),
-        beats: (0..=8)
-            .map(|ordinal| GridBeat {
-                confidence: None,
+    let model = TrackGrid::new(
+        (0..=8)
+            .map(|ordinal| TrackBeat {
                 at: ordinal.to_f64().expect("fixture beat ordinal fits f64"),
                 ordinal,
             })
             .collect(),
-        downbeats: [0, 4, 8]
+        [0, 4, 8]
             .into_iter()
-            .map(|beat_ordinal| GridDownbeat {
-                confidence: None,
+            .map(|beat_ordinal| TrackBeat {
                 at: beat_ordinal
                     .to_f64()
                     .expect("fixture downbeat ordinal fits f64"),
-                beat_ordinal,
+                ordinal: beat_ordinal,
             })
             .collect(),
-        bpm: 60.0,
-        schema_version: 1,
-        revision: 0,
-    })
+        Some(Meter {
+            beats_per_bar: NonZeroU16::new(4).expect("meter"),
+            origin_beat_ordinal: 0,
+        }),
+        60.0,
+        Some(8.0),
+    )
     .expect("consistent grid");
     let grid = model;
     let position = Position::from_secs_f64(0.5);
@@ -114,14 +105,13 @@ fn entry_family_uses_the_media_offset_and_the_requested_side() {
         )
         .is_none()
     );
-    let mut nonuniform = grid.as_raw().clone();
-    nonuniform.meter = None;
-    nonuniform.downbeats.clear();
-    for beat in &mut nonuniform.beats {
+    let mut beats = grid.beats().to_vec();
+    for beat in &mut beats {
         beat.at = (beat.ordinal / 2).to_f64().expect("paired beat")
             + if beat.ordinal % 2 == 0 { 0.0 } else { 0.4 };
     }
-    let nonuniform = BeatGridModel::try_from(nonuniform).expect("unequal observed intervals");
+    let nonuniform = TrackGrid::new(beats, Vec::new(), None, grid.bpm(), grid.duration())
+        .expect("unequal observed intervals");
     let cue = Position::from_millis(600);
     assert_eq!(
         speed(
@@ -143,35 +133,30 @@ fn entry_family_uses_the_media_offset_and_the_requested_side() {
         .expect("nearest source-grid phase"),
         Position::from_millis(760),
     );
-    let unbounded = {
-        let mut raw = nonuniform.as_raw().clone();
-        raw.duration = None;
-        BeatGridModel::try_from(raw).expect("observed grid without a stated end")
-    };
+    let unbounded = TrackGrid::new(
+        nonuniform.beats().to_vec(),
+        nonuniform.downbeats().to_vec(),
+        nonuniform.meter(),
+        nonuniform.bpm(),
+        None,
+    )
+    .expect("observed grid without a stated end");
     assert!(source_grid(&unbounded).maximum_slope().is_some());
 }
 
 #[kithara::test]
 fn correction_bounds_every_step_and_cancels_the_phase_integral() {
     let epsilon = 0.001_f32;
-    let model = BeatGridModel::try_from(RawBeatGrid {
-        state: BeatGridState::Final,
-        duration: Some(200_000.0),
-        meter: None,
-        model_id: "sparse-long-correction".into(),
-        beats: [(0, 0.0), (400_000, 200_000.0)]
+    let model = TrackGrid::new(
+        [(0, 0.0), (400_000, 200_000.0)]
             .into_iter()
-            .map(|(ordinal, at)| GridBeat {
-                confidence: None,
-                at,
-                ordinal,
-            })
+            .map(|(ordinal, at)| TrackBeat { at, ordinal })
             .collect(),
-        downbeats: Vec::new(),
-        bpm: 120.0,
-        schema_version: 1,
-        revision: 0,
-    })
+        Vec::new(),
+        None,
+        120.0,
+        Some(200_000.0),
+    )
     .expect("long affine source region");
     for (from, to, seconds) in [
         (1.0, 1.0, 0.01_f64),

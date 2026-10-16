@@ -16,12 +16,12 @@ use kithara_render::{
     rt::DeckMixerConfig,
 };
 use kithara_signal::{AudioChunkInfo, AudioSpec, FrameCount, SegmentId, SessionFrame};
+use kithara_sync::SpeedCurve;
 use kithara_test_utils::{
     TestTempDir,
     bufpool::{TestPools, pools},
     kithara,
 };
-use kithara_warp::SpeedCurve;
 
 use super::{
     fixtures::{answer, grid, load, loaded, position, trajectory},

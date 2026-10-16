@@ -18,6 +18,7 @@ pub(in crate::pipeline::source) fn spec(sample_rate: u32) -> AudioSpec {
 pub(in crate::pipeline::source) struct TestDecoder {
     pub(in crate::pipeline::source) drops: Arc<Mutex<Vec<u64>>>,
     pub(in crate::pipeline::source) preparations: Arc<AtomicU64>,
+    pub(in crate::pipeline::source) prepare_at_byte: Option<(SharedStream<TestStream>, u64)>,
     pub(in crate::pipeline::source) id: u64,
     pub(in crate::pipeline::source) defer_seek: bool,
     pub(in crate::pipeline::source) pending_reason: kithara_stream::PendingReason,
@@ -36,6 +37,7 @@ impl TestDecoder {
             drops,
             id,
             preparations: Arc::new(AtomicU64::new(0)),
+            prepare_at_byte: None,
             seek_error: None,
             defer_seek: false,
             pending_reason: kithara_stream::PendingReason::NotReady(
@@ -63,10 +65,16 @@ impl Decoder for TestDecoder {
     }
 
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
+        if self.prepare_at_byte.is_some() {
+            assert!(self.preparations.load(Ordering::Relaxed) > 0);
+        }
         Ok(DecoderChunkOutcome::Eof)
     }
 
     fn prepare_next_chunk(&mut self) {
+        if let Some((stream, expected)) = &self.prepare_at_byte {
+            assert_eq!(stream.position(), *expected);
+        }
         self.preparations.fetch_add(1, Ordering::Relaxed);
     }
 

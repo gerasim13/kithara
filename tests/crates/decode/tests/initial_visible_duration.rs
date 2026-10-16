@@ -3,13 +3,18 @@ use std::{io::Cursor, num::NonZeroU32};
 use ::kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{
-        Audio, AudioConfig, AudioDecoderConfig, AudioEvent, ChunkOutcome,
-        DecoderBackend as ObservedBackend, DecoderChangeCause, DecoderEvent, SeekOutcome,
+        Audio, AudioConfig, AudioDecoderConfig, AudioEvent, AudioSource, ChunkOutcome,
+        DecoderBackend as ObservedBackend, DecoderChangeCause, DecoderEvent, SeekLifecycleStage,
+        SeekOutcome,
     },
     decode::{DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory, PcmOrigin},
     events::EventBus,
     file::{File, FileConfig},
-    platform::{sync::Arc, time::Duration, tokio::task::yield_now},
+    platform::{
+        sync::Arc,
+        time::Duration,
+        tokio::task::{spawn_blocking, yield_now},
+    },
     resampler::NoResamplerBackend,
     signal::AudioSpec,
     stream::mock::NoopWorkerWake,
@@ -42,34 +47,41 @@ async fn initial_visible_duration_matches_the_built_ruler_before_eof(#[case] ass
         .await
         .expect("encoded fixture bytes");
     let pools = pools();
-    let mut decoder = DecoderFactory::create_with_probe(
-        Cursor::new(body.to_vec()),
-        Some(asset.ext()),
-        DecoderConfig::<NoResamplerBackend, TestPools>::builder()
-            .pools(pools.clone())
-            .build(),
-    )
-    .expect("initial encoded decoder");
-    let raw_before = decoder.duration();
-    let profile_before = decoder.gapless_profile(None);
-    let origin_before = decoder.initial_pcm_origin().map(PcmOrigin::position);
-    let DecoderChunkOutcome::Chunk(first) = decoder.next_chunk().expect("original decoder PCM")
-    else {
-        panic!("in-memory encoded source must produce original PCM");
-    };
-    assert!(first.frames() > 0);
-    assert_eq!(
-        first.samples.len(),
-        first.frames() * usize::from(first.spec().channels)
-    );
-    assert!(first.samples.iter().all(|sample| sample.is_finite()));
-    let raw_after = decoder.duration();
-    let profile_after = decoder.gapless_profile(None);
-    let origin_after = decoder.initial_pcm_origin().map(PcmOrigin::position);
-    tracing::info!(asset = asset.name(), ?raw_before, ?raw_after, ?profile_before, ?profile_after,
-        ?origin_before, ?origin_after, first_meta = ?first.meta,
-        first_frames = first.frames(), first_samples = ?&first.samples[..first.samples.len().min(8)],
-        "initial encoded duration owner receipt");
+    let decoder_bytes = body.to_vec();
+    let decoder_pools = pools.clone();
+    let (raw_before, raw_after, profile_before, profile_after) = spawn_blocking(move || {
+        let mut decoder = DecoderFactory::create_with_probe(
+            Cursor::new(decoder_bytes),
+            Some(asset.ext()),
+            DecoderConfig::<NoResamplerBackend, TestPools>::builder()
+                .pools(decoder_pools)
+                .build(),
+        )
+        .expect("initial encoded decoder");
+        let raw_before = decoder.duration();
+        let profile_before = decoder.gapless_profile(None);
+        let origin_before = decoder.initial_pcm_origin().map(PcmOrigin::position);
+        let DecoderChunkOutcome::Chunk(first) = decoder.next_chunk().expect("original decoder PCM")
+        else {
+            panic!("in-memory encoded source must produce original PCM");
+        };
+        assert!(first.frames() > 0);
+        assert_eq!(
+            first.samples.len(),
+            first.frames() * usize::from(first.spec().channels)
+        );
+        assert!(first.samples.iter().all(|sample| sample.is_finite()));
+        let raw_after = decoder.duration();
+        let profile_after = decoder.gapless_profile(None);
+        let origin_after = decoder.initial_pcm_origin().map(PcmOrigin::position);
+        tracing::info!(asset = asset.name(), ?raw_before, ?raw_after, ?profile_before, ?profile_after,
+            ?origin_before, ?origin_after, first_meta = ?first.meta,
+            first_frames = first.frames(), first_samples = ?&first.samples[..first.samples.len().min(8)],
+            "initial encoded duration owner receipt");
+        (raw_before, raw_after, profile_before, profile_after)
+    })
+    .await
+    .expect("initial raw decoder task completes");
 
     #[cfg(not(target_os = "android"))]
     if asset == SignalAsset::PROFILE_M4A_AAC_44100_2CH {
@@ -151,21 +163,70 @@ async fn initial_visible_duration_matches_the_built_ruler_before_eof(#[case] ass
     assert_eq!(visible.meta.visible_origin, Some(visible.meta.timestamp));
     assert_eq!(playhead.duration(), Some(initial_length));
     let target = visible.meta.timestamp + Duration::from_secs(5);
-    let sought = audio
-        .seek(target)
-        .expect("first nonzero raw seek after original output");
-    assert!(
-        matches!(sought, SeekOutcome::Landed { target: asked, landed_at }
-        if asked == target && landed_at <= target)
-    );
+    let mut audio_events = audio.events::<AudioEvent>();
+    let before_seek = audio.position();
+    match AudioSource::seek(&mut audio, target)
+        .expect("first nonzero raw seek after original output")
+    {
+        SeekOutcome::Landed {
+            target: asked,
+            landed_at,
+        } => {
+            assert_eq!(asked, target);
+            assert!(landed_at <= target);
+        }
+        SeekOutcome::Pending { target: asked, .. } => {
+            assert_eq!(asked, target);
+            assert_eq!(audio.position(), before_seek);
+        }
+        other @ SeekOutcome::PastEof { .. } => {
+            panic!("five-second seek must retain a playable suffix: {other:?}")
+        }
+    }
+    let mut stages = Vec::new();
+    let mut completions = Vec::new();
     let sought = loop {
         hang_tick!(format!("{} first sought Audio PCM", asset.name()));
-        match audio.next_chunk().expect("visible sought PCM") {
+        let outcome = audio.next_chunk().expect("visible sought PCM");
+        while let Ok(envelope) = audio_events.try_recv() {
+            hang_tick!(format!("{} first sought Audio PCM", asset.name()));
+            match envelope.event {
+                AudioEvent::SeekLifecycle { stage, .. } => stages.push(stage),
+                AudioEvent::SeekComplete { position } => {
+                    let ChunkOutcome::Chunk(chunk) = &outcome else {
+                        panic!("seek completion requires committed PCM");
+                    };
+                    assert_eq!(position, chunk.meta.timestamp);
+                    completions.push(position);
+                }
+                AudioEvent::SeekRejected { target } => panic!("seek to {target:?} was rejected"),
+                _ => {}
+            }
+        }
+        match outcome {
             ChunkOutcome::Chunk(chunk) => break chunk,
             ChunkOutcome::Pending { .. } => yield_now().await,
             ChunkOutcome::Eof { .. } => panic!("one-second tail cannot be empty"),
         }
     };
+    assert_eq!(
+        stages,
+        [
+            SeekLifecycleStage::SeekRequest,
+            SeekLifecycleStage::SeekApplied,
+            SeekLifecycleStage::OutputCommitted,
+        ]
+    );
+    assert_eq!(completions, [sought.meta.timestamp]);
+    let start = sought
+        .meta
+        .source_span
+        .map_or(sought.meta.timestamp, |span| {
+            span.position_at(0).expect("mapped sought start")
+        });
+    let frame = sought.spec().duration_for(1).expect("one source frame");
+    assert!(start + frame >= target);
+    assert!(start <= target + frame);
     assert_eq!(sought.meta.visible_origin, visible.meta.visible_origin);
     tracing::info!(asset = asset.name(), visible_meta = ?visible.meta, sought_meta = ?sought.meta,
         visible_frames = visible.frames(), visible_samples = ?&visible.samples[..visible.samples.len().min(8)],
@@ -184,41 +245,52 @@ async fn assert_complete_aac_presentation(bytes: &[u8], url: url::Url) {
     assert_eq!((reference.sample_rate, reference.channels), (44_100, 2));
     assert_eq!(reference.samples.len(), 264_600 * 2);
 
-    let mut decoder = DecoderFactory::create_with_probe(
-        Cursor::new(bytes.to_vec()),
-        Some("m4a"),
-        DecoderConfig::<NoResamplerBackend, TestPools>::builder()
-            .backend(DecoderBackend::Symphonia)
-            .pools(pools())
-            .build(),
-    )
-    .expect("explicit software AAC owner");
-    assert_eq!(decoder.media_origin(), Some(origin));
-    assert_eq!(
-        decoder.duration(),
-        Some(::kithara::decode::DecoderDuration::MediaEnd(endpoint))
-    );
-    let mut native = Vec::new();
-    loop {
-        hang_tick!();
-        match decoder.next_chunk().expect("actual AAC native PCM") {
-            DecoderChunkOutcome::Chunk(chunk) => {
-                assert_eq!(
-                    spec.frame_at(chunk.meta.timestamp)
-                        .expect("native PCM coordinate"),
-                    (native.len() / 2) as u64
-                );
-                assert_eq!(chunk.meta.media_origin, Some(origin));
-                assert!(chunk.samples.iter().all(|sample| sample.is_finite()));
-                native.extend_from_slice(&chunk.samples);
-                hang_reset!();
-            }
-            DecoderChunkOutcome::Eof => break,
-            other @ DecoderChunkOutcome::Pending(_) => {
-                panic!("in-memory AAC cannot wait for source data: {other:?}")
+    let decoder_bytes = bytes.to_vec();
+    let native = spawn_blocking(move || {
+        let mut decoder = DecoderFactory::create_with_probe(
+            Cursor::new(decoder_bytes),
+            Some("m4a"),
+            DecoderConfig::<NoResamplerBackend, TestPools>::builder()
+                .backend(DecoderBackend::Symphonia)
+                .pools(pools())
+                .build(),
+        )
+        .expect("explicit software AAC owner");
+        assert_eq!(decoder.media_origin(), Some(origin));
+        assert_eq!(
+            decoder.duration(),
+            Some(::kithara::decode::DecoderDuration::MediaEnd(endpoint))
+        );
+        let mut native = Vec::new();
+        let mut watchdog =
+            kithara_test_utils::hang::HangDetector::<kithara_test_utils::hang::NoContext>::new(
+                concat!(module_path!(), "::assert_complete_aac_presentation::native"),
+                kithara_test_utils::hang::default_timeout(),
+            );
+        loop {
+            watchdog.tick_from(file!(), line!());
+            match decoder.next_chunk().expect("actual AAC native PCM") {
+                DecoderChunkOutcome::Chunk(chunk) => {
+                    assert_eq!(
+                        spec.frame_at(chunk.meta.timestamp)
+                            .expect("native PCM coordinate"),
+                        (native.len() / 2) as u64
+                    );
+                    assert_eq!(chunk.meta.media_origin, Some(origin));
+                    assert!(chunk.samples.iter().all(|sample| sample.is_finite()));
+                    native.extend_from_slice(&chunk.samples);
+                    watchdog.reset_from(file!(), line!());
+                }
+                DecoderChunkOutcome::Eof => break,
+                other @ DecoderChunkOutcome::Pending(_) => {
+                    panic!("in-memory AAC cannot wait for source data: {other:?}")
+                }
             }
         }
-    }
+        native
+    })
+    .await
+    .expect("native AAC decoder task completes");
     assert_eq!(
         native.len(),
         265_624 * 2,
@@ -399,14 +471,49 @@ async fn preloaded_original_pcm_preserves_its_origin_through_the_first_raw_seek(
         yield_now().await;
     }
     assert!(audio.is_preloaded());
+    let mut audio_events = audio.events::<AudioEvent>();
     let target = origin + Duration::from_secs(1);
-    assert!(matches!(audio.seek(target).expect("first raw seek"),
-        SeekOutcome::Landed { target: asked, landed_at } if asked == target && landed_at <= target));
+    let before_seek = audio.position();
+    match AudioSource::seek(&mut audio, target).expect("first raw seek") {
+        SeekOutcome::Landed {
+            target: asked,
+            landed_at,
+        } => {
+            assert_eq!(asked, target);
+            assert!(landed_at <= target);
+        }
+        SeekOutcome::Pending { target: asked, .. } => {
+            assert_eq!(asked, target);
+            assert_eq!(audio.position(), before_seek);
+        }
+        other @ SeekOutcome::PastEof { .. } => {
+            panic!("one-second seek must retain a playable suffix: {other:?}")
+        }
+    }
+    let mut stages = Vec::new();
+    let mut completions = Vec::new();
     let mut served = 0_u64;
     let mut endpoint = None;
     loop {
         hang_tick!(format!("{} sought PCM frames={served}", asset.name()));
-        match audio.next_chunk().expect("real sought PCM") {
+        let outcome = audio.next_chunk().expect("real sought PCM");
+        while let Ok(envelope) = audio_events.try_recv() {
+            hang_tick!(format!("{} sought PCM frames={served}", asset.name()));
+            match envelope.event {
+                AudioEvent::SeekLifecycle { stage, .. } => stages.push(stage),
+                AudioEvent::SeekComplete { position } => {
+                    let ChunkOutcome::Chunk(chunk) = &outcome else {
+                        panic!("seek completion requires committed PCM");
+                    };
+                    assert_eq!(served, 0, "only the first sought PCM can complete the seek");
+                    assert_eq!(position, chunk.meta.timestamp);
+                    completions.push(position);
+                }
+                AudioEvent::SeekRejected { target } => panic!("seek to {target:?} was rejected"),
+                _ => {}
+            }
+        }
+        match outcome {
             ChunkOutcome::Chunk(chunk) => {
                 if served < 4096 {
                     eprintln!(
@@ -427,9 +534,18 @@ async fn preloaded_original_pcm_preserves_its_origin_through_the_first_raw_seek(
                 if let Some(previous) = endpoint {
                     assert_eq!(start, previous);
                 } else {
-                    assert!(
-                        start + chunk.spec().duration_for(1).expect("one source frame") >= target
+                    let frame = chunk.spec().duration_for(1).expect("one source frame");
+                    assert!(start + frame >= target);
+                    assert!(start <= target + frame);
+                    assert_eq!(
+                        stages,
+                        [
+                            SeekLifecycleStage::SeekRequest,
+                            SeekLifecycleStage::SeekApplied,
+                            SeekLifecycleStage::OutputCommitted,
+                        ]
                     );
+                    assert_eq!(completions, [chunk.meta.timestamp]);
                 }
                 endpoint = Some(
                     chunk
@@ -449,6 +565,15 @@ async fn preloaded_original_pcm_preserves_its_origin_through_the_first_raw_seek(
         yield_now().await;
     }
     assert!(served > 0);
+    assert_eq!(
+        stages,
+        [
+            SeekLifecycleStage::SeekRequest,
+            SeekLifecycleStage::SeekApplied,
+            SeekLifecycleStage::OutputCommitted,
+        ]
+    );
+    assert_eq!(completions.len(), 1);
     let endpoint = endpoint.expect("sought suffix emitted PCM");
     assert_eq!(audio.duration(), Some(endpoint - origin));
 }

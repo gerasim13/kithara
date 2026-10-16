@@ -1,6 +1,7 @@
 use kithara_signal::{SessionEpoch, TransportRevision};
-use kithara_warp::{BeatGridSnapshot, BeatGridStamp, SessionAnchor, SessionBeat};
-pub use kithara_warp::{Tempo, TempoError};
+use kithara_sync::{SessionAnchor, SessionBeat};
+pub use kithara_sync::{Tempo, TempoError};
+use kithara_warp::{BeatGridSnapshot, BeatGridStamp};
 
 /// The last session transport position processed by the audio graph.
 #[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
@@ -77,8 +78,9 @@ mod tests {
     use std::num::NonZeroU32;
 
     use kithara_signal::{SessionEpoch, SessionFrame};
+    use kithara_sync::{SessionAnchor, SessionBeat};
     use kithara_test_utils::kithara;
-    use kithara_warp::{BeatGridId, BeatGridRevision, BeatGridStamp, SessionAnchor, SessionBeat};
+    use kithara_warp::{BeatGridId, BeatGridRevision, BeatGridStamp};
 
     use super::{SessionTransportSnapshot, Tempo, TempoError, TransportRevision};
 

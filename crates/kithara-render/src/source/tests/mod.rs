@@ -19,6 +19,7 @@ use kithara_platform::{
     time::Duration,
 };
 use kithara_signal::{AudioChunk, AudioSpec, SegmentId, SourceSpan};
+use kithara_sync::SpeedCurve;
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 use kithara_test_fixtures::play_fixtures::half;
 #[cfg(any(
@@ -38,13 +39,13 @@ use kithara_test_utils::{
     bufpool::{TestPools, pools},
     kithara,
 };
+use kithara_warp::StretchKind;
 #[cfg(any(
     feature = "stretch-signalsmith",
     feature = "stretch-bungee",
     feature = "stretch-glide"
 ))]
 use kithara_warp::WarpCapabilities;
-use kithara_warp::{SpeedCurve, StretchKind};
 #[cfg(any(
     feature = "stretch-signalsmith",
     feature = "stretch-bungee",

@@ -2,11 +2,12 @@ use std::num::{NonZeroU128, NonZeroUsize};
 
 use kithara_platform::sync::Arc;
 use kithara_signal::{AudioChunkInfo, ExponentialApproach, FrameCount};
+use kithara_sync::SpeedCurve;
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
 use super::*;
-use crate::{GridSegment, RegionPlan, SpeedCurve, test_pools::TestPools};
+use crate::{GridSegment, RegionPlan, test_pools::TestPools};
 
 fn renderer() -> (WarpRenderer<TestPools>, AudioChunkInfo) {
     let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("sample rate"));

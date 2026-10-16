@@ -5,7 +5,7 @@ use kithara_command::{Due, LevelInbox, ScopeId, ScopedInbox};
 use kithara_config::LiveConfig;
 use kithara_render::bridge::{DeckProtocol, DeckRefusal, SessionInbox};
 use kithara_signal::{SessionEpoch, SessionFrame};
-use kithara_warp::{SessionAnchor, SessionBeat};
+use kithara_sync::{SessionAnchor, SessionBeat};
 use ringbuf::traits::{Consumer, Producer};
 use triple_buffer::Input;
 

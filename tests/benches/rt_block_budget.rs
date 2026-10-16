@@ -26,7 +26,8 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig},
     queue::TrackSource,
     signal::{AudioSpec, OutputContext, SegmentId, SessionEpoch, SessionFrame, TransportRevision},
-    warp::{RenderContext, SpeedCurve, StretchKind},
+    sync::SpeedCurve,
+    warp::{RenderContext, StretchKind},
 };
 use kithara_command::{
     Batch, ChannelConfig, LevelInbox, Port, ScopeId, ScopedConfig, ScopedInbox, ScopedSender,

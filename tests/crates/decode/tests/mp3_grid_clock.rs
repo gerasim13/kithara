@@ -5,13 +5,19 @@ use std::io::Cursor;
 use ::kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{
-        Audio, AudioConfig, AudioDecoderConfig, ChunkOutcome, DecoderBackend as ObservedBackend,
-        DecoderChangeCause, DecoderEvent, SeekOutcome,
+        Audio, AudioConfig, AudioDecoderConfig, AudioEvent, AudioSource, ChunkOutcome,
+        DecoderBackend as ObservedBackend, DecoderChangeCause, DecoderEvent, SeekLifecycleStage,
+        SeekOutcome,
     },
     decode::{DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory, GaplessMode},
     events::EventBus,
     file::{File, FileConfig, FileSrc},
-    platform::{sync::Arc, time::Duration, tokio::task::yield_now},
+    platform::{
+        sync::Arc,
+        thread,
+        time::Duration,
+        tokio::task::{spawn_blocking, yield_now},
+    },
     resampler::NoResamplerBackend,
     signal::{AudioChunk, AudioChunkInfo},
     stream::{AudioCodec, mock::NoopWorkerWake},
@@ -171,45 +177,60 @@ async fn original_and_sought_markers_expose_the_raw_media_basis(
     assert!(score.0.len() >= 3);
 
     let pools = pools();
-    let mut raw = DecoderFactory::create_with_probe(
-        Cursor::new(encoded.bytes().to_vec()),
-        Some("mp3"),
-        DecoderConfig::<NoResamplerBackend, TestPools>::builder()
-            .backend(backend)
-            .gapless(!matches!(mode, GaplessMode::Disabled))
-            .pools(pools.clone())
-            .build(),
-    )
-    .expect("explicit raw decoder");
-    let mut decoded = Capture::default();
-    while decoded.frames() < WINDOW {
-        hang_tick!(format!(
-            "raw {backend:?} {mode:?} frames={}",
-            decoded.frames()
-        ));
-        match raw.next_chunk().expect("raw original PCM") {
-            DecoderChunkOutcome::Chunk(chunk) => {
-                decoded.push(&chunk);
-                hang_reset!();
+    let encoded_bytes = encoded.bytes().to_vec();
+    let raw_pools = pools.clone();
+    let (decoded, media_origin) = spawn_blocking(move || {
+        let mut raw = DecoderFactory::create_with_probe(
+            Cursor::new(encoded_bytes),
+            Some("mp3"),
+            DecoderConfig::<NoResamplerBackend, TestPools>::builder()
+                .backend(backend)
+                .gapless(!matches!(mode, GaplessMode::Disabled))
+                .pools(raw_pools)
+                .build(),
+        )
+        .expect("explicit raw decoder");
+        let mut decoded = Capture::default();
+        let mut watchdog = kithara_test_utils::hang::HangDetector::<String>::new(
+            concat!(
+                module_path!(),
+                "::original_and_sought_markers_expose_the_raw_media_basis::native"
+            ),
+            kithara_test_utils::hang::default_timeout(),
+        );
+        while decoded.frames() < WINDOW {
+            watchdog.tick_with_from(
+                || format!("raw {backend:?} {mode:?} frames={}", decoded.frames()),
+                file!(),
+                line!(),
+            );
+            match raw.next_chunk().expect("raw original PCM") {
+                DecoderChunkOutcome::Chunk(chunk) => {
+                    decoded.push(&chunk);
+                    watchdog.reset_from(file!(), line!());
+                }
+                DecoderChunkOutcome::Pending(_) => thread::yield_now(),
+                DecoderChunkOutcome::Eof => panic!("the three-second diagnostic window is not EOF"),
             }
-            DecoderChunkOutcome::Pending(_) => yield_now().await,
-            DecoderChunkOutcome::Eof => panic!("the three-second diagnostic window is not EOF"),
         }
-    }
-    let media_origin = raw.media_origin().expect("native recording media basis");
-    let origin = raw.initial_pcm_origin();
-    let track = raw.track_info();
-    let gap = raw.timeline_gap_frames();
-    let profile = raw.gapless_profile(Some(AudioCodec::Mp3));
-    tracing::info!(
-        ?backend,
-        ?mode,
-        ?origin,
-        ?track,
-        ?gap,
-        ?profile,
-        "MP3_CLOCK_RAW_DECODER"
-    );
+        let media_origin = raw.media_origin().expect("native recording media basis");
+        let origin = raw.initial_pcm_origin();
+        let track = raw.track_info();
+        let gap = raw.timeline_gap_frames();
+        let profile = raw.gapless_profile(Some(AudioCodec::Mp3));
+        tracing::info!(
+            ?backend,
+            ?mode,
+            ?origin,
+            ?track,
+            ?gap,
+            ?profile,
+            "MP3_CLOCK_RAW_DECODER"
+        );
+        (decoded, media_origin)
+    })
+    .await
+    .expect("raw MP3 clock decoder task completes");
     decoded.report("raw-original", backend, mode);
     decoded.assert_media_phase(true, media_origin, &score.0);
 
@@ -253,13 +274,31 @@ async fn original_and_sought_markers_expose_the_raw_media_basis(
     assert_eq!(audio.media_origin(), Some(media_origin));
 
     for sought in [false, true] {
+        let mut audio_events = audio.events::<AudioEvent>();
+        let mut stages = Vec::new();
+        let mut completions = Vec::new();
+        let target = Duration::from_secs(2);
         if sought {
-            let target = Duration::from_secs(2);
-            let result = audio.seek(target).expect("same uncompensated raw seek");
+            let before_seek = audio.position();
+            let result =
+                AudioSource::seek(&mut audio, target).expect("same uncompensated raw seek");
             tracing::info!(?backend, ?mode, ?target, ?result, "MP3_CLOCK_RAW_SEEK");
-            assert!(
-                matches!(result, SeekOutcome::Landed { target: asked, landed_at } if asked == target && landed_at <= target)
-            );
+            match result {
+                SeekOutcome::Landed {
+                    target: asked,
+                    landed_at,
+                } => {
+                    assert_eq!(asked, target);
+                    assert!(landed_at <= target);
+                }
+                SeekOutcome::Pending { target: asked, .. } => {
+                    assert_eq!(asked, target);
+                    assert_eq!(audio.position(), before_seek);
+                }
+                other @ SeekOutcome::PastEof { .. } => {
+                    panic!("two-second seek must retain a playable suffix: {other:?}")
+                }
+            }
         }
         let mut visible = Capture::default();
         while visible.frames() < WINDOW {
@@ -267,8 +306,53 @@ async fn original_and_sought_markers_expose_the_raw_media_basis(
                 "Audio {backend:?} {mode:?} sought={sought} frames={}",
                 visible.frames()
             ));
-            match audio.next_chunk().expect("original or sought Audio PCM") {
+            let outcome = audio.next_chunk().expect("original or sought Audio PCM");
+            if sought {
+                while let Ok(envelope) = audio_events.try_recv() {
+                    hang_tick!(format!(
+                        "Audio {backend:?} {mode:?} sought={sought} frames={}",
+                        visible.frames()
+                    ));
+                    match envelope.event {
+                        AudioEvent::SeekLifecycle { stage, .. } => stages.push(stage),
+                        AudioEvent::SeekComplete { position } => {
+                            let ChunkOutcome::Chunk(chunk) = &outcome else {
+                                panic!("seek completion requires committed PCM");
+                            };
+                            assert_eq!(
+                                visible.frames(),
+                                0,
+                                "only the first sought PCM can complete the seek"
+                            );
+                            assert_eq!(position, chunk.meta.timestamp);
+                            completions.push(position);
+                        }
+                        AudioEvent::SeekRejected { target } => {
+                            panic!("seek to {target:?} was rejected");
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            match outcome {
                 ChunkOutcome::Chunk(chunk) => {
+                    if sought && visible.frames() == 0 {
+                        assert_eq!(
+                            stages,
+                            [
+                                SeekLifecycleStage::SeekRequest,
+                                SeekLifecycleStage::SeekApplied,
+                                SeekLifecycleStage::OutputCommitted,
+                            ]
+                        );
+                        assert_eq!(completions, [chunk.meta.timestamp]);
+                        let start = chunk.meta.source_span.map_or(chunk.meta.timestamp, |span| {
+                            span.position_at(0).expect("mapped sought start")
+                        });
+                        let frame = chunk.spec().duration_for(1).expect("one source frame");
+                        assert!(start + frame >= target);
+                        assert!(start <= target + frame);
+                    }
                     visible.push(&chunk);
                     hang_reset!();
                 }
@@ -277,6 +361,17 @@ async fn original_and_sought_markers_expose_the_raw_media_basis(
                     panic!("the diagnostic window must contain three seconds")
                 }
             }
+        }
+        if sought {
+            assert_eq!(
+                stages,
+                [
+                    SeekLifecycleStage::SeekRequest,
+                    SeekLifecycleStage::SeekApplied,
+                    SeekLifecycleStage::OutputCommitted,
+                ]
+            );
+            assert_eq!(completions.len(), 1);
         }
         visible.report(
             if sought {

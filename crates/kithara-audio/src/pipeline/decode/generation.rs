@@ -1073,6 +1073,7 @@ mod tests {
         }
 
         fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
+            assert!(self.pcm_preparations.load(Ordering::Relaxed) > 0);
             Ok(DecoderChunkOutcome::Eof)
         }
 
@@ -1115,6 +1116,63 @@ mod tests {
         }
 
         fn update_byte_len(&self, _len: u64) {}
+    }
+
+    #[kithara::test]
+    fn deferred_incoming_seek_prepares_output_before_consuming_a_chunk() {
+        use crate::pipeline::decode::{
+            transition::{IncomingPrime, OutgoingFrontier},
+            transition_promotion::preparation::IncomingPreparation,
+        };
+
+        let spec = spec(2, 1_500);
+        let seek_preparations = Arc::new(AtomicU64::new(0));
+        let pcm_preparations = Arc::new(AtomicU64::new(0));
+        let mut generation = DecoderGeneration::new(
+            Box::new(HeadSeekDecoder {
+                spec,
+                origin: Some(Duration::ZERO),
+                landed_at: Duration::ZERO,
+                landed_frame: 0,
+                defer_seek: true,
+                pending_seek: false,
+                seek_preparations: seek_preparations.clone(),
+                pcm_preparations: pcm_preparations.clone(),
+            }),
+            None,
+            0,
+            None,
+            None,
+            GaplessMode::Disabled,
+        );
+        assert!(matches!(
+            generation.seek(Duration::ZERO, GaplessMode::Disabled),
+            Ok(DecoderSeekOutcome::Pending(_))
+        ));
+        generation.trim_to(ResumeTarget::Position(Duration::ZERO));
+        let preparation = IncomingPreparation {
+            frontier: OutgoingFrontier::Exact {
+                frame: 0,
+                rate: spec.sample_rate.get(),
+            },
+            outgoing_spec: spec,
+            outgoing_profile: generation.gapless_profile(),
+            outgoing_gap: 0,
+            outgoing_origin: 0,
+            outgoing_exhausted: true,
+            join_frames: 0,
+            gapless_mode: GaplessMode::Disabled,
+        };
+
+        assert_eq!(
+            generation
+                .prepare_incoming(preparation)
+                .expect("incoming preparation"),
+            IncomingPrime::Pending
+        );
+        assert_eq!(seek_preparations.load(Ordering::Relaxed), 1);
+        assert_eq!(pcm_preparations.load(Ordering::Relaxed), 1);
+        assert!(generation.is_finished());
     }
 
     #[kithara::test]
@@ -1178,7 +1236,7 @@ mod tests {
                         if landed_at == Duration::from_nanos(landing_nanos) && actual_frame == landing_frame)
                 );
                 assert_eq!(seek_preparations.load(Ordering::Relaxed), 1);
-                assert_eq!(pcm_preparations.load(Ordering::Relaxed), 1);
+                assert_eq!(pcm_preparations.load(Ordering::Relaxed), 0);
                 assert!(
                     generation
                         .prepare_deferred(true, GaplessMode::CodecPriming)
@@ -1186,7 +1244,7 @@ mod tests {
                         .is_none()
                 );
                 assert_eq!(seek_preparations.load(Ordering::Relaxed), 1);
-                assert_eq!(pcm_preparations.load(Ordering::Relaxed), 2);
+                assert_eq!(pcm_preparations.load(Ordering::Relaxed), 1);
             } else {
                 assert!(matches!(outcome, DecoderSeekOutcome::Landed { .. }));
                 assert_eq!(seek_preparations.load(Ordering::Relaxed), 0);

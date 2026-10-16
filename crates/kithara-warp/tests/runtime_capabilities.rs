@@ -10,9 +10,12 @@ use kithara_test_utils::{
     bufpool::{pools, sample_buffer},
     kithara,
 };
-#[cfg(feature = "stretch-identity")]
-use kithara_warp::{SpeedCurve, StretchKind, WarpCapabilities};
 use kithara_warp::{Warp, WarpConfig};
+#[cfg(feature = "stretch-identity")]
+use {
+    kithara_sync::SpeedCurve,
+    kithara_warp::{StretchKind, WarpCapabilities},
+};
 
 #[cfg(feature = "stretch-identity")]
 trait TerminalDrain {

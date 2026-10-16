@@ -1,8 +1,8 @@
 use kithara_command::{Batch, Outcome, Port, Rejection, When};
 use kithara_play::{Bound, PlayError, Player, TrackCommand, TrackSettingsChange, TrackStatus};
 use kithara_signal::{ExponentialApproach, SessionFrame};
+use kithara_sync::SpeedCurve;
 use kithara_test_utils::kithara;
-use kithara_warp::SpeedCurve;
 
 use super::fixtures::{
     Command, Rig, answer, deck, grid, load, loaded, position, sounding, trajectory,

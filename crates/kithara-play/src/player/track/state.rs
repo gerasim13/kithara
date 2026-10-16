@@ -11,7 +11,7 @@ use kithara_render::{
     bridge::{FadeDir, PlaybackFault, Slot, SlotMark},
 };
 use kithara_signal::{FrameCount, SegmentId, SessionFrame};
-use kithara_warp::SpeedCurve;
+use kithara_sync::SpeedCurve;
 
 use super::super::settings::TrackSettingsChange;
 use crate::{OpenedTrack, PlayError, ResourceLoad};

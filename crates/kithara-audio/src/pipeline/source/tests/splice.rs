@@ -1086,11 +1086,20 @@ mod buffered_readiness {
             if landing.is_none() {
                 initial_control = Some(reader.control());
             }
-            let (generation, outcome) = fixture
-                .source
-                .factory
-                .build_generation(reader, None, 0, landing, Some(rate), GaplessMode::Disabled)
-                .expect("native fMP4 generation");
+            let factory = fixture.source.factory.clone();
+            let (generation, outcome) = kithara_platform::tokio::task::spawn_blocking(move || {
+                factory.build_generation(
+                    reader,
+                    None,
+                    0,
+                    landing,
+                    Some(rate),
+                    GaplessMode::Disabled,
+                )
+            })
+            .await
+            .expect("native generation task completes")
+            .expect("native fMP4 generation");
             if landing.is_some() {
                 let Some(DecoderSeekOutcome::Landed { landed_at, .. }) = outcome else {
                     panic!("independent final-seek reference must land: {outcome:?}");

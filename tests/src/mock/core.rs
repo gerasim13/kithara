@@ -17,7 +17,7 @@ use kithara::{
     play::{LoadRefusal, PlayWorker, TrackConfig},
     signal::{AudioChunk, AudioSpec, SegmentId},
     stream::{Stream, StreamType, WorkerWake},
-    warp::SpeedCurve,
+    sync::SpeedCurve,
 };
 use kithara_command::{Batch, Outcome, Rejection, SendError, Sender, When};
 use kithara_render::{

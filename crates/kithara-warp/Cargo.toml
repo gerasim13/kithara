@@ -35,6 +35,7 @@ kithara-dsp = { workspace = true, optional = true }
 kithara-platform = { workspace = true }
 kithara-signal = { workspace = true }
 kithara-stretch = { workspace = true, default-features = false }
+kithara-sync = { workspace = true }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["client-reqwest", "tls-rustls"], optional = true }
 

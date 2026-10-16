@@ -53,7 +53,7 @@ async fn a_chunk_from_another_decode_epoch_proves_nothing() {
                 commands: vec![LaneCommand::Segment {
                     id: positioned,
                     from: Duration::from_secs(1),
-                    speed: kithara_warp::SpeedCurve::Constant(1.0),
+                    speed: kithara_sync::SpeedCurve::Constant(1.0),
                 }],
             },
         )
@@ -170,7 +170,7 @@ async fn readiness_needs_the_exact_origin_and_revision_of_the_activation(
                 commands: vec![LaneCommand::Segment {
                     id: positioned,
                     from: Duration::from_secs(1),
-                    speed: kithara_warp::SpeedCurve::Constant(1.0),
+                    speed: kithara_sync::SpeedCurve::Constant(1.0),
                 }],
             },
         )
@@ -271,7 +271,7 @@ async fn entry_under_backpressure(control_before_output: bool) {
                 commands: vec![LaneCommand::Segment {
                     id: positioned,
                     from: Duration::from_secs(1),
-                    speed: kithara_warp::SpeedCurve::Constant(1.0),
+                    speed: kithara_sync::SpeedCurve::Constant(1.0),
                 }],
             },
         )
@@ -284,7 +284,7 @@ async fn entry_under_backpressure(control_before_output: bool) {
                 When::Next,
                 Batch {
                     basis: Vec::new(),
-                    commands: vec![LaneCommand::SetSpeed(kithara_warp::SpeedCurve::Constant(
+                    commands: vec![LaneCommand::SetSpeed(kithara_sync::SpeedCurve::Constant(
                         1.0,
                     ))],
                 },
@@ -317,7 +317,7 @@ async fn entry_under_backpressure(control_before_output: bool) {
                 When::Next,
                 Batch {
                     basis: Vec::new(),
-                    commands: vec![LaneCommand::SetSpeed(kithara_warp::SpeedCurve::Constant(
+                    commands: vec![LaneCommand::SetSpeed(kithara_sync::SpeedCurve::Constant(
                         1.0,
                     ))],
                 },
@@ -502,7 +502,7 @@ async fn fractional_segment_entry() {
                         commands: vec![LaneCommand::Segment {
                             id: positioned,
                             from: target,
-                            speed: kithara_warp::SpeedCurve::Constant(1.0),
+                            speed: kithara_sync::SpeedCurve::Constant(1.0),
                         }],
                     },
                 )
@@ -604,7 +604,7 @@ async fn post_trim_entry(
                 commands: vec![LaneCommand::Segment {
                     id: positioned,
                     from: target,
-                    speed: kithara_warp::SpeedCurve::Constant(1.0),
+                    speed: kithara_sync::SpeedCurve::Constant(1.0),
                 }],
             },
         )

@@ -8,8 +8,9 @@ pub(super) use kithara_render::{
     rt::DeckMixerConfig,
 };
 pub(super) use kithara_signal::{AudioChunkInfo, AudioSpec};
+pub(super) use kithara_sync::SpeedCurve;
 pub(super) use kithara_test_utils::{TestTempDir, kithara};
-pub(super) use kithara_warp::{SpeedCurve, StretchKind};
+pub(super) use kithara_warp::StretchKind;
 
 use super::*;
 pub(super) use crate::{
@@ -1751,10 +1752,10 @@ fn a_cued_subfloor_speed_reaches_the_lane_at_the_floor(#[case] speed: f32) {
     assert!(matches!(
         lane_commands(&mut inbox).as_slice(),
         [LaneCommand::Segment { speed: SpeedCurve::Constant(sent), .. }]
-            if *sent == kithara_warp::MIN_SPEED
+            if *sent == kithara_sync::MIN_SPEED
     ));
-    assert_eq!(track.segment_speed, kithara_warp::MIN_SPEED);
-    assert_eq!(track.projected().speed(), kithara_warp::MIN_SPEED);
+    assert_eq!(track.segment_speed, kithara_sync::MIN_SPEED);
+    assert_eq!(track.projected().speed(), kithara_sync::MIN_SPEED);
 }
 
 #[kithara::test]
@@ -1784,18 +1785,18 @@ fn a_speed_curve_clamps_every_finite_subfloor_point(#[case] speed: SpeedCurve) {
     assert_eq!(commands.len(), 1);
     match &commands[0] {
         LaneCommand::SetSpeed(SpeedCurve::Ramp { to, frames }) => {
-            assert_eq!(*to, kithara_warp::MIN_SPEED);
+            assert_eq!(*to, kithara_sync::MIN_SPEED);
             assert_eq!(*frames, std::num::NonZeroU64::MIN);
         }
         LaneCommand::SetSpeed(SpeedCurve::Steps(steps)) => {
             assert_eq!(
                 steps.as_ref(),
-                [(0, kithara_warp::MIN_SPEED), (1, kithara_warp::MIN_SPEED)]
+                [(0, kithara_sync::MIN_SPEED), (1, kithara_sync::MIN_SPEED)]
             );
         }
         command => panic!("unexpected lane command: {command:?}"),
     }
-    assert_eq!(track.projected().speed(), kithara_warp::MIN_SPEED);
+    assert_eq!(track.projected().speed(), kithara_sync::MIN_SPEED);
 }
 
 #[kithara::test]

@@ -46,7 +46,11 @@ impl<P> Linked<P> {
     {
         let track = self.inner.snapshot();
         let required = cue_position(track.as_ref());
-        let Some(grid) = self.grid.as_ref().filter(|grid| covers(grid, required)) else {
+        let Some(grid) = self
+            .grid
+            .as_ref()
+            .filter(|grid| covers(grid.geometry(), required))
+        else {
             self.waiting = Some(Waiting::Play { required, at });
             return Ok(None);
         };
@@ -113,7 +117,7 @@ impl<P> Linked<P> {
             .lane
             .segment;
         let (position, from) = self.planned::<S>(at)?;
-        if !covers(grid, position) {
+        if !covers(grid.geometry(), position) {
             return Err(PlayError::NotReady);
         }
         if self.lane_room() == 0 {
@@ -209,7 +213,7 @@ impl<P> Linked<P> {
             && self
                 .grid
                 .as_ref()
-                .is_none_or(|grid| !covers(grid, required))
+                .is_none_or(|grid| !covers(grid.geometry(), required))
         {
             if matches!(waiting, Waiting::Sync { .. }) {
                 self.waiting = Some(Waiting::Sync { required });
@@ -252,21 +256,7 @@ impl<P> Linked<P> {
         let Some(grid) = self.grid.as_ref() else {
             return;
         };
-        let raw = grid.as_raw();
-        let next = raw
-            .downbeats
-            .iter()
-            .filter(|_| raw.meter.is_some())
-            .map(|beat| beat.at)
-            .chain(
-                raw.beats
-                    .iter()
-                    .filter(|_| raw.meter.is_none())
-                    .map(|beat| beat.at),
-            )
-            .find(|seconds| *seconds >= required.as_secs_f64());
-        let Some(position) = next.and_then(|seconds| Position::try_from_secs_f64(seconds).ok())
-        else {
+        let Some(position) = kithara_sync::boundary(grid.geometry(), required) else {
             return;
         };
         let Some(pass) = out.pass() else {
@@ -404,7 +394,11 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
                     }
                     return Ok(sent);
                 }
-                let Some(grid) = self.grid.as_ref().filter(|grid| covers(grid, to)) else {
+                let Some(grid) = self
+                    .grid
+                    .as_ref()
+                    .filter(|grid| covers(grid.geometry(), to))
+                else {
                     self.waiting = Some(Waiting::Seek { required: to });
                     return Ok(None);
                 };
@@ -414,7 +408,7 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
                 let start = at - self.inner.snapshot().as_ref().declick;
                 let (position, _) = self.planned::<S>(start)?;
                 let speed = self.curve(&source, position, start, Some((target, at)))?;
-                let synchronized = matches!(&speed, kithara_warp::SpeedCurve::Constant(value) if self.inner.projected().speed() == *value);
+                let synchronized = matches!(&speed, kithara_sync::SpeedCurve::Constant(value) if self.inner.projected().speed() == *value);
                 let command = if synchronized {
                     TrackCommand::Jump { to: target, at }
                 } else {
@@ -652,7 +646,11 @@ impl<S, P: Track<S>> Track<S> for Linked<P> {
         }
         let ended = matches!(track.status, TrackStatus::Ended { .. });
         let position = cue_position(track);
-        let Some(grid) = self.grid.as_ref().filter(|grid| covers(grid, position)) else {
+        let Some(grid) = self
+            .grid
+            .as_ref()
+            .filter(|grid| covers(grid.geometry(), position))
+        else {
             return Ok(false);
         };
         let source = self.source::<S>(grid)?;
@@ -676,7 +674,7 @@ impl<S, P: Track<S>> Track<S> for Linked<P> {
     fn cue(
         &mut self,
         position: Position,
-        speed: kithara_warp::SpeedCurve,
+        speed: kithara_sync::SpeedCurve,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
         let sent = self.inner.cue(position, speed, out)?;
@@ -691,7 +689,7 @@ impl<S, P: Track<S>> Track<S> for Linked<P> {
     delegate::delegate! {
         to self.inner {
             fn projected(&self) -> TrackSettings;
-            fn prepared_speed(&self) -> Option<&kithara_warp::SpeedCurve>;
+            fn prepared_speed(&self) -> Option<&kithara_sync::SpeedCurve>;
             fn planned(
                 &self,
                 at: SessionFrame,
@@ -757,7 +755,7 @@ impl<P> Linked<P> {
         let Some(grid) = self
             .grid
             .as_ref()
-            .filter(|grid| playing || covers(grid, required))
+            .filter(|grid| playing || covers(grid.geometry(), required))
         else {
             self.waiting = Some(Waiting::Sync { required });
             return Ok(None);
@@ -766,7 +764,7 @@ impl<P> Linked<P> {
         if playing {
             let at = self.jump_frame(out)?;
             let (position, _speed) = self.planned::<S>(at)?;
-            if !covers(grid, position) {
+            if !covers(grid.geometry(), position) {
                 self.waiting = Some(Waiting::Sync { required: position });
                 return Ok(None);
             }

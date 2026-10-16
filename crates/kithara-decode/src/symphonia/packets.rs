@@ -210,7 +210,7 @@ impl Packets {
             PrepareWait::Poll => match self.completion.try_recv() {
                 Ok(reply) => Ok(Some(reply)),
                 Err(mpsc::TryRecvError::Empty) => Ok(None),
-                Err(mpsc::TryRecvError::Disconnected) => Err(()),
+                Err(_) => Err(()),
             },
         };
         if let Ok(reply) = result {

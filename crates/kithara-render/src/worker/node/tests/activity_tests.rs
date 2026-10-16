@@ -18,7 +18,7 @@ fn request_seek(fixture: &mut NodeFixture) {
                 commands: vec![crate::LaneCommand::Segment {
                     id: SegmentId::FIRST.next(),
                     from: kithara_platform::time::Duration::from_secs(5),
-                    speed: kithara_warp::SpeedCurve::Constant(1.0),
+                    speed: kithara_sync::SpeedCurve::Constant(1.0),
                 }],
             },
         )

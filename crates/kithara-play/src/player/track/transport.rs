@@ -6,7 +6,7 @@ use kithara_render::{
     bridge::{DeckPart, Fade, PlaybackFault, Slot},
 };
 use kithara_signal::SessionFrame;
-use kithara_warp::SpeedCurve;
+use kithara_sync::SpeedCurve;
 
 use super::{
     super::{

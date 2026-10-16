@@ -32,7 +32,7 @@ pub(super) use kithara::{
     },
     queue::{Queue, QueueConfig, TrackSource, TrackStatus},
     signal::SessionFrame,
-    warp::SessionBeat,
+    sync::SessionBeat,
 };
 #[cfg(not(target_os = "android"))]
 pub(super) use kithara_app::recording::AssetPartSink;

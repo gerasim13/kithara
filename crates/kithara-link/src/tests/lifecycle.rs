@@ -1,8 +1,8 @@
 use kithara_command::{Outcome, Rejection, Seq, When};
 use kithara_play::{HostedDeck, Player, Settled, TrackCommand, TrackSnapshot, TrackStatus};
 use kithara_signal::{FrameCount, SessionFrame};
+use kithara_sync::SpeedCurve;
 use kithara_test_utils::{bufpool::TestPools, kithara};
-use kithara_warp::SpeedCurve;
 
 use super::fixtures::{
     Command, Control, Deck, Rig, answer, consume, grid, load, loaded, position, sounding,

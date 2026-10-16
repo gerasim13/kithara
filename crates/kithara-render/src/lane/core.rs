@@ -11,7 +11,8 @@ use kithara_command::{Inbox, Protocol, Seq};
 use kithara_dsp::param::SmootherConfig;
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, SegmentId, SourceSpan};
-use kithara_warp::{SpeedCurve, StretchKind, WarpRenderError, WarpRenderer};
+use kithara_sync::SpeedCurve;
+use kithara_warp::{StretchKind, WarpRenderError, WarpRenderer};
 use num_traits::ToPrimitive;
 
 #[path = "commands.rs"]

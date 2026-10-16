@@ -155,7 +155,7 @@ pub struct LinkSyncRequest {
 pub struct LinkSpeed {
     pub item: TrackId,
     pub seq: Seq,
-    pub curve: kithara::warp::SpeedCurve,
+    pub curve: kithara::sync::SpeedCurve,
     pub at: When<SessionFrame>,
     pub landing: Option<(Position, SessionFrame)>,
     pub before: TrackSnapshot,
@@ -179,7 +179,7 @@ pub enum LinkOwnerInputKind {
     Retime,
     Realign,
     Sync { on: bool },
-    Grid { answer: GridAnswer },
+    Grid { answer: Box<GridAnswer> },
 }
 
 #[derive(Debug)]
@@ -187,7 +187,7 @@ pub struct LinkCue {
     pub item: TrackId,
     pub seq: Seq,
     pub position: Position,
-    pub curve: kithara::warp::SpeedCurve,
+    pub curve: kithara::sync::SpeedCurve,
     pub before: TrackSnapshot,
     pub consumed: Option<SlotSnapshot>,
     pub host_input: Option<usize>,
@@ -734,7 +734,7 @@ where
         to self.inner {
             fn admit(&mut self, change: TrackSettingsChange, at: When<SessionFrame>, out: &Outbox<'_, S>) -> Result<Option<usize>, PlayError>;
             fn projected(&self) -> TrackSettings;
-            fn prepared_speed(&self) -> Option<&kithara::warp::SpeedCurve>;
+            fn prepared_speed(&self) -> Option<&kithara::sync::SpeedCurve>;
             fn prepare_entry(&mut self, at: SessionFrame, out: &mut Outbox<'_, S>) -> Result<bool, PlayError>;
             fn planned_end(&self, sample_rate: NonZeroU32) -> Result<Option<SessionFrame>, PlayError>;
             fn speed_applied(&mut self, seq: Seq) -> Option<bool>;
@@ -762,7 +762,7 @@ where
     fn cue(
         &mut self,
         position: Position,
-        speed: kithara::warp::SpeedCurve,
+        speed: kithara::sync::SpeedCurve,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
         let before = self.inner.snapshot();
@@ -1269,7 +1269,7 @@ where
             at: None,
             trajectory: None,
             kind: LinkOwnerInputKind::Grid {
-                answer: answer.clone(),
+                answer: Box::new(answer.clone()),
             },
         });
         LinkedPlayer::grid(&mut self.inner, answer, out);

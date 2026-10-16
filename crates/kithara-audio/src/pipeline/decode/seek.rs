@@ -164,8 +164,8 @@ impl DecoderGeneration {
                 self.reset_at_original_head(DecodeResult::from(target)?, gapless_mode, &terminal);
                 if matches!(terminal, DecoderSeekOutcome::PastEof { .. }) {
                     self.finish()?;
-                    return Ok(outcome);
                 }
+                return Ok(outcome);
             }
             None => {}
         }

@@ -10,9 +10,10 @@ use kithara::{
     resampler::NoResamplerBackend,
     signal::{AudioSpec, FrameCount, InterleavedView, SessionEpoch, SessionFrame},
     stretch::StretchKind,
+    sync::{SessionAnchor, SessionBeat},
     warp::{
-        Beat, BeatAlignment, BeatGridId, BeatGridRevision, BeatGridSnapshot, MapPoint,
-        SessionAnchor, SessionBeat, WarpConfig, WarpMap, WarpMapRevision,
+        Beat, BeatAlignment, BeatGridId, BeatGridRevision, BeatGridSnapshot, MapPoint, WarpConfig,
+        WarpMap, WarpMapRevision,
     },
 };
 use kithara_integration_tests::{

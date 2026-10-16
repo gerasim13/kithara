@@ -14,8 +14,9 @@ use kithara_play::{
 };
 use kithara_render::rt::DeckMixerConfig;
 use kithara_signal::{FrameCount, SessionEpoch, SessionFrame, TransportRevision};
+use kithara_sync::{SessionAnchor, SessionBeat};
 use kithara_test_utils::bufpool::TestPools;
-use kithara_warp::{BeatGridRevision, BeatGridStamp, SessionAnchor, SessionBeat};
+use kithara_warp::{BeatGridRevision, BeatGridStamp};
 
 use super::fixtures::{Control, Deck, Rig, Sequence, rate, trajectory};
 use crate::{

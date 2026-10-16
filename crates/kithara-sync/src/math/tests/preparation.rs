@@ -1,15 +1,13 @@
-use kithara_beat::{BeatGridModel, BeatGridState};
 use kithara_signal::SessionFrame;
 use kithara_test_utils::kithara;
-use kithara_warp::SessionBeat;
 
 use super::fixtures::{boundary_at_or_before, grid, host, position, source_grid};
-use crate::{Bound, covers, entry, phase_error, speed};
+use crate::{Bound, SessionBeat, covers, entry, phase_error, speed};
 
 #[kithara::test]
 fn entry_preserves_the_media_offset_between_source_and_host_beats() {
     let host = host(120.0, 4);
-    let grid = grid(480_000, 480_000, 24_000, 0, None, BeatGridState::Final);
+    let grid = grid(480_000, 480_000, 24_000, 0, None);
     let cue = position(10_000);
     let at = entry(
         &host,
@@ -44,7 +42,7 @@ fn entry_preserves_the_media_offset_between_source_and_host_beats() {
 #[kithara::test]
 fn entry_before_the_first_observed_beat_has_no_coverage() {
     let host = host(120.0, 4);
-    let grid = grid(480_000, 480_000, 30_000, 30_000, None, BeatGridState::Final);
+    let grid = grid(480_000, 480_000, 30_000, 30_000, None);
     let cue = position(6_000);
 
     assert!(!covers(&grid, cue));
@@ -83,13 +81,13 @@ fn phase_error_keeps_both_half_beat_directions_and_entry_preserves_the_cue(
     #[case] expected_entry: i64,
 ) {
     let host = host(120.0, 4);
-    let grid = grid(480_000, 480_000, 24_000, 0, None, BeatGridState::Final);
+    let grid = grid(480_000, 480_000, 24_000, 0, None);
     let cue = position(source_frontier);
     let at = SessionFrame::new(output_frontier);
     let error = phase_error(&host, &source_grid(&grid), cue, at).expect("mapped source phase");
 
     assert_eq!(
-        grid.as_raw().beats[1].at,
+        grid.beats()[1].at,
         cue.as_secs_f64() + position(expected_source_distance).as_secs_f64()
     );
     assert_eq!(
@@ -119,7 +117,7 @@ fn phase_error_keeps_both_half_beat_directions_and_entry_preserves_the_cue(
 #[kithara::test]
 fn different_bpms_share_one_phase_preserving_entry_and_speed() {
     let host = host(120.0, 4);
-    let grid = grid(480_000, 480_000, 30_000, 0, None, BeatGridState::Final);
+    let grid = grid(480_000, 480_000, 30_000, 0, None);
     let cue = position(6_000);
     let at = SessionFrame::new(6_000);
 
@@ -159,14 +157,7 @@ fn different_bpms_share_one_phase_preserving_entry_and_speed() {
 #[kithara::test]
 fn an_in_phase_metered_cue_is_an_inclusive_entry_on_both_sides() {
     let host = host(120.0, 4);
-    let grid = grid(
-        480_000,
-        480_000,
-        24_000,
-        0,
-        Some((4, 0)),
-        BeatGridState::Final,
-    );
+    let grid = grid(480_000, 480_000, 24_000, 0, Some((4, 0)));
     let cue = position(100_000);
     let at = SessionFrame::new(100_000);
 
@@ -199,14 +190,7 @@ fn an_in_phase_metered_cue_is_an_inclusive_entry_on_both_sides() {
 #[kithara::test]
 fn three_four_entries_keep_the_offset_from_the_observed_downbeat() {
     let host = host(120.0, 3);
-    let grid = grid(
-        480_000,
-        480_000,
-        24_000,
-        0,
-        Some((3, 1)),
-        BeatGridState::Final,
-    );
+    let grid = grid(480_000, 480_000, 24_000, 0, Some((3, 1)));
     let cue = position(50_000);
     let at = SessionFrame::new(50_000);
 
@@ -249,14 +233,7 @@ fn three_four_entries_keep_the_offset_from_the_observed_downbeat() {
 #[kithara::test]
 fn a_large_source_offset_selects_the_nearest_entry_without_moving_the_cue() {
     let host = host(120.0, 4);
-    let grid = grid(
-        480_000,
-        480_000,
-        24_000,
-        0,
-        Some((4, 0)),
-        BeatGridState::Final,
-    );
+    let grid = grid(480_000, 480_000, 24_000, 0, Some((4, 0)));
     let cue = position(252_000);
     let at = SessionFrame::new(191_999);
 
@@ -288,7 +265,7 @@ fn a_large_source_offset_selects_the_nearest_entry_without_moving_the_cue() {
 #[kithara::test]
 fn entries_preserve_between_beat_cues_and_exact_beats() {
     let host = host(120.0, 4);
-    let grid = grid(480_000, 480_000, 24_000, 0, None, BeatGridState::Final);
+    let grid = grid(480_000, 480_000, 24_000, 0, None);
     let bound = Bound::AtOrAfter(SessionFrame::new(10_000));
 
     assert_eq!(
@@ -312,7 +289,7 @@ fn entries_preserve_between_beat_cues_and_exact_beats() {
 #[kithara::test]
 fn a_boundary_rounded_onto_the_requested_frame_is_an_inclusive_entry() {
     let host = host(123.0, 4);
-    let grid = grid(480_000, 480_000, 24_000, 0, None, BeatGridState::Final);
+    let grid = grid(480_000, 480_000, 24_000, 0, None);
     let at = SessionFrame::new(23_415);
 
     assert_eq!(host.frame_at(SessionBeat::new(1.0).expect("beat")), at);
@@ -339,14 +316,7 @@ fn a_boundary_rounded_onto_the_requested_frame_is_an_inclusive_entry() {
 #[kithara::test]
 fn pickup_entries_keep_the_weak_beat_phase() {
     let host = host(120.0, 4);
-    let grid = grid(
-        480_000,
-        480_000,
-        24_000,
-        0,
-        Some((4, 1)),
-        BeatGridState::Final,
-    );
+    let grid = grid(480_000, 480_000, 24_000, 0, Some((4, 1)));
     let activation = entry(
         &host,
         &source_grid(&grid),
@@ -362,14 +332,7 @@ fn pickup_entries_keep_the_weak_beat_phase() {
 #[kithara::test]
 fn pickup_entries_preserve_fractional_beat_phase() {
     let host = host(120.0, 4);
-    let grid = grid(
-        480_000,
-        480_000,
-        24_000,
-        0,
-        Some((4, 1)),
-        BeatGridState::Final,
-    );
+    let grid = grid(480_000, 480_000, 24_000, 0, Some((4, 1)));
     let activation = entry(
         &host,
         &source_grid(&grid),
@@ -385,14 +348,7 @@ fn pickup_entries_preserve_fractional_beat_phase() {
 #[kithara::test]
 fn a_provisional_grid_with_a_proven_bar_covers_its_entry() {
     let host = host(120.0, 4);
-    let grid = grid(
-        480_000,
-        480_000,
-        24_000,
-        0,
-        Some((4, 0)),
-        BeatGridState::Provisional,
-    );
+    let grid = grid(480_000, 480_000, 24_000, 0, Some((4, 0)));
 
     assert!(covers(&grid, position(0)));
     assert_eq!(boundary_at_or_before(&grid, position(0)), Some(position(0)));
@@ -410,14 +366,7 @@ fn a_provisional_grid_with_a_proven_bar_covers_its_entry() {
 #[kithara::test]
 fn a_provisional_grid_without_meter_uses_beat_phase() {
     let host = host(120.0, 4);
-    let grid = grid(
-        480_000,
-        480_000,
-        24_000,
-        0,
-        None,
-        BeatGridState::Provisional,
-    );
+    let grid = grid(480_000, 480_000, 24_000, 0, None);
 
     assert!(covers(&grid, position(0)));
     assert_eq!(boundary_at_or_before(&grid, position(0)), Some(position(0)));
@@ -446,14 +395,7 @@ fn a_provisional_grid_without_meter_uses_beat_phase() {
 #[kithara::test]
 fn provisional_coverage_stops_at_the_last_observed_frame() {
     let host = host(120.0, 4);
-    let provisional = grid(
-        480_000,
-        192_000,
-        24_000,
-        0,
-        Some((4, 0)),
-        BeatGridState::Provisional,
-    );
+    let provisional = grid(480_000, 192_000, 24_000, 0, Some((4, 0)));
     let bound = Bound::AtOrAfter(SessionFrame::new(0));
 
     assert!(covers(&provisional, position(48_000)));
@@ -471,14 +413,7 @@ fn provisional_coverage_stops_at_the_last_observed_frame() {
         entry(&host, &source_grid(&provisional), position(200_000), bound),
         None
     );
-    let complete = grid(
-        480_000,
-        480_000,
-        24_000,
-        0,
-        Some((4, 0)),
-        BeatGridState::Final,
-    );
+    let complete = grid(480_000, 480_000, 24_000, 0, Some((4, 0)));
     assert!(covers(&complete, position(200_000)));
     assert_eq!(
         entry(&host, &source_grid(&complete), position(200_000), bound),
@@ -493,18 +428,15 @@ fn provisional_coverage_stops_at_the_last_observed_frame() {
 #[kithara::test]
 fn a_grid_without_observed_geometry_has_no_entry() {
     let host = host(120.0, 4);
-    let model = grid(
-        480_000,
-        480_000,
-        24_000,
-        0,
-        None,
-        BeatGridState::Provisional,
-    );
-    let mut raw = model.as_raw().clone();
-    raw.beats.clear();
-    raw.downbeats.clear();
-    let grid = BeatGridModel::try_from(raw).expect("unavailable geometry is valid");
+    let model = grid(480_000, 480_000, 24_000, 0, None);
+    let grid = crate::TrackGrid::new(
+        Vec::new(),
+        Vec::new(),
+        model.meter(),
+        model.bpm(),
+        model.duration(),
+    )
+    .expect("unavailable geometry is valid");
 
     assert!(!covers(&grid, position(0)));
     assert_eq!(boundary_at_or_before(&grid, position(0)), None);

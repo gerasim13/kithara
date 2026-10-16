@@ -2,10 +2,10 @@ use std::num::{NonZeroU32, NonZeroU128};
 
 use kithara_signal::{ExponentialApproach, SourceSpan};
 use kithara_stretch::ElasticError;
+use kithara_sync::SpeedCurve;
 use num_traits::ToPrimitive;
 
 use super::{Fraction, Phase, Trajectory, core::divisor};
-use crate::SpeedCurve;
 
 impl Phase {
     pub(super) fn ratio(self) -> Option<Fraction> {

@@ -24,6 +24,7 @@ pub mod waveform {
 #[cfg(feature = "beat")]
 pub mod beat {
     pub use kithara_beat::*;
+    pub use kithara_sync::Meter;
 }
 
 #[cfg(feature = "broadcast")]
@@ -94,6 +95,11 @@ pub mod resampler {
 #[cfg(feature = "signal")]
 pub mod signal {
     pub use kithara_signal::*;
+}
+
+#[cfg(feature = "sync")]
+pub mod sync {
+    pub use kithara_sync::*;
 }
 
 #[cfg(feature = "queue")]
@@ -186,14 +192,17 @@ pub use kithara_warp::{GridSegment, RegionPlan, RegionPlanError, StretchKind};
 pub mod mock {
     #[cfg(feature = "audio")]
     pub use kithara_audio::mock::*;
-    #[cfg(feature = "beat")]
-    pub use kithara_beat::{BeatGridModel, BeatGridState, Meter};
     #[cfg(feature = "decode")]
     pub use kithara_decode::mock::*;
     #[cfg(feature = "play")]
     pub use kithara_play::mock::*;
     #[cfg(feature = "stream")]
     pub use kithara_stream::mock::*;
+    #[cfg(feature = "beat")]
+    pub use {
+        kithara_beat::{BeatGridModel, BeatGridState},
+        kithara_sync::Meter,
+    };
 }
 
 /// Prelude — flat imports for common types.
@@ -211,8 +220,6 @@ pub mod prelude {
         Audio, AudioConfig, AudioControl, AudioEvent, AudioRead, AudioReader, AudioSession,
         ResamplerQuality,
     };
-    #[cfg(feature = "beat")]
-    pub use kithara_beat::{BeatGridModel, BeatGridState, Meter};
     #[cfg(feature = "decode")]
     pub use kithara_decode::{DecodeError, DecodeResult, DecoderTrackInfo, TrackMetadata};
     #[cfg(feature = "download")]
@@ -244,4 +251,9 @@ pub mod prelude {
     pub use kithara_warp::{GridSegment, RegionPlan, RegionPlanError, StretchKind};
     #[cfg(feature = "waveform")]
     pub use kithara_waveform::{Bucket, Waveform};
+    #[cfg(feature = "beat")]
+    pub use {
+        kithara_beat::{BeatGridModel, BeatGridState},
+        kithara_sync::Meter,
+    };
 }

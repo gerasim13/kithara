@@ -131,7 +131,7 @@ async fn audio_new_is_bounded_when_first_segment_withheld(fixture_config: HlsFix
         panic!("construction reads the withheld segment it opens in");
     };
     let message = err.to_string();
-    info!(?elapsed, %message, is_interrupted = err.is_interrupted(), "PlayWorker::load failed");
+    info!(?elapsed, %message, error_class = ?err.classify(), "PlayWorker::load failed");
     let lower = message.to_ascii_lowercase();
     assert!(
         lower.contains("not ready") || lower.contains("wait budget"),

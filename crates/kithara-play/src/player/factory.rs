@@ -3,7 +3,7 @@ use std::num::NonZeroU32;
 use kithara_command::{Seq, When};
 use kithara_render::bridge::DeckPart;
 use kithara_signal::SessionFrame;
-use kithara_warp::SpeedCurve;
+use kithara_sync::SpeedCurve;
 
 use super::{
     Player, PlayerConfig, PlayerImpl, Position, Settled, TrackCommand, TrackSettings,

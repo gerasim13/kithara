@@ -10,7 +10,7 @@ use kithara_render::{
     bridge::{DeckPart, Fade, Slot, SlotMark},
 };
 use kithara_signal::{AudioChunkInfo, FrameCount, SegmentId, SessionFrame};
-use kithara_warp::SpeedCurve;
+use kithara_sync::SpeedCurve;
 use num_traits::ToPrimitive;
 
 use super::{

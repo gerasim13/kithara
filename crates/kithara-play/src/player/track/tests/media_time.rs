@@ -273,7 +273,6 @@ fn assert_quiet_curve_projection(
             .target()
             .to_f32()
             .expect("published speed"),
-        _ => panic!("unsupported test curve"),
     };
     assert_eq!(track.snapshot().speed, final_speed);
 

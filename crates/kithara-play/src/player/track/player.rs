@@ -5,7 +5,7 @@ use kithara_render::{
     bridge::{DeckEvent, DeckPart, Fade, FadeDir, PlaybackFault, Returned},
 };
 use kithara_signal::SessionFrame;
-use kithara_warp::SpeedCurve;
+use kithara_sync::SpeedCurve;
 use tracing::warn;
 
 use super::{

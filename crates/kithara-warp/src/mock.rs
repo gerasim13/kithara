@@ -1,12 +1,13 @@
 use std::num::NonZeroU32;
 
 use kithara_signal::{SessionEpoch, SessionFrame};
+use kithara_sync::{SessionAnchor, SessionBeat};
 use num_traits::ToPrimitive;
 
 use crate::{
     AssetAxis, AssetExtent, AssetFrame, BeatEvidence, BeatGridId, BeatGridRevision,
     BeatGridSnapshot, BeatGridState, BeatMarker, BeatOrdinal, FrameUncertainty, MapAxis,
-    MapPosition, MapSegment, SegmentFacts, SegmentSet, SessionAnchor, SessionBeat,
+    MapPosition, MapSegment, SegmentFacts, SegmentSet,
 };
 
 mod consts {

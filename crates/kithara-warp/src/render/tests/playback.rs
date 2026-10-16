@@ -26,6 +26,7 @@ use kithara_signal::{AudioChunkInfo, AudioSpec};
     feature = "stretch-glide"
 ))]
 use kithara_stretch::StretchKind;
+use kithara_sync::SpeedCurve;
 use kithara_test_fixtures::unit_fixtures::warp_sine;
 use kithara_test_utils::kithara;
 
@@ -36,7 +37,7 @@ use kithara_test_utils::kithara;
 ))]
 use super::{WarpRenderer, dominant_bin, expected_bin, flush_serviced, render_serviced};
 use super::{chunk, renderer, spec};
-use crate::{SpeedCurve, WarpConfig};
+use crate::WarpConfig;
 #[cfg(any(
     feature = "stretch-signalsmith",
     feature = "stretch-bungee",
@@ -471,7 +472,7 @@ fn rendered_source_frontier_reaches_end_only_on_completed_drain(
 ) {
     const SOURCE_START: u64 = 10_000;
 
-    let mut renderer = keylocked(backend, consts::MIN_SPEED);
+    let mut renderer = keylocked(backend, kithara_sync::MIN_SPEED);
     let source_frames = renderer.source_block_frames.get();
     let pools = renderer.pools.clone();
     let source = warp_sine[..(source_frames) * 2].to_vec();

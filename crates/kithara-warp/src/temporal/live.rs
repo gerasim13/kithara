@@ -5,10 +5,11 @@ use std::{
 
 use kithara_platform::sync::Arc;
 use kithara_signal::{OutputContext, SessionEpoch, SessionFrame, TransportRevision};
+use kithara_sync::{SessionAnchor, SessionBeat};
 use kithara_test_macros as kithara;
 use portable_atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering, fence};
 
-use crate::{PresentationFrontier, RenderContext, SessionAnchor, SessionBeat, WarpMapRevision};
+use crate::{PresentationFrontier, RenderContext, WarpMapRevision};
 
 #[derive(Debug, Default)]
 struct RenderCell {
@@ -331,10 +332,11 @@ mod tests {
     use std::num::NonZeroU32;
 
     use kithara_signal::{OutputContext, SessionEpoch, SessionFrame, TransportRevision};
+    use kithara_sync::{SessionAnchor, SessionBeat};
     use kithara_test_utils::kithara;
 
     use super::RenderPublisher;
-    use crate::{PresentationFrontier, RenderContext, SessionAnchor, SessionBeat};
+    use crate::{PresentationFrontier, RenderContext};
 
     fn context(epoch: u64, start: i64) -> RenderContext {
         let output = OutputContext::new(

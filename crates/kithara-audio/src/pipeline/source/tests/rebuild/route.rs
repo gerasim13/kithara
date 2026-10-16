@@ -381,6 +381,7 @@ async fn rebuilding_decoder_seek_epoch_supersedes_completion() {
 
     let mut decoder = TestDecoder::new(3, drops);
     decoder.defer_seek = true;
+    decoder.prepare_at_byte = Some((source.shared_stream.clone(), 29));
     let seek_calls = decoder.seek_calls.clone();
     let seek_preparations = decoder.seek_preparations.clone();
     let preparations = decoder.preparations.clone();
@@ -432,9 +433,10 @@ async fn rebuilding_decoder_seek_epoch_supersedes_completion() {
     source.prepare_deferred();
     assert_eq!(source.shared_stream.position(), 29);
     assert_eq!(source.playhead.position(), landed);
-    source.prepare_deferred();
+    assert_eq!(preparations.load(Ordering::Relaxed), 1);
     assert_eq!(seek_calls.load(Ordering::Relaxed), 2);
     assert_eq!(seek_preparations.load(Ordering::Relaxed), 2);
+    assert!(matches!(source.step_track(), TrackStep::StateChanged));
     source.finish_deferred();
     let mut stages = Vec::new();
     while let Ok(envelope) = events.try_recv() {

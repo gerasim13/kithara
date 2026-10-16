@@ -7,7 +7,7 @@ use std::{
 
 use kithara_assets::AssetStore;
 use kithara_audio::AudioObserverSlot;
-use kithara_beat::{BeatGridModel, BeatGridState, GridBeat, GridDownbeat, Meter, RawBeatGrid};
+use kithara_beat::{BeatGridModel, BeatGridState, GridBeat, GridDownbeat, RawBeatGrid};
 use kithara_command::{
     Batch, ChannelConfig, Inbox, Outcome, Rejection, Sender, Seq, When, channel,
 };
@@ -23,8 +23,8 @@ use kithara_render::{
     rt::DeckMixerConfig,
 };
 use kithara_signal::{FrameCount, SegmentId, SessionFrame};
+use kithara_sync::{Meter, SessionBeat, SpeedCurve};
 use kithara_test_utils::bufpool::{TestPools, pools};
-use kithara_warp::{SessionBeat, SpeedCurve};
 use num_traits::AsPrimitive;
 
 use crate::{
@@ -342,7 +342,7 @@ impl Player<TestPools> for ScriptedTrack {
                                         .1
                                         .target()
                                         .as_(),
-                                    _ => panic!("unexpected speed curve"),
+                                    SpeedCurve::Ramp { .. } => panic!("unexpected speed curve"),
                                 }
                             }
                             Command::ConfigureSpeed(value, _) => script.snapshot.speed = value,
@@ -730,11 +730,10 @@ pub(super) fn consume(control: &Control, frame: u32) {
 
 pub(super) fn source_grid(model: &BeatGridModel) -> kithara_sync::SourceGrid {
     kithara_sync::SourceGrid::new(
-        model,
-        kithara_warp::AssetAxis::new(
-            NonZeroU32::new(48_000).expect("fixture rate"),
-            kithara_warp::AssetExtent::Unknown,
-        ),
+        model.geometry(),
+        NonZeroU32::new(48_000).expect("fixture rate"),
+        None,
+        false,
     )
     .expect("served source geometry")
 }

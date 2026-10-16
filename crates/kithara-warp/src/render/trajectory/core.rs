@@ -2,10 +2,10 @@ use std::num::{NonZeroU32, NonZeroU128};
 
 use kithara_signal::ExponentialApproach;
 use kithara_stretch::ElasticError;
+use kithara_sync::SpeedCurve;
 use num_traits::ToPrimitive;
 
 use super::{Fraction, Phase, Trajectory};
-use crate::{SpeedCurve, consts};
 
 pub(super) fn divisor(mut first: u128, mut second: u128) -> u128 {
     while second != 0 {
@@ -15,7 +15,7 @@ pub(super) fn divisor(mut first: u128, mut second: u128) -> u128 {
 }
 
 fn check_precise_speed(value: f64) -> Result<(), ElasticError> {
-    if !value.is_finite() || !(f64::from(consts::MIN_SPEED)..=4.0).contains(&value) {
+    if !value.is_finite() || !(f64::from(kithara_sync::MIN_SPEED)..=4.0).contains(&value) {
         return Err(ElasticError::InvalidRate(value));
     }
     Ok(())
@@ -53,7 +53,7 @@ impl Fraction {
     }
 
     pub(super) fn speed(value: f32) -> Result<Self, ElasticError> {
-        if !value.is_finite() || !(consts::MIN_SPEED..=4.0).contains(&value) {
+        if !value.is_finite() || !(kithara_sync::MIN_SPEED..=4.0).contains(&value) {
             return Err(ElasticError::InvalidRate(f64::from(value)));
         }
         let bits = value.to_bits();

@@ -191,15 +191,19 @@ async fn empty_promoted_tail_keeps_its_own_resume_endpoint_without_refining_dura
     source.set_host_sample_rate(NonZeroU32::new(2_000).expect("new host rate"));
     assert!(matches!(
         source.phase,
-        crate::pipeline::source::core::OwnerPhase::Decoding
+        crate::pipeline::source::core::OwnerPhase::Changing(_)
     ));
     assert_eq!(source.resume.source_end(), Some(resume));
+    assert_eq!(source.playhead.duration(), declared);
+    assert!(drain(&mut source, incoming).is_empty());
+    assert!(matches!(
+        source.phase,
+        crate::pipeline::source::core::OwnerPhase::AtEof
+    ));
     assert_eq!(
         source.decode.active().visible_origin(),
         Some(Duration::from_millis(17))
     );
-    assert_eq!(source.playhead.duration(), declared);
-    assert!(drain(&mut source, incoming).is_empty());
     assert_eq!(source.playhead.duration(), declared);
     assert_eq!(source.media_end(), Some(Duration::from_millis(59_969)));
     assert_ne!(source.media_end(), Some(original.meta.end_timestamp));

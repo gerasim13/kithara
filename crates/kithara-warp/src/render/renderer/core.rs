@@ -7,6 +7,7 @@ use kithara_stretch::{
     BackendCapabilities, ElasticBackendConfig, ElasticEngine, ElasticError, ElasticRequest,
     StretchKind, build_engine,
 };
+use kithara_sync::SpeedCurve;
 use kithara_test_macros as kithara;
 use num_traits::AsPrimitive;
 use tracing::warn;
@@ -15,10 +16,7 @@ use super::{
     super::trajectory::{Fraction, Trajectory},
     target::PreparedTarget,
 };
-use crate::{
-    ActiveRegion, RegionPlan, RenderReader, RenderSnapshot, SpeedCurve, WarpConfig,
-    WarpRenderError, consts,
-};
+use crate::{ActiveRegion, RegionPlan, RenderReader, RenderSnapshot, WarpConfig, WarpRenderError};
 
 /// The speed a renderer renders at and the revision that set it.
 #[derive(Clone, Copy, Debug)]
@@ -30,7 +28,7 @@ pub(in crate::render) struct RateTarget {
 impl RateTarget {
     fn new(speed: f32, revision: u64) -> Self {
         Self {
-            speed: speed.max(consts::MIN_SPEED),
+            speed: speed.max(kithara_sync::MIN_SPEED),
             revision,
         }
     }

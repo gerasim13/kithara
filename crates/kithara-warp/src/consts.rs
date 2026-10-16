@@ -1,15 +1,5 @@
 use std::num::NonZeroUsize;
 
-#[cfg(test)]
-pub(crate) const BEATS_PER_SECOND: f64 = 2.0;
-
-#[cfg(test)]
-pub(crate) const FRAMES_PER_BEAT: i64 = 24_000;
-
-#[cfg(test)]
-pub(crate) const RATE: u32 = 48_000;
-
-pub(crate) const SMOOTH_SECONDS: f64 = 0.005;
 pub(crate) const MODEL_SECONDS_PER_MINUTE: f64 = 60.0;
 
 #[cfg(test)]
@@ -47,12 +37,6 @@ pub(crate) const FRAME_COUNT: u64 = 48_000;
 
 #[cfg(test)]
 pub(crate) const BLOCK_FRAMES: usize = 480;
-
-/// Lowest supported media seconds consumed per output second.
-///
-/// This already asks the backend for a 20x stretch; lower values collapse
-/// quality without providing a useful playback mode.
-pub const MIN_SPEED: f32 = 0.05;
 
 pub(crate) const NATIVE_PACKET_FRAMES: usize = 480;
 pub(crate) const MAX_NATIVE_STRETCH: f64 = 2.0;

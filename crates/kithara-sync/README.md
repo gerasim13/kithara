@@ -21,8 +21,9 @@ trajectories. It owns no player, renderer, group topology, or receipt custody.
 ## Usage
 
 Construct a `TempoTrajectory` from a `TempoStep`, meter, and output sample rate.
-Materialize a `SourceGrid` from the served `BeatGridModel` and its media
-`AssetAxis`; a known media endpoint bounds the map.
+Prepare a `SourceGrid` from validated `TrackGrid` geometry, the decoded sample
+rate and an optional decoded frame count. Completeness requires a final model
+and that known decoded endpoint; document duration alone does not establish it.
 Use `entry(&trajectory, &grid, position, Bound::AtOrAfter(frame))` or
 `Bound::AtOrBefore(frame)` to find the nearest in-phase entry while preserving
 the media position, expressed as `kithara_platform::time::Duration`.

@@ -162,11 +162,7 @@ impl<T: StreamType> Stream<T> {
 
         self.source.set_position(new_pos);
 
-        let wait_range = match self.format_change_segment_range() {
-            Ok(range) if range.start == new_pos => range,
-            _ => new_pos..new_pos.saturating_add(1),
-        };
-        self.prime_seek_range(wait_range, cancel)?;
+        self.prime_seek_range(new_pos..new_pos.saturating_add(1), cancel)?;
 
         if let Some(len) = self.source.len()
             && new_pos > len

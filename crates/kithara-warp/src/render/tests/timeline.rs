@@ -24,6 +24,15 @@ use kithara_test_fixtures::unit_fixtures::warp_constant;
 use kithara_test_fixtures::unit_fixtures::warp_sine;
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
+use {
+    crate::{WarpConfig, consts},
+    kithara_sync::SpeedCurve,
+};
 
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 use super::flush_serviced;
@@ -36,12 +45,6 @@ use super::{WarpRenderer, f64_of};
 use super::{chunk, render_serviced, renderer, spec};
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 use crate::{GridSegment, RegionPlan, Warp};
-#[cfg(any(
-    feature = "stretch-signalsmith",
-    feature = "stretch-bungee",
-    feature = "stretch-glide"
-))]
-use crate::{SpeedCurve, WarpConfig, consts};
 
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 fn finish_unity_transition(

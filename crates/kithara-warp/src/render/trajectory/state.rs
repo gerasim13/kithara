@@ -1,8 +1,7 @@
 use std::num::NonZeroU128;
 
 use kithara_signal::SourceSpan;
-
-use crate::SpeedCurve;
+use kithara_sync::SpeedCurve;
 
 #[derive(Clone, Copy)]
 pub(in crate::render) struct Fraction {

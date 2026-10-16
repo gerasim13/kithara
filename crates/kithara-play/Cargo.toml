@@ -113,6 +113,7 @@ kithara-platform = { workspace = true }
 kithara-render = { workspace = true }
 kithara-signal = { workspace = true }
 kithara-stream = { workspace = true, default-features = false }
+kithara-sync = { workspace = true }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true }
 kithara-warp = { workspace = true, default-features = false, features = ["render"] }

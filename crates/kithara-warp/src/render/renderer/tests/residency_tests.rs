@@ -1,10 +1,11 @@
 use std::num::NonZeroUsize;
 
+use kithara_sync::SpeedCurve;
 use kithara_test_utils::kithara;
 
 use super::*;
 use crate::{
-    GridSegment, RegionPlan, SpeedCurve, Warp,
+    GridSegment, RegionPlan, Warp,
     test_pools::{TestPools, pools, sample_buffer},
 };
 

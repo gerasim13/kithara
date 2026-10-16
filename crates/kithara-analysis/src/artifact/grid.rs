@@ -1,10 +1,11 @@
 use std::num::NonZeroU16;
 
 use kithara_beat::{
-    BeatGridError, BeatGridModel, BeatGridState, GridBeat, GridDownbeat, Meter, RawBeatGrid,
+    BeatGridError, BeatGridModel, BeatGridState, GridBeat, GridDownbeat, RawBeatGrid,
     SCHEMA_VERSION,
 };
 use kithara_signal::{AudioSpec, SignalError};
+use kithara_sync::Meter;
 use num_traits::cast::ToPrimitive;
 use thiserror::Error;
 
@@ -246,9 +247,10 @@ mod tests {
     use std::num::{NonZeroU16, NonZeroU32};
 
     use kithara_beat::{
-        BeatGridModel, BeatGridState, GridBeat, GridDownbeat, Meter, RawBeatGrid, SCHEMA_VERSION,
+        BeatGridModel, BeatGridState, GridBeat, GridDownbeat, RawBeatGrid, SCHEMA_VERSION,
     };
     use kithara_platform::time::Duration;
+    use kithara_sync::Meter;
     use kithara_test_utils::kithara;
 
     use super::{BeatGridUnavailable, BeatSnapshot, BeatState, TrackAnalysis};

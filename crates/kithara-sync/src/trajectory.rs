@@ -1,9 +1,8 @@
 use std::num::{NonZeroU16, NonZeroU32};
 
 use kithara_signal::SessionFrame;
-use kithara_warp::{SessionAnchor, SessionBeat};
 
-use crate::{Tempo, TrajectoryError};
+use crate::{SessionAnchor, SessionBeat, Tempo, TrajectoryError};
 
 /// Host tempo over session time, retaining the executed approach at every target.
 #[derive(Clone, Debug)]

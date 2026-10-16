@@ -1,7 +1,7 @@
 use kithara_platform::sync::Arc;
 use kithara_render::{LaneFrame, bridge::SlotMark};
 use kithara_signal::{ExponentialApproach, SessionFrame};
-use kithara_warp::SpeedCurve;
+use kithara_sync::SpeedCurve;
 use num_traits::ToPrimitive;
 
 use crate::PlayError;
@@ -40,7 +40,6 @@ pub(super) fn check_curve(curve: &mut SpeedCurve) -> Result<f32, PlayError> {
             }
             Ok(final_speed)
         }
-        _ => Err(PlayError::Internal("unsupported speed curve".into())),
     }
 }
 
@@ -48,7 +47,7 @@ fn check_approach(approach: ExponentialApproach) -> Result<f32, PlayError> {
     use super::super::settings::check_speed;
 
     for rate in [approach.initial(), approach.target()] {
-        if !(f64::from(kithara_warp::MIN_SPEED)..=4.0).contains(&rate) {
+        if !(f64::from(kithara_sync::MIN_SPEED)..=4.0).contains(&rate) {
             return Err(PlayError::InvalidParameter {
                 name: "speed".into(),
                 value: rate.to_f32().ok_or(PlayError::Untimed)?,
@@ -101,9 +100,6 @@ pub(super) fn curve_speed(curve: &SpeedCurve, origin: f64, frame: u64) -> Result
                 .rate_at((frame - start).to_f64().ok_or(PlayError::Untimed)?)
                 .ok_or(PlayError::Untimed)
         }
-        _ => Err(PlayError::Internal(
-            "unsupported planned speed curve".into(),
-        )),
     }
 }
 
@@ -180,9 +176,6 @@ pub(super) fn curve_area(
                 .then_some(area)
                 .ok_or(PlayError::Untimed)
         }
-        _ => Err(PlayError::Internal(
-            "unsupported planned speed curve".into(),
-        )),
     }
 }
 
@@ -190,8 +183,8 @@ pub(super) fn curve_area(
 mod tests {
     use kithara_platform::sync::Arc;
     use kithara_signal::ExponentialApproach;
+    use kithara_sync::SpeedCurve;
     use kithara_test_utils::kithara;
-    use kithara_warp::SpeedCurve;
     use num_traits::ToPrimitive;
 
     use super::{curve_area, curve_speed};

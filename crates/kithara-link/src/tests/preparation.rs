@@ -2,8 +2,8 @@ use kithara_command::When;
 use kithara_host::api::Tempo;
 use kithara_play::{Bound, HostedDeck, Player, Track, TrackCommand, TrackStatus};
 use kithara_signal::{ExponentialApproach, FrameCount, SessionFrame};
+use kithara_sync::SpeedCurve;
 use kithara_test_utils::kithara;
-use kithara_warp::SpeedCurve;
 use num_traits::ToPrimitive;
 
 use super::fixtures::{Command, Rig, answer, deck, grid, load, position, source_grid, trajectory};
@@ -391,8 +391,8 @@ fn a_late_partial_grid_resumes_ended_sync_from_zero() {
         }
     );
     let model = grid(24_000, 0, None, 96_000);
-    assert!(crate::covers(&model, position(0)));
-    assert!(!crate::covers(&model, position(480_000)));
+    assert!(crate::covers(model.geometry(), position(0)));
+    assert!(!crate::covers(model.geometry(), position(480_000)));
     control.clear();
     answer(&mut deck, &mut rig, loading, model);
     let commands = control.commands();
@@ -866,7 +866,7 @@ fn a_boundary_rounded_onto_the_first_window_frame_is_admitted() {
         Some(SessionFrame::new(23_415))
     );
     assert_eq!(
-        trajectory(123.0, 4).frame_at(kithara_warp::SessionBeat::new(1.0).expect("beat")),
+        trajectory(123.0, 4).frame_at(kithara_sync::SessionBeat::new(1.0).expect("beat")),
         SessionFrame::new(23_415)
     );
     assert_eq!(

@@ -1,14 +1,12 @@
-use kithara_beat::BeatGridModel;
 use kithara_platform::time::Duration;
 use kithara_signal::SessionFrame;
-use kithara_warp::{MIN_SPEED, SessionBeat, SpeedCurve};
 use num_traits::ToPrimitive;
 
 use super::{
     plan::{CorrectionPlan, CorrectionStep},
     source::{self, Correction, SourceGrid},
 };
-use crate::{Bound, TempoTrajectory};
+use crate::{Bound, MIN_SPEED, SessionBeat, SpeedCurve, TempoTrajectory, TrackGrid};
 
 /// Source beats ahead of the Host phase, modulo the stated beat period.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -26,9 +24,8 @@ impl PhaseError {
 
 /// Whether a position lies inside the grid's inclusive observed beat span.
 #[must_use]
-pub fn covers(grid: &BeatGridModel, position: Duration) -> bool {
-    let raw = grid.as_raw();
-    match (raw.beats.first(), raw.beats.last()) {
+pub fn covers(grid: &TrackGrid, position: Duration) -> bool {
+    match (grid.beats().first(), grid.beats().last()) {
         (Some(first), Some(last)) => {
             match (
                 Duration::try_from_secs_f64(first.at),

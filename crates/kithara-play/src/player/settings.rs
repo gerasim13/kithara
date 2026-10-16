@@ -2,7 +2,8 @@ use kithara_config::Config;
 use kithara_derive::Patch;
 use kithara_events::TrackId;
 use kithara_render::{LaneCommand, LaneStart, bridge::Slot};
-use kithara_warp::{MIN_SPEED, SpeedCurve, StretchKind, WarpConfig};
+use kithara_sync::{MIN_SPEED, SpeedCurve};
+use kithara_warp::{StretchKind, WarpConfig};
 
 use crate::PlayError;
 
@@ -94,8 +95,9 @@ mod tests {
     use kithara_config::ConfigOwner;
     use kithara_render::{LaneApplied, LaneCommand, LaneFrame, LaneProtocol};
     use kithara_signal::{FrameCount, SegmentId};
+    use kithara_sync::SpeedCurve;
     use kithara_test_utils::kithara;
-    use kithara_warp::{SpeedCurve, StretchKind, WarpConfig};
+    use kithara_warp::{StretchKind, WarpConfig};
 
     use super::{PlayerConfigPatch, TrackSettings, TrackSettingsChange};
     use crate::PlayError;
@@ -254,12 +256,12 @@ mod tests {
 
         assert!(matches!(
             execute(&mut inbox, 0).as_slice(),
-            [LaneCommand::SetSpeed(SpeedCurve::Constant(speed))] if *speed == kithara_warp::MIN_SPEED
+            [LaneCommand::SetSpeed(SpeedCurve::Constant(speed))] if *speed == kithara_sync::MIN_SPEED
         ));
         for receipt in sender.receipts() {
             live.settle(&receipt);
         }
-        assert!((live.config().speed() - kithara_warp::MIN_SPEED).abs() < f32::EPSILON);
+        assert!((live.config().speed() - kithara_sync::MIN_SPEED).abs() < f32::EPSILON);
     }
 
     #[kithara::test]
@@ -288,12 +290,12 @@ mod tests {
             result.expect("a finite sub-floor speed is admitted at MIN_SPEED");
             assert!(matches!(
                 execute(&mut inbox, 0).as_slice(),
-                [LaneCommand::SetSpeed(SpeedCurve::Constant(speed))] if *speed == kithara_warp::MIN_SPEED
+                [LaneCommand::SetSpeed(SpeedCurve::Constant(speed))] if *speed == kithara_sync::MIN_SPEED
             ));
             for receipt in sender.receipts() {
                 live.settle(&receipt);
             }
-            assert_eq!(live.config().speed(), kithara_warp::MIN_SPEED);
+            assert_eq!(live.config().speed(), kithara_sync::MIN_SPEED);
         }
     }
 

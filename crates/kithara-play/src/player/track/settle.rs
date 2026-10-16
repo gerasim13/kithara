@@ -5,7 +5,7 @@ use kithara_render::{
     LaneApplied, LaneCommand,
     bridge::{DeckPart, DeckProtocol, DeckRefusal, Returned, SlotMark},
 };
-use kithara_warp::SpeedCurve;
+use kithara_sync::SpeedCurve;
 use tracing::warn;
 
 use super::{

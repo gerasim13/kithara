@@ -3,11 +3,12 @@ use std::num::{NonZeroU64, NonZeroU128};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioChunk, AudioChunkInfo};
 use kithara_stretch::StretchKind;
+use kithara_sync::SpeedCurve;
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
 use super::{WarpRenderer, chunk, renderer, spec};
-use crate::{GridSegment, RegionPlan, SpeedCurve, WarpConfig};
+use crate::{GridSegment, RegionPlan, WarpConfig};
 
 #[kithara::test]
 #[case::resample(StretchKind::Glide)]

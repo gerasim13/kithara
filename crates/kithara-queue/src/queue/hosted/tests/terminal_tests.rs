@@ -116,7 +116,7 @@ impl Track<TestPools> for SnapshotTrack {
         TrackSettings::default()
     }
 
-    fn prepared_speed(&self) -> Option<&kithara_warp::SpeedCurve> {
+    fn prepared_speed(&self) -> Option<&kithara_sync::SpeedCurve> {
         None
     }
 
@@ -163,7 +163,7 @@ impl Track<TestPools> for SnapshotTrack {
     fn cue(
         &mut self,
         _position: Duration,
-        _speed: kithara_warp::SpeedCurve,
+        _speed: kithara_sync::SpeedCurve,
         _out: &mut Outbox<'_, TestPools>,
     ) -> Result<Option<Seq>, PlayError> {
         panic!("terminal-event fixture does not send cue commands")

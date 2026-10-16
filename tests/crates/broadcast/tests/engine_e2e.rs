@@ -249,7 +249,7 @@ async fn the_engine_mix_reaches_an_http_client_as_the_source_tone(broadcast_tone
     .await
     .expect("broadcast drain task completes");
 
-    let decoded = decode_adts_left(on_air.listed_stream().await);
+    let decoded = decode_adts_left(on_air.listed_stream().await).await;
 
     assert_eq!(
         on_air.handle.status().dropped_samples,
@@ -309,7 +309,7 @@ async fn an_intake_gap_breaks_the_served_playlist(broadcast_tone: Vec<f32>) {
     for uri in &after_break {
         stream.extend_from_slice(&on_air.get(&format!("v/0/{uri}")).await);
     }
-    let decoded = decode_adts_left(stream);
+    let decoded = decode_adts_left(stream).await;
 
     assert!(
         decoded.len() >= TAIL_TONE_FRAMES,

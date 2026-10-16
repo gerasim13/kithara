@@ -1,7 +1,8 @@
 use std::num::NonZeroU32;
 
-use kithara_warp::MIN_SPEED;
 use num_traits::ToPrimitive;
+
+use crate::MIN_SPEED;
 /// One speed and its residence time in output seconds.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CorrectionStep {

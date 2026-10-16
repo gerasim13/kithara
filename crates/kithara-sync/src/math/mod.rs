@@ -1,4 +1,5 @@
 mod core;
+mod interval;
 mod plan;
 mod source;
 
@@ -8,7 +9,7 @@ pub use core::{
 };
 
 pub use plan::{CorrectionPlan, CorrectionStep};
-pub use source::SourceGrid;
+pub use source::{SourceGrid, SourceGridError};
 
 #[cfg(test)]
 mod tests;

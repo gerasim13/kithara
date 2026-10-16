@@ -320,7 +320,7 @@ pub fn prepared_seek(spec: AudioSpec, segment: SegmentId, target: Duration) -> P
             commands: vec![crate::LaneCommand::Segment {
                 id: segment,
                 from: target,
-                speed: kithara_warp::SpeedCurve::Constant(1.0),
+                speed: kithara_sync::SpeedCurve::Constant(1.0),
             }],
         },
     )

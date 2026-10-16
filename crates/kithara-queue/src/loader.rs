@@ -304,8 +304,9 @@ mod tests {
     use kithara_platform::time::{Duration, WallInstant, sleep, timeout};
     use kithara_play::{ArtifactSource, PlayWorker, PlayWorkerConfig, mock};
     use kithara_render::{LaneProtocol, LaneStart, Open};
+    use kithara_sync::SpeedCurve;
     use kithara_test_utils::{TestTempDir, kithara, temp_dir};
-    use kithara_warp::{SpeedCurve, StretchKind};
+    use kithara_warp::StretchKind;
 
     use super::*;
     use crate::{

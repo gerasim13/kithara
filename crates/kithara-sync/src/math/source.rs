@@ -1,48 +1,171 @@
 use std::{num::NonZeroU32, ops::RangeInclusive};
 
-use kithara_beat::BeatGridModel;
 use kithara_platform::time::Duration;
 use kithara_signal::{ExponentialApproach, SessionFrame};
-use kithara_warp::{
-    AssetAxis, AssetFrame, Beat, BeatGridId, BeatGridQuery, BeatGridRegion, BeatGridRevision,
-    BeatGridSnapshot, MIN_SPEED, MapPoint, MapPosition, SpeedCurve,
-};
 use num_traits::ToPrimitive;
 
-use crate::TempoTrajectory;
+use super::interval::{self, Interval};
+use crate::{MIN_SPEED, Meter, SpeedCurve, TempoTrajectory, TrackGrid};
+
+/// Native preparation cannot preserve the recording's musical geometry.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum SourceGridError {
+    #[error("a complete source grid requires a known decoded extent")]
+    IncompleteAxis,
+    #[error("a native coordinate is not finite")]
+    Coordinate,
+    #[error("beat {ordinal} lies beyond the decoded asset")]
+    OutsideExtent { ordinal: i64 },
+    #[error("beat ordinal {ordinal} cannot be extended to the stated extent")]
+    Ordinal { ordinal: i64 },
+    #[error("the stated tempo has no representable beat length in frames")]
+    Tempo,
+    #[error("start marker ordinal {ordinal} is not exactly representable")]
+    InexactStartOrdinal { ordinal: i64 },
+    #[error("end marker ordinal {ordinal} is not exactly representable")]
+    InexactEndOrdinal { ordinal: i64 },
+    #[error("interval end position must follow its start")]
+    NonIncreasingPosition,
+    #[error("interval end beat must follow its start")]
+    NonIncreasingBeat,
+    #[error("interval {index} lies beyond the decoded extent")]
+    IntervalOutsideExtent { index: usize },
+    #[error("interval {index} has an unrepresentable tempo")]
+    IntervalTempo { index: usize },
+}
 
 /// Source geometry and the observed span eligible for synchronized admission.
 #[derive(Debug)]
 pub struct SourceGrid {
-    grid: BeatGridSnapshot,
+    intervals: Vec<Interval>,
     rate: NonZeroU32,
     observed: Option<RangeInclusive<Duration>>,
-    metered: bool,
+    meter: Option<Meter>,
+    complete: bool,
+    decoded_frames: Option<u64>,
 }
 
 impl SourceGrid {
-    /// Materializes the served model on its known media axis without extending coverage.
-    #[must_use]
-    pub fn new(model: &BeatGridModel, axis: AssetAxis) -> Option<Self> {
-        let observed = match (model.as_raw().beats.first(), model.as_raw().beats.last()) {
-            (Some(first), Some(last)) => Some(
-                Duration::try_from_secs_f64(first.at).ok()?
-                    ..=Duration::try_from_secs_f64(last.at).ok()?,
-            ),
-            _ => None,
-        };
-        Some(Self {
-            grid: BeatGridSnapshot::model(
-                BeatGridId::allocate().ok()?,
-                BeatGridRevision::first(),
-                model,
-                axis,
-            )
-            .ok()?,
-            rate: axis.sample_rate(),
+    /// Prepares checked geometry on its decoded clock without extending observed admission.
+    ///
+    /// # Errors
+    /// Refuses unrepresentable geometry, beats past decoded EOF, or completeness without EOF.
+    pub fn new(
+        grid: &TrackGrid,
+        rate: NonZeroU32,
+        decoded_frames: Option<u64>,
+        complete: bool,
+    ) -> Result<Self, SourceGridError> {
+        if complete && decoded_frames.is_none() {
+            return Err(SourceGridError::IncompleteAxis);
+        }
+        let intervals = interval::prepare(grid, rate, decoded_frames)?;
+        let observed = grid
+            .beats()
+            .first()
+            .zip(grid.beats().last())
+            .and_then(|(first, last)| {
+                Duration::try_from_secs_f64(first.at)
+                    .ok()
+                    .zip(Duration::try_from_secs_f64(last.at).ok())
+                    .map(|(first, last)| first..=last)
+            });
+        Ok(Self {
+            intervals,
+            rate,
             observed,
-            metered: model.as_raw().meter.is_some(),
+            meter: grid.meter(),
+            complete,
+            decoded_frames,
         })
+    }
+
+    fn by_frame(&self, frame: f64) -> Option<&Interval> {
+        if !frame.is_finite()
+            || frame < 0.0
+            || self
+                .decoded_frames
+                .and_then(|frames| frames.to_f64())
+                .is_some_and(|end| frame > end)
+        {
+            return None;
+        }
+        self.intervals
+            .partition_point(|interval| *interval.frames.start() <= frame)
+            .checked_sub(1)
+            .and_then(|index| self.intervals.get(index))
+            .filter(|interval| interval.frames.contains(&frame))
+    }
+
+    fn by_beat(&self, beat: f64) -> Option<&Interval> {
+        if !beat.is_finite() {
+            return None;
+        }
+        self.intervals
+            .partition_point(|interval| *interval.beats.start() <= beat)
+            .checked_sub(1)
+            .and_then(|index| self.intervals.get(index))
+            .filter(|interval| interval.beats.contains(&beat))
+    }
+
+    delegate::delegate! {
+        to self.by_frame(frame)? {
+            /// Resolves a native decoded frame through the selected affine interval.
+            #[must_use]
+            #[call(beat_at)]
+            pub fn beat_at_frame(&self, frame: f64) -> Option<f64>;
+        }
+        to self.by_beat(beat)? {
+            /// Resolves a musical beat to its native decoded frame.
+            #[must_use]
+            #[call(frame_at)]
+            pub fn frame_at_beat(&self, beat: f64) -> Option<f64>;
+        }
+    }
+
+    /// Returns the exact local interval tempo on the native decoded clock.
+    #[must_use]
+    pub fn bpm_at_frame(&self, frame: f64) -> Option<f64> {
+        self.by_frame(frame)?.bpm(self.rate)
+    }
+
+    /// Returns native-frame and musical bounds, selecting the following interval at a seam.
+    #[must_use]
+    pub fn interval_at_frame(
+        &self,
+        frame: f64,
+    ) -> Option<(RangeInclusive<f64>, RangeInclusive<f64>)> {
+        let interval = self.by_frame(frame)?;
+        Some((interval.frames.clone(), interval.beats.clone()))
+    }
+
+    /// Returns the interval bounds selected by the musical coordinate.
+    #[must_use]
+    pub fn interval_at_beat(
+        &self,
+        beat: f64,
+    ) -> Option<(RangeInclusive<f64>, RangeInclusive<f64>)> {
+        let interval = self.by_beat(beat)?;
+        Some((interval.frames.clone(), interval.beats.clone()))
+    }
+
+    /// Native boundary a missing musical coordinate requires, or asset origin without geometry.
+    #[must_use]
+    pub fn uncovered_frame_at_beat(&self, beat: f64) -> f64 {
+        let upper = self
+            .intervals
+            .partition_point(|interval| *interval.beats.start() <= beat);
+        upper
+            .checked_sub(1)
+            .and_then(|index| self.intervals.get(index))
+            .map_or_else(
+                || {
+                    self.intervals
+                        .first()
+                        .map_or(0.0, |interval| *interval.frames.start())
+                },
+                |previous| *previous.frames.end(),
+            )
     }
 
     pub(super) fn covers(&self, position: Duration) -> bool {
@@ -52,106 +175,64 @@ impl SourceGrid {
     }
 
     pub(super) fn phase_axes(&self, seconds: f64) -> Option<(f64, f64, bool)> {
-        let beat = self.beat_at(seconds)?;
-        if !self.metered {
-            return Some((0.0, 1.0, false));
-        }
-        let point = MapPoint::new(self.grid.stamp(), Beat::new(beat).ok()?);
-        match self.grid.meter_at(point) {
-            BeatGridQuery::Resolved(meter) => Some((
-                i64::from(meter.value().downbeat()).to_f64()?,
-                f64::from(meter.value().beats_per_bar()),
+        self.beat_at(seconds)?;
+        self.meter.map_or(Some((0.0, 1.0, false)), |meter| {
+            Some((
+                meter.origin_beat_ordinal.to_f64()?,
+                f64::from(meter.beats_per_bar.get()),
                 true,
-            )),
-            _ => None,
-        }
-    }
-
-    fn position(&self, seconds: f64) -> Option<MapPoint<MapPosition>> {
-        Some(MapPoint::new(
-            self.grid.stamp(),
-            MapPosition::Asset(AssetFrame::new(seconds * f64::from(self.rate.get())).ok()?),
-        ))
+            ))
+        })
     }
 
     pub(super) fn beat_at(&self, seconds: f64) -> Option<f64> {
-        let BeatGridQuery::Resolved(beat) = self.grid.beat_at(self.position(seconds)?) else {
-            return None;
-        };
-        Some(f64::from(*beat.value().value()))
+        self.beat_at_frame(seconds * f64::from(self.rate.get()))
     }
 
     pub(super) fn media_at(&self, beat: f64) -> Option<f64> {
-        let point = self.point_at(beat)?;
-        let MapPosition::Asset(frame) = point.value() else {
-            return None;
-        };
-        Some(f64::from(*frame) / f64::from(self.rate.get()))
-    }
-
-    fn point_at(&self, beat: f64) -> Option<MapPoint<MapPosition>> {
-        let point = MapPoint::new(self.grid.stamp(), Beat::new(beat).ok()?);
-        let BeatGridQuery::Resolved(position) = self.grid.position_at(point) else {
-            return None;
-        };
-        Some(*position.value())
-    }
-
-    fn slope(&self, position: MapPoint<MapPosition>) -> Option<f64> {
-        let BeatGridQuery::Resolved(tempo) = self.grid.tempo_at(position) else {
-            return None;
-        };
-        Some(60.0 / f64::from(*tempo.value()))
+        Some(self.frame_at_beat(beat)? / f64::from(self.rate.get()))
     }
 
     pub(super) fn slope_at(&self, seconds: f64) -> Option<f64> {
-        self.slope(self.position(seconds)?)
+        Some(60.0 / self.bpm_at_frame(seconds * f64::from(self.rate.get()))?)
     }
 
     pub(super) fn maximum_slope(&self) -> Option<f64> {
-        let mut position = self.position(self.observed.as_ref()?.start().as_secs_f64())?;
+        let mut frame = self.observed.as_ref()?.start().as_secs_f64() * f64::from(self.rate.get());
         let mut maximum: f64 = 0.0;
         loop {
-            maximum = maximum.max(self.slope(position)?);
-            let BeatGridQuery::Resolved(BeatGridRegion::Bounded(region)) =
-                self.grid.region_at(position)
-            else {
-                return None;
-            };
-            let end = MapPoint::new(self.grid.stamp(), region.end());
-            let BeatGridQuery::Resolved(BeatGridRegion::Bounded(next)) = self.grid.region_at(end)
-            else {
+            maximum = maximum.max(60.0 / self.bpm_at_frame(frame)?);
+            let interval = self.by_frame(frame)?;
+            let end = *interval.frames.end();
+            let Some(next) = self.by_frame(end) else {
                 return Some(maximum);
             };
-            if next.end() == region.end() {
+            if *next.frames.end() == end {
                 return Some(maximum);
             }
-            position = end;
+            frame = end;
         }
     }
 
     pub(super) fn nearest_media(&self, beats: [f64; 2], requested: Duration) -> Option<Duration> {
         let mut candidates = [None; 2];
         for (candidate, beat) in candidates.iter_mut().zip(beats) {
-            let point = MapPoint::new(self.grid.stamp(), Beat::new(beat).ok()?);
-            let position = match self.grid.position_at(point) {
-                BeatGridQuery::Resolved(position) => *position.value().value(),
-                BeatGridQuery::OutsideDomain => continue,
-                BeatGridQuery::Uncovered { required }
-                    if required.start() == required.end()
-                        && matches!(self.grid.beat_at(MapPoint::new(self.grid.stamp(), required.start())),
-                            BeatGridQuery::Resolved(start) if beat < f64::from(*start.value().value())) =>
+            if !beat.is_finite() {
+                return None;
+            }
+            let frame = match self.frame_at_beat(beat) {
+                Some(frame) => frame,
+                None if self.complete => continue,
+                None if self
+                    .beat_at_frame(self.uncovered_frame_at_beat(beat))
+                    .is_some_and(|start| beat < start) =>
                 {
                     continue;
                 }
-                _ => return None,
+                None => return None,
             };
-            let MapPosition::Asset(frame) = position else {
-                return None;
-            };
-            *candidate = Some(
-                Duration::try_from_secs_f64(f64::from(frame) / f64::from(self.rate.get())).ok()?,
-            );
+            *candidate =
+                Some(Duration::try_from_secs_f64(frame / f64::from(self.rate.get())).ok()?);
         }
         candidates
             .into_iter()
@@ -160,31 +241,18 @@ impl SourceGrid {
     }
 
     fn interval_at(&self, beat: f64) -> Option<(f64, Option<f64>)> {
-        let mut position = self.point_at(beat)?;
-        let slope = self.slope(position)?;
+        let mut interval = self.by_beat(beat)?;
+        let slope = 60.0 / interval.bpm(self.rate)?;
         loop {
-            let BeatGridQuery::Resolved(BeatGridRegion::Bounded(region)) =
-                self.grid.region_at(position)
-            else {
-                return None;
-            };
-            let end = region.end();
-            let end_position = MapPoint::new(self.grid.stamp(), end);
-            let BeatGridQuery::Resolved(BeatGridRegion::Bounded(next)) =
-                self.grid.region_at(end_position)
-            else {
-                return None;
-            };
-            if next.end() == end {
+            let end = *interval.frames.end();
+            let next = self.by_frame(end)?;
+            if *next.frames.end() == end {
                 return Some((slope, None));
             }
-            if self.slope(end_position)? != slope {
-                let BeatGridQuery::Resolved(end_beat) = self.grid.beat_at(end_position) else {
-                    return None;
-                };
-                return Some((slope, Some(f64::from(*end_beat.value().value()))));
+            if 60.0 / next.bpm(self.rate)? != slope {
+                return Some((slope, Some(self.beat_at_frame(end)?)));
             }
-            position = end_position;
+            interval = next;
         }
     }
 }

@@ -1,4 +1,3 @@
-use kithara_beat::BeatGridState;
 use kithara_signal::SessionFrame;
 use kithara_test_utils::kithara;
 
@@ -8,7 +7,7 @@ use crate::{Bound, covers, entry, phase_error};
 #[kithara::test]
 fn relocation_entry_keeps_the_exact_cue_and_the_requested_lower_bound() {
     let host = host(120.0, 4);
-    let grid = grid(960_000, 960_000, 24_000, 0, None, BeatGridState::Final);
+    let grid = grid(960_000, 960_000, 24_000, 0, None);
     let cue = position(36_000);
     let lower = SessionFrame::new(96_000);
     let activation =
@@ -27,7 +26,7 @@ fn relocation_entry_keeps_the_exact_cue_and_the_requested_lower_bound() {
 #[kithara::test]
 fn relocation_entry_respects_the_frame_after_the_audible_frontier() {
     let host = host(120.0, 4);
-    let grid = grid(960_000, 960_000, 24_000, 0, None, BeatGridState::Final);
+    let grid = grid(960_000, 960_000, 24_000, 0, None);
     let frontier = SessionFrame::new(96_000);
     let lower = SessionFrame::new(96_001);
     let activation = entry(
@@ -46,14 +45,7 @@ fn relocation_entry_respects_the_frame_after_the_audible_frontier() {
 #[kithara::test]
 fn an_uncovered_relocation_cue_has_no_entry() {
     let host = host(120.0, 4);
-    let grid = grid(
-        480_000,
-        192_000,
-        24_000,
-        0,
-        Some((4, 0)),
-        BeatGridState::Provisional,
-    );
+    let grid = grid(480_000, 192_000, 24_000, 0, Some((4, 0)));
     let cue = position(300_000);
 
     assert!(!covers(&grid, cue));

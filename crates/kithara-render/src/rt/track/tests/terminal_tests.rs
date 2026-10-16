@@ -572,7 +572,7 @@ impl AudioSource for SeekFailureSource {
 #[kithara::test]
 fn failed_seek_commits_its_epoch_for_the_terminal_marker() {
     use kithara_command::{Batch, When};
-    use kithara_warp::SpeedCurve;
+    use kithara_sync::SpeedCurve;
     let selected = SegmentId::FIRST.next().next().next();
     let (mut node, receiver, mut lane) = terminal_node(SeekFailureSource, spec(), false);
     lane.send(

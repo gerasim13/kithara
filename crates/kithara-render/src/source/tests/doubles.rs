@@ -11,14 +11,15 @@ use kithara_platform::sync::{
     atomic::{AtomicU64, Ordering},
 };
 use kithara_signal::AudioChunkInfo;
+use kithara_sync::SpeedCurve;
 use kithara_test_utils::{bufpool::TestPools, kithara};
+use kithara_warp::StretchKind;
 #[cfg(any(
     feature = "stretch-signalsmith",
     feature = "stretch-bungee",
     feature = "stretch-glide"
 ))]
 use kithara_warp::WarpCapabilities;
-use kithara_warp::{SpeedCurve, StretchKind};
 #[cfg(any(
     feature = "stretch-signalsmith",
     feature = "stretch-bungee",

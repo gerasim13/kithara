@@ -2,11 +2,12 @@ use std::num::NonZeroU32;
 
 use kithara_signal::AudioChunk;
 use kithara_stretch::StretchKind;
+use kithara_sync::SpeedCurve;
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
 use super::{WarpRenderer, chunk, spec};
-use crate::{SpeedCurve, Warp, WarpConfig, consts, test_pools::pools};
+use crate::{Warp, WarpConfig, consts, test_pools::pools};
 
 const CUE_BEAT: f64 = 4.0;
 

@@ -81,9 +81,9 @@ all = [
     "workspace-hack",
 ]
 abr = ["dep:kithara-abr"]
-analysis = ["waveform", "dep:kithara-analysis"]
+analysis = ["waveform", "sync", "dep:kithara-analysis"]
 assets = ["storage", "dep:kithara-assets"]
-beat = ["dep:kithara-beat"]
+beat = ["sync", "dep:kithara-beat"]
 audio = ["dep:kithara-audio"]
 # Live HLS packaging: take a PCM feed on air as an HLS origin. Off by default.
 broadcast = ["output", "dep:kithara-broadcast"]
@@ -110,7 +110,8 @@ storage = ["dep:kithara-storage"]
 stream = ["dep:kithara-stream"]
 stretch = ["dep:kithara-stretch"]
 ui = ["dep:kithara-ui"]
-warp = ["dep:kithara-warp"]
+sync = ["dep:kithara-sync"]
+warp = ["sync", "dep:kithara-warp"]
 waveform = ["dep:kithara-waveform"]
 worker = ["dep:kithara-worker"]
 workspace-hack = ["dep:kithara-workspace-hack"]
@@ -427,6 +428,7 @@ kithara-signal = { workspace = true, optional = true }
 kithara-storage = { workspace = true, optional = true }
 kithara-stream = { workspace = true, optional = true, default-features = false }
 kithara-stretch = { workspace = true, optional = true, default-features = false }
+kithara-sync = { workspace = true, optional = true }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true, optional = true }
 kithara-ui = { workspace = true, optional = true, default-features = false }

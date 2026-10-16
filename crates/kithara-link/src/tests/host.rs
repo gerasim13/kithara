@@ -3,8 +3,8 @@ use kithara_host::{HostCommand, HostOwner, HostSettingsChange, HostSettled, api:
 use kithara_play::{PlayError, TrackCommand, TrackReceipt};
 use kithara_render::bridge::{DeckProtocol, Slot};
 use kithara_signal::SessionFrame;
+use kithara_sync::SpeedCurve;
 use kithara_test_utils::kithara;
-use kithara_warp::SpeedCurve;
 
 use super::{
     fixtures::{Command, deck as new_deck, grid, loaded, position, sounding, trajectory},
