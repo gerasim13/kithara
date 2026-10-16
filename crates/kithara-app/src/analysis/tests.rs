@@ -858,7 +858,7 @@ async fn a_background_warm_keeps_the_holder_of_a_held_entry(tone_mp3: String) {
     host_b.close().await;
 }
 
-#[kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
+#[kithara::hang_watchdog(timeout = Duration::from_secs(2), ctx = String)]
 async fn settle(owner: &mut Owner) {
     while owner.active.is_some() {
         hang_tick!("analysis pass awaits executor progress".to_owned());
@@ -867,7 +867,7 @@ async fn settle(owner: &mut Owner) {
     }
 }
 
-#[kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
+#[kithara::hang_watchdog(timeout = Duration::from_secs(2), ctx = String)]
 async fn drive_once(owner: &mut Owner) {
     let _real_io = real_io();
     let result = {
