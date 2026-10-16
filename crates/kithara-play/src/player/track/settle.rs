@@ -2,7 +2,7 @@ use std::num::NonZeroU32;
 
 use kithara_command::{Batch, Outcome, Rejection, Seq, When};
 use kithara_render::{
-    LaneCommand,
+    LaneApplied, LaneCommand,
     bridge::{DeckPart, DeckProtocol, DeckRefusal, Returned, SlotMark},
 };
 use kithara_warp::SpeedCurve;
@@ -326,11 +326,36 @@ impl<S> PlayerImpl<S> {
         }
         Ok(())
     }
+}
+
+impl<S> PlayerImpl<S> {
+    fn accept_ready(&mut self, seq: Seq, data: &LaneApplied) {
+        self.engine_latency = data.engine_latency;
+        if let Some(ready) = data.ready
+            && !matches!(self.status, TrackStatus::Failed { .. })
+        {
+            self.ready = Some(ready);
+            if ready == self.segment
+                && let Some(basis) = data.source_basis
+            {
+                self.source_basis = Some(basis);
+                kithara_test_macros::probe_event!(
+                    lane_source_ready,
+                    item = u64::from(self.item),
+                    segment = ready.get(),
+                    lane_seq = seq.get(),
+                    source_revision = basis.source_revision,
+                    source_first_frame = basis.frame_offset
+                );
+            }
+        }
+    }
+
     pub(super) fn settle_lane(&mut self) {
-        let Some(lane) = self.lane.as_mut() else {
+        if self.lane.is_none() {
             return;
-        };
-        for receipt in lane.receipts() {
+        }
+        while let Some(receipt) = self.lane.as_mut().and_then(|lane| lane.receipts().next()) {
             self.settings.settle(&receipt);
             let segment = receipt
                 .batch()
@@ -384,17 +409,7 @@ impl<S> PlayerImpl<S> {
                     self.speed_answers
                         .push_back((receipt.seq(), Ok((*at, session))));
                 }
-                self.engine_latency = data.engine_latency;
-                if let Some(ready) = data.ready
-                    && !matches!(self.status, TrackStatus::Failed { .. })
-                {
-                    self.ready = Some(ready);
-                    if ready == self.segment
-                        && let Some(basis) = data.source_basis
-                    {
-                        self.source_basis = Some(basis);
-                    }
-                }
+                self.accept_ready(receipt.seq(), data);
             } else if let Outcome::Rejected(reason) = receipt.outcome() {
                 let mut speed = false;
                 for operation in operations {

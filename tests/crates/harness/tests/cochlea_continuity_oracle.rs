@@ -69,23 +69,22 @@ async fn render_tempo_control(
             player
                 .select(id, kithara::queue::Transition::None)
                 .expect("select tempo control");
-            if live_rate {
-                player
-                    .set_default_rate((played_bpm / 120.0).as_())
-                    .expect("live playback rate");
-            }
             player.play();
             id
         })
         .await;
-    if !live_rate {
+    harness
+        .render_until_current(
+            id,
+            BLOCK_FRAMES,
+            WallInstant::now() + Duration::from_secs(5),
+        )
+        .await;
+    if live_rate {
         harness
-            .render_until_current(
-                id,
-                BLOCK_FRAMES,
-                WallInstant::now() + Duration::from_secs(5),
-            )
-            .await;
+            .with_queue(move |player| player.set_default_rate((played_bpm / 120.0).as_()))
+            .await
+            .expect("live playback rate");
     }
     hang_reset!();
     let capture_frames = sample_rate_frames * 6;

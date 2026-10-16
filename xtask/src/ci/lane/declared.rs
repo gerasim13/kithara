@@ -586,8 +586,6 @@ mod tests {
 
     #[cfg(unix)]
     fn nextest_fixture() -> (tempfile::TempDir, Process, CiPins, PathBuf) {
-        use std::os::unix::fs::PermissionsExt;
-
         let directory = tempfile::tempdir().expect("isolated nextest lane");
         let root = directory.path();
         let pins = fixture().pins;
@@ -607,21 +605,21 @@ mod tests {
         let installed = inherited
             .resolve_program("cargo-nextest")
             .expect("installed nextest");
-        std::fs::copy(installed, &executable).expect("seed cache with real pinned nextest");
+        let status = std::process::Command::new("cp")
+            .arg(installed)
+            .arg(&executable)
+            .status()
+            .expect("copy real pinned nextest in a child");
+        assert!(status.success(), "seed cache with real pinned nextest");
         let obsolete = root.join("obsolete/bin");
         std::fs::create_dir_all(&obsolete).expect("obsolete PATH directory");
         let shadow = obsolete.join("cargo-nextest");
-        std::fs::write(
-            &shadow,
-            "#!/bin/sh\nprintf '%s\\n' 'cargo-nextest 0.9.140'\n",
-        )
-        .expect("write obsolete shadow");
-        std::fs::set_permissions(&shadow, std::fs::Permissions::from_mode(0o755))
-            .expect("make shadow executable");
+        let obsolete_script = "#!/bin/sh\nprintf '%s\\n' 'cargo-nextest 0.9.140'\n";
+        crate::testing::install_script(&shadow, obsolete_script);
         let stale = cargo_home.join("bin/cargo-nextest");
         std::fs::create_dir_all(stale.parent().expect("Cargo-home binary directory"))
             .expect("create stale Cargo-home tools");
-        std::fs::copy(&shadow, &stale).expect("seed stale Cargo-home nextest");
+        crate::testing::install_script(&stale, obsolete_script);
         let path = env::join_paths(
             std::iter::once(obsolete).chain(env::split_paths(&env::var_os("PATH").expect("PATH"))),
         )
@@ -727,8 +725,8 @@ mod tests {
     #[test]
     fn a_lane_rejects_a_corrupt_pinned_cache_before_running_steps() {
         let (directory, process, pins, executable) = nextest_fixture();
-        let corrupt = b"#!/bin/sh\nprintf '%s\\n' 'cargo-nextest 0.9.140'\n";
-        std::fs::write(&executable, corrupt).expect("corrupt pinned cache");
+        let corrupt = "#!/bin/sh\nprintf '%s\\n' 'cargo-nextest 0.9.140'\n";
+        crate::testing::install_script(&executable, corrupt);
         let marker = directory.path().join("step-ran");
         let lane = CiLaneConfig {
             label: "corrupt cache fixture".to_owned(),
@@ -753,14 +751,14 @@ mod tests {
         assert!(!marker.exists(), "no lane step runs with a corrupt cache");
         assert_eq!(
             std::fs::read(executable).expect("unchanged corrupt artifact"),
-            corrupt
+            corrupt.as_bytes()
         );
     }
 
     #[cfg(unix)]
     #[test]
     fn nextest_install_uses_process_scratch_and_releases_build_and_lock() {
-        use std::{fs, os::unix::fs::PermissionsExt};
+        use std::fs;
 
         use kithara_devtools::lock::FileLock;
 
@@ -779,7 +777,7 @@ mod tests {
         let observed = root.join("install-build.txt");
         let observed_cwd = root.join("install-cwd.txt");
         let installer = root.join("cargo-installer");
-        fs::write(
+        crate::testing::install_script(
             &installer,
             r#"#!/bin/sh
 set -eu
@@ -804,10 +802,7 @@ test "$1" = install
     cp "$INSTALL_SOURCE" "$install_root/bin/cargo-nextest"
     exit 0
 "#,
-        )
-        .expect("installation boundary");
-        fs::set_permissions(&installer, fs::Permissions::from_mode(0o755))
-            .expect("executable installer");
+        );
         let cargo_home = root.join("cargo-home");
         let process = Process::new(
             root,

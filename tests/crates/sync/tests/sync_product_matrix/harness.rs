@@ -888,8 +888,12 @@ impl ProductHarness {
             channels: wrong_source.channels,
             sample_rate: wrong_source.sample_rate,
         };
-        let failures = kithara::platform::tokio::task::spawn_blocking(move || {
-            decoded.physical_failures(&pcm, &marks, case.sample_rate, &grid, &wrong_source, jump)
+        let consumed = super::consumed::Capture::for_track(u64::from(item), case.sample_rate);
+        let failures = kithara::platform::tokio::task::spawn_blocking(move || match consumed {
+            Ok(consumed) => {
+                decoded.physical_failures(&pcm, &marks, &consumed, &grid, &wrong_source, jump)
+            }
+            Err(error) => vec![error],
         })
         .await
         .expect("physical PCM reference analysis must join");

@@ -7,7 +7,7 @@ use kithara_events::EventBus;
 use kithara_net::{Headers, NetError};
 use kithara_platform::{
     CancelGroup, CancelScope, CancelToken,
-    sync::{Arc, RwLock},
+    sync::Arc,
     time::Instant,
     tokio::sync::{mpsc, oneshot},
 };
@@ -133,11 +133,8 @@ pub(super) struct PeerInner {
     /// Keeps the downloader, and with it the download loop, alive for this
     /// peer's lifetime.
     downloader: Downloader,
-    /// Shared with the Registry's `PeerEntry`. Writing through
-    /// [`PeerHandle::with_bus`] immediately makes the new bus visible
-    /// to both the handle's own imperative path and the Registry's
-    /// proactive `poll_next` path.
-    bus: Arc<RwLock<Option<EventBus>>>,
+    /// Initial event destination for imperative and proactive fetches.
+    bus: Option<EventBus>,
     /// Canonical lifetime owner for this peer's fetches and ABR retries.
     cancel: CancelScope,
     cmd_tx: mpsc::Sender<InternalCmd>,
@@ -209,10 +206,10 @@ impl PeerHandle {
         .await
     }
 
-    /// Currently attached bus, if any.
+    /// Event destination supplied at registration, if any.
     #[must_use]
     pub fn bus(&self) -> Option<EventBus> {
-        self.inner.bus.read().clone()
+        self.inner.bus.clone()
     }
 
     /// Peer-level cancellation token.
@@ -282,17 +279,5 @@ impl PeerHandle {
     #[must_use]
     pub fn peer_id(&self) -> AbrPeerId {
         self.inner.abr.peer_id()
-    }
-
-    /// Attach an event bus so the Downloader can publish per-peer
-    /// [`DownloaderEvent`](crate::DownloaderEvent)s and the ABR
-    /// controller can publish [`AbrEvent`](kithara_abr::AbrEvent)s to
-    /// it. Returns `self` so the call chains naturally after
-    /// [`Downloader::register`](super::Downloader::register).
-    #[must_use]
-    pub fn with_bus(self, bus: EventBus) -> Self {
-        *self.inner.bus.write() = Some(bus.clone());
-        let _ = self.inner.abr.clone().with_bus(bus);
-        self
     }
 }

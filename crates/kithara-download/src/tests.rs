@@ -144,7 +144,7 @@ async fn downloader_loop_drives_interval_gated_abr_tick_without_fetch_work() {
     });
     let bus = EventBus::default();
     let mut events = bus.subscribe();
-    let handle = downloader.register(peer.clone()).with_bus(bus);
+    let handle = downloader.register(peer.clone(), Some(bus));
 
     peer.arm_interval_on_tick.store(true, Ordering::Release);
     handle.abr().reevaluate();
@@ -180,14 +180,15 @@ async fn cancelled_abr_deadline_does_not_stop_the_downloader_loop() {
     let first_state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     let first_bus = EventBus::default();
     let mut first_events = first_bus.subscribe();
-    let first_handle = downloader
-        .register(Arc::new(ScheduledAbrPeer {
+    let first_handle = downloader.register(
+        Arc::new(ScheduledAbrPeer {
             cancel: CancelToken::never(),
             state: first_state,
             wake: Arc::new(Notify::default()),
             arm_interval_on_tick: AtomicBool::new(false),
-        }))
-        .with_bus(first_bus);
+        }),
+        Some(first_bus),
+    );
     let second_state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     let second_wake = Arc::new(Notify::default());
 
@@ -209,12 +210,15 @@ async fn cancelled_abr_deadline_does_not_stop_the_downloader_loop() {
     drop(first_handle);
     time::sleep(INTERVAL.saturating_mul(2)).await;
 
-    let second_handle = downloader.register(Arc::new(ScheduledAbrPeer {
-        cancel: CancelToken::never(),
-        state: Arc::clone(&second_state),
-        wake: Arc::clone(&second_wake),
-        arm_interval_on_tick: AtomicBool::new(false),
-    }));
+    let second_handle = downloader.register(
+        Arc::new(ScheduledAbrPeer {
+            cancel: CancelToken::never(),
+            state: Arc::clone(&second_state),
+            wake: Arc::clone(&second_wake),
+            arm_interval_on_tick: AtomicBool::new(false),
+        }),
+        None,
+    );
 
     second_handle.abr().reevaluate();
     second_wake.notified().await;
@@ -238,14 +242,15 @@ async fn cancelled_abr_deadline_rearms_the_next_live_peer() {
     let first_state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     let first_bus = EventBus::default();
     let mut first_events = first_bus.subscribe();
-    let first_handle = downloader
-        .register(Arc::new(ScheduledAbrPeer {
+    let first_handle = downloader.register(
+        Arc::new(ScheduledAbrPeer {
             cancel: CancelToken::never(),
             state: Arc::clone(&first_state),
             wake: Arc::new(Notify::default()),
             arm_interval_on_tick: AtomicBool::new(false),
-        }))
-        .with_bus(first_bus);
+        }),
+        Some(first_bus),
+    );
 
     first_handle.abr().reevaluate();
     loop {
@@ -268,14 +273,15 @@ async fn cancelled_abr_deadline_rearms_the_next_live_peer() {
     let second_wake = Arc::new(Notify::default());
     let second_bus = EventBus::default();
     let mut second_events = second_bus.subscribe();
-    let second_handle = downloader
-        .register(Arc::new(ScheduledAbrPeer {
+    let second_handle = downloader.register(
+        Arc::new(ScheduledAbrPeer {
             cancel: CancelToken::never(),
             state: Arc::clone(&second_state),
             wake: Arc::clone(&second_wake),
             arm_interval_on_tick: AtomicBool::new(false),
-        }))
-        .with_bus(second_bus);
+        }),
+        Some(second_bus),
+    );
     second_handle.abr().reevaluate();
     loop {
         let envelope = second_events
@@ -416,7 +422,7 @@ async fn downloader_shutdown_cancels_queued_commands() {
         max_concurrent: 0,
         ..test_config()
     });
-    let _handle = dl.register(peer.clone());
+    let _handle = dl.register(peer.clone(), None);
 
     peer.yielded.notified().await;
     cancel.cancel();
@@ -453,7 +459,7 @@ async fn dropping_the_last_handle_shuts_a_parentless_downloader_down() {
         max_concurrent: 0,
         ..test_config()
     });
-    let handle = dl.register(peer.clone());
+    let handle = dl.register(peer.clone(), None);
     peer.yielded.notified().await;
 
     drop(handle);
@@ -490,7 +496,7 @@ async fn streaming_without_writer_still_completes() {
         yielded: Notify::default(),
     });
     let dl = Downloader::new(test_config());
-    let handle = dl.register(peer);
+    let handle = dl.register(peer, None);
 
     gate.wait().await;
 
@@ -523,9 +529,12 @@ async fn server_delay_is_part_of_streamed_request_duration() {
     let server = TestHttpServer::new(app).await;
     let gate = CompletionGate::new(1);
     let gate_cb = Arc::clone(&gate);
+    let completed = Arc::new(Mutex::new(None));
+    let completed_cb = Arc::clone(&completed);
     let cmd = FetchCmd::get(server.url("/data"))
         .writer(Box::new(|_chunk: &[u8]| Ok(())))
-        .on_complete(Box::new(move |_bytes, _headers, _error| {
+        .on_complete(Box::new(move |bytes, _headers, error| {
+            *completed_cb.lock() = Some((bytes, error.cloned()));
             gate_cb.complete();
         }))
         .build();
@@ -537,21 +546,48 @@ async fn server_delay_is_part_of_streamed_request_duration() {
     let bus = EventBus::new(16);
     let mut events = bus.subscribe();
     let dl = Downloader::new(test_config());
-    let handle = dl.register(peer).with_bus(bus);
+    let handle = dl.register(peer, Some(bus));
 
     gate.wait().await;
-    let (bytes, duration) = std::iter::from_fn(|| events.try_recv().ok())
-        .find_map(|envelope| match envelope.event {
-            TestEvent::Downloader(DownloaderEvent::RequestCompleted {
-                bytes_transferred,
-                duration,
-                ..
-            }) => Some((bytes_transferred, duration)),
+    let (transferred, error) = completed
+        .lock()
+        .take()
+        .expect("request completion callback");
+    assert_eq!(transferred, 20_000);
+    assert!(error.is_none(), "streaming request failed: {error:?}");
+    let lifecycle: Vec<_> = std::iter::from_fn(|| events.try_recv().ok())
+        .filter_map(|envelope| match envelope.event {
+            TestEvent::Downloader(
+                event @ (DownloaderEvent::RequestEnqueued { .. }
+                | DownloaderEvent::RequestStarted { .. }
+                | DownloaderEvent::RequestCompleted { .. }),
+            ) => Some(event),
             _ => None,
         })
-        .expect("streaming fetch completion event");
-    assert_eq!(bytes, 20_000);
-    assert!(duration >= DELAY, "server delay missing: {duration:?}");
+        .collect();
+    let [
+        DownloaderEvent::RequestEnqueued {
+            request_id: enqueued,
+            ..
+        },
+        DownloaderEvent::RequestStarted {
+            request_id: started,
+            ..
+        },
+        DownloaderEvent::RequestCompleted {
+            request_id: finished,
+            bytes_transferred,
+            duration,
+            ..
+        },
+    ] = lifecycle.as_slice()
+    else {
+        panic!("first request must publish its complete lifecycle: {lifecycle:?}");
+    };
+    assert_eq!(enqueued, started);
+    assert_eq!(started, finished);
+    assert_eq!(*bytes_transferred, transferred);
+    assert!(*duration >= DELAY, "server delay missing: {duration:?}");
     drop(handle);
 }
 
@@ -582,7 +618,7 @@ async fn streamed_request_duration_uses_wall_time() {
     let bus = EventBus::new(16);
     let mut events = bus.subscribe();
     let dl = Downloader::new(test_config());
-    let handle = dl.register(peer).with_bus(bus);
+    let handle = dl.register(peer, Some(bus));
 
     gate.wait().await;
     let (bytes, duration) = std::iter::from_fn(|| events.try_recv().ok())
@@ -646,7 +682,7 @@ async fn completed_request_duration_excludes_real_time_spent_before_it() {
     let bus = EventBus::new(EVENT_BUS_CAPACITY);
     let mut events = bus.subscribe();
     let dl = Downloader::new(test_config());
-    let handle = dl.register(peer).with_bus(bus);
+    let handle = dl.register(peer, Some(bus));
 
     gate.wait().await;
 
@@ -668,8 +704,8 @@ async fn completed_request_duration_excludes_real_time_spent_before_it() {
 #[kithara::test(tokio)]
 async fn peer_handle_cancel_scoped_to_peer() {
     let dl = Downloader::new(test_config());
-    let peer_a = dl.register(Arc::new(MockPeer::new()));
-    let peer_b = dl.register(Arc::new(MockPeer::new()));
+    let peer_a = dl.register(Arc::new(MockPeer::new()), None);
+    let peer_b = dl.register(Arc::new(MockPeer::new()), None);
 
     peer_a.cancel().cancel();
 
@@ -682,7 +718,7 @@ async fn peer_handle_cancel_scoped_to_peer() {
 #[kithara::test(tokio)]
 async fn peer_handle_cancel_fires_on_last_clone_drop() {
     let dl = Downloader::new(test_config());
-    let handle = dl.register(Arc::new(MockPeer::new()));
+    let handle = dl.register(Arc::new(MockPeer::new()), None);
     let cancel = handle.cancel();
     let clone = handle.clone();
 
@@ -708,7 +744,7 @@ async fn peer_handle_execute_returns_error_on_unreachable() {
         .inactivity_timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
         .build();
     let dl = Downloader::new(DownloaderConfig::for_client(test_client_with_options(net)).build());
-    let handle = dl.register(Arc::new(MockPeer::new()));
+    let handle = dl.register(Arc::new(MockPeer::new()), None);
 
     let h2 = handle.clone();
     let task = tokio_spawn(async move {
@@ -742,7 +778,7 @@ async fn peer_handle_downloader_cancel_cascades() {
             .cancel(cancel.clone())
             .build(),
     );
-    let handle = dl.register(Arc::new(MockPeer::new()));
+    let handle = dl.register(Arc::new(MockPeer::new()), None);
 
     cancel.cancel();
     assert!(
@@ -767,7 +803,7 @@ async fn max_concurrent_limits_inflight_connections() {
         ..test_config()
     };
     let dl = Downloader::new(config);
-    let handle = dl.register(Arc::new(MockPeer::new()));
+    let handle = dl.register(Arc::new(MockPeer::new()), None);
 
     let cmds: Vec<FetchCmd> = (0..TOTAL_REQUESTS)
         .map(|_| FetchCmd::head(url.clone()).build())
@@ -808,7 +844,7 @@ async fn many_downloaders_global_peak_stays_bounded() {
                 ..test_config()
             };
             let dl = Downloader::new(config);
-            let handle = dl.register(Arc::new(MockPeer::new()));
+            let handle = dl.register(Arc::new(MockPeer::new()), None);
             let cmds: Vec<FetchCmd> = (0..REQUESTS_PER_DL)
                 .map(|_| FetchCmd::head(url.clone()).build())
                 .collect();
@@ -907,12 +943,15 @@ async fn poll_next_respects_max_concurrent() {
     };
     let dl = Downloader::new(config);
     let gate = CompletionGate::new(TOTAL_CMDS);
-    let handle = dl.register(Arc::new(FloodPeer {
-        url,
-        cancel: CancelToken::never(),
-        remaining: Mutex::new(TOTAL_CMDS),
-        gate: Arc::clone(&gate),
-    }));
+    let handle = dl.register(
+        Arc::new(FloodPeer {
+            url,
+            cancel: CancelToken::never(),
+            remaining: Mutex::new(TOTAL_CMDS),
+            gate: Arc::clone(&gate),
+        }),
+        None,
+    );
 
     // Wait on the completion event: every HEAD has replied. The server
     // decrements its in-flight count before sending each reply, so once the
@@ -999,7 +1038,7 @@ async fn shared_client_keepalive_bounds_connection_count() {
                     ..test_config()
                 };
                 let dl = Downloader::new(config);
-                let handle = dl.register(Arc::new(MockPeer::new()));
+                let handle = dl.register(Arc::new(MockPeer::new()), None);
                 let cmds: Vec<FetchCmd> = (0..REQUESTS_PER_DL)
                     .map(|_| FetchCmd::head(url.clone()).build())
                     .collect();
@@ -1091,9 +1130,7 @@ async fn soft_timeout_publishes_load_slow_on_peer_bus() {
     let scoped = root.scoped();
     let mut rx = scoped.subscribe();
 
-    let handle = dl
-        .register(Arc::new(MockPeer::new()))
-        .with_bus(scoped.clone());
+    let handle = dl.register(Arc::new(MockPeer::new()), Some(scoped.clone()));
     let _ = handle.execute(FetchCmd::get(url).build()).await;
 
     let seen_slow = load_slow_seen(&mut rx).await;
@@ -1119,7 +1156,7 @@ async fn soft_timeout_covers_response_body() {
     let scoped = root.scoped();
     let mut rx = scoped.subscribe();
 
-    let handle = dl.register(Arc::new(MockPeer::new())).with_bus(scoped);
+    let handle = dl.register(Arc::new(MockPeer::new()), Some(scoped));
     let response = handle
         .execute(FetchCmd::get(url).build())
         .await
@@ -1328,7 +1365,7 @@ async fn retry_and_first_byte_publish_on_peer_bus() {
     let root = EventBus::new(64);
     let scoped = root.scoped();
     let mut rx = scoped.subscribe();
-    let handle = dl.register(Arc::new(MockPeer::new())).with_bus(scoped);
+    let handle = dl.register(Arc::new(MockPeer::new()), Some(scoped));
 
     let response = handle
         .execute(FetchCmd::get(url).build())
@@ -1386,7 +1423,7 @@ async fn stalled_body_publishes_resume_and_exhaustion_events() {
     let root = EventBus::new(64);
     let scoped = root.scoped();
     let mut rx = scoped.subscribe();
-    let handle = dl.register(Arc::new(MockPeer::new())).with_bus(scoped);
+    let handle = dl.register(Arc::new(MockPeer::new()), Some(scoped));
 
     // dl `execute` drives the whole fetch through the peer writer, so a
     // permanently stalled body surfaces as the terminal establish error.
@@ -1470,8 +1507,8 @@ async fn active_peer_completes_before_preload_under_contention() {
         &completion_log,
     ));
 
-    let active_handle = dl.register(active.clone());
-    let preload_handle = dl.register(preload.clone());
+    let active_handle = dl.register(active.clone(), None);
+    let preload_handle = dl.register(preload.clone(), None);
 
     // Park until every cmd from both peers has completed (event-driven; the
     // harness timeout(30s) is the real-time backstop).
@@ -1564,7 +1601,7 @@ async fn run_one_batch(dl: &Downloader, gate: &Arc<CompletionGate>, batch: Vec<F
         cmds: Mutex::new(Some(batch)),
         yielded: Notify::default(),
     });
-    let handle = dl.register(peer as Arc<dyn Peer>);
+    let handle = dl.register(peer as Arc<dyn Peer>, None);
     gate.wait().await;
     drop(handle);
 }
@@ -1706,8 +1743,8 @@ async fn both_peers_idle_no_priority_ordering_asserted() {
         &completion_log,
     ));
 
-    let handle_a = dl.register(a);
-    let handle_b = dl.register(b);
+    let handle_a = dl.register(a, None);
+    let handle_b = dl.register(b, None);
 
     // Park until every cmd from both idle peers has drained (event-driven;
     // the harness timeout(30s) is the real-time backstop).
@@ -1756,7 +1793,7 @@ async fn peer_handle_execute_respects_either_peer_priority() {
         cancel: CancelToken::never(),
         active: Arc::clone(&active),
     });
-    let handle = dl.register(peer);
+    let handle = dl.register(peer, None);
 
     let server = spawn_slow_server(1).await;
     let url = server.url("/data");

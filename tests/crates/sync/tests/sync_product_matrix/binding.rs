@@ -233,6 +233,54 @@ fn applied_curves(
     Ok(curves)
 }
 
+fn owned_cue(
+    observation: &LinkObservation,
+    item: kithara::events::TrackId,
+    segment: SegmentId,
+) -> Result<&LinkCue, String> {
+    observation
+        .cue_curves
+        .iter()
+        .rev()
+        .find(|cue| {
+            cue.item == item
+                && observation.ready_cues.contains(&(item, cue.seq))
+                && cue
+                    .consumed
+                    .and_then(|slot| slot.mark)
+                    .is_some_and(|first| first.lane.segment == segment)
+        })
+        .ok_or_else(|| "On has neither an Applied law nor an owned consumed cue Segment".to_owned())
+}
+
+fn configured_speed_failures(
+    observation: &LinkObservation,
+    item: kithara::events::TrackId,
+    segment: SegmentId,
+    curves: &[AppliedCurve<'_>],
+    configured_speed: f32,
+) -> Result<Vec<String>, String> {
+    let (seq, curve) = if let Some(applied) = curves.last() {
+        (applied.command.seq, &applied.command.curve)
+    } else {
+        let cue = owned_cue(observation, item, segment)?;
+        (cue.seq, &cue.curve)
+    };
+    let target = analytic_parts(curve)?
+        .last()
+        .ok_or_else(|| "confirmed curve is empty".to_owned())?
+        .1
+        .target();
+    Ok(if target.to_f32() == Some(configured_speed) {
+        Vec::new()
+    } else {
+        vec![format!(
+            "confirmed {:?} final target {} differs from published speed {}",
+            seq, target, configured_speed
+        )]
+    })
+}
+
 fn analytic_parts(curve: &SpeedCurve) -> Result<Vec<(u64, ExponentialApproach)>, String> {
     let constant = |speed: f32| {
         ExponentialApproach::new(f64::from(speed), f64::from(speed), 0.0)
@@ -1443,7 +1491,6 @@ impl AppliedCurve<'_> {
             .track
             .mark
             .ok_or_else(|| "published source has no consumed mark".to_owned())?;
-        let configured_speed = snapshot.track.speed;
         let claimed_end = match snapshot.sync {
             kithara::link::SyncStatus::On => None,
             kithara::link::SyncStatus::Correcting { remaining } => Some(mark.session + remaining),
@@ -1458,18 +1505,6 @@ impl AppliedCurve<'_> {
             .consumed
             .ok_or_else(|| "Applied law has no consumed source anchor".to_owned())?;
         let mut failures = Vec::new();
-        let parts = analytic_parts(&command.curve)?;
-        let target = parts
-            .last()
-            .ok_or_else(|| "Applied curve is empty".to_owned())?
-            .1
-            .target();
-        if target.to_f32() != Some(configured_speed) {
-            failures.push(format!(
-                "Applied {:?} final target {} differs from published speed {}",
-                command.seq, target, configured_speed
-            ));
-        }
         if let Some(end) = claimed_end {
             if !correcting {
                 return Err(
@@ -1815,7 +1850,13 @@ pub(super) fn executed_law(
         mark.session,
         rate,
     )?;
-    let mut failures = Vec::new();
+    let mut failures = configured_speed_failures(
+        observation,
+        item,
+        mark.lane.segment,
+        &curves,
+        configured_speed,
+    )?;
     let host_history_input = published_host_history(observation, host_grids, rate, &mut failures)?;
     consumed_cue_law(model, observation, &curves, snapshot, rate, &mut failures)?;
     let source_grid = declared_source_grid(model, rate)?;
@@ -1863,32 +1904,7 @@ pub(super) fn executed_law(
         if claimed_end.is_some() {
             return Err("Correcting has no actually applied source law".to_owned());
         }
-        let cue = observation
-            .cue_curves
-            .iter()
-            .rev()
-            .find(|cue| {
-                cue.item == item
-                    && observation.ready_cues.contains(&(item, cue.seq))
-                    && cue
-                        .consumed
-                        .and_then(|slot| slot.mark)
-                        .is_some_and(|first| first.lane.segment == mark.lane.segment)
-            })
-            .ok_or_else(|| {
-                "On has neither an Applied law nor an owned consumed cue Segment".to_owned()
-            })?;
-        let target = analytic_parts(&cue.curve)?
-            .last()
-            .ok_or_else(|| "cue curve is empty".to_owned())?
-            .1
-            .target();
-        if target.to_f32() != Some(configured_speed) {
-            failures.push(format!(
-                "cue {:?} target {} differs from published speed {}",
-                cue.seq, target, configured_speed
-            ));
-        }
+        let cue = owned_cue(observation, item, mark.lane.segment)?;
         curve_rate(&cue.curve, mark.lane.frame)?
     };
     Ok((
@@ -3029,4 +3045,149 @@ fn direct_grid_anchor_rejects_a_whole_bar_and_a_wrong_selected_cue() {
     );
     observation.sync_requests[0].seq = Some(wrong_seq);
     assert!(relocation_count(&observation, item, &shifted, PLAY_SYNC_SEEK, None).is_err());
+}
+
+#[kithara::test(native)]
+fn confirmed_targets_and_consumed_laws_have_separate_clocks() {
+    let item = kithara::events::TrackId::allocate();
+    let rate = NonZeroU32::new(48_000).expect("sample rate");
+    let (posts, _mailbox) = kithara_command::mailbox::<(), ()>();
+    let cue_seq = posts.post(()).expect("cue identity").seq();
+    let old_seq = posts.post(()).expect("old law identity").seq();
+    let future_seq = posts.post(()).expect("future law identity").seq();
+    let start = SlotSnapshot {
+        state: SlotState::Playing,
+        mark: Some(SlotMark {
+            session: SessionFrame::new(96),
+            lane: LaneFrame {
+                segment: SegmentId::FIRST,
+                frame: 96,
+            },
+            position: Duration::from_millis(2),
+        }),
+        source: Some(AudioChunkInfo {
+            spec: AudioSpec::new(2, rate),
+            segment: SegmentId::FIRST,
+            media_origin: Some(Duration::ZERO),
+            ..AudioChunkInfo::default()
+        }),
+        ..SlotSnapshot::default()
+    };
+    let mark = start.mark.expect("consumed mark");
+    let before = kithara::play::TrackSnapshot {
+        item,
+        slot: None,
+        status: kithara::play::TrackStatus::Playing {
+            since: SessionFrame::new(0),
+        },
+        speed: 1.0,
+        position: Duration::from_millis(2),
+        duration: Some(Duration::from_secs(1)),
+        abr: None,
+        metadata: kithara::decode::TrackMetadata::default(),
+        mark: Some(mark),
+        engine_latency: kithara::signal::FrameCount::new(0),
+        ring_depth: kithara::signal::FrameCount::new(0),
+        lane_room: 2,
+        pending_lane: false,
+        attached: true,
+        declick: kithara::signal::FrameCount::new(0),
+    };
+    let command = |seq, at, speed| LinkSpeed {
+        item,
+        seq,
+        curve: SpeedCurve::Constant(speed),
+        at: When::At(SessionFrame::new(at)),
+        landing: None,
+        before: before.clone(),
+        consumed: Some(start),
+        sample_rate: Some(rate),
+        input: None,
+        host_input: None,
+        planned: None,
+    };
+    let mut observation = LinkObservation {
+        cue_curves: vec![LinkCue {
+            item,
+            seq: cue_seq,
+            position: Duration::ZERO,
+            curve: SpeedCurve::Constant(1.0),
+            before: before.clone(),
+            consumed: Some(start),
+            host_input: None,
+            native: Some(LinkReceiptOrigin::Lane),
+            segment: Some(SegmentId::FIRST),
+        }],
+        ready_cues: vec![(item, cue_seq)],
+        speeds: vec![command(future_seq, 192, 1.25)],
+        ..LinkObservation::default()
+    };
+    let check_config = |observation: &LinkObservation, speed| {
+        let curves = applied_curves(observation, item, mark, rate).expect("actual outcomes");
+        configured_speed_failures(observation, item, mark.lane.segment, &curves, speed)
+            .expect("confirmed target")
+    };
+    assert!(check_config(&observation, 1.0).is_empty());
+    assert_eq!(check_config(&observation, 1.25).len(), 1);
+    observation.placement_receipts.push((
+        item,
+        LinkReceiptOrigin::Lane,
+        kithara::play::Settled::Rejected {
+            seq: future_seq,
+            reason: kithara_command::Rejection::Stale,
+        },
+    ));
+    assert!(check_config(&observation, 1.0).is_empty());
+    assert_eq!(check_config(&observation, 1.25).len(), 1);
+    observation.placement_receipts[0].2 = kithara::play::Settled::Applied {
+        seq: future_seq,
+        at: SessionFrame::new(192),
+    };
+    assert!(check_config(&observation, 1.25).is_empty());
+    assert_eq!(check_config(&observation, 1.0).len(), 1);
+    let mut old = command(old_seq, 48, 1.0);
+    let old_mark = SlotMark {
+        session: SessionFrame::new(24),
+        lane: LaneFrame {
+            segment: SegmentId::FIRST,
+            frame: 24,
+        },
+        position: Duration::from_micros(500),
+    };
+    old.before.mark = Some(old_mark);
+    old.before.position = old_mark.position;
+    old.consumed = Some(SlotSnapshot {
+        mark: Some(old_mark),
+        ..start
+    });
+    observation.speeds.insert(0, old);
+    observation.placement_receipts.push((
+        item,
+        LinkReceiptOrigin::Lane,
+        kithara::play::Settled::Applied {
+            seq: old_seq,
+            at: SessionFrame::new(48),
+        },
+    ));
+    let curves = applied_curves(&observation, item, mark, rate).expect("both actual laws");
+    assert_eq!(curves.len(), 2);
+    assert!(check_config(&observation, 1.25).is_empty());
+    assert_eq!(check_config(&observation, 1.1).len(), 1);
+    for (end, advanced) in [(191, 95.0), (192, 96.0), (193, 97.25)] {
+        let projected = projected_media(
+            &observation,
+            item,
+            &curves,
+            start,
+            SessionFrame::new(end),
+            rate,
+        )
+        .expect("consumed projection crosses actual F");
+        let expected = Duration::try_from_secs_f64(0.002 + advanced / 48_000.0)
+            .expect("expected media position");
+        assert_eq!(projected, expected, "consumed frame {end}");
+    }
+    observation.ready_cues.clear();
+    observation.speeds.clear();
+    assert!(configured_speed_failures(&observation, item, mark.lane.segment, &[], 1.0).is_err());
 }

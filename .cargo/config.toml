@@ -63,6 +63,11 @@ rustflags = [
 # this workspace, including the temporary consumer used by semver-checks.
 [patch.crates-io]
 firewheel-web-audio = { git = "https://github.com/gerasim13/bevy_seedling", rev = "18bbf168523175735d7ece9fb293cdf3de66b273" }
+# Preserve source read progress and publish only complete RIFF packets.
+symphonia-core = { git = "https://github.com/gerasim13/Symphonia", rev = "20f73d3ec231d7812d032505f574d26b41c8a894" }
+symphonia-format-riff = { git = "https://github.com/gerasim13/Symphonia", rev = "20f73d3ec231d7812d032505f574d26b41c8a894" }
+symphonia-metadata = { git = "https://github.com/gerasim13/Symphonia", rev = "20f73d3ec231d7812d032505f574d26b41c8a894" }
+
 # The renderer's bump-allocated buffers are hand-picked constants sized for
 # vello's own 8K test scenes, so a window pays 165 MiB on its first frame
 # whatever it draws. The fork derives them from the frame instead and makes

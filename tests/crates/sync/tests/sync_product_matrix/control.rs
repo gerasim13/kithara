@@ -16,12 +16,14 @@ const CONTROL_CAPTURE_FRAMES: usize = 128;
 
 pub(super) struct ControlCapture {
     pub(super) pcm: Vec<f32>,
+    item: u64,
     rate: f32,
     points: Vec<ControlPoint>,
     requested: Position,
     landing: Result<(SessionFrame, u64), String>,
     source: Result<(), String>,
     decoded: Arc<Mutex<DecodedCapture>>,
+    _trace: kithara_test_utils::test::usdt::Scope,
 }
 
 #[derive(Clone)]
@@ -146,14 +148,23 @@ impl ControlCapture {
                 Ok((SessionFrame::new(session), playing_slot(point)?))
             })
             .collect::<Result<Vec<_>, String>>()?;
-        self.decoded.lock().check_physical(
-            &self.pcm,
-            &marks,
-            first.deck.sample_rate,
-            grid,
-            wrong_source,
-            None,
-        )
+        let consumed = super::consumed::Capture::for_track(self.item, first.deck.sample_rate)?;
+        let decoded = self.decoded.lock();
+        decoded.check_physical(&self.pcm, &marks, &consumed, grid, wrong_source, None)?;
+        let mut shifted = self.pcm.clone();
+        shifted.rotate_left(usize::from(CHANNELS));
+        if decoded
+            .check_physical(&shifted, &marks, &consumed, grid, wrong_source, None)
+            .is_ok()
+        {
+            return Err(
+                "physical oracle accepted shifted PCM with unchanged native metadata".to_owned(),
+            );
+        }
+        drop(decoded);
+        let retained = i64::from(marks.first().expect("capture has an initial mark").0)
+            ..i64::from(marks.last().expect("capture has a final mark").0);
+        super::consumed::check_trace_negatives(self.item, first.deck.sample_rate, retained)
     }
 
     fn source_law(
@@ -579,7 +590,7 @@ fn mapped_sample(
         .ok_or_else(|| "control source sample is not finite f32".to_owned())
 }
 
-fn compare_pcm(actual: &[f32], expected: &[f32]) -> Result<(), String> {
+pub(super) fn compare_pcm(actual: &[f32], expected: &[f32]) -> Result<(), String> {
     if actual.len() != expected.len() || actual.is_empty() {
         return Err(format!(
             "control PCM domain differs: actual {}, expected {}",
@@ -723,6 +734,7 @@ pub(super) async fn capture(
     target_bpm: f64,
     start: f64,
 ) -> ControlCapture {
+    let trace = kithara_test_utils::test::usdt::scope();
     let observation = Arc::new(Mutex::new(LinkObservation::default()));
     let session = HostConfig::offline(pools())
         .settings(
@@ -900,7 +912,9 @@ pub(super) async fn capture(
         }
     })();
     ControlCapture {
+        _trace: trace,
         pcm: captured,
+        item: u64::from(id),
         rate,
         points,
         requested,
@@ -957,7 +971,7 @@ impl kithara::audio::AudioObserver for DecodedObserver {
 impl DecodedCapture {
     fn sample(
         &self,
-        info: kithara::signal::AudioChunkInfo,
+        info: super::consumed::SourceIdentity,
         frame: i64,
         channel: usize,
     ) -> Result<f32, String> {
@@ -1016,12 +1030,12 @@ impl DecodedCapture {
         &self,
         pcm: &[f32],
         marks: &[(SessionFrame, kithara_render::bridge::SlotSnapshot)],
-        sample_rate: u32,
+        consumed: &super::consumed::Capture,
         grid: &BeatGridModel,
         wrong_source: &Audio,
         jump: Option<(SessionFrame, SessionFrame)>,
     ) -> Vec<String> {
-        self.check_physical(pcm, marks, sample_rate, grid, wrong_source, jump)
+        self.check_physical(pcm, marks, consumed, grid, wrong_source, jump)
             .err()
             .into_iter()
             .collect()
@@ -1029,9 +1043,10 @@ impl DecodedCapture {
 
     pub(super) fn physical_basis(
         &self,
-        info: kithara::signal::AudioChunkInfo,
+        info: impl Into<super::consumed::SourceIdentity>,
         position: (u128, std::num::NonZeroU128),
     ) -> Result<(u64, kithara::signal::SourceSpan), String> {
+        let info = info.into();
         for (decoded, _) in self.chunks.values().filter(|(decoded, _)| {
             decoded.source_revision == info.source_revision
                 && decoded.spec == info.spec
@@ -1064,9 +1079,9 @@ impl DecodedCapture {
         Err("decoder observer has no physical basis for the raw source position".to_owned())
     }
 
-    fn sample_at(
+    pub(super) fn sample_at(
         &self,
-        info: kithara::signal::AudioChunkInfo,
+        info: super::consumed::SourceIdentity,
         position: (u128, std::num::NonZeroU128),
         speed: f64,
         channel: usize,
@@ -1116,13 +1131,18 @@ impl DecodedCapture {
         &self,
         pcm: &[f32],
         marks: &[(SessionFrame, kithara_render::bridge::SlotSnapshot)],
-        sample_rate: u32,
+        consumed: &super::consumed::Capture,
         grid: &BeatGridModel,
         wrong_source: &Audio,
         jump: Option<(SessionFrame, SessionFrame)>,
     ) -> Result<(), String> {
         let (capture_start, frames) = self.physical_capture_clock(pcm, marks)?;
-        let intervals = physical_intervals(marks, sample_rate)?;
+        let sample_rate = consumed.sample_rate;
+        check_physical_marks(marks, sample_rate)?;
+        let capture_end = i64::from(capture_start)
+            .checked_add(i64::try_from(frames).map_err(|error| error.to_string())?)
+            .ok_or_else(|| "physical capture endpoint overflows".to_owned())?;
+        let intervals = consumed.covered(i64::from(capture_start)..capture_end)?;
         if let Some((_, landing)) = jump
             && !intervals.contains_key(&i64::from(landing))
         {
@@ -1130,10 +1150,11 @@ impl DecodedCapture {
         }
         let physical_bases = intervals
             .iter()
-            .map(|(&start, &info)| {
-                let position = info
-                    .source_span
-                    .and_then(|span| span.source_ratio_at(0))
+            .map(|(&start, interval)| {
+                let info = interval.identity;
+                let position = interval
+                    .source
+                    .source_ratio_at(0)
                     .ok_or_else(|| "physical source interval has no raw origin".to_owned())?;
                 let (origin, basis) = self.physical_basis(info, position)?;
                 let first = basis
@@ -1153,13 +1174,12 @@ impl DecodedCapture {
             if !gain.is_finite() || !(0.0..=1.0).contains(&gain) {
                 return Err("physical capture has an invalid commanded lane gain".to_owned());
             }
-            let (&start, &info) = intervals.range(..=session).next_back().ok_or_else(|| {
+            let (&start, interval) = intervals.range(..=session).next_back().ok_or_else(|| {
                 format!("physical capture has an uncovered output frame {session}")
             })?;
             let offset = u64::try_from(session - start).map_err(|error| error.to_string())?;
-            let span = info
-                .source_span
-                .ok_or_else(|| "physical source span disappeared".to_owned())?;
+            let info = interval.identity;
+            let span = interval.source;
             if offset >= span.output_frames() {
                 let boundary = marks.partition_point(|(at, _)| i64::from(*at) <= session);
                 let nearby = &marks[boundary.saturating_sub(2)..(boundary + 2).min(marks.len())];
@@ -1170,14 +1190,12 @@ impl DecodedCapture {
                      interval={info:?}; nearby_points={nearby:?}"
                 ));
             }
-            let (numerator, denominator) = span
+            let raw_position = span
                 .source_ratio_at(offset)
                 .ok_or_else(|| "physical capture has an unmapped source frame".to_owned())?;
-            let (next, next_denominator) = span
+            let raw_next = span
                 .source_ratio_at(offset + 1)
                 .ok_or_else(|| "physical capture has an unmapped source endpoint".to_owned())?;
-            let raw_position = (numerator, denominator);
-            let raw_next = (next, next_denominator);
             let &(origin, basis, first) = physical_bases
                 .get(&start)
                 .ok_or_else(|| "physical source interval lost its decoded basis".to_owned())?;
@@ -1273,7 +1291,7 @@ impl DecodedCapture {
 
 fn physical_supplied_beats(
     supplied_beats: &mut Vec<(i64, usize)>,
-    info: kithara::signal::AudioChunkInfo,
+    info: super::consumed::SourceIdentity,
     raw_position: (u128, std::num::NonZeroU128),
     raw_next: (u128, std::num::NonZeroU128),
     grid: &BeatGridModel,
@@ -1327,7 +1345,7 @@ fn physical_jump_gain(frame: SessionFrame, jump: Option<(SessionFrame, SessionFr
     }
 }
 
-fn physical_source_speed(
+pub(super) fn physical_source_speed(
     (numerator, denominator): (u128, std::num::NonZeroU128),
     (next, next_denominator): (u128, std::num::NonZeroU128),
 ) -> Result<f64, String> {
@@ -1353,11 +1371,10 @@ fn physical_source_speed(
     Ok(speed)
 }
 
-fn physical_intervals(
+fn check_physical_marks(
     marks: &[(SessionFrame, kithara_render::bridge::SlotSnapshot)],
     sample_rate: u32,
-) -> Result<std::collections::BTreeMap<i64, kithara::signal::AudioChunkInfo>, String> {
-    let mut intervals = std::collections::BTreeMap::new();
+) -> Result<(), String> {
     for &(observed_at, slot) in marks {
         if slot.state != kithara_render::bridge::SlotState::Playing {
             continue;
@@ -1390,19 +1407,8 @@ fn physical_intervals(
                     .to_owned(),
             );
         }
-        let origin = i64::from(mark.session)
-            .checked_sub(i64::try_from(mark.lane.frame).map_err(|error| error.to_string())?)
-            .and_then(|origin| origin.checked_add(i64::try_from(info.lane_frame).ok()?))
-            .ok_or_else(|| {
-                "physical source interval cannot be represented on the session axis".to_owned()
-            })?;
-        if let Some(previous) = intervals.insert(origin, info)
-            && previous != info
-        {
-            return Err("physical capture has conflicting source intervals".to_owned());
-        }
     }
-    Ok(intervals)
+    Ok(())
 }
 
 struct PhysicalReference {

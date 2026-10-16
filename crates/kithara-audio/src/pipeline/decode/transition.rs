@@ -2,7 +2,7 @@ use std::num::NonZeroU32;
 
 use kithara_decode::{DecodeResult, DecoderChunkOutcome, DecoderSeekOutcome};
 use kithara_platform::time::Duration;
-use kithara_signal::{AudioSpec, FrameCount};
+use kithara_signal::{AudioSpec, FrameCount, rescale_frame_ceil};
 use kithara_stream::{PendingReason, VariantTransition};
 use kithara_test_utils::kithara;
 use tracing::{debug, trace};
@@ -81,7 +81,7 @@ pub(super) enum PromotionReadiness {
     Ready(PromotionSpan),
     NeedIncoming,
     AwaitingOutgoingFrontier,
-    AwaitingOutgoingPcm,
+    AwaitingOutgoingPcm { first: u64 },
 }
 
 impl PromotionReadiness {
@@ -95,7 +95,9 @@ impl PromotionReadiness {
     ) -> IncomingPrime {
         match self {
             Self::Ready(_) => IncomingPrime::Ready,
-            Self::AwaitingOutgoingFrontier | Self::AwaitingOutgoingPcm => IncomingPrime::Pending,
+            Self::AwaitingOutgoingFrontier | Self::AwaitingOutgoingPcm { .. } => {
+                IncomingPrime::Pending
+            }
             Self::NeedIncoming => {
                 if staged_ahead(
                     generation,
@@ -367,7 +369,7 @@ impl super::core::ActiveDecode {
         match readiness {
             PromotionReadiness::Ready(_) => return IncomingPrime::Ready,
             PromotionReadiness::AwaitingOutgoingFrontier
-            | PromotionReadiness::AwaitingOutgoingPcm => return IncomingPrime::Pending,
+            | PromotionReadiness::AwaitingOutgoingPcm { .. } => return IncomingPrime::Pending,
             PromotionReadiness::NeedIncoming => {}
         }
         let incoming_readiness = |generation: &DecoderGeneration| {
@@ -410,7 +412,7 @@ impl super::core::ActiveDecode {
                     match readiness {
                         PromotionReadiness::Ready(_) => IncomingPrime::Ready,
                         PromotionReadiness::AwaitingOutgoingFrontier
-                        | PromotionReadiness::AwaitingOutgoingPcm => IncomingPrime::Pending,
+                        | PromotionReadiness::AwaitingOutgoingPcm { .. } => IncomingPrime::Pending,
                         PromotionReadiness::NeedIncoming => {
                             outcome = IncomingPrime::Advanced;
                             continue;
@@ -573,19 +575,19 @@ pub(super) fn promotion_readiness(
         }
         return PromotionReadiness::NeedIncoming;
     }
-    let Some(incoming_next) = frame_at_or_after(incoming_rate, incoming_origin, outgoing_next)
-    else {
-        return PromotionReadiness::NeedIncoming;
-    };
-    if incoming_first > incoming_next || incoming_next >= incoming_end {
-        return PromotionReadiness::NeedIncoming;
-    }
-    let join = if incoming_spec == active_spec {
-        let Some(outgoing_first) = frame_at_or_after(active_rate, outgoing_origin, outgoing_next)
+    let (incoming_next, join) = if incoming_spec == active_spec {
+        let Some(outgoing_first) = NonZeroU32::new(outgoing_rate)
+            .and_then(|rate| rescale_frame_ceil(outgoing_frame, rate, active_spec.sample_rate))
         else {
             return PromotionReadiness::NeedIncoming;
         };
-        match same_spec_join(
+        let Some(incoming_next) = outgoing_first
+            .checked_sub(outgoing_origin)
+            .and_then(|frame| frame.checked_add(incoming_origin))
+        else {
+            return PromotionReadiness::NeedIncoming;
+        };
+        let join = match same_spec_join(
             active,
             blender,
             generation,
@@ -596,10 +598,18 @@ pub(super) fn promotion_readiness(
         ) {
             Ok(join) => join,
             Err(verdict) => return verdict,
-        }
+        };
+        (incoming_next, join)
     } else {
-        PromotionJoin::HardCut
+        let Some(incoming_next) = frame_at_or_after(incoming_rate, incoming_origin, outgoing_next)
+        else {
+            return PromotionReadiness::NeedIncoming;
+        };
+        (incoming_next, PromotionJoin::HardCut)
     };
+    if incoming_first > incoming_next || incoming_next >= incoming_end {
+        return PromotionReadiness::NeedIncoming;
+    }
     let span = PromotionSpan {
         join,
         overlap: OverlapSpan {
@@ -712,7 +722,9 @@ fn same_spec_join(
     if active.is_finished() {
         Err(PromotionReadiness::NeedIncoming)
     } else {
-        Err(PromotionReadiness::AwaitingOutgoingPcm)
+        Err(PromotionReadiness::AwaitingOutgoingPcm {
+            first: outgoing_first,
+        })
     }
 }
 
