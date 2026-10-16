@@ -580,36 +580,38 @@ impl<S> DeckRig<S> {
         &mut self,
         opened: Result<Loaded<OpenedTrack>, LoadRefusal>,
     ) -> Option<Receipt<DispatcherProtocol<ResourceLoad<S>>>> {
-        self.opens.drain();
-        loop {
-            hang_tick!();
-            let due = self.opens.next_due((), 1)?;
-            let seq = due.seq();
-            let loading = match due.commands() {
-                [DispatcherCommand::Load(_)] => true,
-                [DispatcherCommand::SetPriority(_, _)] => false,
-                _ => panic!("expected one fixture load or priority change"),
-            };
-            if !loading {
-                due.apply(Dispatched::Prioritized);
-                let receipt = self.dispatcher.receipts().next().expect("priority answer");
+        kithara_platform::flash::participate_sync(|| {
+            self.opens.drain();
+            loop {
+                hang_tick!();
+                let due = self.opens.next_due((), 1)?;
+                let seq = due.seq();
+                let loading = match due.commands() {
+                    [DispatcherCommand::Load(_)] => true,
+                    [DispatcherCommand::SetPriority(_, _)] => false,
+                    _ => panic!("expected one fixture load or priority change"),
+                };
+                if !loading {
+                    due.apply(Dispatched::Prioritized);
+                    let receipt = self.dispatcher.receipts().next().expect("priority answer");
+                    assert_eq!(receipt.seq(), seq, "the dispatcher answers its own command");
+                    hang_reset!();
+                    continue;
+                }
+                match opened {
+                    Ok(opened) => due.apply(Dispatched::Loaded(opened)),
+                    Err(refusal) => due.refuse(refusal),
+                }
+                let receipt = self
+                    .dispatcher
+                    .receipts()
+                    .next()
+                    .expect("dispatcher answer");
                 assert_eq!(receipt.seq(), seq, "the dispatcher answers its own command");
                 hang_reset!();
-                continue;
+                return Some(receipt);
             }
-            match opened {
-                Ok(opened) => due.apply(Dispatched::Loaded(opened)),
-                Err(refusal) => due.refuse(refusal),
-            }
-            let receipt = self
-                .dispatcher
-                .receipts()
-                .next()
-                .expect("dispatcher answer");
-            assert_eq!(receipt.seq(), seq, "the dispatcher answers its own command");
-            hang_reset!();
-            return Some(receipt);
-        }
+        })
     }
 
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
