@@ -586,6 +586,8 @@ mod tests {
 
     #[cfg(unix)]
     fn nextest_fixture() -> (tempfile::TempDir, Process, CiPins, PathBuf) {
+        use crate::testing::{install_copy, install_script};
+
         let directory = tempfile::tempdir().expect("isolated nextest lane");
         let root = directory.path();
         let pins = fixture().pins;
@@ -605,21 +607,18 @@ mod tests {
         let installed = inherited
             .resolve_program("cargo-nextest")
             .expect("installed nextest");
-        let status = std::process::Command::new("cp")
-            .arg(installed)
-            .arg(&executable)
-            .status()
-            .expect("copy real pinned nextest in a child");
-        assert!(status.success(), "seed cache with real pinned nextest");
+        install_copy(&installed, &executable);
         let obsolete = root.join("obsolete/bin");
         std::fs::create_dir_all(&obsolete).expect("obsolete PATH directory");
         let shadow = obsolete.join("cargo-nextest");
-        let obsolete_script = "#!/bin/sh\nprintf '%s\\n' 'cargo-nextest 0.9.140'\n";
-        crate::testing::install_script(&shadow, obsolete_script);
+        install_script(
+            &shadow,
+            "#!/bin/sh\nprintf '%s\\n' 'cargo-nextest 0.9.140'\n",
+        );
         let stale = cargo_home.join("bin/cargo-nextest");
         std::fs::create_dir_all(stale.parent().expect("Cargo-home binary directory"))
             .expect("create stale Cargo-home tools");
-        crate::testing::install_script(&stale, obsolete_script);
+        install_copy(&shadow, &stale);
         let path = env::join_paths(
             std::iter::once(obsolete).chain(env::split_paths(&env::var_os("PATH").expect("PATH"))),
         )
@@ -762,6 +761,8 @@ mod tests {
 
         use kithara_devtools::lock::FileLock;
 
+        use crate::testing::install_script;
+
         let (directory, inherited, pins, source) = nextest_fixture();
         let root = directory.path();
         let scratch = root.join("scratch");
@@ -777,7 +778,7 @@ mod tests {
         let observed = root.join("install-build.txt");
         let observed_cwd = root.join("install-cwd.txt");
         let installer = root.join("cargo-installer");
-        crate::testing::install_script(
+        install_script(
             &installer,
             r#"#!/bin/sh
 set -eu
