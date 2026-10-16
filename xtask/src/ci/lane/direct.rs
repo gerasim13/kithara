@@ -16,7 +16,8 @@ use crate::{
     ci::{
         build_dir::{BuildDir, LaneTarget, Target},
         config::CiPins,
-        environment::process_var,
+        environment::{ci_in, job_owner, process_var, scratch_root},
+        kache::KacheJob,
         process::Process,
         run::PipelineKind,
     },
@@ -105,17 +106,37 @@ fn run_in(args: &LaneArgs, ctx: &Ctx, var: &dyn Fn(&str) -> Option<OsString>) ->
         },
         var,
     )?;
-    let process = Process::new(&ctx.root, executor_vars(target.cargo_dir(), args.kind));
+    let text = |name: &str| var(name).and_then(|value| value.into_string().ok());
+    let wrapped = var("RUSTC_WRAPPER").is_some_and(|wrapper| !wrapper.is_empty());
+    // The container names the store but not kache's configuration, and its
+    // daemon is the job's to start and to stop. Outside a job both are the
+    // developer's.
+    let kache = if wrapped && ci_in(var) {
+        Some(KacheJob::prepare(
+            scratch_root().join("kache").join(job_owner()?),
+            None,
+            &text,
+        )?)
+    } else {
+        None
+    };
+    let mut vars = executor_vars(target.cargo_dir(), args.kind);
+    if let Some(kache) = &kache {
+        vars.extend(
+            kache
+                .environment(&ctx.config.tools)
+                .map(|(name, value)| (OsString::from(name), value)),
+        );
+    }
+    let process = Process::new(&ctx.root, vars);
     let result = crate::ci::run::journalled(&process, &args.lane, || {
         let result = declared::run(&process, lane, &pins, &ctx.config.tools, args.kind, narrow);
-        if var("RUSTC_WRAPPER").is_some_and(|wrapper| !wrapper.is_empty()) {
-            let on_github =
-                crate::job::github_in(&|name| var(name).and_then(|value| value.into_string().ok()));
-            crate::ci::run::note_compiler_cache(
-                &process,
-                ctx.config.tools.program("sccache"),
-                on_github,
-            );
+        if wrapped {
+            let on_github = crate::job::github_in(&text);
+            crate::ci::run::note_compiler_cache(&process, &ctx.config.tools, on_github);
+        }
+        if let Some(kache) = &kache {
+            kache.stop(&process, &ctx.config.tools);
         }
         result
     });
@@ -921,30 +942,57 @@ cargo.packages = ["tools"]
         );
     }
 
+    /// A recording double for each compiler cache, so a lane's questions to
+    /// them are answered here rather than by the machine's own daemons.
+    #[cfg(unix)]
+    fn cache_doubles(root: &Path) -> (toml::Table, PathBuf) {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let asked = root.join("asked");
+        let mut tools = toml::Table::new();
+        for (name, answer) in [
+            (
+                "sccache",
+                "Cache hits 3\\nCache misses 1\\nCache write errors 0\\n",
+            ),
+            (
+                "kache",
+                r#"{\"local_hits\":3,\"prefetch_hits\":0,\"remote_hits\":0,\"misses\":1}"#,
+            ),
+        ] {
+            let program = root.join(name);
+            fs::write(
+                &program,
+                format!(
+                    "#!/bin/sh\necho \"{name} $@\" >> '{}'\nprintf '{answer}'\n",
+                    asked.display()
+                ),
+            )
+            .expect("write the cache double");
+            fs::set_permissions(&program, fs::Permissions::from_mode(0o755))
+                .expect("make the cache double runnable");
+            tools.insert(
+                name.to_owned(),
+                toml::Table::from_iter([(
+                    "program".to_owned(),
+                    toml::Value::from(program.to_str().expect("a UTF-8 path")),
+                )])
+                .into(),
+            );
+        }
+        (tools, asked)
+    }
+
     /// A job compiling through the cache says what the cache carried for it;
-    /// one that compiles without it has no cache to ask.
+    /// one that compiles without it has no cache to ask. Outside a CI job the
+    /// daemon is the developer's, configured and stopped by nobody but them.
     #[cfg(unix)]
     #[test]
     fn a_lane_that_compiled_through_the_cache_reads_its_counts() {
-        use std::os::unix::fs::PermissionsExt as _;
-
         let temp = tempfile::tempdir().expect("create fixture workspace");
-        let asked = temp.path().join("asked");
-        let sccache = temp.path().join("sccache");
-        fs::write(
-            &sccache,
-            format!(
-                "#!/bin/sh\necho \"$@\" >> '{}'\nprintf 'Cache hits 3\\nCache misses 1\\nCache write errors 0\\n'\n",
-                asked.display()
-            ),
-        )
-        .expect("write the cache double");
-        fs::set_permissions(&sccache, fs::Permissions::from_mode(0o755))
-            .expect("make the cache double runnable");
+        let (tools, asked) = cache_doubles(temp.path());
         let (mut ctx, args) = trivial_lane(temp.path());
-        ctx.config.tools =
-            toml::from_str(&format!("[sccache]\nprogram = \"{}\"\n", sccache.display()))
-                .expect("parse the tools table");
+        ctx.config.tools = tools.try_into().expect("parse the tools table");
 
         run_in(&args, &ctx, &environment(&[])).expect("lane runs without a wrapper");
         assert!(
@@ -952,11 +1000,66 @@ cargo.packages = ["tools"]
             "a lane with no wrapper has no cache to ask"
         );
 
-        run_in(&args, &ctx, &environment(&[("RUSTC_WRAPPER", "sccache")]))
+        run_in(&args, &ctx, &environment(&[("RUSTC_WRAPPER", "kache")]))
             .expect("lane runs through the wrapper");
         assert_eq!(
             fs::read_to_string(&asked).expect("the cache was asked"),
-            "--show-stats\n"
+            "kache stats --json\nsccache --show-stats\n"
+        );
+    }
+
+    /// A GitHub job's container carries the store's credentials but no
+    /// kache configuration: the lane writes the job's own, compiles through
+    /// it, and stops the daemon it started so what it compiled is stored.
+    #[cfg(unix)]
+    #[test]
+    fn a_ci_lane_compiles_through_a_kache_of_its_own() {
+        let temp = tempfile::tempdir().expect("create fixture workspace");
+        let (tools, asked) = cache_doubles(temp.path());
+        let told = temp.path().join("told");
+        let (mut ctx, args) = lane_running(
+            temp.path(),
+            "sh",
+            &format!(
+                r#"args = ["-c", "cat \"$KACHE_CONFIG\" > '{told}' && echo \"wrapper=$RUSTC_WRAPPER\" >> '{told}' && echo \"config=$KACHE_CONFIG\" >> '{told}'"]"#,
+                told = told.display()
+            ),
+        );
+        ctx.config.tools = tools.try_into().expect("parse the tools table");
+
+        run_in(
+            &args,
+            &ctx,
+            &environment(&[
+                ("CI", "true"),
+                ("RUSTC_WRAPPER", "kache"),
+                ("SCCACHE_BUCKET", "kithara-review"),
+                ("SCCACHE_ENDPOINT", "http://kithara-ci-cache:9000"),
+            ]),
+        )
+        .expect("lane runs through its kache");
+
+        let told = fs::read_to_string(&told).expect("the lane step ran");
+        let (config, said) = told
+            .split_once("wrapper=")
+            .expect("the step said its wrapper");
+        let config: toml::Table = toml::from_str(config).expect("kache's configuration parses");
+        assert_eq!(
+            config["cache"]["remote"]["bucket"].as_str(),
+            Some("kithara-trusted")
+        );
+        assert_eq!(config["cache"]["remote_readonly"].as_bool(), Some(true));
+        let (wrapper, path) = said
+            .split_once("\nconfig=")
+            .expect("the step said its config");
+        assert_eq!(wrapper, ctx.config.tools.program("kache"));
+        assert!(
+            !Path::new(path.trim_end()).exists(),
+            "the job's kache directory outlives the job"
+        );
+        assert_eq!(
+            fs::read_to_string(&asked).expect("the cache was asked"),
+            "kache stats --json\nsccache --show-stats\nkache daemon stop\n"
         );
     }
 

@@ -1,41 +1,41 @@
 # android-build / branch
   <require os> macos linux
-  <require tools> cargo java just sccache
+  <require tools> cargo java just sccache kache
   just platform android clippy
   just platform android build
 # android-build / platforms
   <require os> macos linux
-  <require tools> cargo java just sccache
+  <require tools> cargo java just sccache kache
   just platform android clippy
   just platform android build
 # android-build / merge-request
   <require os> macos linux
-  <require tools> cargo java just sccache
+  <require tools> cargo java just sccache kache
   just platform android clippy
   just platform android build
 # android-build / quarantine
   <require os> macos linux
-  <require tools> cargo java just sccache
+  <require tools> cargo java just sccache kache
   just platform android clippy
   just platform android build
 # android-build / main
   <require os> macos linux
-  <require tools> cargo java just sccache
+  <require tools> cargo java just sccache kache
   just platform android clippy
   just platform android build
 # android-build / nightly
   <require os> macos linux
-  <require tools> cargo java just sccache
+  <require tools> cargo java just sccache kache
   just platform android clippy
   just platform android build
 # android-build / weekly
   <require os> macos linux
-  <require tools> cargo java just sccache
+  <require tools> cargo java just sccache kache
   just platform android clippy
   just platform android build
 # android-build / release
   <require os> macos linux
-  <require tools> cargo java just sccache
+  <require tools> cargo java just sccache kache
   just platform android clippy
   just platform android build
 # android-test / branch
@@ -80,55 +80,55 @@
   just platform android test --avd Kithara_CI_API_36
 # apple-ios / branch
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just platform apple ios
     KITHARA_LOCAL_DEV=1
 # apple-ios / platforms
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just platform apple ios
     KITHARA_LOCAL_DEV=1
 # apple-ios / merge-request
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just platform apple ios
     KITHARA_LOCAL_DEV=1
 # apple-ios / quarantine
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just platform apple ios
     KITHARA_LOCAL_DEV=1
 # apple-ios / main
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just platform apple ios
     KITHARA_LOCAL_DEV=1
 # apple-ios / nightly
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just platform apple ios
     KITHARA_LOCAL_DEV=1
 # apple-ios / weekly
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just platform apple ios
     KITHARA_LOCAL_DEV=1
 # apple-ios / release
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just platform apple ios
     KITHARA_LOCAL_DEV=1
 # apple-ios-test / branch
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
+  <require tools> cargo just kache sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   cargo build -p kithara-integration-tests --bin test_server
   <root>/target/debug/test_server
@@ -143,7 +143,7 @@
   xcrun xcresulttool get test-results tests --path <root>/target/xcresult/ios-test.xcresult --format json
 # apple-ios-test / platforms
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
+  <require tools> cargo just kache sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   cargo build -p kithara-integration-tests --bin test_server
   <root>/target/debug/test_server
@@ -158,7 +158,7 @@
   xcrun xcresulttool get test-results tests --path <root>/target/xcresult/ios-test.xcresult --format json
 # apple-ios-test / merge-request
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
+  <require tools> cargo just kache sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   cargo build -p kithara-integration-tests --bin test_server
   <root>/target/debug/test_server
@@ -173,7 +173,7 @@
   xcrun xcresulttool get test-results tests --path <root>/target/xcresult/ios-test.xcresult --format json
 # apple-ios-test / quarantine
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
+  <require tools> cargo just kache sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   cargo build -p kithara-integration-tests --bin test_server
   <root>/target/debug/test_server
@@ -188,7 +188,7 @@
   xcrun xcresulttool get test-results tests --path <root>/target/xcresult/ios-test.xcresult --format json
 # apple-ios-test / main
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
+  <require tools> cargo just kache sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   cargo build -p kithara-integration-tests --bin test_server
   <root>/target/debug/test_server
@@ -203,7 +203,7 @@
   xcrun xcresulttool get test-results tests --path <root>/target/xcresult/ios-test.xcresult --format json
 # apple-ios-test / nightly
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
+  <require tools> cargo just kache sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   cargo build -p kithara-integration-tests --bin test_server
   <root>/target/debug/test_server
@@ -218,7 +218,7 @@
   xcrun xcresulttool get test-results tests --path <root>/target/xcresult/ios-test.xcresult --format json
 # apple-ios-test / weekly
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
+  <require tools> cargo just kache sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   cargo build -p kithara-integration-tests --bin test_server
   <root>/target/debug/test_server
@@ -233,7 +233,7 @@
   xcrun xcresulttool get test-results tests --path <root>/target/xcresult/ios-test.xcresult --format json
 # apple-ios-test / release
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
+  <require tools> cargo just kache sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   cargo build -p kithara-integration-tests --bin test_server
   <root>/target/debug/test_server
@@ -248,89 +248,89 @@
   xcrun xcresulttool get test-results tests --path <root>/target/xcresult/ios-test.xcresult --format json
 # apple-lint / branch
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just lint gate
 # apple-lint / platforms
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just lint full
 # apple-lint / merge-request
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just lint gate
 # apple-lint / quarantine
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just lint gate
 # apple-lint / main
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just lint full
 # apple-lint / nightly
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just lint full
 # apple-lint / weekly
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just lint full
 # apple-lint / release
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just lint full
 # apple-msrv / branch
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just check workspace
     RUSTUP_TOOLCHAIN=1.95.0
 # apple-msrv / platforms
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just check workspace
     RUSTUP_TOOLCHAIN=1.95.0
 # apple-msrv / merge-request
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just check workspace
     RUSTUP_TOOLCHAIN=1.95.0
 # apple-msrv / quarantine
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just check workspace
     RUSTUP_TOOLCHAIN=1.95.0
 # apple-msrv / main
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just check workspace
     RUSTUP_TOOLCHAIN=1.95.0
 # apple-msrv / nightly
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just check workspace
     RUSTUP_TOOLCHAIN=1.95.0
 # apple-msrv / weekly
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just check workspace
     RUSTUP_TOOLCHAIN=1.95.0
 # apple-msrv / release
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just check workspace
     RUSTUP_TOOLCHAIN=1.95.0
@@ -368,175 +368,175 @@
   just test wasm safari all include
 # apple-swift-test / branch
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
+  <require tools> cargo just kache sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   just platform apple xcframework --profile debug
   swift test --disable-xctest --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
     KITHARA_LOCAL_DEV=1
 # apple-swift-test / platforms
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
+  <require tools> cargo just kache sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   just platform apple xcframework --profile debug
   swift test --disable-xctest --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
     KITHARA_LOCAL_DEV=1
 # apple-swift-test / merge-request
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
+  <require tools> cargo just kache sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   just platform apple xcframework --profile debug
   swift test --disable-xctest --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
     KITHARA_LOCAL_DEV=1
 # apple-swift-test / quarantine
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
+  <require tools> cargo just kache sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   just platform apple xcframework --profile debug
   swift test --disable-xctest --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
     KITHARA_LOCAL_DEV=1
 # apple-swift-test / main
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
+  <require tools> cargo just kache sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   just platform apple xcframework --profile debug
   swift test --disable-xctest --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
     KITHARA_LOCAL_DEV=1
 # apple-swift-test / nightly
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
+  <require tools> cargo just kache sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   just platform apple xcframework --profile debug
   swift test --disable-xctest --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
     KITHARA_LOCAL_DEV=1
 # apple-swift-test / weekly
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
+  <require tools> cargo just kache sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   just platform apple xcframework --profile debug
   swift test --disable-xctest --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
     KITHARA_LOCAL_DEV=1
 # apple-swift-test / release
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
+  <require tools> cargo just kache sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   just platform apple xcframework --profile debug
   swift test --disable-xctest --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
     KITHARA_LOCAL_DEV=1
 # apple-test / branch
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --touched --flash=on --no-block=on --profile ci
 # apple-test / platforms
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=on --no-block=on --profile ci
 # apple-test / merge-request
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=on --no-block=on --profile ci
 # apple-test / quarantine
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=on --no-block=on --profile ci
 # apple-test / main
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=on --no-block=on --profile ci
 # apple-test / nightly
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=on --no-block=on --profile ci
 # apple-test / weekly
   refused: weekly pipelines do not run the Apple suite
 # apple-test / release
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=on --no-block=on --profile ci
 # apple-test-flash-off / branch
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
 # apple-test-flash-off / platforms
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
 # apple-test-flash-off / merge-request
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
 # apple-test-flash-off / quarantine
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
 # apple-test-flash-off / main
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
 # apple-test-flash-off / nightly
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
 # apple-test-flash-off / weekly
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
 # apple-test-flash-off / release
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
 # apple-xcframework / branch
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just platform apple xcframework --profile debug
 # apple-xcframework / platforms
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just platform apple xcframework --profile debug
 # apple-xcframework / merge-request
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just platform apple xcframework --profile debug
 # apple-xcframework / quarantine
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just platform apple xcframework --profile debug
 # apple-xcframework / main
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just platform apple xcframework --profile debug
 # apple-xcframework / nightly
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just platform apple xcframework --profile debug
 # apple-xcframework / weekly
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just platform apple xcframework --profile debug
 # apple-xcframework / release
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just platform apple xcframework --profile debug
 # deep-bench / branch
@@ -1269,167 +1269,167 @@
   just lint arch
 # linux-broadcast / branch
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=broadcast
     CARGO_BUILD_JOBS=2
 # linux-broadcast / platforms
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=broadcast
     CARGO_BUILD_JOBS=2
 # linux-broadcast / merge-request
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=broadcast
     CARGO_BUILD_JOBS=2
 # linux-broadcast / quarantine
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=broadcast
     CARGO_BUILD_JOBS=2
 # linux-broadcast / main
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=broadcast
     CARGO_BUILD_JOBS=2
 # linux-broadcast / nightly
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=broadcast
     CARGO_BUILD_JOBS=2
 # linux-broadcast / weekly
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=broadcast
     CARGO_BUILD_JOBS=2
 # linux-broadcast / release
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=broadcast
     CARGO_BUILD_JOBS=2
 # linux-check / branch
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just check workspace
 # linux-check / platforms
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just check workspace
 # linux-check / merge-request
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just check workspace
 # linux-check / quarantine
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just check workspace
 # linux-check / main
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just check workspace
 # linux-check / nightly
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just check workspace
 # linux-check / weekly
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just check workspace
 # linux-check / release
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just check workspace
 # linux-coverage / branch
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test coverage
     CARGO_BUILD_JOBS=2
     COVERAGE_OUTPUT_DIR=coverage
 # linux-coverage / platforms
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test coverage
     CARGO_BUILD_JOBS=2
     COVERAGE_OUTPUT_DIR=coverage
 # linux-coverage / merge-request
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test coverage
     CARGO_BUILD_JOBS=2
     COVERAGE_OUTPUT_DIR=coverage
 # linux-coverage / quarantine
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test coverage
     CARGO_BUILD_JOBS=2
     COVERAGE_OUTPUT_DIR=coverage
 # linux-coverage / main
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test coverage
     CARGO_BUILD_JOBS=2
     COVERAGE_OUTPUT_DIR=coverage
 # linux-coverage / nightly
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test coverage
     CARGO_BUILD_JOBS=2
     COVERAGE_OUTPUT_DIR=coverage
 # linux-coverage / weekly
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test coverage
     CARGO_BUILD_JOBS=2
     COVERAGE_OUTPUT_DIR=coverage
 # linux-coverage / release
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test coverage
     CARGO_BUILD_JOBS=2
     COVERAGE_OUTPUT_DIR=coverage
 # linux-doc / branch
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=doc
     CARGO_BUILD_JOBS=2
 # linux-doc / platforms
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=doc
     CARGO_BUILD_JOBS=2
 # linux-doc / merge-request
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=doc
     CARGO_BUILD_JOBS=2
 # linux-doc / quarantine
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=doc
     CARGO_BUILD_JOBS=2
 # linux-doc / main
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=doc
     CARGO_BUILD_JOBS=2
 # linux-doc / nightly
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=doc
     CARGO_BUILD_JOBS=2
 # linux-doc / weekly
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=doc
     CARGO_BUILD_JOBS=2
 # linux-doc / release
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=doc
     CARGO_BUILD_JOBS=2
 # linux-fixtures / branch
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=fixtures
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
@@ -1438,7 +1438,7 @@
     RTEN_NUM_THREADS=1
 # linux-fixtures / platforms
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=fixtures
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
@@ -1447,7 +1447,7 @@
     RTEN_NUM_THREADS=1
 # linux-fixtures / merge-request
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=fixtures
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
@@ -1456,7 +1456,7 @@
     RTEN_NUM_THREADS=1
 # linux-fixtures / quarantine
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=fixtures
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
@@ -1465,7 +1465,7 @@
     RTEN_NUM_THREADS=1
 # linux-fixtures / main
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=fixtures
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
@@ -1474,7 +1474,7 @@
     RTEN_NUM_THREADS=1
 # linux-fixtures / nightly
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=fixtures
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
@@ -1483,7 +1483,7 @@
     RTEN_NUM_THREADS=1
 # linux-fixtures / weekly
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=fixtures
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
@@ -1492,7 +1492,7 @@
     RTEN_NUM_THREADS=1
 # linux-fixtures / release
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=fixtures
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
@@ -1501,82 +1501,82 @@
     RTEN_NUM_THREADS=1
 # linux-harness / branch
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=harness
     CARGO_BUILD_JOBS=2
 # linux-harness / platforms
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=harness
     CARGO_BUILD_JOBS=2
 # linux-harness / merge-request
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=harness
     CARGO_BUILD_JOBS=2
 # linux-harness / quarantine
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=harness
     CARGO_BUILD_JOBS=2
 # linux-harness / main
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=harness
     CARGO_BUILD_JOBS=2
 # linux-harness / nightly
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=harness
     CARGO_BUILD_JOBS=2
 # linux-harness / weekly
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=harness
     CARGO_BUILD_JOBS=2
 # linux-harness / release
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=harness
     CARGO_BUILD_JOBS=2
 # linux-integration-regressions / branch
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=integration-regressions
     CARGO_BUILD_JOBS=2
 # linux-integration-regressions / platforms
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=integration-regressions
     CARGO_BUILD_JOBS=2
 # linux-integration-regressions / merge-request
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=integration-regressions
     CARGO_BUILD_JOBS=2
 # linux-integration-regressions / quarantine
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=integration-regressions
     CARGO_BUILD_JOBS=2
 # linux-integration-regressions / main
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=integration-regressions
     CARGO_BUILD_JOBS=2
 # linux-integration-regressions / nightly
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=integration-regressions
     CARGO_BUILD_JOBS=2
 # linux-integration-regressions / weekly
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=integration-regressions
     CARGO_BUILD_JOBS=2
 # linux-integration-regressions / release
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=integration-regressions
     CARGO_BUILD_JOBS=2
 # linux-lint / branch
@@ -1613,42 +1613,42 @@
   just lint full
 # linux-loom / branch
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=loom
     CARGO_BUILD_JOBS=2
 # linux-loom / platforms
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=loom
     CARGO_BUILD_JOBS=2
 # linux-loom / merge-request
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=loom
     CARGO_BUILD_JOBS=2
 # linux-loom / quarantine
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=loom
     CARGO_BUILD_JOBS=2
 # linux-loom / main
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=loom
     CARGO_BUILD_JOBS=2
 # linux-loom / nightly
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=loom
     CARGO_BUILD_JOBS=2
 # linux-loom / weekly
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=loom
     CARGO_BUILD_JOBS=2
 # linux-loom / release
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=loom
     CARGO_BUILD_JOBS=2
 # linux-msrv / branch
@@ -1693,42 +1693,42 @@
     RUSTUP_TOOLCHAIN=1.95.0
 # linux-net-host / branch
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=net-host
     CARGO_BUILD_JOBS=2
 # linux-net-host / platforms
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=net-host
     CARGO_BUILD_JOBS=2
 # linux-net-host / merge-request
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=net-host
     CARGO_BUILD_JOBS=2
 # linux-net-host / quarantine
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=net-host
     CARGO_BUILD_JOBS=2
 # linux-net-host / main
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=net-host
     CARGO_BUILD_JOBS=2
 # linux-net-host / nightly
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=net-host
     CARGO_BUILD_JOBS=2
 # linux-net-host / weekly
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=net-host
     CARGO_BUILD_JOBS=2
 # linux-net-host / release
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=net-host
     CARGO_BUILD_JOBS=2
 # linux-perf-memory / branch
@@ -1797,95 +1797,95 @@
   gitleaks git . --config .gitleaks.toml --log-opts=--all --no-banner --redact=100 --verbose --report-format json --report-path gitleaks-report.json
 # linux-selenium-firefox / branch
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=selenium-firefox
     CARGO_BUILD_JOBS=2
 # linux-selenium-firefox / platforms
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=selenium-firefox
     CARGO_BUILD_JOBS=2
 # linux-selenium-firefox / merge-request
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=selenium-firefox
     CARGO_BUILD_JOBS=2
 # linux-selenium-firefox / quarantine
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=selenium-firefox
     CARGO_BUILD_JOBS=2
 # linux-selenium-firefox / main
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=selenium-firefox
     CARGO_BUILD_JOBS=2
 # linux-selenium-firefox / nightly
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=selenium-firefox
     CARGO_BUILD_JOBS=2
 # linux-selenium-firefox / weekly
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=selenium-firefox
     CARGO_BUILD_JOBS=2
 # linux-selenium-firefox / release
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=selenium-firefox
     CARGO_BUILD_JOBS=2
 # linux-support / branch
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --touched --lane=tooling --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
 # linux-support / platforms
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --touched --lane=tooling --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
 # linux-support / merge-request
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --touched --lane=tooling --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
 # linux-support / quarantine
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --touched --lane=tooling --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
 # linux-support / main
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --touched --lane=tooling --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
 # linux-support / nightly
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --touched --lane=tooling --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
 # linux-support / weekly
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --touched --lane=tooling --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
 # linux-support / release
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --touched --lane=tooling --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
 # linux-test-real-clock / branch
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --touched --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1896,7 +1896,7 @@
     KITHARA_HANG_PREKILL_SECS=110
 # linux-test-real-clock / platforms
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1907,7 +1907,7 @@
     KITHARA_HANG_PREKILL_SECS=110
 # linux-test-real-clock / merge-request
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1918,7 +1918,7 @@
     KITHARA_HANG_PREKILL_SECS=110
 # linux-test-real-clock / quarantine
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1929,7 +1929,7 @@
     KITHARA_HANG_PREKILL_SECS=110
 # linux-test-real-clock / main
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1940,7 +1940,7 @@
     KITHARA_HANG_PREKILL_SECS=110
 # linux-test-real-clock / nightly
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1951,7 +1951,7 @@
     KITHARA_HANG_PREKILL_SECS=110
 # linux-test-real-clock / weekly
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1962,7 +1962,7 @@
     KITHARA_HANG_PREKILL_SECS=110
 # linux-test-real-clock / release
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -1973,103 +1973,103 @@
     KITHARA_HANG_PREKILL_SECS=110
 # linux-test-simulated-clock / branch
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --touched --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
 # linux-test-simulated-clock / platforms
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
 # linux-test-simulated-clock / merge-request
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
 # linux-test-simulated-clock / quarantine
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
 # linux-test-simulated-clock / main
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
 # linux-test-simulated-clock / nightly
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
 # linux-test-simulated-clock / weekly
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
 # linux-test-simulated-clock / release
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
 # linux-tooling / branch
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
 # linux-tooling / platforms
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
 # linux-tooling / merge-request
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
 # linux-tooling / quarantine
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
 # linux-tooling / main
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
 # linux-tooling / nightly
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
 # linux-tooling / weekly
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
 # linux-tooling / release
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
 # linux-usdt / branch
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
   just test run --lane=usdt-render-scheduler --profile ci
@@ -2082,7 +2082,7 @@
     CARGO_BUILD_JOBS=2
 # linux-usdt / platforms
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
   just test run --lane=usdt-render-scheduler --profile ci
@@ -2095,7 +2095,7 @@
     CARGO_BUILD_JOBS=2
 # linux-usdt / merge-request
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
   just test run --lane=usdt-render-scheduler --profile ci
@@ -2108,7 +2108,7 @@
     CARGO_BUILD_JOBS=2
 # linux-usdt / quarantine
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
   just test run --lane=usdt-render-scheduler --profile ci
@@ -2121,7 +2121,7 @@
     CARGO_BUILD_JOBS=2
 # linux-usdt / main
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
   just test run --lane=usdt-render-scheduler --profile ci
@@ -2134,7 +2134,7 @@
     CARGO_BUILD_JOBS=2
 # linux-usdt / nightly
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
   just test run --lane=usdt-render-scheduler --profile ci
@@ -2147,7 +2147,7 @@
     CARGO_BUILD_JOBS=2
 # linux-usdt / weekly
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
   just test run --lane=usdt-render-scheduler --profile ci
@@ -2160,7 +2160,7 @@
     CARGO_BUILD_JOBS=2
 # linux-usdt / release
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
   just test run --lane=usdt-render-scheduler --profile ci
@@ -2173,35 +2173,35 @@
     CARGO_BUILD_JOBS=2
 # linux-wasm / branch
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just platform wasm
 # linux-wasm / platforms
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just platform wasm
 # linux-wasm / merge-request
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just platform wasm
 # linux-wasm / quarantine
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just platform wasm
 # linux-wasm / main
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just platform wasm
 # linux-wasm / nightly
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just platform wasm
 # linux-wasm / weekly
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just platform wasm
 # linux-wasm / release
   <require os> linux
-  <require tools> cargo just sccache
+  <require tools> cargo just sccache kache
   just platform wasm
 # quality-architecture / branch
   <require os> linux

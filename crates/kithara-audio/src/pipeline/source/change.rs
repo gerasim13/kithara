@@ -177,7 +177,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                         self.phase = OwnerPhase::Changing(change);
                         Ok(None)
                     }
-                    Err(mpsc::TryRecvError::Disconnected) => Err(DecodeError::InvalidData {
+                    Err(_) => Err(DecodeError::InvalidData {
                         detail: "retiring source construction channel closed",
                     }),
                 },
@@ -195,7 +195,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                             self.phase = OwnerPhase::Changing(change);
                             return Ok(None);
                         }
-                        Err(mpsc::TryRecvError::Disconnected) => {
+                        Err(_) => {
                             return Err(DecodeError::InvalidData {
                                 detail: "source construction channel closed",
                             });

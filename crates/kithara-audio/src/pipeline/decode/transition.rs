@@ -309,7 +309,7 @@ impl super::core::ActiveDecode {
         let result = match preparation.completion.try_recv() {
             Ok(result) => result,
             Err(mpsc::TryRecvError::Empty) => return None,
-            Err(mpsc::TryRecvError::Disconnected) => Err(DecodeError::InvalidData {
+            Err(_) => Err(DecodeError::InvalidData {
                 detail: "incoming decoder preparation channel closed",
             }),
         };

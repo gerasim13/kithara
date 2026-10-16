@@ -201,6 +201,7 @@ pub(crate) fn linux_build_args(pins: &CiPins) -> Result<Vec<(&'static str, Strin
             "cargo-workspace-unused-pub",
         ),
         ("JUST_VERSION", "just"),
+        ("KACHE_VERSION", "kache"),
         ("MD_FORMATTER_VERSION", "md-formatter"),
         ("SCCACHE_VERSION", "sccache"),
         ("SIMILARITY_RS_VERSION", "similarity-rs"),

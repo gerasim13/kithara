@@ -5,4 +5,4 @@ mod plan;
 mod record;
 mod store;
 
-pub(super) use owner::run;
+pub(super) use owner::{Evictor, buckets};
