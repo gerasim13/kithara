@@ -1123,6 +1123,7 @@ impl DecodedCapture {
     ) -> Result<(), String> {
         let (capture_start, frames) = self.physical_capture_clock(pcm, marks)?;
         let intervals = physical_intervals(marks, sample_rate)?;
+        let spans = physical_spans(&intervals)?;
         if let Some((_, landing)) = jump
             && !intervals.contains_key(&i64::from(landing))
         {
@@ -1157,8 +1158,8 @@ impl DecodedCapture {
                 format!("physical capture has an uncovered output frame {session}")
             })?;
             let offset = u64::try_from(session - start).map_err(|error| error.to_string())?;
-            let span = info
-                .source_span
+            let span = *spans
+                .get(&start)
                 .ok_or_else(|| "physical source span disappeared".to_owned())?;
             if offset >= span.output_frames() {
                 let boundary = marks.partition_point(|(at, _)| i64::from(*at) <= session);
@@ -1405,6 +1406,55 @@ fn physical_intervals(
     Ok(intervals)
 }
 
+/// Extends each interval's span over output frames no mark observed.
+///
+/// A chunk that starts and ends between two marks is never observed. Its frames are covered only
+/// when the lane advanced by exactly the unobserved frames and the earlier mapping continues
+/// exactly into the next observed one. Any other unobserved frame stays a `SourceSpan` hole.
+fn physical_spans(
+    intervals: &std::collections::BTreeMap<i64, kithara::signal::AudioChunkInfo>,
+) -> Result<std::collections::BTreeMap<i64, kithara::signal::SourceSpan>, String> {
+    let mut spans = std::collections::BTreeMap::new();
+    let mut entries = intervals.iter().peekable();
+    while let Some((&start, &info)) = entries.next() {
+        let span = info
+            .source_span
+            .ok_or_else(|| "physical source interval has no exact source span".to_owned())?;
+        let bridged = entries
+            .peek()
+            .and_then(|&(&next_start, &next)| bridged_span(start, info, span, next_start, next));
+        spans.insert(start, bridged.unwrap_or(span));
+    }
+    Ok(spans)
+}
+
+fn bridged_span(
+    start: i64,
+    info: kithara::signal::AudioChunkInfo,
+    span: kithara::signal::SourceSpan,
+    next_start: i64,
+    next: kithara::signal::AudioChunkInfo,
+) -> Option<kithara::signal::SourceSpan> {
+    let end = start.checked_add(i64::try_from(span.output_frames()).ok()?)?;
+    let unobserved = u64::try_from(next_start.checked_sub(end)?).ok()?;
+    if unobserved == 0
+        || next.segment != info.segment
+        || next.source_revision != info.source_revision
+        || next.spec != info.spec
+        || next.media_origin != info.media_origin
+        || next.lane_frame
+            != info
+                .lane_frame
+                .checked_add(span.output_frames())?
+                .checked_add(unobserved)?
+    {
+        return None;
+    }
+    let continued = next.source_span?.rebase_output(unobserved, 0)?;
+    span.followed_by(continued)?
+        .for_output_range(0..span.output_frames().checked_add(unobserved)?)
+}
+
 struct PhysicalReference {
     expected: Vec<f32>,
     wrong_cue: Vec<f32>,
@@ -1503,4 +1553,28 @@ impl PhysicalReference {
         }
         Ok(())
     }
+}
+
+#[kithara::test(native)]
+fn an_unobserved_chunk_is_covered_only_by_an_exact_mapping_continuation() {
+    let rate = NonZeroU32::new(48_000).expect("nonzero rate");
+    let chunk = |start: u64, lane_frame: u64| kithara::signal::AudioChunkInfo {
+        source_span: kithara::signal::SourceSpan::new(start, start + 10, rate, 10),
+        frames: 10,
+        lane_frame,
+        ..Default::default()
+    };
+    let covered = |next: kithara::signal::AudioChunkInfo| {
+        let intervals = std::collections::BTreeMap::from([(0, chunk(1_000, 100)), (11, next)]);
+        physical_spans(&intervals).expect("spans")[&0]
+    };
+
+    let bridged = covered(chunk(1_011, 111));
+    assert_eq!(bridged.output_frames(), 11);
+    assert_eq!(
+        bridged.source_ratio_at(10),
+        Some((1_010, std::num::NonZeroU128::MIN))
+    );
+    assert_eq!(covered(chunk(1_012, 111)).output_frames(), 10);
+    assert_eq!(covered(chunk(1_011, 112)).output_frames(), 10);
 }
