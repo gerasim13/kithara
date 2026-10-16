@@ -9,7 +9,7 @@ use std::{
 use kithara::{
     host::HostOwned,
     platform::time::{self, Duration},
-    play::{ResourceConfig, ResourceSrc},
+    play::{PlayError, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, Transition},
     stretch::{BungeeConfig, ElasticBackendConfig, SignalsmithConfig},
     warp::{StretchKind, WarpConfig},
@@ -175,6 +175,39 @@ fn first_target_onset(samples: &[f32], command_frame: usize, target: usize) -> O
         tone_is_dominant(&samples[start * channels..end * channels], target)
             .then_some(start - command_frame)
     })
+}
+
+/// Sends the case's burst of alternating rates, then its target rate, and
+/// returns the frame the target is sent at. A burst the deck has no room for
+/// stops at its refusal; the next block answers the burst and returns the
+/// room the target needs.
+async fn send_target_rate(
+    harness: &OfflinePlayer,
+    queue: &HostOwned<Queue<TestPools>>,
+    case: ResponseCase,
+    samples: &mut Vec<f32>,
+) -> usize {
+    let refused = harness
+        .run(queue.control(), move |q| {
+            (0..case.burst).find_map(|command| {
+                q.set_rate(if command.is_multiple_of(2) { 4.0 } else { 0.5 })
+                    .err()
+            })
+        })
+        .await;
+    if let Some(refused) = refused {
+        assert!(
+            matches!(refused, PlayError::SlotChannelFull { .. }),
+            "a burst past the deck's room is refused as full, not {refused:?}"
+        );
+        samples.extend(capture_frames(harness, case.callback_frames, case.callback_frames).await);
+    }
+    let command_frame = samples.len() / usize::from(CHANNELS);
+    harness
+        .run(queue.control(), move |q| q.set_rate(case.target_rate))
+        .await
+        .expect("the deck has room for the target rate");
+    command_frame
 }
 
 async fn capture_frames(
@@ -511,7 +544,6 @@ async fn run_case(
     let trace = usdt_trace::scope();
     let mut samples =
         capture_command_boundary(&harness, &trace, case.initial_tone, case.callback_frames).await;
-    let command_frame = samples.len() / usize::from(CHANNELS);
     assert!(
         queue.is_playing(),
         "{backend} command boundary is not playing"
@@ -533,16 +565,7 @@ async fn run_case(
         consumed_end <= published_end,
         "{backend} presented transport {consumed_end} is ahead of published transport {published_end}"
     );
-    harness
-        .run(queue.control(), move |q| {
-            for command in 0..case.burst {
-                q.set_rate(if command.is_multiple_of(2) { 4.0 } else { 0.5 })
-                    .expect("a finite rate is accepted");
-            }
-            q.set_rate(case.target_rate)
-                .expect("a finite rate is accepted");
-        })
-        .await;
+    let command_frame = send_target_rate(&harness, &queue, case, &mut samples).await;
     let (acknowledged, revision, at_apply) = capture_until_applied(&harness, &trace, case).await;
     let apply_frame = command_frame + acknowledged.len() / usize::from(CHANNELS);
     samples.extend(acknowledged);
@@ -804,7 +827,6 @@ async fn run_strict_case(
     let trace = usdt_trace::scope();
     let mut samples =
         capture_command_boundary(&harness, &trace, case.initial_tone, case.callback_frames).await;
-    let command_frame = samples.len() / usize::from(CHANNELS);
     assert!(
         queue.is_playing(),
         "{backend} command boundary is not playing"
@@ -826,16 +848,7 @@ async fn run_strict_case(
         consumed_end <= published_end,
         "{backend} presented transport {consumed_end} is ahead of published transport {published_end}"
     );
-    harness
-        .run(queue.control(), move |q| {
-            for command in 0..case.burst {
-                q.set_rate(if command.is_multiple_of(2) { 4.0 } else { 0.5 })
-                    .expect("a finite rate is accepted");
-            }
-            q.set_rate(case.target_rate)
-                .expect("a finite rate is accepted");
-        })
-        .await;
+    let command_frame = send_target_rate(&harness, &queue, case, &mut samples).await;
     samples.extend(capture_frames(&harness, case.observation_frames(), case.callback_frames).await);
     let events = response_events(&trace);
     drop(trace);
