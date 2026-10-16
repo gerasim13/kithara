@@ -155,9 +155,12 @@ impl<'a> ArtifactFetch<'a> {
                 url: url.clone(),
             })?;
         let scope = CancelScope::new(self.cancel.cloned());
-        let handle = downloader.register(Arc::new(ArtifactPeer {
-            cancel: scope.token(),
-        }));
+        let handle = downloader.register(
+            Arc::new(ArtifactPeer {
+                cancel: scope.token(),
+            }),
+            None,
+        );
         let cmd = FetchCmd::get(url.clone())
             .cancel(scope.token())
             .maybe_headers(self.headers_for(url))

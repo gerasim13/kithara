@@ -868,11 +868,12 @@ mod tests {
             ))
             .build(),
         );
-        let handle = downloader
-            .register(Arc::new(MockPeer {
+        let handle = downloader.register(
+            Arc::new(MockPeer {
                 cancel: CancelToken::never(),
-            }))
-            .with_bus(bus.clone());
+            }),
+            Some(bus.clone()),
+        );
         KeyStore::new(
             handle,
             test_scope(store),

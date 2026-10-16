@@ -26,8 +26,11 @@ use kithara_download::{Downloader, DownloaderConfig};
 
 // Reuse an application-owned HTTP client and register protocol peers.
 let downloader = Downloader::new(DownloaderConfig::for_client(client).build());
-let handle = downloader.register(peer);
+let handle = downloader.register(peer, None);
 ```
+
+Pass `Some(bus)` at registration to observe every transfer from the peer's first
+request. The event destination remains fixed for the registration's lifetime.
 
 The facade exposes the same API as `kithara::download` behind its `download`
 feature. `client-reqwest` and `tls-rustls` are the crate defaults; `client-wreq`,

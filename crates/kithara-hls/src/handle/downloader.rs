@@ -26,14 +26,14 @@ where
     }
 
     /// Register `peer` on `downloader` and take ownership of the quartet.
-    /// The sole `downloader.register(...).with_bus(...)` site.
+    /// The sole downloader registration site for this stream.
     pub(crate) fn register(
         downloader: &Downloader,
         peer: Arc<dyn Peer>,
         bus: EventBus,
         scope: AssetScope<S>,
     ) -> Self {
-        let peer_handle = downloader.register(peer).with_bus(bus);
+        let peer_handle = downloader.register(peer, Some(bus));
         Self { scope, peer_handle }
     }
 

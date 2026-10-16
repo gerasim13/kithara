@@ -87,8 +87,9 @@ pub enum CancelReason {
 
 /// Events emitted by the unified downloader layer.
 ///
-/// Published on the **peer's bus scope**, set via
-/// `PeerHandle::with_bus`. A per-track subscriber sees only its own
+/// Published on the **peer's bus scope**, supplied to
+/// [`Downloader::register`](crate::Downloader::register).
+/// A per-track subscriber sees only its own
 /// fetches; a root-bus subscriber sees fetches from every peer.
 ///
 /// Every variant for a single fetch carries the same [`RequestId`].
