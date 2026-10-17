@@ -258,6 +258,7 @@ where
     #[kithara::hang_watchdog(ctx = String, timeout = kithara_test_utils::hang::default_timeout().min(Duration::from_secs(4)))]
     fn call(&self, command: QueueCommand<S>) -> Result<(), QueueError> {
         let mut ticket = self.postbox.post(command).map_err(|_| PlayError::Closed)?;
+        let seq = ticket.seq().get();
         loop {
             let mut answer = None;
             hang_park!(
@@ -265,7 +266,16 @@ where
                     let now = Instant::now();
                     answer = Some(ticket.wait_until(now + remaining));
                 },
-                "queue command owner has not answered its ticket".to_owned()
+                format!(
+                    "queue post {seq} wait_outcome={}",
+                    match answer.as_ref() {
+                        Some(Ok(Ok(()))) => "applied",
+                        Some(Ok(Err(Refused::Owner(_)))) => "refused",
+                        Some(Ok(Err(Refused::Unanswered))) => "unanswered",
+                        Some(Err(_)) => "timeout",
+                        None => "not-entered",
+                    }
+                )
             );
             match answer {
                 Some(Ok(answer)) => {
