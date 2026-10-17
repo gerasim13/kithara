@@ -221,26 +221,33 @@ impl<S> Track<S> for PlayerImpl<S> {
         let basis = self.source_basis.ok_or(PlayError::Untimed)?;
         let endpoint = source_endpoint(basis, endpoint, sample_rate)?;
         let commands = self.planned_changes(mark.lane.segment, true)?;
-        let mut trajectory = self.trajectory_at(mark, span, offset, sample_rate, &commands)?;
-        let mut cursor = mark.lane.frame;
-        for (at, _, change) in commands.iter().filter(|(at, _, _)| *at > mark.lane.frame) {
-            if let Some(offset) = trajectory
-                .first_at_or_after(0, sample_rate, endpoint, Some(at - cursor))
-                .map_err(|error| PlayError::Internal(error.to_string()))?
-            {
-                return self.planned_session_end(mark, cursor, offset);
-            }
-            trajectory
-                .advance_by(0, sample_rate, at - cursor)
-                .map_err(|error| PlayError::Internal(error.to_string()))?;
-            cursor = *at;
-            project_change(&mut trajectory, change, sample_rate)?;
-        }
-        let offset = trajectory
-            .first_at_or_after(0, sample_rate, endpoint, None)
-            .map_err(|error| PlayError::Internal(error.to_string()))?
-            .ok_or(PlayError::Untimed)?;
-        self.planned_session_end(mark, cursor, offset)
+        let source = self.observed_source.ok_or(PlayError::Untimed)?;
+        let plan = EndPlan {
+            source: (
+                source.source_revision,
+                source.render_revision,
+                source.mapping_revision,
+            ),
+            basis,
+            endpoint,
+            speed: self.segment_speed.to_bits(),
+            sample_rate,
+            commands: commands.iter().map(|(at, seq, _)| (*at, *seq)).collect(),
+        };
+        let known = self
+            .projected_end
+            .borrow()
+            .as_ref()
+            .filter(|projected| projected.plan == plan)
+            .map(|projected| projected.frame);
+        let end = if let Some(end) = known {
+            end
+        } else {
+            let end = self.project_end(mark, span, offset, &plan, &commands)?;
+            *self.projected_end.borrow_mut() = Some(ProjectedEnd { plan, frame: end });
+            end
+        };
+        self.planned_session_end(mark, end)
     }
 
     fn speed_receipt(&mut self) -> Option<Settled> {
@@ -358,10 +365,8 @@ impl<S> PlayerImpl<S> {
     fn planned_session_end(
         &self,
         mark: SlotMark,
-        cursor: u64,
-        offset: u64,
+        end: u64,
     ) -> Result<Option<SessionFrame>, PlayError> {
-        let end = cursor.checked_add(offset).ok_or(PlayError::Untimed)?;
         session_at(
             mark,
             LaneFrame {
@@ -433,4 +438,39 @@ fn project_change(
         }
     }
     Ok(())
+}
+
+impl<S> PlayerImpl<S> {
+    /// Walks the accepted plan from the segment start to the lane frame
+    /// where the source reaches its endpoint.
+    fn project_end(
+        &self,
+        mark: SlotMark,
+        span: SourceSpan,
+        offset: u64,
+        plan: &EndPlan,
+        commands: &[(u64, Seq, PlannedChange<'_>)],
+    ) -> Result<u64, PlayError> {
+        let sample_rate = plan.sample_rate;
+        let mut trajectory = self.trajectory_at(mark, span, offset, sample_rate, commands)?;
+        let mut cursor = mark.lane.frame;
+        for (at, _, change) in commands.iter().filter(|(at, _, _)| *at > mark.lane.frame) {
+            if let Some(offset) = trajectory
+                .first_at_or_after(0, sample_rate, plan.endpoint, Some(at - cursor))
+                .map_err(|error| PlayError::Internal(error.to_string()))?
+            {
+                return cursor.checked_add(offset).ok_or(PlayError::Untimed);
+            }
+            trajectory
+                .advance_by(0, sample_rate, at - cursor)
+                .map_err(|error| PlayError::Internal(error.to_string()))?;
+            cursor = *at;
+            project_change(&mut trajectory, change, sample_rate)?;
+        }
+        let offset = trajectory
+            .first_at_or_after(0, sample_rate, plan.endpoint, None)
+            .map_err(|error| PlayError::Internal(error.to_string()))?
+            .ok_or(PlayError::Untimed)?;
+        cursor.checked_add(offset).ok_or(PlayError::Untimed)
+    }
 }
