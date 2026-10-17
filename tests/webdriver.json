@@ -2,6 +2,7 @@
   "goog:chromeOptions": {
     "args": [
       "--headless=new",
+      "--mute-audio",
       "--disable-background-networking",
       "--disable-extensions",
       "--no-sandbox",
@@ -21,7 +22,8 @@
       "media.autoplay.block-event.enabled": false,
       "media.autoplay.block-webaudio": false,
       "media.autoplay.blocking_policy": 0,
-      "media.autoplay.default": 0
+      "media.autoplay.default": 0,
+      "media.volume_scale": "0.0"
     }
   }
 }
