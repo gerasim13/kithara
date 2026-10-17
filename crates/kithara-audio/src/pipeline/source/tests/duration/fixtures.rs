@@ -242,7 +242,7 @@ pub(super) fn drain(
                 assert_eq!(chunk.frames(), meta.frames as usize);
                 assert_eq!(chunk.samples.len(), chunk.frames() * 2);
                 let origin = extent.origin * u64::from(meta.spec.sample_rate.get()) / 1_000;
-                for (index, frame) in chunk.samples.chunks_exact(2).enumerate() {
+                for (index, &frame) in chunk.samples.as_chunks::<2>().0.iter().enumerate() {
                     let at = meta.frame_offset + index as u64;
                     let expected = f32::from(
                         u16::try_from(

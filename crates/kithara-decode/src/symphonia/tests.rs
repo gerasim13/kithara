@@ -830,7 +830,9 @@ mod wav {
             u64::try_from(expected.len() / (2 * usize::from(spec.channels))).expect("PCM frames")
         );
         let expected = expected
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|sample| {
                 (f32::from(i16::from_le_bytes([sample[0], sample[1]])) / 32768.0).to_bits()
             })

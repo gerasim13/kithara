@@ -271,7 +271,9 @@ fn terminal_flush_reaches_last_source_audio_at_each_rate(
             "the oracle must reject one synthetic terminal frame"
         );
         let reversed = terminal
-            .chunks_exact(CHANNELS)
+            .as_chunks::<CHANNELS>()
+            .0
+            .iter()
             .rev()
             .flatten()
             .copied()

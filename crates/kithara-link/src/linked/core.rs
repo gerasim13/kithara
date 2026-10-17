@@ -2,9 +2,8 @@ use std::task::Waker;
 
 use kithara_command::{Rejection, Seq, When};
 use kithara_play::{
-    Bound, DeckControl, DeckPass, FadeDir, HostedDeck, Outbox, PlayError, PlayWorker, Player,
-    Position, Settled, Track, TrackCommand, TrackReceipt, TrackSettings, TrackSettingsChange,
-    TrackStatus,
+    Bound, DeckControl, DeckPass, HostedDeck, Outbox, PlayError, PlayWorker, Player, Position,
+    Settled, Track, TrackCommand, TrackReceipt, TrackSettings, TrackSettingsChange, TrackStatus,
 };
 use kithara_render::{
     bridge::{DeckEvent, DeckPart},
@@ -22,73 +21,57 @@ use super::{
 use crate::{GridAnswer, TempoTrajectory, covers, entry, jump_target};
 
 impl<P> Linked<P> {
-    fn synced_speed(&self, change: TrackSettingsChange) -> Result<(), PlayError> {
-        if self.mode == SyncMode::On
-            && let TrackSettingsChange::Speed(speed) = change
-        {
-            return Err(PlayError::InvalidParameter {
-                name: "speed while synchronized".into(),
-                value: speed,
-            });
-        }
-        Ok(())
-    }
-}
-
-impl<P> Linked<P> {
-    fn play_synced<S>(
-        &mut self,
-        at: When<SessionFrame>,
-        out: &mut Outbox<'_, S>,
-    ) -> Result<Option<Seq>, PlayError>
+    fn drain_speed_receipts<S>(&mut self)
     where
         P: Track<S>,
     {
-        let track = self.inner.snapshot();
-        let required = cue_position(track.as_ref());
-        let Some(grid) = self
-            .grid
-            .as_ref()
-            .filter(|grid| covers(grid.geometry(), required))
-        else {
-            self.waiting = Some(Waiting::Play { required, at });
-            return Ok(None);
-        };
-        if matches!(
-            track.as_ref().status,
-            TrackStatus::Idle | TrackStatus::Loading
-        ) || self.cue.is_some()
-        {
-            self.waiting = Some(Waiting::Play { required, at });
-            return Ok(None);
-        }
-        let earliest = self.earliest(out)?;
-        let bound = match at {
-            When::Next => earliest,
-            When::At(frame) if frame < earliest => return Err(PlayError::Late),
-            When::At(frame) => frame,
-            When::Deferred => {
-                return Err(PlayError::Internal(
-                    "a linked Play has no deferred executor moment".into(),
-                ));
+        if !self.speeds.is_empty() {
+            while let Some(receipt) = self.inner.speed_receipt() {
+                let seq = match &receipt {
+                    Settled::Pending => continue,
+                    Settled::Applied { seq, .. } | Settled::Rejected { seq, .. } => *seq,
+                };
+                let Some(index) = self.speeds.iter().position(|(pending, _)| *pending == seq)
+                else {
+                    continue;
+                };
+                if let Settled::Applied { at, .. } = receipt {
+                    if let SpeedOperation::Correction { state, .. } = &mut self.speeds[index].1 {
+                        if let CorrectionState::Pending(correction) = state {
+                            *state =
+                                CorrectionState::Applied(RunningCorrection { at, ..*correction });
+                        }
+                    } else {
+                        self.speeds.remove(index);
+                    }
+                    continue;
+                }
+                let (_, operation) = self.speeds.remove(index);
+                if self.synced()
+                    && matches!(
+                        receipt,
+                        Settled::Rejected {
+                            reason: Rejection::Late | Rejection::Refused(_),
+                            ..
+                        }
+                    )
+                {
+                    match operation {
+                        SpeedOperation::Correction { commanded, .. } => {
+                            self.alignment = Some(commanded);
+                        }
+                        SpeedOperation::Alignment => {
+                            self.waiting = Some(Waiting::Sync {
+                                required: self.inner.snapshot().as_ref().position,
+                            });
+                        }
+                        SpeedOperation::Relocation { to } => {
+                            self.waiting = Some(Waiting::Seek { required: to });
+                        }
+                    }
+                }
             }
-        };
-        let source = self.source::<S>(grid)?;
-        let frame = entry(&self.host, &source, required, Bound::AtOrAfter(bound))
-            .ok_or(PlayError::NotReady)?;
-        if !self.prepare_entry(frame, out)? {
-            self.waiting = Some(Waiting::Play { required, at });
-            return Ok(None);
         }
-        let sent = self.inner.apply(
-            TrackCommand::Play {
-                at: When::At(frame),
-            },
-            out,
-        )?;
-        self.waiting = None;
-        self.start = sent;
-        Ok(sent)
     }
 
     fn record_retime(&mut self, at: SessionFrame, seq: Seq) {
@@ -221,12 +204,7 @@ impl<P> Linked<P> {
             return;
         }
         self.waiting = None;
-        let result = match waiting {
-            Waiting::Play { at, .. } => self.apply(TrackCommand::Play { at }, out),
-            Waiting::Seek { required } => self.apply(TrackCommand::Seek { to: required }, out),
-            Waiting::Sync { .. } if self.synced() => self.sync(true, out),
-            Waiting::Load { .. } | Waiting::Sync { .. } => Ok(None),
-        };
+        let result = self.apply_waiting(waiting, out);
         match result {
             Ok(_) => {}
             Err(PlayError::Full(_) | PlayError::NotReady | PlayError::Untimed) => {
@@ -236,7 +214,23 @@ impl<P> Linked<P> {
         }
     }
 
-    fn withdraw_start(&mut self, required: Position) {
+    fn apply_waiting<S>(
+        &mut self,
+        waiting: Waiting,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<Option<Seq>, PlayError>
+    where
+        P: Track<S>,
+    {
+        match waiting {
+            Waiting::Play { at, .. } => self.apply(TrackCommand::Play { at }, out),
+            Waiting::Seek { required } => self.apply(TrackCommand::Seek { to: required }, out),
+            Waiting::Sync { .. } if self.synced() => self.sync(true, out),
+            Waiting::Load { .. } | Waiting::Sync { .. } => Ok(None),
+        }
+    }
+
+    pub(super) fn withdraw_start(&mut self, required: Position) {
         if let Some(start) = self.start.take() {
             self.withdrawn.push(start);
             self.waiting = Some(Waiting::Play {
@@ -330,37 +324,9 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
         command: TrackCommand<S>,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
-        if self.synced() && matches!(&command, TrackCommand::Play { at: When::Deferred }) {
-            return Err(PlayError::Internal(
-                "a linked Play has no deferred executor moment".into(),
-            ));
-        }
-        if self.synced()
-            && let TrackCommand::Play {
-                at: When::At(frame),
-            } = &command
-            && *frame < self.earliest(out)?
-        {
-            return Err(PlayError::Late);
-        }
+        self.check_synced_command(&command, out)?;
         if let TrackCommand::Load { item, position } = command {
-            let seq = self
-                .inner
-                .apply(TrackCommand::Load { item, position }, out)?;
-            self.load = seq;
-            self.grid = None;
-            self.correction = None;
-            self.alignment = None;
-            self.speeds.clear();
-            self.start = None;
-            self.start_caller = None;
-            self.withdrawn.clear();
-            self.retimes.clear();
-            self.cue = self.synced().then_some(position);
-            self.waiting = self
-                .synced()
-                .then_some(Waiting::Load { required: position });
-            return Ok(seq);
+            return self.load_item(item, position, out);
         }
         if !self.synced() {
             return self.inner.apply(command, out);
@@ -372,108 +338,17 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
                 self.inner.apply(TrackCommand::Configure(change, at), out)
             }
             TrackCommand::Play { at } => self.play_synced(at, out),
-            TrackCommand::Seek { to } => {
-                let status = self.inner.snapshot().as_ref().status;
-                if status == TrackStatus::Loading && self.cue.is_some() {
-                    self.cue = Some(to);
-                    if let Some(Waiting::Load { required } | Waiting::Play { required, .. }) =
-                        self.waiting.as_mut()
-                    {
-                        *required = to;
-                    }
-                    return Ok(None);
-                }
-                if !matches!(status, TrackStatus::Playing { .. }) {
-                    let sent = self.inner.apply(TrackCommand::Seek { to }, out)?;
-                    if let Some(start) = self.start {
-                        self.start_caller.get_or_insert(start);
-                    }
-                    self.withdraw_start(to);
-                    if self.cue.is_some() {
-                        self.cue = Some(to);
-                    }
-                    return Ok(sent);
-                }
-                let Some(grid) = self
-                    .grid
-                    .as_ref()
-                    .filter(|grid| covers(grid.geometry(), to))
-                else {
-                    self.waiting = Some(Waiting::Seek { required: to });
-                    return Ok(None);
-                };
-                let at = self.jump_frame(out)?;
-                let source = self.source::<S>(grid)?;
-                let target = jump_target(&self.host, &source, to, at).ok_or(PlayError::NotReady)?;
-                let start = at - self.inner.snapshot().as_ref().declick;
-                let (position, _) = self.planned::<S>(start)?;
-                let speed = self.curve(&source, position, start, Some((target, at)))?;
-                let synchronized = matches!(&speed, kithara_sync::SpeedCurve::Constant(value) if self.inner.projected().speed() == *value);
-                let command = if synchronized {
-                    TrackCommand::Jump { to: target, at }
-                } else {
-                    TrackCommand::Align {
-                        to: target,
-                        speed,
-                        at,
-                    }
-                };
-                let sent = self.inner.apply(command, out)?;
-                if !synchronized && let Some(seq) = sent {
-                    self.speeds.push((seq, SpeedOperation::Relocation { to }));
-                }
-                self.waiting = None;
-                Ok(sent)
-            }
+            TrackCommand::Seek { to } => self.seek_synced(to, out),
             TrackCommand::Pause { at } => {
                 self.waiting = None;
                 self.inner.apply(TrackCommand::Pause { at }, out)
             }
-            TrackCommand::Jump { to, at } => self.inner.apply(TrackCommand::Jump { to, at }, out),
-            TrackCommand::Align { to, speed, at } => {
-                self.inner.apply(TrackCommand::Align { to, speed, at }, out)
-            }
-            TrackCommand::SetSpeed { speed, at } => {
-                self.inner.apply(TrackCommand::SetSpeed { speed, at }, out)
-            }
-            TrackCommand::SetHostRate { rate } => {
-                self.inner.apply(TrackCommand::SetHostRate { rate }, out)
-            }
             TrackCommand::Fade { at, settings, dir } => {
-                if dir == FadeDir::In
-                    && !matches!(
-                        self.inner.snapshot().as_ref().status,
-                        TrackStatus::Playing { .. }
-                    )
-                {
-                    let When::At(frame) = at else {
-                        return Err(PlayError::Untimed);
-                    };
-                    let grid = self.grid.as_ref().ok_or(PlayError::NotReady)?;
-                    let source = self.source::<S>(grid)?;
-                    if self.inner.entry(Bound::AtOrAfter(frame)).is_none()
-                        || self.inner.prepared_speed()
-                            != Some(&self.curve(
-                                &source,
-                                cue_position(self.inner.snapshot().as_ref()),
-                                frame,
-                                None,
-                            )?)
-                    {
-                        return Err(PlayError::NotReady);
-                    }
-                }
+                self.check_synced_fade::<S>(at, dir)?;
                 self.inner
                     .apply(TrackCommand::Fade { at, settings, dir }, out)
             }
-            TrackCommand::PlayAfter { track } => {
-                self.inner.apply(TrackCommand::PlayAfter { track }, out)
-            }
-            TrackCommand::Supersede => self.inner.apply(TrackCommand::Supersede, out),
-            TrackCommand::Release => self.inner.apply(TrackCommand::Release, out),
-            TrackCommand::Seat { slot, at } => {
-                self.inner.apply(TrackCommand::Seat { slot, at }, out)
-            }
+            other => self.inner.apply(other, out),
         }
     }
 
@@ -522,53 +397,7 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
 
     fn tick(&mut self, now: SessionFrame, out: &mut Outbox<'_, S>) {
         self.inner.tick(now, out);
-        if !self.speeds.is_empty() {
-            while let Some(receipt) = self.inner.speed_receipt() {
-                let seq = match &receipt {
-                    Settled::Pending => continue,
-                    Settled::Applied { seq, .. } | Settled::Rejected { seq, .. } => *seq,
-                };
-                let Some(index) = self.speeds.iter().position(|(pending, _)| *pending == seq)
-                else {
-                    continue;
-                };
-                if let Settled::Applied { at, .. } = receipt {
-                    if let SpeedOperation::Correction { state, .. } = &mut self.speeds[index].1 {
-                        if let CorrectionState::Pending(correction) = state {
-                            *state =
-                                CorrectionState::Applied(RunningCorrection { at, ..*correction });
-                        }
-                    } else {
-                        self.speeds.remove(index);
-                    }
-                    continue;
-                }
-                let (_, operation) = self.speeds.remove(index);
-                if self.synced()
-                    && matches!(
-                        receipt,
-                        Settled::Rejected {
-                            reason: Rejection::Late | Rejection::Refused(_),
-                            ..
-                        }
-                    )
-                {
-                    match operation {
-                        SpeedOperation::Correction { commanded, .. } => {
-                            self.alignment = Some(commanded);
-                        }
-                        SpeedOperation::Alignment => {
-                            self.waiting = Some(Waiting::Sync {
-                                required: self.inner.snapshot().as_ref().position,
-                            });
-                        }
-                        SpeedOperation::Relocation { to } => {
-                            self.waiting = Some(Waiting::Seek { required: to });
-                        }
-                    }
-                }
-            }
-        }
+        self.drain_speed_receipts::<S>();
         self.update_correction::<S>();
         if self.synced() {
             self.realign(out);
@@ -745,6 +574,41 @@ where
 }
 
 impl<P> Linked<P> {
+    fn align_playing<S>(
+        &mut self,
+        source: &kithara_sync::SourceGrid,
+        position: Position,
+        at: SessionFrame,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<Option<Seq>, PlayError>
+    where
+        P: Track<S>,
+    {
+        if self.lane_room() == 0 {
+            return Err(PlayError::Full("lane"));
+        }
+        if out.deck_available() == 0 {
+            return Err(PlayError::Full("deck"));
+        }
+        let to = jump_target(&self.host, source, position, at).ok_or(PlayError::NotReady)?;
+        let start = at - self.inner.snapshot().as_ref().declick;
+        let (before, _) = self.planned::<S>(start)?;
+        let sent = self.inner.apply(
+            TrackCommand::Align {
+                to,
+                speed: self.curve(source, before, start, Some((to, at)))?,
+                at,
+            },
+            out,
+        )?;
+        if let Some(seq) = sent {
+            self.speeds.push((seq, SpeedOperation::Alignment));
+        }
+        self.correction = None;
+        self.waiting = None;
+        Ok(sent)
+    }
+
     fn align<S>(&mut self, out: &mut Outbox<'_, S>) -> Result<Option<Seq>, PlayError>
     where
         P: Track<S>,
@@ -768,29 +632,7 @@ impl<P> Linked<P> {
                 self.waiting = Some(Waiting::Sync { required: position });
                 return Ok(None);
             }
-            if self.lane_room() == 0 {
-                return Err(PlayError::Full("lane"));
-            }
-            if out.deck_available() == 0 {
-                return Err(PlayError::Full("deck"));
-            }
-            let to = jump_target(&self.host, &source, position, at).ok_or(PlayError::NotReady)?;
-            let start = at - self.inner.snapshot().as_ref().declick;
-            let (before, _) = self.planned::<S>(start)?;
-            let sent = self.inner.apply(
-                TrackCommand::Align {
-                    to,
-                    speed: self.curve(&source, before, start, Some((to, at)))?,
-                    at,
-                },
-                out,
-            )?;
-            if let Some(seq) = sent {
-                self.speeds.push((seq, SpeedOperation::Alignment));
-            }
-            self.correction = None;
-            self.waiting = None;
-            return Ok(sent);
+            return self.align_playing(&source, position, at, out);
         }
         let at = self.earliest(out)?;
         let at = entry(&self.host, &source, required, Bound::AtOrAfter(at))

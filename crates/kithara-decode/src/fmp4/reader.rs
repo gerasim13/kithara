@@ -190,19 +190,24 @@ pub(crate) fn fill_segment_buffer(
                 hang_reset!();
             }
             InputReadOutcome::Pending(reason) => return Ok(FillStatus::Pending(reason)),
-            InputReadOutcome::Eof => {
-                if state.filled == state.total() {
-                    return Ok(FillStatus::Ready);
-                }
-                if refresh_range(state, live) && state.sync_buffer_ready()? {
-                    return Ok(FillStatus::Ready);
-                }
-                return Err(DecodeError::InvalidData {
-                    detail: "unexpected EOF before segment buffer filled",
-                });
-            }
+            InputReadOutcome::Eof => return finish_segment_buffer(state, live),
         }
     }
+}
+
+fn finish_segment_buffer(
+    state: &mut SegmentReadState,
+    live: LiveRange<'_>,
+) -> DecodeResult<FillStatus> {
+    if state.filled == state.total() {
+        return Ok(FillStatus::Ready);
+    }
+    if refresh_range(state, live) && state.sync_buffer_ready()? {
+        return Ok(FillStatus::Ready);
+    }
+    Err(DecodeError::InvalidData {
+        detail: "unexpected EOF before segment buffer filled",
+    })
 }
 
 /// Re-resolve `state.range` against the live layout. Returns `true` if

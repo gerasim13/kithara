@@ -68,14 +68,11 @@ fn ordinal(value: i64) -> Option<f64> {
     (scalar.to_i64() == Some(value)).then_some(scalar)
 }
 
-pub(super) fn prepare(
+fn prepare_anchors(
     grid: &TrackGrid,
-    rate: NonZeroU32,
-    decoded_frames: Option<u64>,
-) -> Result<Vec<Interval>, SourceGridError> {
-    let scale = f64::from(rate.get());
-    let beat_frames = scale * 60.0 / grid.bpm();
-    let decoded_end = decoded_frames.and_then(|frames| frames.to_f64());
+    scale: f64,
+    decoded_end: Option<f64>,
+) -> Result<Vec<(f64, i64)>, SourceGridError> {
     let mut anchors = grid
         .beats()
         .iter()
@@ -95,32 +92,17 @@ pub(super) fn prepare(
     if anchors.is_empty() {
         anchors.push((0.0, 0));
     }
-    if !beat_frames.is_finite() || beat_frames <= 0.0 {
-        return Err(SourceGridError::Tempo);
-    }
-    let first = anchors[0];
-    let last = anchors[anchors.len() - 1];
-    let mut intervals: Vec<Interval> = Vec::new();
-    if first.0 != 0.0 {
-        let initial = first
-            .1
-            .to_f64()
-            .ok_or(SourceGridError::Ordinal { ordinal: first.1 })?
-            - first.0 / beat_frames;
-        if !initial.is_finite() {
-            return Err(SourceGridError::Coordinate);
-        }
-        let end =
-            ordinal(first.1).ok_or(SourceGridError::InexactEndOrdinal { ordinal: first.1 })?;
-        intervals.push(Interval::new((0.0, initial), (first.0, end))?);
-    }
-    for pair in anchors.windows(2) {
-        let start = ordinal(pair[0].1)
-            .ok_or(SourceGridError::InexactStartOrdinal { ordinal: pair[0].1 })?;
-        let end =
-            ordinal(pair[1].1).ok_or(SourceGridError::InexactEndOrdinal { ordinal: pair[1].1 })?;
-        intervals.push(Interval::new((pair[0].0, start), (pair[1].0, end))?);
-    }
+    Ok(anchors)
+}
+
+fn extend_intervals(
+    intervals: &mut Vec<Interval>,
+    grid: &TrackGrid,
+    scale: f64,
+    decoded_end: Option<f64>,
+    beat_frames: f64,
+    last: (f64, i64),
+) -> Result<(), SourceGridError> {
     let stated_end = grid.duration().map(|seconds| seconds * scale);
     let horizon = match (decoded_end, stated_end) {
         (Some(decoded), Some(stated)) => Some(decoded.min(stated)),
@@ -150,6 +132,14 @@ pub(super) fn prepare(
             intervals.push(Interval::new((last.0, start), (end_frame, end))?);
         }
     }
+    Ok(())
+}
+
+fn validate_intervals(
+    intervals: &[Interval],
+    rate: NonZeroU32,
+    decoded_end: Option<f64>,
+) -> Result<(), SourceGridError> {
     for (index, interval) in intervals.iter().enumerate() {
         if decoded_end.is_some_and(|end| *interval.frames.end() > end) {
             return Err(SourceGridError::IntervalOutsideExtent { index });
@@ -158,5 +148,45 @@ pub(super) fn prepare(
             return Err(SourceGridError::IntervalTempo { index });
         }
     }
+    Ok(())
+}
+
+pub(super) fn prepare(
+    grid: &TrackGrid,
+    rate: NonZeroU32,
+    decoded_frames: Option<u64>,
+) -> Result<Vec<Interval>, SourceGridError> {
+    let scale = f64::from(rate.get());
+    let beat_frames = scale * 60.0 / grid.bpm();
+    let decoded_end = decoded_frames.and_then(|frames| frames.to_f64());
+    let anchors = prepare_anchors(grid, scale, decoded_end)?;
+    if !beat_frames.is_finite() || beat_frames <= 0.0 {
+        return Err(SourceGridError::Tempo);
+    }
+    let first = anchors[0];
+    let last = anchors[anchors.len() - 1];
+    let mut intervals: Vec<Interval> = Vec::new();
+    if first.0 != 0.0 {
+        let initial = first
+            .1
+            .to_f64()
+            .ok_or(SourceGridError::Ordinal { ordinal: first.1 })?
+            - first.0 / beat_frames;
+        if !initial.is_finite() {
+            return Err(SourceGridError::Coordinate);
+        }
+        let end =
+            ordinal(first.1).ok_or(SourceGridError::InexactEndOrdinal { ordinal: first.1 })?;
+        intervals.push(Interval::new((0.0, initial), (first.0, end))?);
+    }
+    for pair in anchors.windows(2) {
+        let start = ordinal(pair[0].1)
+            .ok_or(SourceGridError::InexactStartOrdinal { ordinal: pair[0].1 })?;
+        let end =
+            ordinal(pair[1].1).ok_or(SourceGridError::InexactEndOrdinal { ordinal: pair[1].1 })?;
+        intervals.push(Interval::new((pair[0].0, start), (pair[1].0, end))?);
+    }
+    extend_intervals(&mut intervals, grid, scale, decoded_end, beat_frames, last)?;
+    validate_intervals(&intervals, rate, decoded_end)?;
     Ok(intervals)
 }

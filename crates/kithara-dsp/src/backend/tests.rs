@@ -332,7 +332,14 @@ mod oracle {
 
     pub(super) fn interleave_pair(left: &[f32], right: &[f32], output: &mut [f32]) -> usize {
         let frames = left.len().min(right.len()).min(output.len() / 2);
-        for ((pair, l), r) in output.chunks_exact_mut(2).zip(left).zip(right).take(frames) {
+        for ((pair, l), r) in output
+            .as_chunks_mut::<2>()
+            .0
+            .iter_mut()
+            .zip(left)
+            .zip(right)
+            .take(frames)
+        {
             pair.copy_from_slice(&[*l, *r]);
         }
         frames
@@ -341,15 +348,14 @@ mod oracle {
     pub(super) fn deinterleave_pair(input: &[f32], left: &mut [f32], right: &mut [f32]) -> usize {
         let frames = (input.len() / 2).min(left.len()).min(right.len());
         for ((pair, l), r) in input
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .zip(left.iter_mut())
             .zip(right.iter_mut())
             .take(frames)
         {
-            if let [a, b] = pair {
-                *l = *a;
-                *r = *b;
-            }
+            [*l, *r] = *pair;
         }
         frames
     }

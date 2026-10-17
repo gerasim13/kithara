@@ -157,6 +157,12 @@ where
     ) -> TickResult {
         match self.reader.next_chunk() {
             Ok(ChunkOutcome::Chunk(chunk)) => {
+                debug!(
+                    metadata = ?chunk.meta,
+                    samples = chunk.samples.len(),
+                    pass_rate = self.rate.get(),
+                    "analysis: decoded PCM offered"
+                );
                 let range = chunk.meta.frame_range();
                 let Ok(analyzers) = open(
                     &mut self.analyzers,

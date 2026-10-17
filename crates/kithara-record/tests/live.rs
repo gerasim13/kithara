@@ -72,8 +72,9 @@ impl RecordingSink for TestSink {
 }
 
 fn write(output: &mut impl LiveOutput, frames: &[f32]) {
-    let left: Vec<_> = frames.chunks_exact(2).map(|frame| frame[0]).collect();
-    let right: Vec<_> = frames.chunks_exact(2).map(|frame| frame[1]).collect();
+    let (pairs, _) = frames.as_chunks::<2>();
+    let left: Vec<_> = pairs.iter().map(|[left, _]| *left).collect();
+    let right: Vec<_> = pairs.iter().map(|[_, right]| *right).collect();
     output.write_stereo(frames.len() / 2, &left, &right);
 }
 
@@ -84,8 +85,10 @@ fn wav_samples(bytes: &[u8]) -> Vec<f32> {
     let data_len = u32::from_le_bytes(bytes[40..44].try_into().expect("WAV data length"));
     assert_eq!(bytes.len(), 44 + data_len as usize);
     bytes[44..]
-        .chunks_exact(4)
-        .map(|sample| f32::from_le_bytes(sample.try_into().expect("one f32 sample")))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|sample| f32::from_le_bytes(*sample))
         .collect()
 }
 

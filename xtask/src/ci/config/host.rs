@@ -468,7 +468,7 @@ pub(crate) fn parse_build_cache_size(value: &str) -> Result<u64, BuildCacheSizeE
     let invalid = || BuildCacheSizeError {
         value: value.to_owned(),
     };
-    let digits = value.strip_suffix("GB").ok_or_else(&invalid)?;
+    let digits = value.strip_suffix("GB").ok_or_else(invalid)?;
     if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err(invalid());
     }

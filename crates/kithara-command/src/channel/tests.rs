@@ -400,7 +400,7 @@ fn the_executor_takes_commands_out_of_the_batch() {
     inbox.drain();
 
     let mut due = inbox.next_due(Frame(0), BLOCK).expect("the batch is due");
-    let taken: Vec<_> = due.commands_mut().drain(..).collect();
+    let taken = mem::take(due.commands_mut());
     due.apply(());
 
     assert_eq!(taken, [7]);

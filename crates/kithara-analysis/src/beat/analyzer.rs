@@ -75,6 +75,7 @@ where
     B: ResamplerBackend,
 {
     windows: BTreeMap<usize, RawBeats>,
+    origin: Option<u64>,
     short: BTreeSet<usize>,
     grid: GridBuffers,
     params: GridParams,
@@ -130,11 +131,36 @@ where
             window_frames,
             runs: Runs::new(config, source_rate, budget, BUDGET_RUNS),
             windows: BTreeMap::new(),
+            origin: None,
             short: BTreeSet::new(),
             failure: None,
             downmix: pools.get::<f32>(),
             grid: GridBuffers::new(&pools),
             source_rate,
+        }
+    }
+
+    pub(crate) fn observe_origin(&mut self, origin: u64) -> bool {
+        if self.origin.is_some_and(|known| known != origin) {
+            return false;
+        }
+        self.origin = Some(origin);
+        true
+    }
+
+    fn window_index(&self, start: u64, base: usize) -> usize {
+        if self.origin == Some(start) {
+            base / self.hop_frames
+        } else {
+            base.div_ceil(self.hop_frames)
+        }
+    }
+
+    fn window_offset(&self, start: u64, base: usize, span: usize, rate: f32) -> f32 {
+        if span < base {
+            start.to_f32().unwrap_or(f32::MAX) / self.source_rate.to_f32().unwrap_or(1.0)
+        } else {
+            span.to_f32().unwrap_or(f32::MAX) / rate
         }
     }
 
@@ -217,12 +243,10 @@ where
 
         for (start, mono) in self.runs.spans() {
             let base = self.runs.offset_in_run(0, start);
-            let mut index = base.div_ceil(self.hop_frames);
+            let mut index = self.window_index(start, base);
             loop {
                 let span = index.saturating_mul(self.hop_frames);
-                let Some(offset) = span.checked_sub(base) else {
-                    break;
-                };
+                let offset = span.saturating_sub(base);
                 let Some(available) = mono.len().checked_sub(offset).filter(|left| *left > 0)
                 else {
                     break;
@@ -248,14 +272,19 @@ where
                         }
                     };
                     owned.copy_from_slice(input);
-                    let keep = if full { self.hop_frames } else { available };
+                    let keep = if full {
+                        self.hop_frames.saturating_sub(base.saturating_sub(span))
+                    } else {
+                        available
+                    };
+                    let offset_seconds = self.window_offset(start, base, span, rate);
                     return Some(DetectRequest {
                         input: owned,
                         window: WindowMeta {
                             full,
                             index,
                             keep_seconds: keep.to_f32().unwrap_or(f32::MAX) / rate,
-                            offset_seconds: span.to_f32().unwrap_or(f32::MAX) / rate,
+                            offset_seconds,
                         },
                     });
                 }
@@ -324,8 +353,13 @@ where
 
     fn release_detected(&mut self) {
         let (windows, short, hop) = (&self.windows, &self.short, self.hop_frames);
+        let origin = self.origin.map(|at| self.runs.offset_in_run(0, at));
         self.runs.release(|base| {
-            let first = base.div_ceil(hop);
+            let first = if origin == Some(base) {
+                base / hop
+            } else {
+                base.div_ceil(hop)
+            };
             let mut index = first;
             while windows.contains_key(&index) && !short.contains(&index) {
                 index = index.saturating_add(1);
@@ -351,8 +385,10 @@ where
             taken,
             windows,
             short,
+            origin,
         } = resume;
         self.runs.restore(pools, runs, taken)?;
+        self.origin = origin;
         self.windows = windows
             .into_iter()
             .map(|(index, raw)| (index, raw_beats(raw)))
@@ -404,6 +440,10 @@ where
 
     pub(crate) fn write_resume(&mut self, out: &mut Vec<u8>) {
         let mut writer = Writer::new(out);
+        writer.write_bool(self.origin.is_some());
+        if let Some(origin) = self.origin {
+            writer.write_u64(origin);
+        }
         self.runs.write_resume(&mut writer);
         writer.write_len(self.windows.len());
         for (index, raw) in &self.windows {
@@ -474,17 +514,22 @@ fn normalize_marks(marks: &mut Vec<BeatMark>) {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use kithara_beat::{BeatDetectError, BeatDetector, BeatDetectorMock, BeatMark, RawBeats};
+    use kithara_beat::{
+        BeatDetectError, BeatDetector, BeatDetectorMock, BeatMark, RawBeats, SpectralBeats, Tempo,
+    };
     use kithara_platform::sync::{Arc, Mutex};
     use kithara_resampler::rubato::RubatoBackend;
     use kithara_signal::FrameSpan;
-    use kithara_test_fixtures::analysis_beat_fixtures::{
-        cancelling, quarter_4096, quarter_10000, quarter_44100, quarter_88200, quarter_132300,
-        quarter_176400, quarter_529200, quarter_2646000, sine_220, sine_440, step, tenth_4096,
-        tenth_816000,
+    use kithara_test_fixtures::{
+        analysis_beat_fixtures::{
+            cancelling, quarter_4096, quarter_10000, quarter_44100, quarter_88200, quarter_132300,
+            quarter_176400, quarter_529200, quarter_2646000, sine_220, sine_440, step, tenth_4096,
+            tenth_816000,
+        },
+        unit_fixtures::clicks_120_20s,
     };
     use kithara_test_utils::kithara;
-    use num_traits::cast::AsPrimitive;
+    use num_traits::cast::{AsPrimitive, ToPrimitive};
     use unimock::{MockFn, Unimock, matching};
 
     use super::{
@@ -661,27 +706,119 @@ mod tests {
         // 2.0 s at 22 050 Hz, with real signal all the way to the end —
         // the resampler tail must be flushed, not dropped.
         let pcm = sine_440;
-        let mut analyzer = analyzer(consts::SRC, BeatAnalysisConfig::<RubatoBackend>::default());
-        let detector = detector(|mono| {
+        for origin in [0, 529, 576, 1105] {
+            let mut analyzer =
+                analyzer(consts::SRC, BeatAnalysisConfig::<RubatoBackend>::default());
+            assert!(analyzer.analyzer.observe_origin(origin));
+            let calls = Arc::new(Mutex::new(0));
+            let detector_calls = Arc::clone(&calls);
+            let detector = detector(move |mono| {
+                *detector_calls.lock() += 1;
+                assert_eq!(mono.len(), 2 * consts::TARGET);
+                let whole = rms(mono);
+                assert!((whole - 0.354).abs() < 0.05, "sine RMS: {whole}");
+                let tail = rms(&mono[mono.len() - 256..]);
+                assert!(tail > 0.2, "resampled signal tail: {tail}");
+                empty_raw()
+            });
+            let mut at = origin;
+            for chunk in pcm.chunks(1000 * 2) {
+                assert!(analyzer.push_interleaved(chunk, 2, at, Opens::Run, &detector));
+                at += u64::try_from(chunk.len() / 2).expect("fixture frame count fits u64");
+            }
+            analyzer.snapshot(&detector, true).expect("mock detects");
             assert_eq!(
-                mono.len(),
-                2 * consts::TARGET,
-                "every input frame must reach the detector at 22 050 Hz"
+                *calls.lock(),
+                1,
+                "the detector reads the complete run at {origin}"
             );
-            let whole = rms(mono);
-            assert!(
-                (whole - 0.354).abs() < 0.05,
-                "sine RMS must survive resampling, got {whole}"
+        }
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn observed_leading_origin_preserves_detector_input_and_raw_beats(clicks_120_20s: Vec<f32>) {
+        let pcm: Vec<_> = clicks_120_20s
+            .iter()
+            .copied()
+            .cycle()
+            .take(30 * consts::TARGET)
+            .flat_map(|sample| [sample; 4])
+            .collect();
+        let block = usize::try_from(consts::SRC).expect("rate fits usize") * 16;
+        let mut baseline = None;
+        let mut input_frames = None;
+        for origin in [0, 576] {
+            let mut pass = analyzer(consts::SRC, BeatAnalysisConfig::<RubatoBackend>::default());
+            assert!(pass.analyzer.observe_origin(origin));
+            let detector = SpectralBeats::new(pass.pools.clone(), Tempo::default())
+                .expect("existing spectral backend");
+            let mut at = origin;
+            let mut calls = 0;
+            for chunk in pcm.chunks(block * 2) {
+                assert!(pass.push_interleaved_deferred(chunk, 2, at, Opens::Run));
+                at += u64::try_from(chunk.len() / 2).expect("fixture count fits u64");
+                while let Some(request) = pass.prepare_detection(false) {
+                    calls += 1;
+                    assert_eq!(request.window.index, 0);
+                    assert_eq!(
+                        request.input.len(),
+                        *input_frames.get_or_insert(request.input.len())
+                    );
+                    assert_eq!(
+                        request.window.offset_seconds,
+                        origin.to_f32().expect("origin fits f32")
+                            / consts::SRC.to_f32().expect("rate fits f32")
+                    );
+                    let output = request.detect(&detector);
+                    assert!(
+                        !output
+                            .result
+                            .as_ref()
+                            .expect("click detection")
+                            .beats
+                            .is_empty()
+                    );
+                    pass.apply_detection(output);
+                }
+            }
+            assert_eq!(calls, 1, "a valid short estimate waits for full readiness");
+            assert!(pass.prepare_detection(true).is_none());
+            let grid = pass.snapshot(&detector, true).expect("real click grid");
+            assert!(!grid.beats().is_empty());
+            let zero = baseline.get_or_insert_with(|| grid.beats().to_vec());
+            assert_eq!(grid.beats().len(), zero.len());
+            for (raw, relative) in grid.beats().iter().zip(zero.iter()) {
+                assert!(
+                    raw.abs_diff(relative + origin) <= 1,
+                    "raw beat {raw} preserves source origin {origin} beside {relative}"
+                );
+            }
+            assert_eq!(
+                pass.unanalysed(Some(at)),
+                if origin == 0 {
+                    Vec::new()
+                } else {
+                    std::iter::once(0..origin).collect()
+                }
             );
-            let tail = rms(&mono[mono.len() - 256..]);
-            assert!(
-                tail > 0.2,
-                "the final 256 samples must carry signal (tail flushed), rms {tail}"
-            );
-            empty_raw()
-        });
-        push_chunked(&mut analyzer, &pcm, 1000, &detector);
-        analyzer.snapshot(&detector, true).expect("mock detects");
+            let mut beat = Vec::new();
+            pass.write_resume(&mut beat);
+            let state = crate::progress::AnalysisResume::capture(
+                std::num::NonZeroU64::MIN,
+                None,
+                Some(&beat),
+            )
+            .decode()
+            .expect("observed source origin round trips");
+            let mut resumed = analyzer(consts::SRC, BeatAnalysisConfig::<RubatoBackend>::default());
+            resumed
+                .analyzer
+                .restore(&resumed.pools, state.beat.expect("beat resume"))
+                .expect("resumed buffers fit");
+            assert_eq!(resumed.analyzer.origin, Some(origin));
+            assert!(resumed.analyzer.observe_origin(origin));
+            assert!(!resumed.analyzer.observe_origin(origin + 1));
+        }
     }
 
     #[kithara::test]
@@ -908,24 +1045,21 @@ mod tests {
             .build();
         let second = usize::try_from(consts::SRC).unwrap_or(1);
         let pcm = quarter_2646000;
-        let mut analyzer = analyzer(consts::SRC, config);
-        let detector = detector(|_| empty_raw());
-
-        let mut worst = 0;
-        for (index, chunk) in pcm.chunks(second * 2).enumerate() {
-            let at = u64::try_from(index * second).unwrap_or(0);
-            analyzer.push_interleaved_deferred(chunk, 2, at, Opens::Run);
-            while let Some(request) = analyzer.prepare_detection(false) {
-                analyzer.apply_detection(request.detect(&detector));
+        for origin in [0, 576] {
+            let mut analyzer = analyzer(consts::SRC, config.clone());
+            assert!(analyzer.analyzer.observe_origin(origin));
+            let detector = detector(|_| empty_raw());
+            let mut worst = 0;
+            for (index, chunk) in pcm.chunks(second * 2).enumerate() {
+                let at = origin + u64::try_from(index * second).expect("fixture frames fit u64");
+                analyzer.push_interleaved_deferred(chunk, 2, at, Opens::Run);
+                while let Some(request) = analyzer.prepare_detection(false) {
+                    analyzer.apply_detection(request.detect(&detector));
+                }
+                worst = worst.max(analyzer.held_frames());
             }
-            worst = worst.max(analyzer.held_frames());
+            assert!(worst <= 6 * second, "origin {origin} held {worst} frames");
         }
-
-        assert!(
-            worst <= 6 * second,
-            "one window is 3 s, yet the run held {worst} frames of {}",
-            60 * second
-        );
     }
 
     #[kithara::test]

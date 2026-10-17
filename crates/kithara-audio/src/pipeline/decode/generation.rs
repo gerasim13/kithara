@@ -1268,7 +1268,7 @@ mod tests {
                 const FADE_FRAMES: usize = 4;
                 assert_eq!(&output.samples[..2], &[0.0; 2]);
                 let mut previous = 0.0;
-                for frame in output.samples[..FADE_FRAMES * 2].chunks_exact(2) {
+                for frame in output.samples[..FADE_FRAMES * 2].as_chunks::<2>().0 {
                     assert_eq!(frame[0], frame[1]);
                     assert!(frame[0] >= previous && frame[0] < 0.25);
                     previous = frame[0];

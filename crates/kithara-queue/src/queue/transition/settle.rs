@@ -153,18 +153,7 @@ where
             return Ok(());
         };
         if let Settled::Applied { at, .. } = settled {
-            self.transition_applied(seq, index, *at)?;
-            if let Some(target) = self.target.filter(|target| !target.auto)
-                && self.incoming_index(target.to).is_none()
-                && let Some(requested) = self
-                    .active
-                    .position(|active| active.item == target.to && active.role == Role::Outgoing)
-            {
-                self.active
-                    .get_mut(requested)
-                    .ok_or(PlayError::NoActiveSlot)?
-                    .role = Role::Incoming;
-            }
+            self.commit_handover(seq, index, *at)?;
             return Ok(());
         }
         self.pending_handover = None;
@@ -183,6 +172,37 @@ where
         let Settled::Rejected { reason, .. } = settled else {
             return Ok(());
         };
+        self.recover_handover(index, seq, reason, out)
+    }
+
+    fn commit_handover(
+        &mut self,
+        seq: Seq,
+        index: usize,
+        at: SessionFrame,
+    ) -> Result<(), PlayError> {
+        self.transition_applied(seq, index, at)?;
+        if let Some(target) = self.target.filter(|target| !target.auto)
+            && self.incoming_index(target.to).is_none()
+            && let Some(requested) = self
+                .active
+                .position(|active| active.item == target.to && active.role == Role::Outgoing)
+        {
+            self.active
+                .get_mut(requested)
+                .ok_or(PlayError::NoActiveSlot)?
+                .role = Role::Incoming;
+        }
+        Ok(())
+    }
+
+    fn recover_handover(
+        &mut self,
+        index: usize,
+        seq: Seq,
+        reason: &Rejection<PlayError>,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<(), PlayError> {
         if matches!(reason, Rejection::Stale)
             && self.target.is_some_and(|target| target.stale == Some(seq))
         {
@@ -284,30 +304,51 @@ where
             return Ok(());
         };
         if self.target.is_some_and(|target| target.repeat == Some(seq)) {
-            match settled {
-                Settled::Applied { .. } => {
-                    self.target = None;
-                    self.announce(QueueEvent::CurrentTrackAdvance {
-                        id: self.current,
-                        reason: AdvanceReason::NaturalEof,
-                    });
-                }
-                Settled::Rejected {
-                    reason: Rejection::Late | Rejection::Stale,
-                    ..
-                } => {
-                    if let Some(target) = &mut self.target {
-                        target.repeat = None;
-                        target.continued = Some(Continuation::Entry(seq));
-                    }
-                }
-                _ => self.cancel_target(out).map_err(play_error)?,
-            }
+            self.repeat_settled(seq, settled, out)?;
             return Ok(());
         }
         if active.load.is_some_and(|load| load.seq() == seq) {
             return self.load_settled(index, settled, out);
         }
+        self.pause_settled(index, seq, applied, settled, out)
+    }
+    fn repeat_settled(
+        &mut self,
+        seq: Seq,
+        settled: &Settled,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<(), PlayError> {
+        match settled {
+            Settled::Applied { .. } => {
+                self.target = None;
+                self.announce(QueueEvent::CurrentTrackAdvance {
+                    id: self.current,
+                    reason: AdvanceReason::NaturalEof,
+                });
+            }
+            Settled::Rejected {
+                reason: Rejection::Late | Rejection::Stale,
+                ..
+            } => {
+                if let Some(target) = &mut self.target {
+                    target.repeat = None;
+                    target.continued = Some(Continuation::Entry(seq));
+                }
+            }
+            _ => self.cancel_target(out).map_err(play_error)?,
+        }
+        Ok(())
+    }
+
+    fn pause_settled(
+        &mut self,
+        index: usize,
+        seq: Seq,
+        applied: bool,
+        settled: &Settled,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<(), PlayError> {
+        let active = self.active.get(index).ok_or(PlayError::NoActiveSlot)?;
         let continued_pause = active.role == Role::Incoming
             && self.target.is_some_and(|target| {
                 !target.playing

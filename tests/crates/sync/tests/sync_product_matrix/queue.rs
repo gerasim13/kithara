@@ -6,8 +6,8 @@ use kithara::{
     events::TrackId,
     link::LinkedSnapshot,
     play::{
-        CrossfadeCurve, CrossfadeSettings, DeckMixSettings, DeckMixerConfig, TrackSettings,
-        TrackSnapshot,
+        CrossfadeCurve, CrossfadeSettings, DeckMixSettings, DeckMixerConfig, Position,
+        TrackSettings, TrackSnapshot,
     },
     queue::{QueueSettings, Transition},
     signal::{AudioChunkInfo, SegmentId, SourceSpan},
@@ -22,6 +22,7 @@ use kithara_render::bridge::{Fade, FadeDir, Slot, SlotSnapshot, SlotState};
 use kithara_test_utils::tracing;
 
 use super::{
+    cases::NEWTECHNO_PHRASE,
     consumed::{Capture, SourceIdentity},
     control::{CONTROL_GAIN, DecodedCapture, DecodedObserver},
     imports::*,
@@ -91,6 +92,7 @@ type NativeSegment = (TrackId, Slot, SessionFrame, u64, u64);
 
 struct Voice {
     item: TrackId,
+    entry: Position,
     model: Arc<BeatGridModel>,
     decoded: Arc<Mutex<DecodedCapture>>,
     fixture: kithara_integration_tests::pcm_oracle::Audio,
@@ -198,14 +200,23 @@ fn intervals(
     result
 }
 
-fn first_grid_boundary(voice: &Voice) -> Duration {
+fn entry_boundary(voice: &Voice) -> Duration {
     let raw = voice.model.as_raw();
+    let requested = voice.entry.as_secs_f64();
     let seconds = if raw.meter.is_some() {
-        raw.downbeats.first().expect("declared first downbeat").at
+        raw.downbeats
+            .iter()
+            .find(|beat| beat.at >= requested)
+            .expect("a declared downbeat covers the requested entry")
+            .at
     } else {
-        raw.beats.first().expect("declared first beat").at
+        raw.beats
+            .iter()
+            .find(|beat| beat.at >= requested)
+            .expect("a declared beat covers the requested entry")
+            .at
     };
-    Duration::try_from_secs_f64(seconds).expect("finite declared first boundary")
+    Duration::try_from_secs_f64(seconds).expect("finite declared entry boundary")
 }
 
 fn residency_origin(voice: &Voice, info: AudioChunkInfo) -> u64 {
@@ -297,7 +308,7 @@ fn voice_intervals(
     );
     assert_eq!(
         first_span.position_at(0),
-        Some(first_grid_boundary(voice)),
+        Some(entry_boundary(voice)),
         "actual first SourceSpan starts at the supplied first grid boundary"
     );
     assert_eq!(
@@ -748,7 +759,14 @@ impl QueueMusic {
     }
 
     #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
-    async fn append_sources(&mut self) {
+    async fn append_sources(&mut self, tracks: &[(&str, Start)]) {
+        assert!(
+            tracks
+                .iter()
+                .map(|(name, _)| *name)
+                .eq(self.kind.sources().iter().copied()),
+            "every track has an explicit entry offset in queue order"
+        );
         let target = self.deck.id();
         self.host
             .send(LinkedHostCommand::Sync {
@@ -758,7 +776,7 @@ impl QueueMusic {
             .await
             .expect("SYNC through the actual Host owner");
         let provider = self.kind.provider();
-        for (index, name) in self.kind.sources().iter().enumerate() {
+        for (index, (name, start)) in tracks.iter().enumerate() {
             hang_tick!(format!("queue321: append real source {index}: {name}"));
             let asset =
                 kithara_test_fixtures::assets::by_name(name).expect("existing musical fixture");
@@ -781,6 +799,33 @@ impl QueueMusic {
             let ArtifactSource::Value(model) = provider.beat_grid(index) else {
                 panic!("declared fixture analysis");
             };
+            let entry = Position::from_secs_f64(start.seconds(Some(&model)));
+            let pinned_cue = match *name {
+                "library_flac_newtechno" => Some((64, 27.64)),
+                "library_flac_ryabina" => Some((128, 38.8)),
+                _ => None,
+            };
+            if let Some((ordinal, seconds)) = pinned_cue {
+                let beat = model
+                    .as_raw()
+                    .beats
+                    .iter()
+                    .find(|beat| beat.ordinal == ordinal)
+                    .expect("the original fixture grid contains the requested cue beat");
+                assert_eq!(beat.at, seconds, "the original fixture cue stays fixed");
+                if !self.forward_oracle {
+                    assert_eq!(
+                        *start,
+                        Start::Beat(ordinal),
+                        "keylock uses the requested cue beat"
+                    );
+                    assert_eq!(
+                        entry,
+                        Position::from_secs_f64(seconds),
+                        "keylock uses the requested entry offset"
+                    );
+                }
+            }
             if self.kind == MusicCase::Natural {
                 assert!(
                     model.as_raw().meter.is_some(),
@@ -800,21 +845,32 @@ impl QueueMusic {
             let item = self
                 .host
                 .run(move || {
-                    let item = control.append(TrackSource::Config(Box::new(config)))?;
+                    let item = control.append_at(TrackSource::Config(Box::new(config)), entry)?;
                     control.attach_observer(item, observer);
                     Ok::<_, kithara::queue::QueueError>(item)
                 })
                 .await
                 .expect("append to the same public QueueControl");
-            self.voices.push(Voice {
+            let voice = Voice {
                 item,
+                entry,
                 model,
                 decoded,
                 fixture,
                 first: BTreeMap::new(),
                 bound: None,
                 checks: 0,
-            });
+            };
+            if !self.forward_oracle
+                && let Some((_, seconds)) = pinned_cue
+            {
+                assert_eq!(
+                    entry_boundary(&voice),
+                    Duration::from_secs_f64(seconds),
+                    "the selected keylock boundary stays at the requested fixture cue"
+                );
+            }
+            self.voices.push(voice);
             hang_reset!();
         }
     }
@@ -1823,15 +1879,15 @@ fn assert_transport(
     );
     assert!(
         o.placements.iter().all(|placement| {
-            voices.iter().any(|voice| {
-                voice.item == placement.item && placement.to == first_grid_boundary(voice)
-            })
+            voices
+                .iter()
+                .any(|voice| voice.item == placement.item && placement.to == entry_boundary(voice))
         }) && o.cue_curves.iter().all(|cue| {
             voices
                 .iter()
-                .any(|voice| voice.item == cue.item && cue.position == first_grid_boundary(voice))
+                .any(|voice| voice.item == cue.item && cue.position == entry_boundary(voice))
         }),
-        "every initial or reprepared cue uses that source's supplied first grid boundary"
+        "every initial or reprepared cue uses the supplied boundary at or after its entry"
     );
     for voice in voices {
         let loaded = o
@@ -1840,9 +1896,15 @@ fn assert_transport(
             .find(|(owner, _)| *owner == voice.item)
             .expect("actual Load publishes its initial source clock")
             .1;
+        let raw_entry = loaded
+            .media_origin
+            .expect("the loaded source has its immutable media origin")
+            .checked_add(voice.entry)
+            .expect("the requested entry fits the source clock");
         assert_eq!(
-            loaded.frame_offset, 0,
-            "named fixture Load actually opens at source zero"
+            loaded.frame_offset,
+            loaded.spec.frame_at(raw_entry).expect("entry source frame"),
+            "the initial Load opens at its requested entry"
         );
     }
     assert!(
@@ -2600,24 +2662,31 @@ fn output_contract(
 }
 
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
-async fn capture_music(kind: MusicCase) {
+async fn capture_music(kind: MusicCase, key_lock: bool, tracks: &[(&str, Start)]) {
     let _trace = usdt_trace::scope();
     let wall = Instant::now();
     tracing::info!(target: "kithara_test::sync::queue321", phase = "setup_begin");
-    let track = TrackSettings::default();
+    let track = TrackSettings::builder()
+        .backend(kithara::stretch::StretchKind::Signalsmith)
+        .keylock(key_lock)
+        .build();
     assert!(
-        !track.keylock()
-            && track
-                .backend()
-                .capabilities()
-                .contains(kithara::stretch::BackendCapabilities::RATE),
-        "UNSUPPORTED_ORACLE_WITNESS: residency proof requires the native no-keylock RATE chain"
+        track.backend().capabilities().contains(if key_lock {
+            kithara::stretch::BackendCapabilities::KEYLOCK
+        } else {
+            kithara::stretch::BackendCapabilities::RATE
+        }),
+        "the selected backend supports the requested playback mode"
     );
     let mut case = QueueMusic::new(kind, track).await;
-    case.append_sources().await;
+    case.append_sources(tracks).await;
     tracing::info!(target: "kithara_test::sync::queue321", phase = "render_begin",
         wall_s = wall.elapsed().as_secs_f64(), frame = case.host.position());
     let mut data = case.run().await;
+    if key_lock {
+        check_keylock_music(&mut case, data).await;
+        return;
+    }
     hang_tick!(
         "queue321: validating native starts, ends, exact SourceSpan and physical mixed PCM"
             .to_owned()
@@ -2668,7 +2737,7 @@ async fn capture_music(kind: MusicCase) {
                         first,
                         residency_origin(voice, first.source.expect("first source identity")),
                     ),
-                    first_grid_boundary(voice),
+                    entry_boundary(voice),
                     &voice.decoded.lock(),
                 )
                 .unwrap_or_else(|error| {
@@ -2708,7 +2777,7 @@ async fn capture_music(kind: MusicCase) {
                 first,
                 residency_origin(voice, first.source.expect("first source identity")),
             ),
-            first_grid_boundary(voice),
+            entry_boundary(voice),
             &voice.decoded.lock(),
         )
         .is_err()
@@ -2815,7 +2884,18 @@ async fn capture_music(kind: MusicCase) {
     tracing("kithara_test::sync::queue321=info")
 )]
 async fn one_queue_crossfades_five_music_tracks_and_retargets_host_during_overlap() {
-    capture_music(MusicCase::Natural).await;
+    capture_music(
+        MusicCase::Natural,
+        false,
+        &[
+            ("rhythm_wav_house_124_aligned", Start::Seconds(0.0)),
+            ("rhythm_wav_downtempo_96_aligned", Start::Seconds(0.0)),
+            ("rhythm_wav_techno_132_aligned", Start::Seconds(0.0)),
+            ("rhythm_wav_trip_hop_74_aligned", Start::Seconds(0.0)),
+            ("rhythm_wav_breakbeat_140_aligned", Start::Seconds(0.0)),
+        ],
+    )
+    .await;
 }
 
 #[kithara::test(
@@ -2826,36 +2906,31 @@ async fn one_queue_crossfades_five_music_tracks_and_retargets_host_during_overla
     timeout(Duration::from_secs(300)),
     tracing("kithara_test::sync::queue321=info")
 )]
-async fn one_queue_crossfades_five_real_tracks_through_four_public_next_requests() {
-    capture_music(MusicCase::RealNext).await;
+#[case::rate_from_start(false, &[
+    ("library_flac_song2", Start::Seconds(0.0)),
+    ("library_flac_slowtechno", Start::Seconds(0.0)),
+    ("library_flac_newtechno", Start::Seconds(0.0)),
+    ("library_flac_ryabina", Start::Seconds(0.0)),
+    ("library_flac_song1", Start::Seconds(0.0)),
+])]
+#[case::keylock_with_offsets(true, &[
+    ("library_flac_song2", Start::Seconds(0.0)),
+    ("library_flac_slowtechno", Start::Seconds(0.0)),
+    ("library_flac_newtechno", NEWTECHNO_PHRASE),
+    ("library_flac_ryabina", Start::Beat(128)),
+    ("library_flac_song1", Start::Seconds(0.0)),
+])]
+async fn one_queue_crossfades_five_real_tracks_through_four_public_next_requests(
+    #[case] key_lock: bool,
+    #[case] tracks: &[(&str, Start)],
+) {
+    capture_music(MusicCase::RealNext, key_lock, tracks).await;
 }
 
-#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
-#[ignore = "writes opt-in listening artifacts; run explicitly with KITHARA_AUDIO_ARTIFACT_DIR"]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
-async fn record_five_real_tracks_with_keylock_through_four_public_next_requests() {
-    let _trace = usdt_trace::scope();
-    let track = TrackSettings::builder()
-        .backend(kithara::stretch::StretchKind::Signalsmith)
-        .keylock(true)
-        .build();
-    assert!(track.keylock());
-    assert!(
-        track
-            .backend()
-            .capabilities()
-            .contains(kithara::stretch::BackendCapabilities::KEYLOCK),
-        "the selected backend supports pitch-preserving playback"
-    );
-    let mut case = QueueMusic::new(MusicCase::RealNext, track).await;
-    assert!(
-        case.output_wav.is_some() && case.master_wav.is_some(),
-        "listening capture requires KITHARA_AUDIO_ARTIFACT_DIR"
-    );
-    case.append_sources().await;
-    let data = case.run().await;
+async fn check_keylock_music(case: &mut QueueMusic, data: CapturedMusic) {
     let mut failures = data.failures.clone();
-    let capture = native_capture(&case, &data, &mut failures);
+    let capture = native_capture(case, &data, &mut failures);
     let opens = kithara_test_utils::test::usdt::events_of("source_opened").len();
     assert_eq!(opens, 5, "exactly five real source opens");
     assert!(data.output_delta > 0.0, "Output carries the Host metronome");
@@ -2872,6 +2947,57 @@ async fn record_five_real_tracks_with_keylock_through_four_public_next_requests(
                 (voice.item, capture)
             })
             .collect();
+        let mut entry_checks = Vec::new();
+        for voice in &voices {
+            let start = frame(
+                capture
+                    .starts
+                    .iter()
+                    .find(|(item, ..)| *item == voice.item)
+                    .expect("the cued track actually starts")
+                    .2,
+            );
+            let end = native_end(&capture, voice.item, data.bounded_end);
+            let copied = consumed[&voice.item]
+                .covered(start..end)
+                .expect("the complete audible source domain was actually consumed");
+            let (&copied_at, interval) = copied.first_key_value().expect("first consumed frame");
+            assert_eq!(copied_at, start, "the first PCM starts on its native Start");
+            let identity = interval.identity;
+            for interval in copied.values() {
+                assert_eq!(
+                    (
+                        interval.identity.spec,
+                        interval.identity.source_revision,
+                        interval.identity.media_origin,
+                    ),
+                    (
+                        identity.spec,
+                        identity.source_revision,
+                        identity.media_origin
+                    ),
+                    "every consumed slice retains the first native source identity"
+                );
+            }
+            let actual = interval
+                .source
+                .position_at(0)
+                .expect("first source position")
+                .checked_sub(identity.media_origin.expect("immutable source origin"))
+                .expect("the source entry follows its media origin");
+            let selected = entry_boundary(voice);
+            assert!(
+                actual.abs_diff(selected) <= Duration::from_secs_f64(1.0 / f64::from(RATE)),
+                "item {:?} must first consume its selected cue {selected:?}, got {actual:?}",
+                voice.item,
+            );
+            entry_checks.push(serde_json::json!({
+                "item": u64::from(voice.item),
+                "requested_seconds": voice.entry.as_secs_f64(),
+                "selected_seconds": selected.as_secs_f64(),
+                "first_consumed_source_seconds": actual.as_secs_f64(),
+            }));
+        }
         let domain = 0..i64::try_from(data.pcm.len() / 2).expect("captured frames");
         let required_beats = assert_all_beats(
             &voices,
@@ -2912,10 +3038,12 @@ async fn record_five_real_tracks_with_keylock_through_four_public_next_requests(
         serde_json::json!({
             "scenario": "five-real-tracks-four-next-keylock-100-to-120",
             "requested_backend": "Signalsmith", "keylock": true,
+            "entry_cues": entry_checks,
             "actual_backend": "not exposed by TrackSnapshot or existing probes",
             "sources": REAL_SOURCES,
             "source_grids": voices.iter().map(|voice| serde_json::json!({
                 "item": u64::from(voice.item), "model": voice.model.as_raw(),
+                "requested_start_seconds": voice.entry.as_secs_f64(),
             })).collect::<Vec<_>>(),
             "frames": data.pcm.len() / 2, "sample_rate": RATE, "channels": 2,
             "source_open_count": opens,

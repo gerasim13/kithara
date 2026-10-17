@@ -171,16 +171,8 @@ where
         if meta.source_span.is_some_and(|span| !span.is_affine()) {
             return Err(crate::WarpRenderError::UnsupportedSourceGeometry);
         }
-        if let Some(prepared) = self.prepared_quantum {
-            if prepared.source_start != meta.frame_offset {
-                return Err(crate::WarpRenderError::OutstandingQuantum);
-            }
-            if prepared.source_span.is_none_or(|span| {
-                usize::try_from(span.output_frames()).is_ok_and(|frames| frames <= output_limit)
-            }) {
-                return Ok(FrameCount::new(prepared.frames));
-            }
-            self.prepared_quantum = None;
+        if let Some(frames) = self.prepared_source_window(meta, output_limit)? {
+            return Ok(frames);
         }
         self.rebase_source(meta);
         if self.transition_pending() || self.engine_outdated() {
@@ -190,19 +182,44 @@ where
             return Err(crate::WarpRenderError::UnsupportedRegionPlan);
         }
         self.terminal_source_end = None;
+        let prepared = self.prepare_active_quantum(meta, remaining, output_limit)?;
+        self.prepared_quantum = Some(prepared);
+        Ok(FrameCount::new(prepared.frames))
+    }
+
+    fn prepared_source_window(
+        &mut self,
+        meta: AudioChunkInfo,
+        output_limit: usize,
+    ) -> Result<Option<FrameCount>, crate::WarpRenderError> {
+        if let Some(prepared) = self.prepared_quantum {
+            if prepared.source_start != meta.frame_offset {
+                return Err(crate::WarpRenderError::OutstandingQuantum);
+            }
+            if prepared.source_span.is_none_or(|span| {
+                usize::try_from(span.output_frames()).is_ok_and(|frames| frames <= output_limit)
+            }) {
+                return Ok(Some(FrameCount::new(prepared.frames)));
+            }
+            self.prepared_quantum = None;
+        }
+        Ok(None)
+    }
+
+    fn prepare_active_quantum(
+        &self,
+        meta: AudioChunkInfo,
+        remaining: usize,
+        output_limit: usize,
+    ) -> Result<PreparedQuantum, ElasticError> {
         if !self.requires_staging()
             || (self.plan.is_none()
                 && (self.trajectory.constant_unity()
                     || (!self.current_keylock && self.trajectory.unity_interval())))
         {
-            let prepared = self.prepare_unity_quantum(meta, remaining, output_limit)?;
-            let frames = prepared.frames;
-            self.prepared_quantum = Some(prepared);
-            return Ok(FrameCount::new(frames));
+            return self.prepare_unity_quantum(meta, remaining, output_limit);
         }
-        let prepared = self.prepare_projected_quantum(meta, remaining, output_limit)?;
-        self.prepared_quantum = Some(prepared);
-        Ok(FrameCount::new(prepared.frames))
+        self.prepare_projected_quantum(meta, remaining, output_limit)
     }
 
     fn prepare_unity_quantum(
@@ -285,17 +302,7 @@ where
             .ok_or(ElasticError::SampleCountOverflow)?;
         let (numerator, denominator) =
             self.mapped_position(meta.frame_offset, meta.spec.sample_rate, offset)?;
-        let correction = self.plan.as_ref().map_or(1.0, |plan| {
-            plan.segments().iter().fold(1.0_f64, |minimum, segment| {
-                minimum.min(segment.ratio_correction())
-            })
-        });
-        let radius = if f64::from(self.trajectory.speed_bounds()?.1) <= correction {
-            0
-        } else {
-            u64::try_from(crate::consts::SOURCE_RADIUS)
-                .map_err(|_| ElasticError::SampleCountOverflow)?
-        };
+        let radius = self.projection_radius()?;
         let end = u64::try_from(numerator.div_ceil(denominator.get()))
             .ok()
             .and_then(|frame| frame.checked_add(radius + 1))
@@ -316,6 +323,42 @@ where
         })
     }
 
+    fn projection_radius(&self) -> Result<u64, ElasticError> {
+        let correction = self.plan.as_ref().map_or(1.0, |plan| {
+            plan.segments().iter().fold(1.0_f64, |minimum, segment| {
+                minimum.min(segment.ratio_correction())
+            })
+        });
+        let radius = if f64::from(self.trajectory.speed_bounds()?.1) <= correction {
+            0
+        } else {
+            u64::try_from(crate::consts::SOURCE_RADIUS)
+                .map_err(|_| ElasticError::SampleCountOverflow)?
+        };
+        Ok(radius)
+    }
+
+    #[kithara::hang_watchdog]
+    fn terminal_span(
+        span: kithara_signal::SourceSpan,
+        end: u64,
+    ) -> Option<(kithara_signal::SourceSpan, usize)> {
+        let mut outputs = span.output_frames();
+        while outputs > 0 {
+            hang_tick!();
+            let (numerator, denominator) = span.source_ratio_at(outputs - 1)?;
+            if numerator / denominator.get() < u128::from(end) {
+                break;
+            }
+            outputs -= 1;
+            hang_reset!();
+        }
+        Some((
+            span.for_output_range(0..outputs)?,
+            usize::try_from(outputs).ok()?,
+        ))
+    }
+
     /// Shrink a prepared source span at true EOF without sampling controls again.
     #[kithara::hang_watchdog]
     pub fn prepare_terminal_quantum(&mut self, frames: usize) -> Option<FrameCount> {
@@ -328,18 +371,9 @@ where
             .checked_add(u64::try_from(frames).ok()?)?;
         self.terminal_source_end = Some(end);
         if let Some(span) = prepared.source_span {
-            let mut outputs = span.output_frames();
-            while outputs > 0 {
-                hang_tick!();
-                let (numerator, denominator) = span.source_ratio_at(outputs - 1)?;
-                if numerator / denominator.get() < u128::from(end) {
-                    break;
-                }
-                outputs -= 1;
-                hang_reset!();
-            }
-            prepared.source_span = Some(span.for_output_range(0..outputs)?);
-            prepared.landing_frames = Some(usize::try_from(outputs).ok()?);
+            let (span, outputs) = Self::terminal_span(span, end)?;
+            prepared.source_span = Some(span);
+            prepared.landing_frames = Some(outputs);
         }
         let shrink = prepared.frames - frames;
         if shrink > 0 && prepared.source_span.is_none() {

@@ -161,9 +161,11 @@ pub(super) fn pcm(constant_half: &'static [u8], src: &str, seconds: f64) -> Box<
         .expect("fixture frame count fits usize");
     let frames = total.min(4096);
     let samples = constant_half
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .take(frames * 2)
-        .map(|bytes| f32::from_le_bytes(bytes.try_into().expect("sample bytes")))
+        .map(|bytes| f32::from_le_bytes(*bytes))
         .collect::<Vec<_>>();
     pcm_samples(src, seconds, &samples, frames == total)
 }

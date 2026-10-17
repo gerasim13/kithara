@@ -100,7 +100,7 @@ fn request_incoming_plan_with_disposition(
 
 fn assert_route_signal(chunk: &AudioChunk, expected_offset: u64) {
     assert_eq!(chunk.meta.frame_offset, expected_offset);
-    for (frame, samples) in chunk.samples.chunks_exact(2).enumerate() {
+    for (frame, samples) in chunk.samples.as_chunks::<2>().0.iter().enumerate() {
         let absolute = expected_offset.saturating_add(u64::try_from(frame).unwrap_or(u64::MAX));
         let absolute_f64 = num_traits::cast::ToPrimitive::to_f64(&absolute).unwrap_or(f64::MAX);
         let time = absolute_f64 / f64::from(consts::SAMPLE_RATE);

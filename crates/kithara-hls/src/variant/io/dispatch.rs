@@ -91,18 +91,7 @@ where
         let wait_segment = wait_end
             .and_then(|end| self.find_at_offset(end.saturating_sub(1)))
             .map(|(segment, _, _)| segment);
-        if let Some(segment) = wait_segment
-            && let Some(entry) = self.segments.get(segment as usize)
-            && !entry.state().is_loaded()
-            && !entry.state().is_failed()
-            && !entry.state().is_downloading()
-        {
-            let planned = PlannedFetch::Segment(segment);
-            let mut queue = self.flow.queue.lock();
-            if !queue.contains(&planned) {
-                queue.push_front(planned);
-            }
-        }
+        self.prioritize_waiting_segment(wait_segment);
         let construction_segment_end =
             construction_segment_end.map(|end| end.max(wait_segment.unwrap_or(end)));
         let owed_through = audible
@@ -229,6 +218,21 @@ where
         }
         self.defer_prefetch_until(resume_at.unwrap_or(consts::NO_PREFETCH_DEFERRAL));
         out
+    }
+
+    fn prioritize_waiting_segment(&self, wait_segment: Option<u32>) {
+        if let Some(segment) = wait_segment
+            && let Some(entry) = self.segments.get(segment as usize)
+            && !entry.state().is_loaded()
+            && !entry.state().is_failed()
+            && !entry.state().is_downloading()
+        {
+            let planned = PlannedFetch::Segment(segment);
+            let mut queue = self.flow.queue.lock();
+            if !queue.contains(&planned) {
+                queue.push_front(planned);
+            }
+        }
     }
 
     #[kithara::probe(

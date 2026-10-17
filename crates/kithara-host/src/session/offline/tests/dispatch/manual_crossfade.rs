@@ -808,7 +808,7 @@ impl ManualRecording {
         let master = &self.master;
         let output = &self.output;
         let reference_output = &self.reference_output;
-        for (offset, stereo) in master.chunks_exact(2).enumerate() {
+        for (offset, stereo) in master.as_chunks::<2>().0.iter().enumerate() {
             let frame = start + offset as u64;
             let (out_gain, in_gain) = if frame < at {
                 (1.0, 0.0)

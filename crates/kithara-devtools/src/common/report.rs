@@ -125,12 +125,15 @@ pub fn print_grouped(report: &Report, diff: &RatchetDiff<'_>) {
 
         let description = sorted.iter().find_map(|v| v.explanation.as_deref());
 
-        let locations = sorted.iter().map(|v| {
+        let locations = repeated(&sorted).map(|(v, times)| {
             let loc = match v.severity {
                 Severity::Deny => format!("DENY  {}", v.key),
                 Severity::Warn => v.key.clone(),
             };
-            (loc, Some(v.message.clone()))
+            (
+                format!("{loc}{}", times_suffix(times)),
+                Some(v.message.clone()),
+            )
         });
 
         print_check_block(check, header_severity, &summary, description, locations);
@@ -220,6 +223,22 @@ fn eprint_failing(v: &Violation) {
     }
 }
 
+/// Adjacent identical violations as one entry with how many there are. A check
+/// that weighs a site reports it once per unit of weight, so the ratchet counts
+/// the units, and a listing would otherwise repeat the line that many times.
+fn repeated<'a>(vs: &'a [&'a Violation]) -> impl Iterator<Item = (&'a Violation, usize)> {
+    vs.chunk_by(|a, b| a.severity == b.severity && a.key == b.key && a.message == b.message)
+        .map(|run| (run[0], run.len()))
+}
+
+fn times_suffix(times: usize) -> String {
+    if times > 1 {
+        format!(" ×{times}")
+    } else {
+        String::new()
+    }
+}
+
 #[must_use]
 pub fn render_markdown(report: &Report, ran: &[&'static str], diff: &RatchetDiff<'_>) -> String {
     let mut out = String::new();
@@ -244,8 +263,15 @@ pub fn render_markdown(report: &Report, ran: &[&'static str], diff: &RatchetDiff
         let _ = write!(out, "## {check}\n\n");
         out.push_str("| severity | key | message |\n");
         out.push_str("| --- | --- | --- |\n");
-        for v in vs {
-            let _ = writeln!(out, "| {} | `{}` | {} |", v.severity, v.key, v.message,);
+        for (v, times) in repeated(&vs) {
+            let _ = writeln!(
+                out,
+                "| {} | `{}`{} | {} |",
+                v.severity,
+                v.key,
+                times_suffix(times),
+                v.message,
+            );
         }
         out.push('\n');
     }

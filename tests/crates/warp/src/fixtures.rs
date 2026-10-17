@@ -50,7 +50,9 @@ pub fn marked_source_pcm(source_pcm: &'static [u8]) -> &'static [u8] {
 fn peak_amplitude(wav: &[u8], start_frame: usize, frames: usize) -> i16 {
     let channels = usize::from(CHANNELS);
     wav[WAV_HEADER_BYTES..]
-        .chunks_exact(SAMPLE_BYTES)
+        .as_chunks::<SAMPLE_BYTES>()
+        .0
+        .iter()
         .skip(start_frame * channels)
         .take(frames * channels)
         .map(|sample| i16::from_le_bytes([sample[0], sample[1]]).saturating_abs())

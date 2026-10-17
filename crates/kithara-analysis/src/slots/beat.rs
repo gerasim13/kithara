@@ -117,6 +117,12 @@ impl<B> Slot<B>
 where
     B: ResamplerBackend,
 {
+    pub(crate) fn observe_origin(&mut self, origin: u64) -> bool {
+        self.0
+            .as_mut()
+            .is_none_or(|analyzer| analyzer.observe_origin(origin))
+    }
+
     pub(crate) fn apply_detection(&mut self, output: DetectOutput) {
         if let Some(analyzer) = &mut self.0 {
             analyzer.apply_detection(output);

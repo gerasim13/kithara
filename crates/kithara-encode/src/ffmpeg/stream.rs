@@ -141,7 +141,9 @@ impl AacStream for FfmpegStream {
         frame.set_pts(Some(self.next_pts));
         for (target, sample) in frame
             .data_mut(0)
-            .chunks_exact_mut(size_of::<f32>())
+            .as_chunks_mut::<{ size_of::<f32>() }>()
+            .0
+            .iter_mut()
             .zip(samples)
         {
             target.copy_from_slice(&sample.to_ne_bytes());

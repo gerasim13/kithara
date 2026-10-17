@@ -1,6 +1,6 @@
 #![cfg(target_arch = "wasm32")]
 
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, rc::Rc, sync::Once};
 
 use js_sys::{Array, Float32Array, Float64Array, Object, Reflect};
 use kithara::{
@@ -124,6 +124,10 @@ fn revisions(events: &Events) -> Vec<f64> {
 }
 
 fn observed_player() -> (AudioPlayer, Events, [BroadcastObservation; 2]) {
+    static BINDINGS: Once = Once::new();
+    BINDINGS.call_once(|| {
+        kithara_ffi::web::bindings::setup().expect("browser bindings initialized");
+    });
     let diagnostics = [
         BroadcastObservation::new("kithara-reply"),
         BroadcastObservation::new("kithara-events"),

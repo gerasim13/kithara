@@ -28,7 +28,9 @@ pub(crate) fn load_pcm_fixture(name: &str) -> Vec<f32> {
         "raw f32le fixture length must be a multiple of 4"
     );
     bytes
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
         .collect()
 }

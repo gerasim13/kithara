@@ -104,9 +104,8 @@ impl Jump {
     }
     fn output_limit(self, at: u64) -> usize {
         match self {
-            Self::Down { start, frames, .. } => frames.saturating_sub(
-                usize::try_from(at.saturating_sub(start)).map_or(usize::MAX, |frames| frames),
-            ),
+            Self::Down { start, frames, .. } => frames
+                .saturating_sub(usize::try_from(at.saturating_sub(start)).unwrap_or(usize::MAX)),
             Self::Up { .. } => usize::MAX,
         }
     }
@@ -181,6 +180,10 @@ impl Preparation {
 
 pub(crate) struct Lane {
     inbox: Inbox<LaneProtocol>,
+    state: LaneState,
+}
+
+struct LaneState {
     cursor: LaneFrame,
     position: Option<Duration>,
     preload_chunks: NonZeroUsize,
@@ -201,46 +204,48 @@ impl Lane {
     ) -> Self {
         Self {
             inbox,
-            cursor: LaneFrame::default(),
-            position: None,
-            preload_chunks,
-            declick,
-            preload: Preload::Filling(0),
-            pending: None,
-            deferred: None,
-            ended: false,
-            parked: None,
-            jump: None,
+            state: LaneState {
+                cursor: LaneFrame::default(),
+                position: None,
+                preload_chunks,
+                declick,
+                preload: Preload::Filling(0),
+                pending: None,
+                deferred: None,
+                ended: false,
+                parked: None,
+                jump: None,
+            },
         }
     }
 
     delegate::delegate! {
         to self {
-            #[expr(self.cursor)]
+            #[expr(self.state.cursor)]
             pub(crate) const fn cursor(&self) -> LaneFrame;
-            #[expr(self.position)]
+            #[expr(self.state.position)]
             pub(crate) const fn position(&self) -> Option<Duration>;
         }
     }
 
     pub(crate) fn declick_frames(&self, sample_rate: NonZeroU32) -> FrameCount {
-        crate::rt::declick_frame_count(self.declick, sample_rate)
+        crate::rt::declick_frame_count(self.state.declick, sample_rate)
     }
 
     pub(crate) fn is_preloaded(&self) -> bool {
-        matches!(self.preload, Preload::Ready)
+        matches!(self.state.preload, Preload::Ready)
     }
 
     fn finish_pending(&mut self, ready: Option<SegmentId>) {
-        if let Some(pending) = self.pending.take()
+        if let Some(pending) = self.state.pending.take()
             && let Some(due) = self.inbox.resume(pending.seq, pending.at, pending.at)
         {
             tracing::debug!(
                 seq = pending.seq.get(),
                 actual_apply_segment = pending.at.segment.get(),
                 actual_apply_frame = pending.at.frame,
-                prepared_segment = self.cursor.segment.get(),
-                prepared_frontier = self.cursor.frame,
+                prepared_segment = self.state.cursor.segment.get(),
+                prepared_frontier = self.state.cursor.frame,
                 ready_segment = ?ready,
                 "lane preparation finished"
             );
@@ -259,12 +264,12 @@ impl Lane {
         visible_origin: Option<Duration>,
     ) -> Result<(), WarpRenderError> {
         if meta.frames > 0
-            && matches!(self.preload, Preload::Filling(0))
-            && let Some(pending) = &mut self.pending
+            && matches!(self.state.preload, Preload::Filling(0))
+            && let Some(pending) = &mut self.state.pending
             && pending.source.is_none()
         {
             if let Some(to) = pending.requested_entry {
-                self.position = Some(reanchor_source(warp, meta, to, visible_origin)?);
+                self.state.position = Some(reanchor_source(warp, meta, to, visible_origin)?);
             }
             pending.source = Some(meta);
         }
@@ -272,8 +277,8 @@ impl Lane {
     }
 
     pub(crate) fn check_admission(&self, meta: &AudioChunkInfo) -> Result<(), TrackFailureKind> {
-        if matches!(self.preload, Preload::Filling(0))
-            && let Some(pending) = self.pending.as_ref()
+        if matches!(self.state.preload, Preload::Filling(0))
+            && let Some(pending) = self.state.pending.as_ref()
             && !pending.accepts(meta)
         {
             tracing::error!(?pending, incoming = ?meta, "prepared PCM violates lane entry");
@@ -283,7 +288,7 @@ impl Lane {
     }
 
     pub(crate) fn reject_preparation(&mut self, failure: TrackFailureKind) {
-        if let Some(pending) = self.pending.take()
+        if let Some(pending) = self.state.pending.take()
             && let Some(due) = self.inbox.resume(pending.seq, pending.at, pending.at)
         {
             due.refuse(failure);
@@ -291,27 +296,27 @@ impl Lane {
     }
 
     pub(crate) fn admitted(&mut self) {
-        if let Preload::Filling(admitted) = &mut self.preload {
+        if let Preload::Filling(admitted) = &mut self.state.preload {
             *admitted = admitted.saturating_add(1);
-            if *admitted >= self.preload_chunks.get() {
+            if *admitted >= self.state.preload_chunks.get() {
                 self.finish_preload();
             }
         }
     }
 
     pub(crate) fn upstream_parked(&mut self) {
-        if matches!(self.preload, Preload::Filling(1..)) {
+        if matches!(self.state.preload, Preload::Filling(1..)) {
             self.finish_preload();
         }
     }
 
     pub(crate) fn finish_preload(&mut self) {
-        self.preload = Preload::Ready;
-        self.finish_pending(Some(self.cursor.segment));
+        self.state.preload = Preload::Ready;
+        self.finish_pending(Some(self.state.cursor.segment));
     }
 
     pub(crate) fn finish_segment(&mut self) {
-        self.ended = true;
+        self.state.ended = true;
     }
 
     pub(crate) fn prepare_quantum<S: HasPool<f32>>(
@@ -321,7 +326,7 @@ impl Lane {
         remaining: usize,
         visible_origin: Option<Duration>,
     ) -> Result<FrameCount, WarpRenderError> {
-        let target = match self.jump {
+        let target = match self.state.jump {
             Some(Jump::Up { to: Some(to), .. }) => {
                 Some(visible_origin.map_or(to, |origin| origin.max(to)))
             }
@@ -331,10 +336,10 @@ impl Lane {
             reanchor_source(warp, meta, to, visible_origin)?;
         }
         let frames = warp.prepare_source_window(meta, remaining, self.output_limit())?;
-        if let Some(Jump::Up { to, .. }) = &mut self.jump
+        if let Some(Jump::Up { to, .. }) = &mut self.state.jump
             && to.take().is_some()
         {
-            self.position = target;
+            self.state.position = target;
         }
         Ok(frames)
     }
@@ -342,40 +347,41 @@ impl Lane {
     pub(crate) fn output_limit(&self) -> usize {
         let due = self
             .inbox
-            .frames_until_due(self.cursor)
+            .frames_until_due(self.state.cursor)
             .map_or(usize::MAX, |frames| {
-                usize::try_from(frames).map_or(usize::MAX, |frames| frames)
+                usize::try_from(frames).unwrap_or(usize::MAX)
             });
-        self.jump
-            .map_or(due, |jump| due.min(jump.output_limit(self.cursor.frame)))
+        self.state.jump.map_or(due, |jump| {
+            due.min(jump.output_limit(self.state.cursor.frame))
+        })
     }
 
     pub(crate) fn stamp(&mut self, chunk: &mut AudioChunk) {
-        chunk.meta.segment = self.cursor.segment;
-        chunk.meta.lane_frame = self.cursor.frame;
+        chunk.meta.segment = self.state.cursor.segment;
+        chunk.meta.lane_frame = self.state.cursor.frame;
         let channels = usize::from(chunk.spec().channels.max(1));
-        if let Some(jump) = &self.jump {
+        if let Some(jump) = &self.state.jump {
             for (offset, frame) in chunk.samples.chunks_exact_mut(channels).enumerate() {
-                let offset = u64::try_from(offset).map_or(u64::MAX, |offset| offset);
-                let gain = jump.gain(self.cursor.frame.saturating_add(offset));
+                let offset = u64::try_from(offset).unwrap_or(u64::MAX);
+                let gain = jump.gain(self.state.cursor.frame.saturating_add(offset));
                 for sample in frame {
                     *sample *= gain;
                 }
             }
         }
-        let frames = u64::try_from(chunk.frames()).map_or(u64::MAX, |frames| frames);
-        self.cursor.frame = self.cursor.frame.saturating_add(frames);
+        let frames = u64::try_from(chunk.frames()).unwrap_or(u64::MAX);
+        self.state.cursor.frame = self.state.cursor.frame.saturating_add(frames);
         if let Some(position) = chunk
             .meta
             .source_span
             .and_then(|span| span.position_at(span.output_frames()))
         {
-            self.position = Some(position);
+            self.state.position = Some(position);
         }
-        if matches!(self.jump, Some(Jump::Up { start, frames, .. })
-            if self.cursor.frame.saturating_sub(start) >= u64::try_from(frames).map_or(u64::MAX, |frames| frames))
+        if matches!(self.state.jump, Some(Jump::Up { start, frames, .. })
+            if self.state.cursor.frame.saturating_sub(start) >= u64::try_from(frames).unwrap_or(u64::MAX))
         {
-            self.jump = None;
+            self.state.jump = None;
         }
     }
 
@@ -391,25 +397,25 @@ impl Lane {
     {
         let Some(Jump::Down {
             to, start, frames, ..
-        }) = self.jump
+        }) = self.state.jump
         else {
             return Ok(false);
         };
-        let frames = u64::try_from(frames).map_or(u64::MAX, |frames| frames);
-        if self.cursor.frame.saturating_sub(start) < frames {
+        let frames = u64::try_from(frames).unwrap_or(u64::MAX);
+        if self.state.cursor.frame.saturating_sub(start) < frames {
             return Ok(false);
         }
         let visible_origin = source.visible_origin();
         let to = visible_origin.map_or(to, |origin| origin.max(to));
-        self.position = landing_position(source.seek_for_render(to))?;
+        self.state.position = landing_position(source.seek_for_render(to))?;
         warp.reset();
         let next_spec = source.prepare_deferred().unwrap_or(spec);
         warp.prepare_engine_latency(next_spec)
             .map_err(|_| TrackFailureKind::Render)?;
-        self.jump = Some(Jump::Up {
+        self.state.jump = Some(Jump::Up {
             to: Some(to),
-            start: self.cursor.frame,
-            frames: usize::try_from(frames).map_or(usize::MAX, |frames| frames),
+            start: self.state.cursor.frame,
+            frames: usize::try_from(frames).unwrap_or(usize::MAX),
         });
         Ok(true)
     }
@@ -598,9 +604,9 @@ mod tests {
             }
         }
         let requested = Duration::from_nanos(1_000_005_000);
-        lane.jump = Some(Jump::Down {
+        lane.state.jump = Some(Jump::Down {
             to: requested,
-            start: lane.cursor.frame,
+            start: lane.state.cursor.frame,
             frames: 0,
             gain: 1.0,
         });
@@ -610,7 +616,7 @@ mod tests {
                 .expect("unknown-end typed seek")
         );
         assert_eq!(source.requested, Some(requested));
-        assert_eq!(lane.position, Some(Duration::from_secs(1)));
+        assert_eq!(lane.state.position, Some(Duration::from_secs(1)));
         let first = 44_101;
         let meta = AudioChunkInfo {
             spec,
@@ -620,27 +626,30 @@ mod tests {
             end_timestamp: spec.duration_for(first + 16).expect("actual decoded end"),
             ..AudioChunkInfo::default()
         };
-        lane.jump = Some(Jump::Up {
+        lane.state.jump = Some(Jump::Up {
             to: Some(Duration::from_secs(1)),
-            start: lane.cursor.frame,
+            start: lane.state.cursor.frame,
             frames: expected,
         });
         assert!(matches!(
             lane.prepare_quantum(&mut warp, meta, 16, None),
             Err(WarpRenderError::InvalidSourceGeometry)
         ));
-        assert!(matches!(lane.jump, Some(Jump::Up { to: Some(_), .. })));
-        lane.jump = Some(Jump::Up {
+        assert!(matches!(
+            lane.state.jump,
+            Some(Jump::Up { to: Some(_), .. })
+        ));
+        lane.state.jump = Some(Jump::Up {
             to: Some(Duration::ZERO),
-            start: lane.cursor.frame,
+            start: lane.state.cursor.frame,
             frames: expected,
         });
         warp.prepare_engine_latency(spec)
             .expect("initial-head render engine");
         lane.prepare_quantum(&mut warp, meta, 16, Some(meta.timestamp))
             .expect("observed original visible head clamps a zero request");
-        assert_eq!(lane.position, Some(meta.timestamp));
-        assert!(matches!(lane.jump, Some(Jump::Up { to: None, .. })));
+        assert_eq!(lane.state.position, Some(meta.timestamp));
+        assert!(matches!(lane.state.jump, Some(Jump::Up { to: None, .. })));
     }
 
     #[kithara::test]
@@ -712,7 +721,7 @@ mod tests {
             NonZeroUsize::new(1).expect("preload"),
             crate::consts::DEFAULT_DECLICK,
         );
-        lane.cursor.frame = 64;
+        lane.state.cursor.frame = 64;
         let mut warp = Warp::new((), &WarpConfig::builder().build())
             .renderer(spec, crate::test_pools::pools());
         if pending_repeat {
@@ -745,16 +754,16 @@ mod tests {
             .expect("segment credit");
         lane.execute_due(&mut JumpSource, &mut warp, spec)
             .expect("segment accepted");
-        assert_eq!(lane.cursor.frame, if pending_repeat { 64 } else { 0 });
+        assert_eq!(lane.state.cursor.frame, if pending_repeat { 64 } else { 0 });
         assert_eq!(
-            lane.position,
+            lane.state.position,
             if pending_repeat {
                 None
             } else {
                 Some(Duration::from_secs(1))
             }
         );
-        assert!(lane.deferred.is_none());
+        assert!(lane.state.deferred.is_none());
         if pending_repeat {
             let receipts: Vec<_> = sender.receipts().collect();
             assert!(receipts.iter().any(|receipt| matches!(receipt.outcome(),

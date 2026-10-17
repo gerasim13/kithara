@@ -11,7 +11,7 @@ use super::{
     Queue, Transition,
     slots::{Active, LoadState, Parked, Role},
     transition::TransitionRequest,
-    types::{Continuation, Placement, SeekPosition, extract_track_name},
+    types::{Continuation, PendingHandover, Placement, SeekPosition, extract_track_name},
 };
 use crate::{
     AdvanceReason, NavigationState, QueueError, QueueEvent, TrackSource, TrackStatus, consts,
@@ -107,30 +107,7 @@ where
         if self.target.is_some_and(|target| target.to == id) {
             self.cancel_target(out)?;
         }
-        let mut sent = None;
-        let mut removal_seq = None;
-        for active_index in self.active.indices(|active| {
-            active.item == id && !(active.role == Role::Current && replacement.is_some())
-        }) {
-            let pending_owner = pending.is_some_and(|pending| {
-                self.active
-                    .get(active_index)
-                    .is_some_and(|active| active.slot == pending.slot)
-                    && self.active.is_replacement(active_index) == pending.replacement
-            });
-            let released = self.release_track(active_index, out)?;
-            sent = released.or(sent);
-            if pending_owner {
-                removal_seq = released;
-            }
-        }
-        for parked in self
-            .active
-            .parked_iter_mut()
-            .filter(|parked| parked.item == id)
-        {
-            sent = parked.track.apply(TrackCommand::Release, out)?.or(sent);
-        }
+        let (sent, removal_seq) = self.release_removed_item(id, replacement, pending, out)?;
         drop(self.tracks.records_mut().remove(index));
         self.navigation.reconcile(&self.track_ids());
         self.announce(QueueEvent::TrackRemoved { id });
@@ -164,6 +141,40 @@ where
         }
         self.reap_released();
         Ok(sent)
+    }
+
+    fn release_removed_item(
+        &mut self,
+        id: TrackId,
+        replacement: Option<TrackId>,
+        pending: Option<PendingHandover>,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<(Option<Seq>, Option<Seq>), PlayError> {
+        let mut sent = None;
+        let mut removal_seq = None;
+        for active_index in self.active.indices(|active| {
+            active.item == id && !(active.role == Role::Current && replacement.is_some())
+        }) {
+            let pending_owner = pending.is_some_and(|pending| {
+                self.active
+                    .get(active_index)
+                    .is_some_and(|active| active.slot == pending.slot)
+                    && self.active.is_replacement(active_index) == pending.replacement
+            });
+            let released = self.release_track(active_index, out)?;
+            sent = released.or(sent);
+            if pending_owner {
+                removal_seq = released;
+            }
+        }
+        for parked in self
+            .active
+            .parked_iter_mut()
+            .filter(|parked| parked.item == id)
+        {
+            sent = parked.track.apply(TrackCommand::Release, out)?.or(sent);
+        }
+        Ok((sent, removal_seq))
     }
 
     pub(super) fn clear_entries(

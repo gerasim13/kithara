@@ -175,10 +175,14 @@ async fn decoder_node_eof_under_backpressure() {
     let (mut node, mut receiver, _lane) =
         prepared_node(ScriptedSource::new([produced()]), 1, 1).await;
     assert_eq!(node.tick(), TickResult::Progress);
+    assert_eq!(node.tick(), TickResult::Progress);
     assert_eq!(node.tick(), TickResult::Backpressured);
     assert!(node.terminal.is_none());
+    assert!(
+        node.pending.is_some(),
+        "EOF waits for admission behind the full port"
+    );
     assert!(matches!(receiver.pop(), Some(PcmPacket::Chunk(packet)) if !packet.meta.end_of_track));
-    assert_eq!(node.tick(), TickResult::Progress);
     assert_eq!(node.tick(), TickResult::Progress);
     assert!(node.terminal.is_some());
     assert!(matches!(receiver.pop(), Some(PcmPacket::Chunk(packet)) if packet.meta.end_of_track));
@@ -360,10 +364,88 @@ async fn decoded_frontier_advances_only_after_final_port_admission() {
     let initial = spec.duration_for(1).expect("initial frame");
     assert_eq!(node.tick(), TickResult::Progress);
     assert_eq!(node.tick(), TickResult::Backpressured);
-    assert_eq!(receiver.decoded_frontier(), initial);
+    let prepared = node
+        .pending
+        .as_ref()
+        .expect("one packet prepared behind the full port");
+    let PcmPacket::Chunk(prepared) = &prepared.packet else {
+        panic!("prepared PCM packet");
+    };
+    let prepared = prepared.meta;
+    for _ in 0..3 {
+        assert_eq!(node.tick(), TickResult::Backpressured);
+        let pending = node
+            .pending
+            .as_ref()
+            .expect("the same packet remains pending");
+        assert!(matches!(&pending.packet, PcmPacket::Chunk(chunk) if chunk.meta == prepared));
+        assert_eq!(receiver.decoded_frontier(), initial);
+    }
     assert!(receiver.pop().is_some());
     assert_eq!(node.tick(), TickResult::Progress);
     assert_eq!(receiver.decoded_frontier(), Duration::from_millis(750));
+}
+
+#[kithara::test(tokio)]
+async fn a_pending_packet_stops_at_a_scheduled_speed_boundary() {
+    let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("rate"));
+    let second = chunk(spec, SegmentId::FIRST, 0, 1, &[0.0; 8]);
+    let source = ScriptedSource::new([produced(), TrackStep::Produced(Fetch::data(second))]);
+    let (mut node, mut receiver, mut lane) = prepared_node(source, 1, 1).await;
+    assert_eq!(node.tick(), TickResult::Progress);
+    let at = crate::LaneFrame {
+        segment: SegmentId::FIRST,
+        frame: 3,
+    };
+    let seq = lane
+        .send(
+            When::At(at),
+            Batch {
+                basis: Vec::new(),
+                commands: vec![LaneCommand::SetSpeed(kithara_sync::SpeedCurve::Constant(
+                    1.0,
+                ))],
+            },
+        )
+        .expect("scheduled speed batch");
+    assert_eq!(node.tick(), TickResult::Progress);
+    assert_eq!(node.tick(), TickResult::Backpressured);
+    assert_eq!(
+        node.source.cursor(),
+        at,
+        "preparation stops at the queued command"
+    );
+    let pending = node
+        .pending
+        .as_ref()
+        .expect("old-law prefix is prepared behind the full port");
+    let PcmPacket::Chunk(prefix) = &pending.packet else {
+        panic!("prepared PCM prefix")
+    };
+    assert_eq!(prefix.meta.lane_frame, 1);
+    assert_eq!(prefix.frames(), 2);
+    assert_eq!(prefix.meta.render_revision, 0);
+    let prefix = prefix.meta;
+    assert_eq!(node.tick(), TickResult::Backpressured);
+    assert_eq!(node.source.cursor(), at);
+    assert!(
+        matches!(node.pending.as_ref().map(|pending| &pending.packet),
+        Some(PcmPacket::Chunk(chunk)) if chunk.meta == prefix),
+        "applying the next law retains the immutable old-law prefix"
+    );
+    assert!(receiver.pop().is_some());
+    assert_eq!(node.tick(), TickResult::Progress);
+    let Some(PcmPacket::Chunk(admitted)) = receiver.pop() else {
+        panic!("admitted prefix")
+    };
+    assert_eq!(admitted.meta, prefix);
+    assert_eq!(node.tick(), TickResult::Progress);
+    let Some(PcmPacket::Chunk(next)) = receiver.pop() else {
+        panic!("new-law suffix")
+    };
+    assert_eq!(next.meta.lane_frame, at.frame);
+    assert_eq!(next.frames(), 2);
+    assert_eq!(next.meta.render_revision, seq.get());
 }
 
 #[kithara::test(tokio)]
@@ -380,6 +462,10 @@ async fn source_end_commits_only_after_final_port_admission() {
     });
     assert_eq!(node.tick(), TickResult::Progress);
     assert_eq!(node.tick(), TickResult::Backpressured);
+    assert!(
+        node.pending.is_some(),
+        "source output is prepared while the final port is full"
+    );
     assert!(commits.lock().is_empty());
     assert!(receiver.pop().is_some());
     assert_eq!(node.tick(), TickResult::Progress);
@@ -453,16 +539,12 @@ async fn decoder_node_seek_rearms_preload_gate() {
     assert_eq!(node.tick(), TickResult::Progress);
     assert!(node.source.is_preloaded(), "first chunk opens preload");
     let id = segment(&mut lane);
-    assert_eq!(node.tick(), TickResult::Backpressured);
+    assert_eq!(node.tick(), TickResult::Progress);
     assert!(!node.source.is_preloaded(), "new segment rearms preload");
     assert_eq!(node.source.cursor().segment, id);
+    assert!(node.pending.is_none(), "StateChanged is not admitted PCM");
     assert!(
         matches!(receiver.pop(), Some(PcmPacket::Chunk(packet)) if packet.meta.segment == SegmentId::FIRST)
-    );
-    assert_eq!(node.tick(), TickResult::Progress);
-    assert!(
-        !node.source.is_preloaded(),
-        "StateChanged is not admitted PCM"
     );
     assert_eq!(node.tick(), TickResult::Progress);
     assert!(

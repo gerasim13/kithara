@@ -24,6 +24,14 @@ struct Fixture {
     _temp: TempDir,
     bootstrap_artifact: PathBuf,
     bootstrap_cargo: PathBuf,
+    /// The Cargo home this fixture hands to every command it spawns.
+    ///
+    /// Discovering the xtask source closure runs `cargo metadata`, which
+    /// takes the package cache lock of its Cargo home even for a workspace
+    /// without dependencies. A CI host shares one Cargo home between its
+    /// runners, so the inherited one would make this fixture wait for
+    /// whatever another job is downloading.
+    cargo_home: PathBuf,
     cargo_log: PathBuf,
     fake_bin: PathBuf,
     git_log: PathBuf,
@@ -46,11 +54,13 @@ impl Fixture {
         let cargo_log = temp.path().join("cargo.log");
         let git_log = temp.path().join("git.log");
         let bootstrap_cargo = temp.path().join("bootstrap-cargo");
+        let cargo_home = temp.path().join("cargo-home");
         let justfile = root.join("justfile");
         fs::create_dir_all(root.join(".config"))?;
         fs::create_dir_all(root.join(".git/xtask-cache"))?;
         fs::create_dir_all(root.join("xtask/src"))?;
         fs::create_dir_all(&fake_bin)?;
+        fs::create_dir_all(&cargo_home)?;
         let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .context("resolve repository root")?;
@@ -120,6 +130,7 @@ exit 98
             _temp: temp,
             bootstrap_artifact,
             bootstrap_cargo,
+            cargo_home,
             cargo_log,
             fake_bin,
             git_log,
@@ -136,6 +147,7 @@ exit 98
             .current_dir(&self.root)
             .env("CARGO_TARGET_DIR", &self.target)
             .env("CARGO", env!("CARGO"))
+            .env("CARGO_HOME", &self.cargo_home)
             .env("XTASK_SELF_CACHE_CARGO", &self.bootstrap_cargo)
             .env("SELF_CACHE_BOOTSTRAP_ARTIFACT", &self.bootstrap_artifact)
             .stdin(Stdio::null());
@@ -167,6 +179,7 @@ exit 98
             .args(args)
             .current_dir(&self.root)
             .env("CARGO_TARGET_DIR", &self.target)
+            .env("CARGO_HOME", &self.cargo_home)
             .env("PATH", self.fake_path()?)
             .env("SELF_CACHE_CARGO_LOG", &self.cargo_log)
             .env("SELF_CACHE_GIT_LOG", &self.git_log)
@@ -199,6 +212,7 @@ exit 98
             .args(args)
             .current_dir(root)
             .env("CARGO", env!("CARGO"))
+            .env("CARGO_HOME", &self.cargo_home)
             .env("XTASK_SELF_CACHE_CARGO", &fake_cargo)
             .env("PATH", self.fake_path()?)
             .env("SELF_CACHE_CARGO_LOG", &self.cargo_log)
@@ -252,6 +266,7 @@ exit 98
             .env_remove("KITHARA_XTASK_TARGET")
             .env("CARGO_TARGET_DIR", &self.target)
             .env("CARGO", env!("CARGO"))
+            .env("CARGO_HOME", &self.cargo_home)
             .env("PATH", self.fake_path()?)
             .env("SELF_CACHE_CARGO_LOG", &self.cargo_log)
             .env("SELF_CACHE_GIT_LOG", &self.git_log)
@@ -1199,6 +1214,7 @@ wait "$descendant"
         .current_dir(&fixture.root)
         .env("CARGO_TARGET_DIR", &fixture.target)
         .env("CARGO", env!("CARGO"))
+        .env("CARGO_HOME", &fixture.cargo_home)
         .env("XTASK_SELF_CACHE_CARGO", &fake_cargo)
         .env("SELF_CACHE_CARGO_PID", &cargo_pid)
         .env("SELF_CACHE_DESCENDANT_PID", &descendant_pid)

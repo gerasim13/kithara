@@ -288,6 +288,21 @@ pub(crate) mod preparation {
             Some(incoming_readiness(generation, *self, origin))
         }
 
+        fn stage_chunk(
+            generation: &mut DecoderGeneration,
+            chunk: kithara_signal::AudioChunk,
+        ) -> DecodeResult<IncomingPrime> {
+            match apply_skip(chunk, generation.pending_head_skip_mut()) {
+                Ok(Some(chunk)) if !chunk.samples.is_empty() => generation.stage(chunk)?,
+                Ok(Some(_)) | Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(?error, "incoming source mapping failed");
+                    return Ok(IncomingPrime::Failed);
+                }
+            }
+            Ok(IncomingPrime::Advanced)
+        }
+
         pub(in crate::pipeline::decode) fn prepare(
             &self,
             generation: &mut DecoderGeneration,
@@ -317,15 +332,8 @@ pub(crate) mod preparation {
                 }
                 match generation.next_chunk() {
                     Ok(DecoderChunkOutcome::Chunk(chunk)) => {
-                        match apply_skip(*chunk, generation.pending_head_skip_mut()) {
-                            Ok(Some(chunk)) if !chunk.samples.is_empty() => {
-                                generation.stage(chunk)?;
-                            }
-                            Ok(Some(_)) | Ok(None) => {}
-                            Err(error) => {
-                                tracing::warn!(?error, "incoming source mapping failed");
-                                return Ok(IncomingPrime::Failed);
-                            }
+                        if Self::stage_chunk(generation, *chunk)? == IncomingPrime::Failed {
+                            return Ok(IncomingPrime::Failed);
                         }
                     }
                     Ok(DecoderChunkOutcome::Pending(

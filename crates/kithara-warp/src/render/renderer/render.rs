@@ -350,13 +350,7 @@ where
             if pending_frames > 0 {
                 self.append_pending_source(part, meta, frame)?;
             }
-            if start == 0 && self.output_start_meta.is_none() {
-                self.output_start_meta = if pending_frames > 0 {
-                    self.pending_meta
-                } else {
-                    Some(Self::meta_at_frame(meta, frame)?)
-                };
-            }
+            self.start_active_output(meta, frame, pending_frames, start)?;
             let scratch = self
                 .scratch
                 .as_mut()
@@ -403,6 +397,23 @@ where
         }
     }
 
+    fn start_active_output(
+        &mut self,
+        meta: AudioChunkInfo,
+        frame: u64,
+        pending_frames: usize,
+        start: usize,
+    ) -> Result<(), ElasticError> {
+        if start == 0 && self.output_start_meta.is_none() {
+            self.output_start_meta = if pending_frames > 0 {
+                self.pending_meta
+            } else {
+                Some(Self::meta_at_frame(meta, frame)?)
+            };
+        }
+        Ok(())
+    }
+
     /// Output frames one engine request emits for `sub` source frames and the
     /// remainder it leaves; a `landing` request emits what is left of it.
     fn request_output_frames(
@@ -419,6 +430,76 @@ where
                 Self::landing_output_frames(sub, stretch, self.output_remainder, landing, emitted)
             },
         )
+    }
+
+    fn terminal_next_meta(
+        &self,
+        admitted_source_frames: usize,
+        source_frames: usize,
+    ) -> Result<Option<AudioChunkInfo>, ElasticError> {
+        let next_meta = if admitted_source_frames == source_frames {
+            None
+        } else {
+            let meta = self.pending_meta.ok_or(ElasticError::EmptySource)?;
+            let next = meta
+                .frame_offset
+                .checked_add(
+                    u64::try_from(admitted_source_frames)
+                        .map_err(|_| ElasticError::SampleCountOverflow)?,
+                )
+                .ok_or(ElasticError::SampleCountOverflow)?;
+            Some(Self::meta_at_frame(meta, next)?)
+        };
+        Ok(next_meta)
+    }
+
+    fn process_terminal_output(
+        &mut self,
+        request: ElasticRequest,
+        admitted_samples: usize,
+        channels: usize,
+    ) -> Result<(), ElasticError> {
+        let output_samples = request
+            .output_frames()
+            .checked_mul(channels)
+            .map(SampleCount::new)
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let start = self.scratch.as_deref().map_or(0, <[f32]>::len);
+        let end = start
+            .checked_add(output_samples.get())
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let scratch = self
+            .scratch
+            .as_mut()
+            .ok_or(ElasticError::EnginePreparation(
+                "output scratch is unavailable",
+            ))?;
+        if end > scratch.capacity() {
+            return Err(ElasticError::OutputFrameLimit {
+                frames: end / channels,
+                limit: scratch.capacity() / channels,
+            });
+        }
+        scratch
+            .ensure_len(end)
+            .map_err(|_| ElasticError::PoolCapacity)?;
+        let source = self
+            .pending_source
+            .as_deref()
+            .ok_or(ElasticError::PoolCapacity)?;
+        let engine = self
+            .engine
+            .as_mut()
+            .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?;
+        if let Err(error) = engine.process(
+            request,
+            &source[..admitted_samples],
+            &mut scratch[start..end],
+        ) {
+            scratch.truncate(start);
+            return Err(error);
+        }
+        Ok(())
     }
 
     pub(in crate::render) fn render_terminal_pending(
@@ -464,59 +545,8 @@ where
         let admitted_samples = admitted_source_frames
             .checked_mul(channels)
             .ok_or(ElasticError::SampleCountOverflow)?;
-        let next_meta = if admitted_source_frames == source_frames {
-            None
-        } else {
-            let meta = self.pending_meta.ok_or(ElasticError::EmptySource)?;
-            let next = meta
-                .frame_offset
-                .checked_add(
-                    u64::try_from(admitted_source_frames)
-                        .map_err(|_| ElasticError::SampleCountOverflow)?,
-                )
-                .ok_or(ElasticError::SampleCountOverflow)?;
-            Some(Self::meta_at_frame(meta, next)?)
-        };
-        let output_samples = output_frames
-            .get()
-            .checked_mul(channels)
-            .map(SampleCount::new)
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        let start = self.scratch.as_deref().map_or(0, <[f32]>::len);
-        let end = start
-            .checked_add(output_samples.get())
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        let scratch = self
-            .scratch
-            .as_mut()
-            .ok_or(ElasticError::EnginePreparation(
-                "output scratch is unavailable",
-            ))?;
-        if end > scratch.capacity() {
-            return Err(ElasticError::OutputFrameLimit {
-                frames: end / channels,
-                limit: scratch.capacity() / channels,
-            });
-        }
-        scratch
-            .ensure_len(end)
-            .map_err(|_| ElasticError::PoolCapacity)?;
-        let source = self
-            .pending_source
-            .as_deref()
-            .ok_or(ElasticError::PoolCapacity)?;
-        let engine = self
-            .engine
-            .as_mut()
-            .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?;
-        if let Err(error) = engine.process(
-            request,
-            &source[..admitted_samples],
-            &mut scratch[start..end],
-        ) {
-            scratch.truncate(start);
-            return Err(error);
-        }
+        let next_meta = self.terminal_next_meta(admitted_source_frames, source_frames)?;
+        self.process_terminal_output(request, admitted_samples, channels)?;
         self.output_start_meta = self.pending_meta;
         drop(
             self.pending_source

@@ -237,3 +237,21 @@ pub(crate) mod tap {
         Ok(())
     }
 }
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn retire_browser_transport(context: &mut firewheel::FirewheelContext) -> bool {
+    let Some(store) = context.proc_store_mut() else {
+        return false;
+    };
+    if let Some(transport) = store.try_get_mut::<TransportState>() {
+        if let Err(error) = transport.retire_closing() {
+            tracing::error!(%error, "stopped transport could not retire its scopes");
+        }
+    }
+    if let std::collections::hash_map::Entry::Occupied(entry) =
+        store.entry::<TransportState>().boxed_entry
+    {
+        drop(entry.remove());
+    }
+    true
+}

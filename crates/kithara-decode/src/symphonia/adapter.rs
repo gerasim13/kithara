@@ -140,24 +140,8 @@ impl<R: Read> Read for ReadSeekAdapter<R> {
                     }
                 }
                 Err(error) => {
-                    if let Some((control, revision)) = readiness {
-                        if let Some(reason) = pending_input(&error) {
-                            control.set_pending(reason);
-                            if !control.wait(revision) {
-                                return Err(io::Error::new(
-                                    io::ErrorKind::Interrupted,
-                                    PendingReason::SessionRetired,
-                                ));
-                            }
-                            continue;
-                        }
-                        if error.kind() == io::ErrorKind::Interrupted
-                            && error
-                                .get_ref()
-                                .is_none_or(|inner| !inner.is::<PendingReason>())
-                        {
-                            continue;
-                        }
+                    if resume_pending_read(readiness, &error)? {
+                        continue;
                     }
                     if read == 0 {
                         return Err(error);
@@ -172,6 +156,32 @@ impl<R: Read> Read for ReadSeekAdapter<R> {
         }
         Ok(read)
     }
+}
+
+fn resume_pending_read(
+    readiness: Option<(&ReaderControl, u64)>,
+    error: &io::Error,
+) -> io::Result<bool> {
+    if let Some((control, revision)) = readiness {
+        if let Some(reason) = pending_input(error) {
+            control.set_pending(reason);
+            if !control.wait(revision) {
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    PendingReason::SessionRetired,
+                ));
+            }
+            return Ok(true);
+        }
+        if error.kind() == io::ErrorKind::Interrupted
+            && error
+                .get_ref()
+                .is_none_or(|inner| !inner.is::<PendingReason>())
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn pending_input(error: &io::Error) -> Option<PendingReason> {

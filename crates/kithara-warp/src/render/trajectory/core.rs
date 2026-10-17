@@ -21,6 +21,48 @@ fn check_precise_speed(value: f64) -> Result<(), ElasticError> {
     Ok(())
 }
 
+fn check_approach_steps(steps: &[(u64, ExponentialApproach)]) -> Result<(), ElasticError> {
+    if steps.first().is_none_or(|(frame, _)| *frame != 0)
+        || steps.windows(2).any(|pair| pair[0].0 >= pair[1].0)
+    {
+        return Err(ElasticError::EnginePreparation(
+            "analytic segments must start at zero and be strictly ordered",
+        ));
+    }
+    for (_, curve) in steps {
+        check_precise_speed(curve.initial())?;
+        check_precise_speed(curve.target())?;
+    }
+    Ok(())
+}
+
+fn check_speed_steps(steps: &[(u64, f32)]) -> Result<(), ElasticError> {
+    if steps.is_empty() || steps.windows(2).any(|pair| pair[0].0 >= pair[1].0) {
+        return Err(ElasticError::EnginePreparation(
+            "speed steps must be nonempty and strictly ordered",
+        ));
+    }
+    for (_, speed) in steps {
+        Fraction::speed(*speed)?;
+    }
+    Ok(())
+}
+
+fn check_curve(curve: &SpeedCurve) -> Result<(), ElasticError> {
+    match curve {
+        SpeedCurve::Constant(speed) | SpeedCurve::Ramp { to: speed, .. } => {
+            Fraction::speed(*speed)?;
+        }
+        SpeedCurve::Approach(curve) => {
+            check_precise_speed(curve.initial())?;
+            check_precise_speed(curve.target())?;
+        }
+        SpeedCurve::ApproachSteps(steps) => check_approach_steps(steps)?,
+        SpeedCurve::Steps(steps) => check_speed_steps(steps)?,
+    }
+    Ok(())
+}
+
 impl Fraction {
     pub(in crate::render) fn on_lattice(self) -> Option<Self> {
         let scale = 1u128 << 32;
@@ -277,38 +319,7 @@ impl Trajectory {
     /// # Errors
     /// Rejects an invalid law or an unrepresentable source coordinate.
     pub fn replace(&mut self, curve: SpeedCurve) -> Result<f32, ElasticError> {
-        match &curve {
-            SpeedCurve::Constant(speed) | SpeedCurve::Ramp { to: speed, .. } => {
-                Fraction::speed(*speed)?;
-            }
-            SpeedCurve::Approach(curve) => {
-                check_precise_speed(curve.initial())?;
-                check_precise_speed(curve.target())?;
-            }
-            SpeedCurve::ApproachSteps(steps) => {
-                if steps.first().is_none_or(|(frame, _)| *frame != 0)
-                    || steps.windows(2).any(|pair| pair[0].0 >= pair[1].0)
-                {
-                    return Err(ElasticError::EnginePreparation(
-                        "analytic segments must start at zero and be strictly ordered",
-                    ));
-                }
-                for (_, curve) in steps.iter() {
-                    check_precise_speed(curve.initial())?;
-                    check_precise_speed(curve.target())?;
-                }
-            }
-            SpeedCurve::Steps(steps) => {
-                if steps.is_empty() || steps.windows(2).any(|pair| pair[0].0 >= pair[1].0) {
-                    return Err(ElasticError::EnginePreparation(
-                        "speed steps must be nonempty and strictly ordered",
-                    ));
-                }
-                for (_, speed) in steps.iter() {
-                    Fraction::speed(*speed)?;
-                }
-            }
-        }
+        check_curve(&curve)?;
         let origin_speed = match &self.curve {
             SpeedCurve::Approach(_) | SpeedCurve::ApproachSteps(_) => self.speed_at()?,
             _ => Fraction::speed(self.speed_at()?.value()?)?,

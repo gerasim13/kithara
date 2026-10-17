@@ -333,7 +333,7 @@ where
             );
             return TickResult::Backpressured;
         }
-        if matches!(self.terminal, Some(Err(_))) || self.port.forward.is_full() {
+        if matches!(self.terminal, Some(Err(_))) {
             tracing::trace!(
                 target: "render_refill",
                 probe = "refill_backpressured",
@@ -376,6 +376,9 @@ where
                 return TickResult::Progress;
             }
             TrackStep::Blocked(reason) => {
+                if self.port.forward.is_full() {
+                    return TickResult::Backpressured;
+                }
                 self.source.upstream_parked();
                 return match reason {
                     WaitingReason::WaitingDemand => TickResult::UpstreamPending,
@@ -485,7 +488,7 @@ mod tests {
         stage(&mut fixture, 1.0);
         assert_eq!(fixture.node.admit(), TickResult::Progress);
         assert!(fixture.node.pending.is_none());
-        assert_eq!(fixture.node.tick(), TickResult::Backpressured);
+        assert_eq!(fixture.node.tick(), TickResult::Progress);
         assert_eq!(pop(&mut fixture), Some(1.0));
         assert_eq!(pop(&mut fixture), None);
         assert!(fixture.node.pending.is_none());

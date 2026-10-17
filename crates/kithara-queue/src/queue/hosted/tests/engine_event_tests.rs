@@ -1,6 +1,7 @@
 use kithara_audio::{DecodeErrorKind, TrackFailureKind};
 use kithara_command::Port;
-use kithara_play::{DeckEvent, PlaybackFault, Slot};
+use kithara_events::{DEFAULT_EVENT_BUS_CAPACITY, SlotId};
+use kithara_play::{DeckEvent, ItemRole, PlaybackFault, PlayerEvent, Slot, TrackRef};
 use kithara_signal::SegmentId;
 
 use super::*;
@@ -170,6 +171,7 @@ async fn the_deck_leading_on_past_a_failed_track_advances_for_the_failure() {
         .expect("failed slot")
         .slot;
     let mut events = queue.subscribe::<QueueEvent>();
+    let mut observations = queue.subscribe::<PlayerEvent>();
     rig.mixer
         .report(DeckEvent::Failed {
             slot,
@@ -179,6 +181,24 @@ async fn the_deck_leading_on_past_a_failed_track_advances_for_the_failure() {
             }),
         })
         .expect("source failure");
+    tick_fixture(&mut queue, &mut rig);
+    assert!(matches!(
+        queue.track(failed).expect("failed entry").status,
+        TrackStatus::Failed(_)
+    ));
+    assert!(matches!(
+        observations.try_recv().expect("failure observation").event,
+        PlayerEvent::ItemDidFail { item: ItemRole::Leading(track), .. } if track.id == failed
+    ));
+    for _ in 0..=DEFAULT_EVENT_BUS_CAPACITY {
+        queue
+            .bus
+            .publish(PlayerEvent::VolumeChanged { volume: 0.5 });
+    }
+    assert!(matches!(
+        observations.try_recv(),
+        Err(kithara_platform::tokio::sync::broadcast::error::TryRecvError::Lagged(_))
+    ));
     tick_fixture(&mut queue, &mut rig);
     answer_load(&mut queue, &mut rig, &dir).await;
     crate::mock::finish(&mut queue, &mut rig);
@@ -220,29 +240,58 @@ async fn lag_recovery_keeps_an_ended_queue_ended() {
 }
 
 #[kithara::test(tokio)]
-#[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-async fn lagged_player_events_resynchronize_current_track() {
-    hang_tick!();
+async fn overflowing_player_observations_do_not_announce_an_unchanged_current_track() {
     let (mut queue, id, _, mut rig, _dir) = crate::mock::selected().await;
-    hang_reset!();
-    let unrelated = DeckEvent::Ended {
-        slot: Slot::new(3),
-        at: SessionFrame::new(128),
-    };
-    while rig.mixer.report(unrelated).is_ok() {
-        hang_tick!();
-        hang_reset!();
-    }
-    rig.events.drain().for_each(drop);
+    let mut observations = queue.subscribe::<PlayerEvent>();
     let mut events = queue.subscribe::<QueueEvent>();
+    for _ in 0..=DEFAULT_EVENT_BUS_CAPACITY {
+        queue
+            .bus
+            .publish(PlayerEvent::VolumeChanged { volume: 0.5 });
+    }
+    assert!(matches!(
+        observations.try_recv(),
+        Err(kithara_platform::tokio::sync::broadcast::error::TryRecvError::Lagged(_))
+    ));
     tick_fixture(&mut queue, &mut rig);
-    hang_tick!();
-    let saw_current_track = wait_for_queue_event(&mut events, |event| {
-        matches!(event, QueueEvent::CurrentTrackChanged { id: Some(current_id) } if *current_id == id)
-    }, 200).await;
-    hang_reset!();
+    assert_eq!(queue.current().map(|entry| entry.id), Some(id));
     assert!(
-        saw_current_track,
-        "lag recovery should re-announce the current track"
+        std::iter::from_fn(|| events.try_recv().ok())
+            .all(|envelope| !matches!(envelope.event, QueueEvent::CurrentTrackChanged { .. }))
+    );
+}
+
+#[kithara::test(tokio)]
+async fn a_failure_observation_cannot_fail_the_current_track() {
+    let (mut queue, id, _, mut rig, _dir) = crate::mock::selected().await;
+    let slot = queue
+        .active
+        .iter()
+        .find(|active| active.item == id)
+        .expect("current slot")
+        .slot;
+    let before = queue.track(id).expect("current entry").status;
+    let mut events = queue.subscribe::<QueueEvent>();
+    queue.bus.publish(PlayerEvent::ItemDidFail {
+        item: ItemRole::Leading(TrackRef::new(
+            id,
+            SlotId::new(u64::from(slot.get())),
+            "observation.wav".into(),
+        )),
+        fault: PlaybackFault::Source(TrackFailureKind::Decode {
+            kind: DecodeErrorKind::InvalidData,
+        }),
+    });
+    tick_fixture(&mut queue, &mut rig);
+    assert_eq!(queue.current().map(|entry| entry.id), Some(id));
+    assert_eq!(queue.track(id).expect("current entry").status, before);
+    assert!(queue.target.is_none());
+    assert!(
+        std::iter::from_fn(|| events.try_recv().ok()).all(|envelope| !matches!(
+            envelope.event,
+            QueueEvent::TrackLoadFailed { .. }
+                | QueueEvent::CurrentTrackAdvance { .. }
+                | QueueEvent::CurrentTrackChanged { .. }
+        ))
     );
 }

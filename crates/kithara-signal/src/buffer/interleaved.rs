@@ -356,7 +356,7 @@ mod tests {
             .resize_frames(FrameCount::new(4))
             .expect("shrinking keeps the stride");
         assert!(planar.stride().get() > planar.frames().get());
-        for (channel, values) in pcm_ramp.chunks_exact(4).take(3).enumerate() {
+        for (channel, values) in pcm_ramp.as_chunks::<4>().0.iter().take(3).enumerate() {
             planar
                 .channel_mut(channel)
                 .expect("channel exists")

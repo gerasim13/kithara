@@ -6,6 +6,7 @@ mod error;
 mod guard;
 #[cfg(test)]
 pub(crate) use kithara_test_utils::bufpool as test_pools;
+use serde as _;
 
 pub mod api;
 pub mod player;
@@ -22,9 +23,9 @@ pub mod mock;
 pub use api::{
     BpmInfo, DjEvent, EngineEvent, Equalizer, InterruptionKind, ItemRole, ItemStatus, MediaTime,
     PlaybackDirection, PlayerEvent, PlayerStatus, PortDescription, PortType, RouteChangeReason,
-    RouteDescription, SelectionPlayback, SessionBeat, SessionDuckingMode, SessionEvent,
-    SessionTransportSnapshot, SlotId, StretchBackendKind, SyncUnavailable, Tempo, TempoError,
-    TimeControlStatus, TimeRange, TrackBinding, TrackRef, TransportRevision, WaitingReason,
+    RouteDescription, SessionBeat, SessionDuckingMode, SessionEvent, SessionTransportSnapshot,
+    SlotId, StretchBackendKind, SyncUnavailable, Tempo, TempoError, TimeControlStatus, TimeRange,
+    TrackBinding, TrackRef, TransportRevision, WaitingReason,
 };
 pub use error::PlayError;
 pub use kithara_assets::{AssetLayout, DefaultLayout};

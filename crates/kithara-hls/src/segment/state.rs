@@ -81,7 +81,7 @@ impl SegmentSlotState {
     pub(crate) fn mark_loaded(&self) -> bool {
         let (Ok(prior) | Err(prior)) =
             self.flags
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |bits| {
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |bits| {
                     let next = if SlotFlags::from_bits_truncate(bits).contains(SlotFlags::EVICTED) {
                         SlotFlags::empty()
                     } else {
@@ -99,7 +99,7 @@ impl SegmentSlotState {
     pub(crate) fn mark_evicted(&self) {
         let _ = self
             .flags
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |bits| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |bits| {
                 let flags = SlotFlags::from_bits_truncate(bits);
                 let next = if flags.contains(SlotFlags::DOWNLOADING) {
                     flags | SlotFlags::EVICTED

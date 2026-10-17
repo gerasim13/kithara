@@ -99,14 +99,7 @@ impl GaplessProbe {
                     };
                 }
             }
-            Mp4Event::TrackEnd => {
-                if let Some(track) = self.current.take()
-                    && let Some(info) = derive_from_track(&track, self.movie_timescale)
-                {
-                    self.elst_derived = Some(info);
-                    return ControlFlow::Break(());
-                }
-            }
+            Mp4Event::TrackEnd => return self.finish_track(),
             Mp4Event::TrackMediaTiming(timing) => {
                 if let Some(track) = &mut self.current {
                     track.media = Some(timing);
@@ -118,6 +111,16 @@ impl GaplessProbe {
                 }
             }
             Mp4Event::TrackCodec(_) | Mp4Event::TrackId(_) => {}
+        }
+        ControlFlow::Continue(())
+    }
+
+    fn finish_track(&mut self) -> ControlFlow<()> {
+        if let Some(track) = self.current.take()
+            && let Some(info) = derive_from_track(&track, self.movie_timescale)
+        {
+            self.elst_derived = Some(info);
+            return ControlFlow::Break(());
         }
         ControlFlow::Continue(())
     }

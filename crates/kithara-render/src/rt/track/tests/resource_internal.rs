@@ -26,10 +26,12 @@ fn spec() -> AudioSpec {
 
 fn pcm_samples(input: &'static [u8], frames: usize) -> Vec<f32> {
     input
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .cycle()
         .take(frames * 2)
-        .map(|bytes| f32::from_le_bytes(bytes.try_into().expect("sample bytes")))
+        .map(|bytes| f32::from_le_bytes(*bytes))
         .collect()
 }
 

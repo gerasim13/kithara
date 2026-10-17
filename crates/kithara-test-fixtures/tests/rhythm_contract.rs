@@ -261,7 +261,7 @@ fn assert_markers_agree(
 fn stereo_side_ratio(wav: &[u8]) -> f64 {
     let mut side = 0.0;
     let mut mid = 0.0;
-    for frame in wav[consts::WAV_HEADER_BYTES..].chunks_exact(4) {
+    for frame in wav[consts::WAV_HEADER_BYTES..].as_chunks::<4>().0 {
         let left = f64::from(i16::from_le_bytes([frame[0], frame[1]]));
         let right = f64::from(i16::from_le_bytes([frame[2], frame[3]]));
         side += (left - right).powi(2);
@@ -301,7 +301,9 @@ fn exact_score_map(style: &str, control: &str) -> (Vec<u64>, Vec<u64>) {
 
 fn wav_markers(wav: &[u8], downbeats_only: bool) -> Vec<u64> {
     wav[consts::WAV_HEADER_BYTES..]
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .enumerate()
         .filter_map(|(frame, bytes)| {
             let left = i16::from_le_bytes([bytes[0], bytes[1]]);
@@ -319,7 +321,9 @@ fn wav_markers(wav: &[u8], downbeats_only: bool) -> Vec<u64> {
 
 fn wav_channel_markers(wav: &[u8], channel: usize, downbeats_only: bool) -> Vec<u64> {
     wav[consts::WAV_HEADER_BYTES..]
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .enumerate()
         .filter_map(|(frame, bytes)| {
             let offset = channel * size_of::<i16>();
@@ -336,7 +340,9 @@ fn wav_channel_markers(wav: &[u8], channel: usize, downbeats_only: bool) -> Vec<
 
 fn wav_channel_is_zero(wav: &[u8], channel: usize) -> bool {
     wav[consts::WAV_HEADER_BYTES..]
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .all(|bytes| {
             let offset = channel * size_of::<i16>();
             i16::from_le_bytes([bytes[offset], bytes[offset + 1]]) == 0
@@ -345,7 +351,9 @@ fn wav_channel_is_zero(wav: &[u8], channel: usize) -> bool {
 
 fn wav_channel_has_rich_bed(wav: &[u8], channel: usize) -> bool {
     wav[consts::WAV_HEADER_BYTES..]
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .any(|bytes| {
             let offset = channel * size_of::<i16>();
             let sample = i16::from_le_bytes([bytes[offset], bytes[offset + 1]]);

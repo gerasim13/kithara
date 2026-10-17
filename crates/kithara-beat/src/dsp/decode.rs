@@ -80,12 +80,15 @@ where
 }
 
 #[cfg(test)]
+type DecodeProbe = (SampleBuffer, f32, Vec<SampleBuffer>, SampleBuffer, usize);
+
+#[cfg(test)]
 pub(super) fn probe<S>(
     curve: &[f32],
     periods: &[f32],
     tempo: Tempo,
     pools: &PoolRegion<S>,
-) -> Result<(SampleBuffer, f32, Vec<SampleBuffer>, SampleBuffer, usize), PoolError>
+) -> Result<DecodeProbe, PoolError>
 where
     S: HasPool<f32>,
 {

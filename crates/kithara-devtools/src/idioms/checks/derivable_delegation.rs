@@ -777,9 +777,9 @@ fn simple_delegate_target(tokens: &[TokenTree]) -> Option<String> {
         _ => return None,
     };
     let mut target = format!("self.{member}");
-    let mut chunks = rest.chunks_exact(2);
-    for chunk in &mut chunks {
-        let [TokenTree::Punct(dot), TokenTree::Ident(field)] = chunk else {
+    let (pairs, remainder) = rest.as_chunks::<2>();
+    for pair in pairs {
+        let [TokenTree::Punct(dot), TokenTree::Ident(field)] = pair else {
             return None;
         };
         if dot.as_char() != '.' {
@@ -788,7 +788,7 @@ fn simple_delegate_target(tokens: &[TokenTree]) -> Option<String> {
         target.push('.');
         target.push_str(&field.to_string());
     }
-    chunks.remainder().is_empty().then_some(target)
+    remainder.is_empty().then_some(target)
 }
 
 fn render_delegate(

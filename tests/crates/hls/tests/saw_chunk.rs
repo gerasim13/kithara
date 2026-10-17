@@ -18,7 +18,9 @@ pub(crate) fn first_invalid_sample(samples: &[f32]) -> Option<(usize, f32)> {
 /// Stereo frames whose two channels differ, as `(frame, left, right)`.
 pub(crate) fn channel_mismatches(samples: &[f32]) -> impl Iterator<Item = (usize, f32, f32)> + '_ {
     samples
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .enumerate()
         .filter(|(_, frame)| (frame[0] - frame[1]).abs() > f32::EPSILON)
         .map(|(f, frame)| (f, frame[0], frame[1]))

@@ -139,6 +139,7 @@ where
 
     delegate::delegate! {
         to self.analyzer {
+            pub(crate) fn observe_origin(&mut self, origin: u64) -> bool;
             pub(crate) fn coverage(&self) -> &RangeSet<u64>;
             pub(crate) fn intake(&self) -> Intake;
             pub(crate) fn failure(&self) -> Option<&BeatPassError>;

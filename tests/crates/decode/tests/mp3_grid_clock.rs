@@ -168,7 +168,9 @@ async fn original_and_sought_markers_expose_the_raw_media_basis(
     let waveform = rhythm_wav_deck_b_120bpm_48k();
     let header = kithara_test_fixtures::signal::header(RATE, CHANNELS, Some(0));
     let authored: Vec<_> = waveform.bytes()[header.len()..]
-        .chunks_exact(size_of::<i16>())
+        .as_chunks::<{ size_of::<i16>() }>()
+        .0
+        .iter()
         .map(|sample| f32::from(i16::from_le_bytes([sample[0], sample[1]])) / f32::from(i16::MAX))
         .take(WINDOW * usize::from(CHANNELS))
         .collect();

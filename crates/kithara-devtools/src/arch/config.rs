@@ -92,6 +92,8 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) fn_arg_count: FnArgCountThreshold,
     #[serde(default)]
+    pub(crate) fn_cyclomatic: FnCyclomaticThreshold,
+    #[serde(default)]
     pub(crate) generic_param_count: GenericParamCountThreshold,
     #[serde(default)]
     pub(crate) god_module: GodModuleThreshold,
@@ -519,6 +521,21 @@ pub(crate) struct FnArgCountThreshold {
 impl Default for FnArgCountThreshold {
     fn default() -> Self {
         Self { warn: 5 }
+    }
+}
+
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
+#[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
+pub(crate) struct FnCyclomaticThreshold {
+    /// Cyclomatic complexity a function may reach; each point above it is one
+    /// ratchet unit for that function.
+    pub(crate) deny: usize,
+}
+
+impl Default for FnCyclomaticThreshold {
+    fn default() -> Self {
+        Self { deny: 15 }
     }
 }
 

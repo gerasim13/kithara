@@ -291,8 +291,10 @@ pub(super) fn difference(left: &Image, right: &Image) -> (f64, Vec<u8>) {
     let total = left.rgba.len() / 4;
     for (index, (a, b)) in left
         .rgba
-        .chunks_exact(4)
-        .zip(right.rgba.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(right.rgba.as_chunks::<4>().0)
         .enumerate()
     {
         let gap = a
@@ -330,10 +332,8 @@ pub(super) fn difference(left: &Image, right: &Image) -> (f64, Vec<u8>) {
 /// over it, so the most common colour in a capture stands in for it.
 fn background_color(image: &Image) -> [u8; 4] {
     let mut counts: HashMap<[u8; 4], usize> = HashMap::new();
-    for pixel in image.rgba.chunks_exact(4) {
-        *counts
-            .entry([pixel[0], pixel[1], pixel[2], pixel[3]])
-            .or_insert(0) += 1;
+    for pixel in image.rgba.as_chunks::<4>().0 {
+        *counts.entry(*pixel).or_insert(0) += 1;
     }
     counts
         .into_iter()
@@ -344,7 +344,7 @@ fn background_color(image: &Image) -> [u8; 4] {
 /// A pixel that differs from a background by more than the rasteriser-noise
 /// floor [`difference`] already uses, applied here between a host and its own
 /// background instead of between the two hosts.
-fn is_ink(pixel: &[u8], background: [u8; 4]) -> bool {
+fn is_ink(pixel: [u8; 4], background: [u8; 4]) -> bool {
     pixel
         .iter()
         .zip(background)
@@ -367,9 +367,11 @@ pub(super) fn ink_disagreement(left: &Image, right: &Image) -> f64 {
     let total = left.rgba.len() / 4;
     let disagreeing = left
         .rgba
-        .chunks_exact(4)
-        .zip(right.rgba.chunks_exact(4))
-        .filter(|(a, b)| is_ink(a, left_bg) != is_ink(b, right_bg))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(right.rgba.as_chunks::<4>().0)
+        .filter(|(a, b)| is_ink(**a, left_bg) != is_ink(**b, right_bg))
         .count();
     if total == 0 {
         0.0

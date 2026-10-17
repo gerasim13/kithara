@@ -126,6 +126,97 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .ok_or(ElasticError::EmptyOutput)
     }
 
+    fn prepare_native_history(
+        &mut self,
+        cue: u64,
+        history_start: i64,
+        history_frames: usize,
+        channels: usize,
+    ) -> Result<usize, ElasticError> {
+        let resident = self.residency.as_ref().ok_or(ElasticError::PoolCapacity)?;
+        let history = self
+            .pending_source
+            .as_mut()
+            .ok_or(ElasticError::PoolCapacity)?;
+        let history_samples = history_frames
+            .checked_mul(channels)
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        history
+            .ensure_len(history_samples)
+            .map_err(|_| ElasticError::PoolCapacity)?;
+        history.truncate(history_samples);
+        history.fill(0.0);
+        let origin = i64::try_from(resident.origin.ok_or(ElasticError::EmptySource)?)
+            .map_err(|_| ElasticError::SampleCountOverflow)?;
+        let available = resident.range(history_start.max(origin), cue, channels)?;
+        let source_history = &resident.samples[available];
+        let missing = history.len() - source_history.len();
+        history[missing..].copy_from_slice(source_history);
+        Ok(history_samples)
+    }
+
+    fn prepare_native_input(
+        &mut self,
+        cue: u64,
+        feed: u64,
+        channels: usize,
+    ) -> Result<(), ElasticError> {
+        let resident = self.residency.as_ref().ok_or(ElasticError::PoolCapacity)?;
+        let source = &mut self
+            .projection
+            .as_mut()
+            .ok_or(ElasticError::PoolCapacity)?
+            .buffers[1];
+        copy_source(
+            resident,
+            source,
+            cue,
+            feed,
+            self.terminal_source_end,
+            channels,
+        )
+    }
+
+    fn prime_native_engine(
+        &mut self,
+        feed: u64,
+        lookahead_end: u64,
+        history_samples: usize,
+        warm_frames: usize,
+        channels: usize,
+    ) -> Result<(), ElasticError> {
+        let history = self
+            .pending_source
+            .as_ref()
+            .ok_or(ElasticError::PoolCapacity)?;
+        let source = &self
+            .projection
+            .as_ref()
+            .ok_or(ElasticError::PoolCapacity)?
+            .buffers[1];
+        let (lookahead, warm) = source.split_at(history_samples);
+        let discarded = self
+            .activation_scratch
+            .as_mut()
+            .ok_or(ElasticError::PoolCapacity)?;
+        let discarded_samples = warm_frames
+            .checked_mul(channels)
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        discarded
+            .ensure_len(discarded_samples)
+            .map_err(|_| ElasticError::PoolCapacity)?;
+        discarded.truncate(discarded_samples);
+        let request = ElasticRequest::new(
+            usize::try_from(feed - lookahead_end).map_err(|_| ElasticError::SampleCountOverflow)?,
+            warm_frames,
+        )?;
+        self.engine
+            .as_mut()
+            .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
+            .prime(request, history, lookahead, warm, discarded)?;
+        Ok(())
+    }
+
     fn prime_native_projection(&mut self, span: SourceSpan) -> Result<(), ElasticError> {
         let channels = usize::from(self.spec.channels);
         let latency = self
@@ -149,60 +240,16 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .ok()
             .and_then(|cue| cue.checked_sub(i64::try_from(latency.first()).ok()?))
             .ok_or(ElasticError::SampleCountOverflow)?;
-        let resident = self.residency.as_ref().ok_or(ElasticError::PoolCapacity)?;
-        let history = self
-            .pending_source
-            .as_mut()
-            .ok_or(ElasticError::PoolCapacity)?;
-        let history_samples = latency
-            .first()
-            .checked_mul(channels)
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        history
-            .ensure_len(history_samples)
-            .map_err(|_| ElasticError::PoolCapacity)?;
-        history.truncate(history_samples);
-        history.fill(0.0);
-        let origin = i64::try_from(resident.origin.ok_or(ElasticError::EmptySource)?)
-            .map_err(|_| ElasticError::SampleCountOverflow)?;
-        let available = resident.range(history_start.max(origin), cue, channels)?;
-        let source_history = &resident.samples[available];
-        let missing = history.len() - source_history.len();
-        history[missing..].copy_from_slice(source_history);
-        let source = &mut self
-            .projection
-            .as_mut()
-            .ok_or(ElasticError::PoolCapacity)?
-            .buffers[1];
-        copy_source(
-            resident,
-            source,
-            cue,
+        let history_samples =
+            self.prepare_native_history(cue, history_start, latency.first(), channels)?;
+        self.prepare_native_input(cue, feed, channels)?;
+        self.prime_native_engine(
             feed,
-            self.terminal_source_end,
+            lookahead_end,
+            history_samples,
+            latency.second(),
             channels,
         )?;
-        let (lookahead, warm) = source.split_at(history_samples);
-        let discarded = self
-            .activation_scratch
-            .as_mut()
-            .ok_or(ElasticError::PoolCapacity)?;
-        let discarded_samples = latency
-            .second()
-            .checked_mul(channels)
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        discarded
-            .ensure_len(discarded_samples)
-            .map_err(|_| ElasticError::PoolCapacity)?;
-        discarded.truncate(discarded_samples);
-        let request = ElasticRequest::new(
-            usize::try_from(feed - lookahead_end).map_err(|_| ElasticError::SampleCountOverflow)?,
-            latency.second(),
-        )?;
-        self.engine
-            .as_mut()
-            .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
-            .prime(request, history, lookahead, warm, discarded)?;
         let projection = self.projection.as_mut().ok_or(ElasticError::PoolCapacity)?;
         projection.feed = Some(feed);
         projection.offset = 0;
@@ -212,12 +259,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         Ok(())
     }
 
-    #[kithara::hang_watchdog]
-    pub(in crate::render) fn render_native_projection(
-        &mut self,
-        span: SourceSpan,
-        speed: f64,
-    ) -> Result<(), ElasticError> {
+    fn check_native_origin(&self, span: SourceSpan) -> Result<(), ElasticError> {
         let expected = self.mapped_position(span.start(), self.spec.sample_rate, 0)?;
         let actual = span
             .source_ratio_at(0)
@@ -241,10 +283,14 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
                         .ok_or(ElasticError::SampleCountOverflow)?,
             });
         }
-        self.apply_pitch(1.0)?;
-        if !self.active {
-            self.prime_native_projection(span)?;
-        }
+        Ok(())
+    }
+
+    fn prepare_native_output(
+        &mut self,
+        span: SourceSpan,
+        speed: f64,
+    ) -> Result<(usize, usize, usize), ElasticError> {
         let channels = usize::from(self.spec.channels);
         let frames =
             usize::try_from(span.output_frames()).map_err(|_| ElasticError::SampleCountOverflow)?;
@@ -265,44 +311,70 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
             .capabilities();
         let packet = self.native_projection_packet(speed, capabilities)?;
+        Ok((frames, channels, packet))
+    }
+
+    fn feed_native_packet(
+        &mut self,
+        span: SourceSpan,
+        frame: usize,
+        packet: usize,
+        channels: usize,
+    ) -> Result<(), ElasticError> {
+        let end = self.native_boundary(span, frame + packet)?;
+        let projection = self.projection.as_mut().ok_or(ElasticError::PoolCapacity)?;
+        let start = projection.feed.ok_or(ElasticError::EmptySource)?;
+        let source_frames = usize::try_from(
+            end.checked_sub(start)
+                .ok_or(ElasticError::SampleCountOverflow)?,
+        )
+        .map_err(|_| ElasticError::SampleCountOverflow)?;
+        let resident = self.residency.as_ref().ok_or(ElasticError::PoolCapacity)?;
+        let [output, source] = &mut projection.buffers;
+        copy_source(
+            resident,
+            source,
+            start,
+            end,
+            self.terminal_source_end,
+            channels,
+        )?;
+        let count = packet
+            .checked_mul(channels)
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        if count > output.capacity() {
+            return Err(ElasticError::PoolCapacity);
+        }
+        output
+            .ensure_len(count)
+            .map_err(|_| ElasticError::PoolCapacity)?;
+        output.truncate(count);
+        self.engine
+            .as_mut()
+            .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
+            .process(ElasticRequest::new(source_frames, packet)?, source, output)?;
+        projection.feed = Some(end);
+        projection.offset = 0;
+        Ok(())
+    }
+
+    #[kithara::hang_watchdog]
+    pub(in crate::render) fn render_native_projection(
+        &mut self,
+        span: SourceSpan,
+        speed: f64,
+    ) -> Result<(), ElasticError> {
+        self.check_native_origin(span)?;
+        self.apply_pitch(1.0)?;
+        if !self.active {
+            self.prime_native_projection(span)?;
+        }
+        let (frames, channels, packet) = self.prepare_native_output(span, speed)?;
         for frame in 0..frames {
             hang_tick!();
             let projection = self.projection.as_ref().ok_or(ElasticError::PoolCapacity)?;
             if projection.offset == projection.buffers[0].len() {
-                let end = self.native_boundary(span, frame + packet)?;
-                let projection = self.projection.as_mut().ok_or(ElasticError::PoolCapacity)?;
-                let start = projection.feed.ok_or(ElasticError::EmptySource)?;
-                let source_frames = usize::try_from(
-                    end.checked_sub(start)
-                        .ok_or(ElasticError::SampleCountOverflow)?,
-                )
-                .map_err(|_| ElasticError::SampleCountOverflow)?;
-                let resident = self.residency.as_ref().ok_or(ElasticError::PoolCapacity)?;
-                let [output, source] = &mut projection.buffers;
-                copy_source(
-                    resident,
-                    source,
-                    start,
-                    end,
-                    self.terminal_source_end,
-                    channels,
-                )?;
-                let count = packet
-                    .checked_mul(channels)
-                    .ok_or(ElasticError::SampleCountOverflow)?;
-                if count > output.capacity() {
-                    return Err(ElasticError::PoolCapacity);
-                }
-                output
-                    .ensure_len(count)
-                    .map_err(|_| ElasticError::PoolCapacity)?;
-                output.truncate(count);
-                self.engine
-                    .as_mut()
-                    .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
-                    .process(ElasticRequest::new(source_frames, packet)?, source, output)?;
-                projection.feed = Some(end);
-                projection.offset = 0;
+                self.feed_native_packet(span, frame, packet, channels)?;
             }
             let projection = self.projection.as_mut().ok_or(ElasticError::PoolCapacity)?;
             let output = &projection.buffers[0][projection.offset..projection.offset + channels];

@@ -2,11 +2,14 @@ use std::task::{Context, Poll};
 
 use kithara_audio::{AudioSource, TrackFailureKind};
 use kithara_bufpool::HasPool;
-use kithara_signal::{AudioChunk, AudioSpec};
+use kithara_command::{Due, Inbox, Seq};
+use kithara_platform::time::Duration;
+use kithara_signal::{AudioChunk, AudioSpec, FrameCount, SegmentId};
+use kithara_sync::SpeedCurve;
 use kithara_warp::WarpRenderer;
 
 use super::{
-    Jump, Lane, LaneApplied, LaneChange, LaneCommand, LaneFrame, Preload, Preparation,
+    Jump, Lane, LaneApplied, LaneChange, LaneCommand, LaneFrame, LaneState, Preload, Preparation,
     landing_position,
 };
 
@@ -22,9 +25,15 @@ impl Lane {
                 Some(deferred) => deferred.park(),
                 None => break,
             };
-            let previous = self.deferred.replace(next.ok_or(TrackFailureKind::Render)?);
+            let previous = self
+                .state
+                .deferred
+                .replace(next.ok_or(TrackFailureKind::Render)?);
             if let Some(previous) = previous {
-                drop(self.inbox.resume(previous, self.cursor, self.cursor));
+                drop(
+                    self.inbox
+                        .resume(previous, self.state.cursor, self.state.cursor),
+                );
             }
         }
         Ok(())
@@ -44,107 +53,30 @@ impl Lane {
         let mut changed = LaneChange::None;
         let declick_frames = self.declick_frames(spec.sample_rate).get();
         loop {
-            let deferred = self.ended
+            let deferred = self.state.ended
                 && self
                     .inbox
-                    .frames_until_due(self.cursor)
+                    .frames_until_due(self.state.cursor)
                     .is_none_or(|frames| frames > 0);
-            let Some(due) = (if deferred && self.deferred.is_some() {
-                let seq = self.deferred.take().ok_or(TrackFailureKind::Render)?;
-                self.inbox.resume(seq, self.cursor, self.cursor)
-            } else {
-                self.inbox.next_due(self.cursor, 1)
-            }) else {
+            let Some(due) = next_due(&mut self.inbox, &mut self.state, deferred)? else {
                 break;
             };
             if changed == LaneChange::None {
                 changed = LaneChange::Controls;
             }
-            let revision = due.seq().get();
             let at = due.at();
-            let mut segment = None;
-            let mut requested_entry = None;
-            let mut restored_same = false;
-            let mut cancelled_deferred = None;
-            let mut refusal = None;
-            for command in due.commands() {
-                tracing::debug!(
-                    seq = revision,
-                    actual_apply_segment = at.segment.get(),
-                    actual_apply_frame = at.frame,
-                    current_segment = self.cursor.segment.get(),
-                    prepared_frontier = self.cursor.frame,
-                    command = ?command,
-                    "lane command executing"
-                );
-                match command {
-                    LaneCommand::SetSpeed(curve) => warp
-                        .set_speed(curve.clone(), revision)
-                        .map_err(|_| TrackFailureKind::Render)?,
-                    LaneCommand::SetKeylock(on) => warp.set_keylock(*on),
-                    LaneCommand::SetBackend(kind) => warp.set_backend(*kind),
-                    LaneCommand::Jump { to } => {
-                        let gain = self.jump.map_or(1.0, |jump| jump.gain(self.cursor.frame));
-                        self.jump = Some(Jump::Down {
-                            to: *to,
-                            start: self.cursor.frame,
-                            frames: declick_frames,
-                            gain,
-                        });
-                    }
-                    LaneCommand::Segment { id, from, speed } => {
-                        if *id == self.cursor.segment && self.deferred.is_some() {
-                            restored_same = true;
-                            cancelled_deferred = self.deferred.take();
-                            continue;
-                        }
-                        let restored = self.parked.filter(|(cursor, _)| cursor.segment == *id);
-                        let from = match restored {
-                            Some((_, Some(position))) => position,
-                            Some((_, None)) => {
-                                refusal = Some(TrackFailureKind::Render);
-                                break;
-                            }
-                            None => *from,
-                        };
-                        if deferred {
-                            self.parked = Some((self.cursor, self.position));
-                        } else {
-                            self.parked = None;
-                        }
-                        cancelled_deferred = self.deferred.take();
-                        self.cursor = restored.map_or(
-                            LaneFrame {
-                                segment: *id,
-                                frame: 0,
-                            },
-                            |(cursor, _)| cursor,
-                        );
-                        requested_entry = Some(from);
-                        self.position = landing_position(source.seek_for_render(from))?;
-                        warp.reset();
-                        warp.set_speed(speed.clone(), revision)
-                            .map_err(|_| TrackFailureKind::Render)?;
-                        self.jump = None;
-                        self.ended = false;
-                        segment = Some(*id);
-                        changed = LaneChange::Source;
-                    }
-                    LaneCommand::SetHostRate { id, rate } => {
-                        cancelled_deferred = self.deferred.take();
-                        self.parked = None;
-                        source.set_host_sample_rate(*rate);
-                        warp.reset();
-                        self.cursor = LaneFrame {
-                            segment: *id,
-                            frame: 0,
-                        };
-                        self.jump = None;
-                        self.ended = false;
-                        segment = Some(*id);
-                        changed = LaneChange::Source;
-                    }
-                }
+            let effects =
+                self.state
+                    .execute_commands(&due, source, warp, deferred, declick_frames)?;
+            let CommandEffects {
+                segment,
+                requested_entry,
+                restored_same,
+                cancelled_deferred,
+                refusal,
+            } = effects;
+            if segment.is_some() {
+                changed = LaneChange::Source;
             }
             if let Some(failure) = refusal {
                 due.refuse(failure);
@@ -157,38 +89,197 @@ impl Lane {
             if segment.is_some() {
                 let seq = due.defer();
                 self.finish_pending(None);
-                self.preload = Preload::Filling(0);
-                self.pending = Some(Preparation {
+                self.state.preload = Preload::Filling(0);
+                self.state.pending = Some(Preparation {
                     seq,
                     at,
-                    entry: self.cursor,
+                    entry: self.state.cursor,
                     source: None,
                     requested_entry,
                     render_revision: warp.render_revision(),
                     latency,
                 });
             } else {
-                if matches!(self.preload, Preload::Filling(0))
-                    && let Some(pending) = &mut self.pending
-                    && pending.entry == self.cursor
-                {
-                    pending.render_revision = warp.render_revision();
-                    pending.latency = latency;
-                }
-                due.apply(LaneApplied {
-                    source_basis: None,
-                    engine_latency: latency,
-                    ready: (restored_same && matches!(self.preload, Preload::Ready))
-                        .then_some(self.cursor.segment),
-                });
+                due.apply(self.state.controls_applied(
+                    restored_same,
+                    warp.render_revision(),
+                    latency,
+                ));
             }
             if let Some(seq) = cancelled_deferred {
-                drop(self.inbox.resume(seq, self.cursor, self.cursor));
+                drop(self.inbox.resume(seq, self.state.cursor, self.state.cursor));
             }
         }
         if self.land_jump(source, warp, spec)? {
             changed = LaneChange::Source;
         }
         Ok(changed)
+    }
+}
+
+#[derive(Default)]
+struct CommandEffects {
+    segment: Option<SegmentId>,
+    requested_entry: Option<Duration>,
+    restored_same: bool,
+    cancelled_deferred: Option<Seq>,
+    refusal: Option<TrackFailureKind>,
+}
+
+impl LaneState {
+    fn controls_applied(
+        &mut self,
+        restored_same: bool,
+        revision: u64,
+        latency: FrameCount,
+    ) -> LaneApplied {
+        if matches!(self.preload, Preload::Filling(0))
+            && let Some(pending) = &mut self.pending
+            && pending.entry == self.cursor
+        {
+            pending.render_revision = revision;
+            pending.latency = latency;
+        }
+        LaneApplied {
+            source_basis: None,
+            engine_latency: latency,
+            ready: (restored_same && matches!(self.preload, Preload::Ready))
+                .then_some(self.cursor.segment),
+        }
+    }
+
+    fn execute_commands<T, S>(
+        &mut self,
+        due: &Due<'_, super::LaneProtocol>,
+        source: &mut T,
+        warp: &mut WarpRenderer<S>,
+        deferred: bool,
+        declick_frames: usize,
+    ) -> Result<CommandEffects, TrackFailureKind>
+    where
+        T: AudioSource<Chunk = AudioChunk>,
+        S: HasPool<f32>,
+    {
+        let revision = due.seq().get();
+        let at = due.at();
+        let mut effects = CommandEffects::default();
+        for command in due.commands() {
+            tracing::debug!(
+                seq = revision,
+                actual_apply_segment = at.segment.get(),
+                actual_apply_frame = at.frame,
+                current_segment = self.cursor.segment.get(),
+                prepared_frontier = self.cursor.frame,
+                command = ?command,
+                "lane command executing"
+            );
+            match command {
+                LaneCommand::SetSpeed(curve) => warp
+                    .set_speed(curve.clone(), revision)
+                    .map_err(|_| TrackFailureKind::Render)?,
+                LaneCommand::SetKeylock(on) => warp.set_keylock(*on),
+                LaneCommand::SetBackend(kind) => warp.set_backend(*kind),
+                LaneCommand::Jump { to } => {
+                    let gain = self.jump.map_or(1.0, |jump| jump.gain(self.cursor.frame));
+                    self.jump = Some(Jump::Down {
+                        to: *to,
+                        start: self.cursor.frame,
+                        frames: declick_frames,
+                        gain,
+                    });
+                }
+                LaneCommand::Segment { id, from, speed } => {
+                    self.enter_segment(
+                        (*id, *from, speed),
+                        source,
+                        warp,
+                        revision,
+                        deferred,
+                        &mut effects,
+                    )?;
+                    if effects.refusal.is_some() {
+                        break;
+                    }
+                }
+                LaneCommand::SetHostRate { id, rate } => {
+                    effects.cancelled_deferred = self.deferred.take();
+                    self.parked = None;
+                    source.set_host_sample_rate(*rate);
+                    warp.reset();
+                    self.cursor = LaneFrame {
+                        segment: *id,
+                        frame: 0,
+                    };
+                    self.jump = None;
+                    self.ended = false;
+                    effects.segment = Some(*id);
+                }
+            }
+        }
+        Ok(effects)
+    }
+
+    fn enter_segment<T, S>(
+        &mut self,
+        (id, from, speed): (SegmentId, Duration, &SpeedCurve),
+        source: &mut T,
+        warp: &mut WarpRenderer<S>,
+        revision: u64,
+        deferred: bool,
+        effects: &mut CommandEffects,
+    ) -> Result<(), TrackFailureKind>
+    where
+        T: AudioSource<Chunk = AudioChunk>,
+        S: HasPool<f32>,
+    {
+        if id == self.cursor.segment && self.deferred.is_some() {
+            effects.restored_same = true;
+            effects.cancelled_deferred = self.deferred.take();
+            return Ok(());
+        }
+        let restored = self.parked.filter(|(cursor, _)| cursor.segment == id);
+        let from = match restored {
+            Some((_, Some(position))) => position,
+            Some((_, None)) => {
+                effects.refusal = Some(TrackFailureKind::Render);
+                return Ok(());
+            }
+            None => from,
+        };
+        if deferred {
+            self.parked = Some((self.cursor, self.position));
+        } else {
+            self.parked = None;
+        }
+        effects.cancelled_deferred = self.deferred.take();
+        self.cursor = restored.map_or(
+            LaneFrame {
+                segment: id,
+                frame: 0,
+            },
+            |(cursor, _)| cursor,
+        );
+        effects.requested_entry = Some(from);
+        self.position = landing_position(source.seek_for_render(from))?;
+        warp.reset();
+        warp.set_speed(speed.clone(), revision)
+            .map_err(|_| TrackFailureKind::Render)?;
+        self.jump = None;
+        self.ended = false;
+        effects.segment = Some(id);
+        Ok(())
+    }
+}
+
+fn next_due<'a>(
+    inbox: &'a mut Inbox<super::LaneProtocol>,
+    state: &mut LaneState,
+    deferred: bool,
+) -> Result<Option<Due<'a, super::LaneProtocol>>, TrackFailureKind> {
+    if deferred && state.deferred.is_some() {
+        let seq = state.deferred.take().ok_or(TrackFailureKind::Render)?;
+        Ok(inbox.resume(seq, state.cursor, state.cursor))
+    } else {
+        Ok(inbox.next_due(state.cursor, 1))
     }
 }

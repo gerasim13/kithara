@@ -127,22 +127,7 @@ pub(super) fn curve_area(
             };
             Ok(area(end)? - area(start)?)
         }
-        SpeedCurve::Steps(steps) => {
-            let mut area = 0.0;
-            let mut cursor = start;
-            let mut speed = origin;
-            for &(frame, next) in steps.iter() {
-                if frame > end {
-                    break;
-                }
-                if frame > cursor {
-                    area += (frame - cursor).to_f64().ok_or(PlayError::Untimed)? * speed;
-                    cursor = frame;
-                }
-                speed = f64::from(next);
-            }
-            Ok(area + (end - cursor).to_f64().ok_or(PlayError::Untimed)? * speed)
-        }
+        SpeedCurve::Steps(steps) => steps_area(steps, origin, start, end),
         SpeedCurve::Approach(approach) => approach
             .advance_over(
                 start.to_f64().ok_or(PlayError::Untimed)?,
@@ -151,32 +136,55 @@ pub(super) fn curve_area(
                     .ok_or(PlayError::Untimed)?,
             )
             .ok_or(PlayError::Untimed),
-        SpeedCurve::ApproachSteps(steps) => {
-            let mut area = 0.0;
-            let mut cursor = start;
-            for (index, &(at, approach)) in steps.iter().enumerate() {
-                let boundary = steps.get(index + 1).map_or(end, |(next, _)| end.min(*next));
-                if boundary <= cursor {
-                    continue;
-                }
-                let elapsed = cursor.checked_sub(at).ok_or(PlayError::Untimed)?;
-                let frames = boundary.checked_sub(cursor).ok_or(PlayError::Untimed)?;
-                area += approach
-                    .advance_over(
-                        elapsed.to_f64().ok_or(PlayError::Untimed)?,
-                        frames.to_f64().ok_or(PlayError::Untimed)?,
-                    )
-                    .ok_or(PlayError::Untimed)?;
-                cursor = boundary;
-                if cursor == end {
-                    break;
-                }
-            }
-            (cursor == end && area.is_finite())
-                .then_some(area)
-                .ok_or(PlayError::Untimed)
+        SpeedCurve::ApproachSteps(steps) => approaches_area(steps, start, end),
+    }
+}
+
+fn steps_area(steps: &[(u64, f32)], origin: f64, start: u64, end: u64) -> Result<f64, PlayError> {
+    let mut area = 0.0;
+    let mut cursor = start;
+    let mut speed = origin;
+    for &(frame, next) in steps {
+        if frame > end {
+            break;
+        }
+        if frame > cursor {
+            area += (frame - cursor).to_f64().ok_or(PlayError::Untimed)? * speed;
+            cursor = frame;
+        }
+        speed = f64::from(next);
+    }
+    Ok(area + (end - cursor).to_f64().ok_or(PlayError::Untimed)? * speed)
+}
+
+fn approaches_area(
+    steps: &[(u64, ExponentialApproach)],
+    start: u64,
+    end: u64,
+) -> Result<f64, PlayError> {
+    let mut area = 0.0;
+    let mut cursor = start;
+    for (index, &(at, approach)) in steps.iter().enumerate() {
+        let boundary = steps.get(index + 1).map_or(end, |(next, _)| end.min(*next));
+        if boundary <= cursor {
+            continue;
+        }
+        let elapsed = cursor.checked_sub(at).ok_or(PlayError::Untimed)?;
+        let frames = boundary.checked_sub(cursor).ok_or(PlayError::Untimed)?;
+        area += approach
+            .advance_over(
+                elapsed.to_f64().ok_or(PlayError::Untimed)?,
+                frames.to_f64().ok_or(PlayError::Untimed)?,
+            )
+            .ok_or(PlayError::Untimed)?;
+        cursor = boundary;
+        if cursor == end {
+            break;
         }
     }
+    (cursor == end && area.is_finite())
+        .then_some(area)
+        .ok_or(PlayError::Untimed)
 }
 
 #[cfg(test)]
