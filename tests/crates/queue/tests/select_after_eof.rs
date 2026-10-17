@@ -6,6 +6,7 @@ use kithara::{
     platform::{
         sync::Arc,
         time::{self, Duration},
+        tokio::sync::broadcast::error::TryRecvError,
     },
     queue::{AdvanceReason, QueueControl, QueueEvent, RepeatMode, TrackStatus, Transition},
 };
@@ -28,15 +29,23 @@ const BLOCK_BUDGET: usize = 256;
 /// The advance a natural end asks for, named for the entry it lands on.
 #[kithara::flash(io)]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
-async fn wait_for_eof_advance(events: &mut EventReceiver<QueueEvent>, id: TrackId) {
+async fn wait_for_eof_advance(
+    harness: &OfflinePlayer,
+    events: &mut EventReceiver<QueueEvent>,
+    id: TrackId,
+) {
     let answered = time::timeout(__hang_detector.remaining(), async {
         loop {
             hang_tick!(format!(
                 "repeat-one waits for natural EOF advance onto {id:?}"
             ));
-            let Ok(Ok(envelope)) = time::timeout(__hang_detector.remaining(), events.recv()).await
-            else {
-                return false;
+            let envelope = match events.try_recv() {
+                Ok(envelope) => envelope,
+                Err(TryRecvError::Empty) => {
+                    let _ = harness.render(BLOCK_FRAMES).await;
+                    continue;
+                }
+                Err(_) => return false,
             };
             if matches!(
                 envelope.event,
@@ -375,14 +384,14 @@ async fn repeat_one_restarts_the_track_its_own_eof_ended() {
         first_onset_frame(&first_pass, 0.005).is_some(),
         "the track must play once before repeat-one is judged"
     );
-    wait_for_eof_advance(&mut advances, id).await;
+    wait_for_eof_advance(&harness, &mut advances, id).await;
 
     let after_eof = render_loop(&queue, &harness, PASS_BLOCKS).await;
     assert!(
         first_onset_frame(&after_eof, 0.005).is_some(),
         "repeat-one must restart the track its own EOF ended"
     );
-    wait_for_eof_advance(&mut advances, id).await;
+    wait_for_eof_advance(&harness, &mut advances, id).await;
     let after_second_eof = render_loop(&queue, &harness, PASS_BLOCKS).await;
     assert!(
         first_onset_frame(&after_second_eof, 0.005).is_some(),
