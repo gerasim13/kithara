@@ -279,6 +279,7 @@ mod fixture {
             state,
             id,
             kithara_queue::QueueCommand::Append {
+                position: kithara_play::Position::ZERO,
                 id: item,
                 source: kithara_queue::TrackSource::Config(Box::new(config)),
             },

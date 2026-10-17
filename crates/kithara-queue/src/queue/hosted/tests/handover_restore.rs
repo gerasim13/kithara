@@ -117,6 +117,7 @@ impl HandoverRig {
             hang_tick!();
             let path = rig.dir.path().join(name);
             rig.apply(QueueCommand::Append {
+                position: Position::ZERO,
                 id,
                 source: TrackSource::Uri(path.to_str().expect("fixture path").to_owned()),
             })
@@ -154,6 +155,7 @@ impl HandoverRig {
                     .expect("fixture path")
                     .to_owned(),
             ),
+            Position::ZERO,
             crate::queue::types::Placement::Append,
         );
         rig
@@ -177,6 +179,7 @@ impl HandoverRig {
                         .expect("fixture path")
                         .to_owned(),
                 ),
+                Position::ZERO,
                 crate::queue::types::Placement::Append,
             );
         }
@@ -627,6 +630,7 @@ async fn removing_a_successor_over_a_held_native_chain_enters_the_next_item(
     let incoming_source = rig.source(1).to_owned();
     let source = rig.dir.path().join("item-3.wav");
     rig.apply(QueueCommand::Append {
+        position: Position::ZERO,
         id: rig.ids[2],
         source: TrackSource::Uri(source.to_str().expect("fixture source").to_owned()),
     })
@@ -822,6 +826,7 @@ async fn removing_an_unstarted_chain_target_keeps_the_confirmed_current(
     let following_item = rig.ids[2];
     let source = rig.dir.path().join("item-3.wav");
     rig.apply(QueueCommand::Append {
+        position: Position::ZERO,
         id: following_item,
         source: TrackSource::Uri(source.to_str().expect("fixture source").to_owned()),
     })
@@ -1186,6 +1191,7 @@ async fn a_rejected_removal_detach_finishes_its_custody_gate(
     let following_item = rig.ids[2];
     let source = rig.dir.path().join("item-3.wav");
     rig.apply(QueueCommand::Append {
+        position: Position::ZERO,
         id: following_item,
         source: TrackSource::Uri(source.to_str().expect("fixture source").to_owned()),
     })
@@ -2134,6 +2140,7 @@ async fn cancelling_a_parked_chain_answers_it_before_the_predecessors_eof() {
                 .expect("third path")
                 .to_owned(),
         ),
+        Position::ZERO,
         crate::queue::types::Placement::Append,
     );
     rig.arm(2).await;
@@ -3069,6 +3076,7 @@ impl HandoverRig {
                         .expect("third path")
                         .to_owned(),
                 ),
+                Position::ZERO,
                 crate::queue::types::Placement::Append,
             );
         }

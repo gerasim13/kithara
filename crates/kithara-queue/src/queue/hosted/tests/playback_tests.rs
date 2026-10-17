@@ -12,6 +12,7 @@ async fn spurious_item_did_play_to_end_is_filtered() {
             Player::apply(
                 queue,
                 QueueCommand::Append {
+                    position: kithara_play::Position::ZERO,
                     id: TrackId::allocate(),
                     source: TrackSource::Uri(
                         dir.path()
@@ -94,6 +95,7 @@ async fn play_retries_the_current_track_after_its_prefetch_failed() {
         Player::apply(
             queue,
             QueueCommand::Append {
+                position: kithara_play::Position::ZERO,
                 id,
                 source: TrackSource::Uri(source.clone()),
             },
@@ -238,7 +240,11 @@ async fn play_promotes_the_initial_pending_prefetch() {
                     after: None,
                 }
             } else {
-                QueueCommand::Append { id, source }
+                QueueCommand::Append {
+                    id,
+                    source,
+                    position: kithara_play::Position::ZERO,
+                }
             };
             Player::apply(queue, command, out).expect("open queue accepts a track");
         });

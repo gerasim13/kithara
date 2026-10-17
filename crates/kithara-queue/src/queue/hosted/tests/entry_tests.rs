@@ -551,6 +551,7 @@ async fn atomic_track_id_cas_arm_then_disarm() {
             Player::apply(
                 queue,
                 QueueCommand::Append {
+                    position: Position::ZERO,
                     id,
                     source: source.clone(),
                 },

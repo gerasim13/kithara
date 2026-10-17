@@ -1126,7 +1126,14 @@ where
                 LinkProbeCommand::Incoming { item, source, cue } => {
                     self.inner.factory_mut().set_synced(true);
                     self.inner
-                        .apply(QueueCommand::Append { id: item, source }, out)
+                        .apply(
+                            QueueCommand::Append {
+                                id: item,
+                                source,
+                                position: Position::ZERO,
+                            },
+                            out,
+                        )
                         .expect("append incoming track");
                     self.inner
                         .apply(

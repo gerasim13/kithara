@@ -30,6 +30,7 @@ fn engine_not_running_operations_return_error(#[case] operation: IdleOperation) 
             kithara_play::Player::apply(
                 deck,
                 kithara_queue::QueueCommand::Append {
+                    position: kithara_play::Position::ZERO,
                     id: kithara_events::TrackId::allocate(),
                     source: kithara_queue::TrackSource::Config(Box::new(config)),
                 },

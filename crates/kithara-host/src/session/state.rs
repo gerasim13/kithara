@@ -586,6 +586,7 @@ mod tests {
                 Player::apply(
                     deck,
                     QueueCommand::Append {
+                        position: kithara_play::Position::ZERO,
                         id: item,
                         source: TrackSource::Uri(path.to_string_lossy().into_owned()),
                     },

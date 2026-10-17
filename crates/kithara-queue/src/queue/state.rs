@@ -524,6 +524,7 @@ pub(crate) mod tests {
             &mut queue,
             &mut rig,
             QueueCommand::Append {
+                position: Position::ZERO,
                 id,
                 source: "/kithara/missing-track.wav".into(),
             },
@@ -594,6 +595,7 @@ pub(crate) mod tests {
                 &mut queue,
                 &mut rig,
                 QueueCommand::Append {
+                    position: Position::ZERO,
                     id: TrackId::allocate(),
                     source: "https://example.com/a.mp3".into(),
                 }
@@ -645,7 +647,12 @@ pub(crate) mod tests {
         let (mut queue, _) = make_queue();
         let control = queue.control();
         let id = TrackId::allocate();
-        queue.insert_entry(id, "https://example.com/a.mp3".into(), Placement::Append);
+        queue.insert_entry(
+            id,
+            "https://example.com/a.mp3".into(),
+            Position::ZERO,
+            Placement::Append,
+        );
         let mut events = control.subscribe::<PlayerEvent>();
         queue.current = Some(id);
         queue.announce(QueueEvent::CurrentTrackChanged { id: Some(id) });
@@ -683,6 +690,7 @@ pub(crate) mod tests {
             &mut queue,
             &mut rig,
             QueueCommand::Append {
+                position: Position::ZERO,
                 id,
                 source: "https://example.com/a.mp3".into(),
             },
@@ -749,6 +757,7 @@ pub(crate) mod tests {
             &mut queue,
             &mut rig,
             QueueCommand::Append {
+                position: Position::ZERO,
                 id,
                 source: "/kithara/missing-track.wav".into(),
             },
@@ -778,6 +787,7 @@ pub(crate) mod tests {
             &mut queue,
             &mut rig,
             QueueCommand::Append {
+                position: Position::ZERO,
                 id: other,
                 source: "/kithara/other-missing-track.wav".into(),
             },
@@ -910,6 +920,7 @@ pub(crate) mod tests {
         let append = control
             .postbox
             .post(QueueCommand::Append {
+                position: Position::ZERO,
                 id: TrackId(42),
                 source: "https://example.com/attachment.mp3".into(),
             })
@@ -968,6 +979,7 @@ pub(crate) mod tests {
         let second = TrackId(42);
         let append = control
             .post(QueueCommand::Append {
+                position: Position::ZERO,
                 id: first,
                 source: "https://example.com/first.mp3".into(),
             })
@@ -1035,6 +1047,7 @@ pub(crate) mod tests {
         let append = control
             .postbox
             .post(QueueCommand::Append {
+                position: Position::ZERO,
                 id: TrackId(1),
                 source: "https://example.com/a.mp3".into(),
             })
@@ -1059,6 +1072,7 @@ pub(crate) mod tests {
         let mutation = control
             .postbox
             .post(QueueCommand::Append {
+                position: Position::ZERO,
                 id: TrackId(1),
                 source: "https://example.com/a.mp3".into(),
             })

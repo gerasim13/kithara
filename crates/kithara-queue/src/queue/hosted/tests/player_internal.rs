@@ -193,6 +193,7 @@ async fn arm_next_replaces_a_previously_armed_item() {
         &mut queue,
         &mut rig,
         QueueCommand::Append {
+            position: kithara_play::Position::ZERO,
             id: third,
             source: TrackSource::Uri(
                 dir.path()
@@ -305,6 +306,7 @@ async fn selecting_another_item_unarms_the_successor() {
         &mut queue,
         &mut rig,
         QueueCommand::Append {
+            position: kithara_play::Position::ZERO,
             id: third,
             source: TrackSource::Uri(
                 dir.path()

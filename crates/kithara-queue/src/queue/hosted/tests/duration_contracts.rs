@@ -104,6 +104,7 @@ impl DurationRig {
         .expect("constant WAV");
         let id = TrackId::allocate();
         self.apply(QueueCommand::Append {
+            position: kithara_play::Position::ZERO,
             id,
             source: TrackSource::Uri(path.to_str().expect("fixture path").to_owned()),
         });

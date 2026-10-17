@@ -157,6 +157,7 @@ async fn pending_override_latches_profile_without_mutating_default() {
         Player::apply(
             queue,
             QueueCommand::Append {
+                position: kithara_play::Position::ZERO,
                 id,
                 source: TrackSource::Uri(
                     dir.path()

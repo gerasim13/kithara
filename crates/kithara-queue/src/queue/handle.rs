@@ -21,7 +21,24 @@ where
     /// # Errors
     /// Returns the queue's refusal or a closed mailbox.
     pub fn append<T: Into<TrackSource<S>>>(&self, source: T) -> Result<TrackId, QueueError> {
-        self.append_with_id(TrackId::allocate(), source)
+        self.append_at(source, Position::ZERO)
+    }
+
+    /// Appends an item whose initial load starts at the given media position.
+    /// # Errors
+    /// Returns the queue's refusal or a closed mailbox.
+    pub fn append_at<T: Into<TrackSource<S>>>(
+        &self,
+        source: T,
+        position: Position,
+    ) -> Result<TrackId, QueueError> {
+        let id = TrackId::allocate();
+        self.call(QueueCommand::Append {
+            id,
+            source: source.into(),
+            position,
+        })?;
+        Ok(id)
     }
 
     /// Appends an item using an identity allocated by the caller.
@@ -35,6 +52,7 @@ where
         self.call(QueueCommand::Append {
             id,
             source: source.into(),
+            position: Position::ZERO,
         })?;
         Ok(id)
     }

@@ -27,9 +27,10 @@ where
         &mut self,
         id: TrackId,
         source: TrackSource<S>,
+        position: Position,
         placement: Placement,
     ) {
-        let record = TrackRecord::new(id, extract_track_name(&source), source);
+        let record = TrackRecord::new(id, extract_track_name(&source), source, position);
         let records = self.tracks.records_mut();
         let index = match placement {
             Placement::Append => {
@@ -265,9 +266,7 @@ where
             let (track, seq) = self.open_track(
                 id,
                 Some(slot),
-                self.held_position
-                    .and_then(SeekPosition::held)
-                    .unwrap_or(Position::ZERO),
+                self.held_position.and_then(SeekPosition::held),
                 output,
                 out,
             )?;
@@ -291,7 +290,7 @@ where
         &mut self,
         id: TrackId,
         slot: Option<Slot>,
-        position: Position,
+        held_position: Option<Position>,
         output: Option<&OutputSnapshot>,
         out: &mut Outbox<'_, S>,
     ) -> Result<(F::Track, Option<Seq>), QueueError> {
@@ -302,6 +301,11 @@ where
             .tracks
             .source(id)
             .ok_or(QueueError::UnknownTrackId(id))?;
+        let position = held_position.unwrap_or(
+            self.tracks
+                .initial_position(id)
+                .ok_or(QueueError::UnknownTrackId(id))?,
+        );
         let observer = self
             .tracks
             .observer(id)
@@ -378,9 +382,7 @@ where
             let (track, seq) = self.open_track(
                 id,
                 None,
-                self.held_position
-                    .and_then(SeekPosition::held)
-                    .unwrap_or(Position::ZERO),
+                self.held_position.and_then(SeekPosition::held),
                 output,
                 out,
             )?;
@@ -524,7 +526,7 @@ where
             else {
                 break;
             };
-            match self.open_track(id, None, Position::ZERO, output, out) {
+            match self.open_track(id, None, None, output, out) {
                 Ok((track, load)) => self.active.park(Parked {
                     item: id,
                     track,
@@ -787,6 +789,7 @@ mod tests {
             &mut queue,
             &mut rig,
             QueueCommand::Append {
+                position: Position::ZERO,
                 id: old,
                 source: "https://example.com/old.mp3".into(),
             },
@@ -805,6 +808,7 @@ mod tests {
             &mut queue,
             &mut rig,
             QueueCommand::Append {
+                position: Position::ZERO,
                 id: replacement,
                 source: "https://example.com/replacement.mp3".into(),
             },
@@ -895,7 +899,12 @@ mod tests {
     #[kithara::test(tokio)]
     async fn begin_dedupes_live_attempt() {
         let (mut queue, mut rig) = make_queue();
-        queue.insert_entry(TrackId(1), "/kithara/missing.wav".into(), Placement::Append);
+        queue.insert_entry(
+            TrackId(1),
+            "/kithara/missing.wav".into(),
+            Position::ZERO,
+            Placement::Append,
+        );
         let first = with_outbox(&mut queue, &mut rig, |queue, pass, out| {
             queue.load_track(TrackId(1), Role::Preloaded, Some(pass.output), out)
         })
@@ -924,7 +933,12 @@ mod tests {
     async fn selection_reflects_only_the_requested_live_attempt() {
         let (mut queue, mut rig) = make_queue();
         for id in [TrackId(1), TrackId(2)] {
-            queue.insert_entry(id, "/kithara/missing.wav".into(), Placement::Append);
+            queue.insert_entry(
+                id,
+                "/kithara/missing.wav".into(),
+                Position::ZERO,
+                Placement::Append,
+            );
         }
         assert!(!queue.target.is_some_and(|target| target.to == TrackId(1)));
         assert!(
@@ -965,7 +979,12 @@ mod tests {
     #[kithara::test(tokio)]
     async fn promote_waiting_reuses_its_open_and_preserves_its_claim() {
         let (mut queue, mut rig) = make_queue();
-        queue.insert_entry(TrackId(1), "/kithara/missing.wav".into(), Placement::Append);
+        queue.insert_entry(
+            TrackId(1),
+            "/kithara/missing.wav".into(),
+            Position::ZERO,
+            Placement::Append,
+        );
         let queued = with_outbox(&mut queue, &mut rig, |queue, pass, out| {
             queue.load_track(TrackId(1), Role::Preloaded, Some(pass.output), out)
         })
@@ -1033,7 +1052,12 @@ mod tests {
     #[kithara::test(tokio)]
     async fn promote_keeps_attempt_holding_permit() {
         let (mut queue, mut rig) = make_queue();
-        queue.insert_entry(TrackId(1), "/kithara/missing.wav".into(), Placement::Append);
+        queue.insert_entry(
+            TrackId(1),
+            "/kithara/missing.wav".into(),
+            Position::ZERO,
+            Placement::Append,
+        );
         let first = with_outbox(&mut queue, &mut rig, |queue, pass, out| {
             queue.load_track(TrackId(1), Role::Preloaded, Some(pass.output), out)
         })
@@ -1077,7 +1101,12 @@ mod tests {
     #[kithara::test]
     fn promote_vacant_is_noop() {
         let (mut queue, mut rig) = make_queue();
-        queue.insert_entry(TrackId(1), "/kithara/missing.wav".into(), Placement::Append);
+        queue.insert_entry(
+            TrackId(1),
+            "/kithara/missing.wav".into(),
+            Position::ZERO,
+            Placement::Append,
+        );
         assert!(
             with_outbox(&mut queue, &mut rig, |queue, _, out| {
                 queue.transition_loaded(out)
@@ -1100,7 +1129,7 @@ mod tests {
         let (mut queue, mut rig) = make_queue();
         let source: TrackSource<TestPools> = "not a url".into();
         for id in [TrackId(42), TrackId(43)] {
-            queue.insert_entry(id, source.clone(), Placement::Append);
+            queue.insert_entry(id, source.clone(), Position::ZERO, Placement::Append);
         }
         queue.publish();
         let output = kithara_play::mock::output(None).get();

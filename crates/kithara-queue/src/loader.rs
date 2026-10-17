@@ -427,9 +427,12 @@ mod tests {
         let id = TrackId::allocate();
         let source: TrackSource<TestPools> = "https://example.com/pending.mp3".into();
         let mut tracks: Tracks<TestPools> = Tracks::default();
-        tracks
-            .records_mut()
-            .push(TrackRecord::new(id, "pending".into(), source.clone()));
+        tracks.records_mut().push(TrackRecord::new(
+            id,
+            "pending".into(),
+            source.clone(),
+            kithara_play::Position::ZERO,
+        ));
         let (item, load) = loader
             .start(
                 id,
@@ -465,6 +468,7 @@ mod tests {
             id,
             "slow".into(),
             TrackSource::Uri("https://example.com/slow.mp3".into()),
+            kithara_play::Position::ZERO,
         ));
         let cancel = CancelToken::never().child();
         let config = ResourceConfig::for_src(
@@ -593,9 +597,12 @@ mod tests {
         let superseded = covered("superseded.jpg", b"superseded cover");
         let current = covered("current.jpg", b"current cover");
         let mut tracks = Tracks::default();
-        tracks
-            .records_mut()
-            .push(TrackRecord::new(id, "covered".into(), current.clone()));
+        tracks.records_mut().push(TrackRecord::new(
+            id,
+            "covered".into(),
+            current.clone(),
+            kithara_play::Position::ZERO,
+        ));
         let bus = loader.prep.bus.clone();
         let mut events = bus.subscribe::<QueueEvent>();
         let output = mock::output(None).get();

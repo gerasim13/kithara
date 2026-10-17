@@ -5,7 +5,7 @@ use kithara_bufpool::HasPool;
 use kithara_decode::TrackMetadata;
 use kithara_events::TrackId;
 use kithara_platform::{CancelToken, sync::Arc};
-use kithara_play::{ResourceConfig, ResourceSrc};
+use kithara_play::{Position, ResourceConfig, ResourceSrc};
 use tracing::debug;
 
 use crate::{
@@ -111,6 +111,7 @@ where
     pub(crate) metadata: TrackMetadata,
     pub(crate) id: TrackId,
     pub(crate) source: TrackSource<S>,
+    pub(crate) initial_position: Position,
     pub(crate) status: TrackStatus,
     observer: AudioObserverSlot,
 }
@@ -119,7 +120,12 @@ impl<S> TrackRecord<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
-    pub(crate) fn new(id: TrackId, name: String, source: TrackSource<S>) -> Self {
+    pub(crate) fn new(
+        id: TrackId,
+        name: String,
+        source: TrackSource<S>,
+        initial_position: Position,
+    ) -> Self {
         Self {
             id,
             name,
@@ -127,6 +133,7 @@ where
             url: source.uri().map(str::to_string),
             status: TrackStatus::Pending,
             source,
+            initial_position,
             load: None,
             observer: AudioObserverSlot::default(),
         }
@@ -223,6 +230,9 @@ where
             #[expr($.map(|record| record.source.clone()))]
             #[call(find)]
             pub(crate) fn source(&self, id: TrackId) -> Option<TrackSource<S>>;
+            #[expr($.map(|record| record.initial_position))]
+            #[call(find)]
+            pub(crate) fn initial_position(&self, id: TrackId) -> Option<Position>;
         }
     }
 
@@ -448,6 +458,7 @@ mod tests {
             id,
             String::new(),
             "https://x/a.mp3".into(),
+            Position::ZERO,
         ));
         tracks
     }
@@ -461,11 +472,13 @@ mod tests {
             TrackId(1),
             String::new(),
             "https://x/first.mp3".into(),
+            Position::ZERO,
         ));
         records.push(TrackRecord::new(
             TrackId(2),
             String::new(),
             "https://x/second.mp3".into(),
+            Position::ZERO,
         ));
         tracks
     }

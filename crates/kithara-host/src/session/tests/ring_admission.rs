@@ -101,6 +101,7 @@ fn seated_queue(
         &mut queue,
         &mut rig,
         QueueCommand::Append {
+            position: kithara_play::Position::ZERO,
             id,
             source: format!("file://{}", path.display()).into(),
         },

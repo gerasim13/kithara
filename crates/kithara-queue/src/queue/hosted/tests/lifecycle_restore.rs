@@ -70,7 +70,12 @@ fn advance_stops_at_end() {
 fn insert_and_remove_preserve_resource() {
     let (mut queue, _, _dir) = empty_queue();
     let id = TrackId::allocate();
-    queue.insert_entry(id, TrackSource::Uri("first".to_owned()), Placement::Append);
+    queue.insert_entry(
+        id,
+        TrackSource::Uri("first".to_owned()),
+        kithara_play::Position::ZERO,
+        Placement::Append,
+    );
     let removed = queue.tracks.records_mut().remove(0);
     assert_eq!(removed.source.uri(), Some("first"));
     assert_eq!(queue.tracks.records().len(), 0);
@@ -86,6 +91,7 @@ async fn announce_carries_the_item_identity(#[case] loaded: bool) {
         &mut queue,
         &mut rig,
         QueueCommand::Append {
+            position: kithara_play::Position::ZERO,
             id,
             source: TrackSource::Uri(
                 dir.path()
@@ -171,6 +177,7 @@ async fn clear_resets_cursor_and_announce() {
         &mut queue,
         &mut rig,
         QueueCommand::Append {
+            position: kithara_play::Position::ZERO,
             id: first,
             source: TrackSource::Uri(
                 dir.path()
@@ -248,6 +255,7 @@ async fn player_advance_through_queue() {
         &mut queue,
         &mut rig,
         QueueCommand::Append {
+            position: kithara_play::Position::ZERO,
             id: third,
             source: TrackSource::Uri(
                 dir.path()
@@ -283,6 +291,7 @@ fn player_insert_scenarios(#[case] insert_at_position: bool, #[case] expected_co
             &mut queue,
             &mut rig,
             QueueCommand::Append {
+                position: kithara_play::Position::ZERO,
                 id: TrackId::allocate(),
                 source: TrackSource::Uri(
                     dir.path()
@@ -336,6 +345,7 @@ async fn player_remove_at_scenarios(#[case] scenario: u8) {
             &mut queue,
             &mut rig,
             QueueCommand::Append {
+                position: kithara_play::Position::ZERO,
                 id: third,
                 source: TrackSource::Uri(
                     dir.path()
@@ -380,6 +390,7 @@ async fn cold_navigation_and_removal_preserve_item_identity() {
                 &mut queue,
                 &mut rig,
                 QueueCommand::Append {
+                    position: kithara_play::Position::ZERO,
                     id,
                     source: TrackSource::Uri(path.to_str().expect("path").to_owned()),
                 },
@@ -461,6 +472,7 @@ async fn remove_at_shifts_current_and_reopens_announce() {
         &mut queue,
         &mut rig,
         QueueCommand::Append {
+            position: kithara_play::Position::ZERO,
             id: third,
             source: TrackSource::Uri(
                 dir.path()
@@ -689,6 +701,7 @@ async fn remove_all_items_releases_output_state_and_allows_fresh_playback() {
         &mut queue,
         &mut rig,
         QueueCommand::Append {
+            position: kithara_play::Position::ZERO,
             id: first,
             source: TrackSource::Uri(
                 dir.path()
@@ -721,6 +734,7 @@ async fn an_inserted_resource_adopts_the_session_wake_mode() {
         &mut queue,
         &mut rig,
         QueueCommand::Append {
+            position: kithara_play::Position::ZERO,
             id,
             source: TrackSource::Uri(path.to_str().expect("inserted source").to_owned()),
         },
@@ -761,6 +775,7 @@ fn close_waits_for_an_admitted_operation() {
     let postbox = queue.postbox.clone();
     let operation = postbox
         .post(QueueCommand::Append {
+            position: kithara_play::Position::ZERO,
             id,
             source: TrackSource::Uri("memory://admitted".to_owned()),
         })

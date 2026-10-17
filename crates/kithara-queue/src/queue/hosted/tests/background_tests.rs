@@ -25,6 +25,7 @@ fn append(
                 Player::apply(
                     queue,
                     QueueCommand::Append {
+                        position: kithara_play::Position::ZERO,
                         id,
                         source: TrackSource::Uri(
                             dir.path()
@@ -193,6 +194,7 @@ async fn spawn_load_bad_url_emits_failed_status() {
         Player::apply(
             queue,
             QueueCommand::Append {
+                position: kithara_play::Position::ZERO,
                 id,
                 source: TrackSource::Uri("not-a-url".into()),
             },
@@ -252,6 +254,132 @@ async fn an_appended_track_loads_without_a_select() {
         .expect("parked track");
     assert_eq!(parked.track.snapshot().slot, None);
     assert!(!parked.track.snapshot().attached);
+}
+
+#[kithara::test(tokio)]
+async fn initial_append_loads_at_its_cue_without_a_seek() {
+    let (mut queue, mut rig, dir) = empty_queue();
+    let id = TrackId::allocate();
+    let position = Duration::from_millis(5);
+    with_outbox(&mut queue, &mut rig, |queue, out| {
+        Player::apply(
+            queue,
+            QueueCommand::Append {
+                id,
+                source: TrackSource::Uri(
+                    dir.path()
+                        .join("entry.wav")
+                        .to_str()
+                        .expect("fixture path")
+                        .to_owned(),
+                ),
+                position,
+            },
+            out,
+        )
+    })
+    .expect("append cued initial track");
+    rig.opens.drain();
+    let mut due = rig.opens.next_due((), 1).expect("initial load");
+    let [DispatcherCommand::Load(request)] = due.commands_mut().as_mut_slice() else {
+        panic!("one initial load command");
+    };
+    assert_eq!(request.position, position);
+    assert_eq!(request.class, ServiceClass::Warm);
+    request.inbox.drain();
+    assert!(
+        request
+            .inbox
+            .next_due(
+                LaneFrame {
+                    segment: kithara_signal::SegmentId::FIRST,
+                    frame: 0
+                },
+                1
+            )
+            .is_none(),
+        "the cue belongs to Load, without a lane seek"
+    );
+    due.defer();
+    tick_fixture(&mut queue, &mut rig);
+    assert!(
+        hold_loads(&mut queue, &mut rig).0.is_empty(),
+        "the cue opens once"
+    );
+}
+
+#[kithara::test(tokio)]
+async fn preloaded_append_keeps_its_cue_without_seeking_the_current_track() {
+    let (mut queue, mut rig, dir) = empty_queue();
+    let first = append(&mut queue, &mut rig, &dir, 1)[0];
+    answer_load(&mut queue, &mut rig, &dir).await;
+    crate::mock::finish(&mut queue, &mut rig);
+    assert!(hold_loads(&mut queue, &mut rig).0.is_empty());
+    let outgoing = queue.current_track().expect("current track").snapshot();
+    let id = TrackId::allocate();
+    let position = Duration::from_millis(5);
+    with_outbox(&mut queue, &mut rig, |queue, out| {
+        Player::apply(
+            queue,
+            QueueCommand::Append {
+                id,
+                source: TrackSource::Uri(
+                    dir.path()
+                        .join("entry.wav")
+                        .to_str()
+                        .expect("fixture path")
+                        .to_owned(),
+                ),
+                position,
+            },
+            out,
+        )
+    })
+    .expect("append cued background track");
+    rig.opens.drain();
+    let mut due = rig.opens.next_due((), 1).expect("background load");
+    let [DispatcherCommand::Load(request)] = due.commands_mut().as_mut_slice() else {
+        panic!("one background load command");
+    };
+    assert_eq!(request.position, position);
+    assert_eq!(request.class, ServiceClass::Idle);
+    let seq = due.defer();
+    select(&mut queue, &mut rig, id);
+    assert!(
+        hold_loads(&mut queue, &mut rig).0.is_empty(),
+        "selection reuses the cued load"
+    );
+    let mut due = rig
+        .opens
+        .resume(seq, (), ())
+        .expect("retained background load");
+    let [DispatcherCommand::Load(request)] = due.commands_mut().as_mut_slice() else {
+        panic!("the original cued load is retained");
+    };
+    request.inbox.drain();
+    assert!(
+        request
+            .inbox
+            .next_due(
+                LaneFrame {
+                    segment: kithara_signal::SegmentId::FIRST,
+                    frame: 0
+                },
+                1
+            )
+            .is_none(),
+        "selection does not send a second seek"
+    );
+    due.defer();
+    let current = queue
+        .current_track()
+        .expect("unchanged current track")
+        .snapshot();
+    assert_eq!(queue.current, Some(first));
+    assert_eq!(current.item, outgoing.item);
+    assert_eq!(current.position, outgoing.position);
+    assert_eq!(current.mark, outgoing.mark);
+    assert_eq!(current.pending_lane, outgoing.pending_lane);
 }
 
 #[kithara::test(tokio)]

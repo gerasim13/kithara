@@ -31,6 +31,7 @@ where
     Append {
         id: TrackId,
         source: TrackSource<S>,
+        position: Position,
     },
     Insert {
         id: TrackId,
@@ -112,8 +113,12 @@ where
     ) -> Result<Option<Seq>, QueueError> {
         self.validate_command(&command)?;
         match command {
-            QueueCommand::Append { id, source } => {
-                self.insert_entry(id, source, Placement::Append);
+            QueueCommand::Append {
+                id,
+                source,
+                position,
+            } => {
+                self.insert_entry(id, source, position, Placement::Append);
                 self.arm_initial_load(output, out);
                 Ok(None)
             }
@@ -129,7 +134,7 @@ where
                     }
                     None => 0,
                 };
-                self.insert_entry(id, source, Placement::At(index));
+                self.insert_entry(id, source, Position::ZERO, Placement::At(index));
                 if after == self.current && self.current.is_some() {
                     self.cancel_auto(out)?;
                 }
@@ -141,7 +146,8 @@ where
             QueueCommand::SetTracks(sources) => {
                 self.clear_entries(out)?;
                 for source in sources {
-                    self.insert_entry(TrackId::allocate(), source, Placement::Append);
+                    let id = TrackId::allocate();
+                    self.insert_entry(id, source, Position::ZERO, Placement::Append);
                 }
                 self.arm_initial_load(output, out);
                 Ok(None)

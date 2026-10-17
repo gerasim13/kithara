@@ -468,6 +468,7 @@ fn selected_second() -> (TestQueue, TrackId, TrackId) {
             id,
             "repeated".to_owned(),
             TrackSource::from("https://example.com/repeated.mp3"),
+            kithara_play::Position::ZERO,
         ));
         queue.tracks.set_status(id, TrackStatus::Loaded);
         let mut track = queue
@@ -825,6 +826,7 @@ fn should_arm_crossfade_cases(
         incoming,
         "next".to_owned(),
         TrackSource::from("https://example.com/next.mp3"),
+        kithara_play::Position::ZERO,
     ));
     let mut track = queue
         .config

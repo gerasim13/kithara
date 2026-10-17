@@ -238,6 +238,7 @@ async fn track_state_is_leading() {
         Player::apply(
             queue,
             QueueCommand::Append {
+                position: kithara_play::Position::ZERO,
                 id: preloaded,
                 source: TrackSource::Uri(
                     dir.path()

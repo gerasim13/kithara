@@ -26,6 +26,7 @@ async fn admission_fills_unset_metadata_from_the_decoder(cancel_token: CancelTok
             Player::apply(
                 queue,
                 QueueCommand::Append {
+                    position: kithara_play::Position::ZERO,
                     id,
                     source: TrackSource::Config(Box::new(config)),
                 },

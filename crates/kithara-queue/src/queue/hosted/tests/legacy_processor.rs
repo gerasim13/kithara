@@ -105,6 +105,7 @@ impl ThresholdRig {
             monitoring: false,
         };
         rig.apply(QueueCommand::Append {
+            position: kithara_play::Position::ZERO,
             id: THRESHOLD_ITEM,
             source: rig.source.clone(),
         });
@@ -244,6 +245,7 @@ impl ThresholdRig {
         rig.queue.insert_entry(
             THRESHOLD_NEXT,
             rig.source.clone(),
+            kithara_play::Position::ZERO,
             crate::queue::types::Placement::Append,
         );
         rig.apply(QueueCommand::Play { at: When::Next });
@@ -904,6 +906,7 @@ async fn cancel_preload_unloads_a_successor_only_while_it_preloads(
                 Player::apply(
                     queue,
                     QueueCommand::Append {
+                        position: kithara_play::Position::ZERO,
                         id,
                         source: TrackSource::Uri(
                             source_dir

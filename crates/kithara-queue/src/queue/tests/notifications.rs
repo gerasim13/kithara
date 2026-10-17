@@ -24,6 +24,7 @@ async fn notification_changed_carries_src() {
         Player::apply(
             queue,
             QueueCommand::Append {
+                position: kithara_play::Position::ZERO,
                 id: item,
                 source: TrackSource::Uri(expected_source.clone()),
             },
@@ -73,6 +74,7 @@ async fn notification_clone() {
         Player::apply(
             queue,
             QueueCommand::Append {
+                position: kithara_play::Position::ZERO,
                 id: item,
                 source: TrackSource::Uri(expected_source.clone()),
             },
