@@ -382,13 +382,23 @@ pub(super) async fn render_passthrough(
     );
 
     let metrics_before_warmup = target.metrics();
-    for _ in 0..WARMUP_BLOCKS {
+    for block in 0..WARMUP_BLOCKS {
         hang_tick!();
         let started = Instant::now();
         if let Some(player) = load.as_mut() {
             let _ = player.render(BLOCK_FRAMES).await;
         }
         let _ = target.render(BLOCK_FRAMES).await;
+        let metrics = target.metrics();
+        assert_eq!(
+            metrics.underruns(),
+            metrics_before_warmup.underruns(),
+            "no-SYNC warmup underrun: stretch={stretch:?}, with_load={with_load}, \
+             block={block}, output_frames={}..{}, before={metrics_before_warmup:?}, \
+             now={metrics:?}",
+            block * BLOCK_FRAMES,
+            (block + 1) * BLOCK_FRAMES,
+        );
         time::sleep(block_period.saturating_sub(started.elapsed())).await;
         hang_reset!();
     }
@@ -401,13 +411,23 @@ pub(super) async fn render_passthrough(
         .saturating_sub(metrics_before_warmup.underruns());
     let mut pcm = Vec::with_capacity(CAPTURE_BLOCKS * BLOCK_FRAMES * usize::from(CHANNELS));
     load_probe.start_capture();
-    for _ in 0..CAPTURE_BLOCKS {
+    for block in 0..CAPTURE_BLOCKS {
         hang_tick!();
         let started = Instant::now();
         if let Some(player) = load.as_mut() {
             let _ = player.render(BLOCK_FRAMES).await;
         }
         pcm.extend(target.render(BLOCK_FRAMES).await);
+        let metrics = target.metrics();
+        assert_eq!(
+            metrics.underruns(),
+            metrics_before_capture.underruns(),
+            "no-SYNC capture underrun: stretch={stretch:?}, with_load={with_load}, \
+             block={block}, output_frames={}..{}, before={metrics_before_capture:?}, \
+             now={metrics:?}",
+            (WARMUP_BLOCKS + block) * BLOCK_FRAMES,
+            (WARMUP_BLOCKS + block + 1) * BLOCK_FRAMES,
+        );
         time::sleep(block_period.saturating_sub(started.elapsed())).await;
         hang_reset!();
     }

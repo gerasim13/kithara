@@ -84,6 +84,14 @@ impl Deck {
                         );
                     }
                     track.adopt(segment);
+                    #[cfg(feature = "usdt")]
+                    {
+                        let slot = u32::from(slot.get());
+                        let segment = segment.get();
+                        let at = i64::from(at);
+                        let seq = seq.get();
+                        kithara::probe_event!(deck_adopted, slot, segment, at, seq);
+                    }
                     track.recycle_obsolete(&mut self.recycle[slot.index()]);
                 }
                 Some(DeckPart::Adopt { slot, segment })

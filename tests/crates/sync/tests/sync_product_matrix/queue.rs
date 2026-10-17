@@ -5,8 +5,11 @@ use std::{collections::BTreeMap, ops::Range};
 use kithara::{
     events::TrackId,
     link::LinkedSnapshot,
-    play::{CrossfadeCurve, CrossfadeSettings, DeckMixSettings, DeckMixerConfig, TrackSnapshot},
-    queue::QueueSettings,
+    play::{
+        CrossfadeCurve, CrossfadeSettings, DeckMixSettings, DeckMixerConfig, TrackSettings,
+        TrackSnapshot,
+    },
+    queue::{QueueSettings, Transition},
     signal::{AudioChunkInfo, SegmentId, SourceSpan},
     warp::{Beat, BeatGrid, BeatGridQuery, BeatGridSnapshot, MapPoint, MapPosition},
 };
@@ -35,8 +38,56 @@ const SOURCES: &[&str] = &[
     "rhythm_wav_trip_hop_74_aligned",
     "rhythm_wav_breakbeat_140_aligned",
 ];
+const REAL_SOURCES: &[&str] = &[
+    "library_flac_song2",
+    "library_flac_slowtechno",
+    "library_flac_newtechno",
+    "library_flac_ryabina",
+    "library_flac_song1",
+];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MusicCase {
+    Natural,
+    RealNext,
+}
+
+impl MusicCase {
+    fn sources(self) -> &'static [&'static str] {
+        match self {
+            Self::Natural => SOURCES,
+            Self::RealNext => REAL_SOURCES,
+        }
+    }
+
+    fn provider(self) -> Provider {
+        match self {
+            Self::Natural => Provider::Rhythm(SOURCES),
+            Self::RealNext => Provider::Library(REAL_SOURCES),
+        }
+    }
+
+    fn crossfade(self) -> CrossfadeSettings {
+        match self {
+            Self::Natural => CrossfadeSettings::default(),
+            Self::RealNext => CrossfadeSettings {
+                duration: 4.0,
+                curve: CrossfadeCurve::EqualPower,
+                ..CrossfadeSettings::default()
+            },
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Natural => "queue321-five-music-tracks-100-to-120",
+            Self::RealNext => "queue321-five-real-tracks-four-next-100-to-120",
+        }
+    }
+}
 
 type NativeStart = (TrackId, Slot, SessionFrame, Fade);
+type NativeSegment = (TrackId, Slot, SessionFrame, u64, u64);
 
 struct Voice {
     item: TrackId,
@@ -130,24 +181,31 @@ fn envelope(capture: &LinkCapture, item: TrackId, session: i64, mixer: DeckMixer
     }
 }
 
-fn intervals(voices: &[Voice], capture: &LinkCapture) -> Vec<Interval> {
+fn intervals(
+    voices: &[Voice],
+    capture: &LinkCapture,
+    consumed: &BTreeMap<TrackId, Capture>,
+    bounded_end: Option<(TrackId, SessionFrame)>,
+) -> Vec<Interval> {
     let mut result: Vec<_> = voices
         .iter()
         .enumerate()
-        .flat_map(|(index, voice)| voice_intervals(index, voice, capture))
+        .flat_map(|(index, voice)| {
+            voice_intervals(index, voice, capture, &consumed[&voice.item], bounded_end)
+        })
         .collect();
     result.sort_by_key(|interval| (interval.slot.get(), interval.active.start));
     result
 }
 
-fn first_strong_beat(voice: &Voice) -> Duration {
+fn first_grid_boundary(voice: &Voice) -> Duration {
     let raw = voice.model.as_raw();
-    assert!(
-        raw.meter.is_some(),
-        "fixed musical fixtures declare their meter"
-    );
-    Duration::try_from_secs_f64(raw.downbeats.first().expect("declared first downbeat").at)
-        .expect("finite declared first downbeat")
+    let seconds = if raw.meter.is_some() {
+        raw.downbeats.first().expect("declared first downbeat").at
+    } else {
+        raw.beats.first().expect("declared first beat").at
+    };
+    Duration::try_from_secs_f64(seconds).expect("finite declared first boundary")
 }
 
 fn residency_origin(voice: &Voice, info: AudioChunkInfo) -> u64 {
@@ -173,7 +231,24 @@ fn residency_origin(voice: &Voice, info: AudioChunkInfo) -> u64 {
         .expect("actual first pre-Warp physical input")
 }
 
-fn native_end(capture: &LinkCapture, item: TrackId) -> i64 {
+fn native_end(
+    capture: &LinkCapture,
+    item: TrackId,
+    bounded_end: Option<(TrackId, SessionFrame)>,
+) -> i64 {
+    if let Some((last, end)) = bounded_end
+        && item == last
+    {
+        assert!(
+            capture
+                .faded
+                .iter()
+                .chain(&capture.ended)
+                .all(|(owner, ..)| *owner != item),
+            "bounded final voice has no native terminal event"
+        );
+        return frame(end);
+    }
     capture
         .faded
         .iter()
@@ -184,14 +259,20 @@ fn native_end(capture: &LinkCapture, item: TrackId) -> i64 {
         .expect("native terminal frame")
 }
 
-fn voice_intervals(index: usize, voice: &Voice, capture: &LinkCapture) -> Vec<Interval> {
+fn voice_intervals(
+    index: usize,
+    voice: &Voice,
+    capture: &LinkCapture,
+    consumed: &Capture,
+    bounded_end: Option<(TrackId, SessionFrame)>,
+) -> Vec<Interval> {
     let mut result = Vec::new();
     let &(_, slot, start, _) = capture
         .starts
         .iter()
         .find(|(owner, ..)| *owner == voice.item)
         .expect("one actual Start per item");
-    let end = native_end(capture, voice.item);
+    let end = native_end(capture, voice.item, bounded_end);
     assert!(end > frame(start), "each real source has an audible domain");
     let packets = source_packets(voice, capture, slot, start, end);
     let (&first_start, &first_info) = packets
@@ -216,8 +297,8 @@ fn voice_intervals(index: usize, voice: &Voice, capture: &LinkCapture) -> Vec<In
     );
     assert_eq!(
         first_span.position_at(0),
-        Some(first_strong_beat(voice)),
-        "actual first SourceSpan starts at the supplied first strong beat"
+        Some(first_grid_boundary(voice)),
+        "actual first SourceSpan starts at the supplied first grid boundary"
     );
     assert_eq!(
         (first_info.spec.sample_rate.get(), first_info.spec.channels),
@@ -276,8 +357,6 @@ fn voice_intervals(index: usize, voice: &Voice, capture: &LinkCapture) -> Vec<In
         .lock()
         .fixture_domain(first_info, &voice.fixture, origin)
         .unwrap_or_else(|error| panic!("named source {:?}: {error}", voice.item));
-    let consumed = Capture::for_track(u64::from(voice.item), RATE)
-        .unwrap_or_else(|error| panic!("item {:?}: {error}", voice.item));
     let slices = consumed
         .covered(frame(start)..end)
         .unwrap_or_else(|error| panic!("item {:?}: {error}", voice.item));
@@ -509,6 +588,8 @@ fn reference(
 }
 
 struct QueueMusic {
+    kind: MusicCase,
+    forward_oracle: bool,
     voices: Vec<Voice>,
     deck: LinkedQueueHandle<TestPools>,
     master_wav: Option<AudioArtifactTap>,
@@ -516,6 +597,7 @@ struct QueueMusic {
     master: TapProbe,
     host: OfflineHostHarness<TestPools, LinkedOwner<TestPools>>,
     mixer: DeckMixerConfig,
+    metronome: MetronomeConfig,
     _worker: PlayWorker<TestPools>,
 }
 
@@ -531,17 +613,22 @@ struct CapturedMusic {
     failures: Vec<String>,
     answered: Vec<(TrackId, Seq)>,
     pcm: Vec<f32>,
+    output: Vec<f32>,
+    next_requests: Vec<(TrackId, SessionFrame)>,
+    bounded_end: Option<(TrackId, SessionFrame)>,
     retarget: Option<(SessionFrame, [TrackId; 2])>,
     checks: Vec<serde_json::Value>,
     selected_items: Vec<TrackId>,
     primary_beats: Vec<(i64, TrackId)>,
-    boundary_copy: Option<BoundaryCopy>,
+    boundary_copies: Vec<BoundaryCopy>,
     output_delta: f32,
+    supplied_grid_shift_rejected: bool,
 }
 
 impl QueueMusic {
     #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
-    async fn new() -> Self {
+    async fn new(kind: MusicCase, track: TrackSettings) -> Self {
+        let forward_oracle = !track.keylock();
         let sample_rate = NonZeroU32::new(RATE).expect("source rate");
         let pools = pools();
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
@@ -556,6 +643,7 @@ impl QueueMusic {
             sample_rate,
         );
         let axis = trajectory.clone();
+        let metronome = MetronomeConfig::builder().level(0.25).duck(0.25).build();
         let config = HostConfig::offline(pools)
             .max_block_frames(
                 NonZeroU32::new(BLOCK.try_into().expect("block frames fit u32")).expect("block"),
@@ -564,7 +652,7 @@ impl QueueMusic {
                 HostSettings::builder()
                     .sample_rate(sample_rate)
                     .tempo(initial)
-                    .metronome(MetronomeConfig::builder().level(0.25).duck(0.25).build())
+                    .metronome(metronome)
                     .build(),
             )
             .build();
@@ -587,25 +675,21 @@ impl QueueMusic {
             .await
             .expect("actual Master tap");
         let label = artifact_label();
-        let output_wav = AudioArtifactTap::from_env(
-            &format!("{label}-queue321-five-music-tracks-100-to-120-output"),
-            RATE,
-            2,
-        )
-        .expect("Output WAV export");
-        let master_wav = AudioArtifactTap::from_env(
-            &format!("{label}-queue321-five-music-tracks-100-to-120-master"),
-            RATE,
-            2,
-        )
-        .expect("Master WAV export");
+        let output_wav =
+            AudioArtifactTap::from_env(&format!("{label}-{}-output", kind.label()), RATE, 2)
+                .expect("Output WAV export");
+        let master_wav =
+            AudioArtifactTap::from_env(&format!("{label}-{}-master", kind.label()), RATE, 2)
+                .expect("Master WAV export");
         let mixer = DeckMixerConfig::builder()
             .sample_rate(sample_rate)
             .slots(NonZeroUsize::new(2).expect("two actual reusable mixer slots"))
             .mix(DeckMixSettings::builder().level(CONTROL_GAIN).build())
             .build();
-        let crossfade = CrossfadeSettings::default();
-        assert_eq!(crossfade.duration, 1.0, "original #321 crossfade");
+        let crossfade = kind.crossfade();
+        if kind == MusicCase::Natural {
+            assert_eq!(crossfade.duration, 1.0, "original #321 crossfade");
+        }
         let observation = Arc::new(Mutex::new(LinkObservation {
             capture: Some(LinkCapture::default()),
             ..LinkObservation::default()
@@ -613,16 +697,9 @@ impl QueueMusic {
         let warp = kithara::warp::WarpConfig::builder()
             .render_quantum_frames(NonZeroUsize::new(BLOCK).expect("one observed Warp quantum"))
             .build();
-        let track = kithara::play::TrackSettings::default();
         assert!(
-            !track.keylock()
-                && track
-                    .backend()
-                    .capabilities()
-                    .contains(kithara::stretch::BackendCapabilities::RATE)
-                && warp.region_plan().is_none()
-                && warp.source_block_frames().get() == SOURCE_BLOCK,
-            "UNSUPPORTED_ORACLE_WITNESS: residency proof requires the fixed native no-keylock RATE chain without a region plan"
+            warp.region_plan().is_none() && warp.source_block_frames().get() == SOURCE_BLOCK,
+            "UNSUPPORTED_ORACLE_WITNESS: capture requires the fixed Warp geometry without a region plan"
         );
         let queue = Queue::new(
             QueueConfig::with_factory(LinkedFactory::new(
@@ -650,10 +727,13 @@ impl QueueMusic {
             .await
             .expect("one ordinary Linked Queue");
         Self {
+            kind,
+            forward_oracle,
             host,
             deck,
             master,
             mixer,
+            metronome,
             voices: Vec::new(),
             output_wav,
             master_wav,
@@ -673,8 +753,8 @@ impl QueueMusic {
             })
             .await
             .expect("SYNC through the actual Host owner");
-        let provider = Provider::Rhythm(SOURCES);
-        for (index, name) in SOURCES.iter().enumerate() {
+        let provider = self.kind.provider();
+        for (index, name) in self.kind.sources().iter().enumerate() {
             hang_tick!(format!("queue321: append real source {index}: {name}"));
             let asset =
                 kithara_test_fixtures::assets::by_name(name).expect("existing musical fixture");
@@ -683,17 +763,26 @@ impl QueueMusic {
                 .await
                 .expect("independent native PCM of this named musical fixture");
             assert_eq!(
-                (
-                    fixture.sample_rate,
-                    fixture.channels,
-                    fixture.samples.len() / 2
-                ),
-                (RATE, 2, RATE as usize * 12),
-                "the fixed fixture is twelve seconds of stereo music"
+                (fixture.sample_rate, fixture.channels),
+                (RATE, 2),
+                "native stereo fixture"
             );
+            if self.kind == MusicCase::Natural {
+                assert_eq!(
+                    fixture.samples.len() / 2,
+                    RATE as usize * 12,
+                    "the fixed fixture is twelve seconds of stereo music"
+                );
+            }
             let ArtifactSource::Value(model) = provider.beat_grid(index) else {
                 panic!("declared fixture analysis");
             };
+            if self.kind == MusicCase::Natural {
+                assert!(
+                    model.as_raw().meter.is_some(),
+                    "fixed musical fixtures declare their meter"
+                );
+            }
             let config = ResourceConfig::for_src(
                 ResourceSrc::parse(path.to_str().expect("source path")).expect("fixture source"),
             )
@@ -735,24 +824,27 @@ impl QueueMusic {
         let mut render_time = Duration::ZERO;
         let mut history_visits = 0;
         let mut data = CapturedMusic::default();
-        let started = self.start_clock(&mut data).await;
+        let cadence = self.start_clock(&mut data).await;
         hang_reset!();
         let first_frames: f64 = (BLOCK - 1).as_();
         time::sleep(
             Duration::from_secs_f64(first_frames / f64::from(RATE))
-                .saturating_sub(started.elapsed()),
+                .saturating_sub(cadence.elapsed()),
         )
         .await;
-        let source_count: f64 = SOURCES.len().as_();
-        let max_frames: u64 = (((source_count * 4.0)
-            + self
-                .voices
-                .iter()
-                .map(|voice| 12.0 * voice.model.as_raw().bpm / 100.0)
-                .sum::<f64>())
-            * f64::from(RATE))
-        .ceil()
-        .as_();
+        let source_count: f64 = self.kind.sources().len().as_();
+        let max_frames: u64 = match self.kind {
+            MusicCase::Natural => (((source_count * 4.0)
+                + self
+                    .voices
+                    .iter()
+                    .map(|voice| 12.0 * voice.model.as_raw().bpm / 100.0)
+                    .sum::<f64>())
+                * f64::from(RATE))
+            .ceil()
+            .as_(),
+            MusicCase::RealNext => u64::from(RATE) * 120,
+        };
         let mut grids = Vec::new();
         let mut playing = false;
         let mut postroll = None;
@@ -767,7 +859,7 @@ impl QueueMusic {
             ));
             assert!(
                 self.host.position() <= max_frames,
-                "five fixed sources must reach a native final Ended"
+                "the fixed Queue scenario must finish within its declared frame bound"
             );
             let control = self.deck.control().clone();
             let grid = self
@@ -850,24 +942,45 @@ impl QueueMusic {
                 starts_seen = starts;
                 reported = Instant::now();
             }
-            let final_end = self.deck.observe(|o| {
-                o.capture
-                    .as_ref()
-                    .expect("capture")
-                    .ended
-                    .iter()
-                    .find(|(item, ..)| *item == self.voices[4].item)
-                    .map(|(_, _, at)| *at)
-            });
-            if let Some(at) = final_end {
-                let required = *postroll.get_or_insert_with(|| frame(at) + BLOCK as i64);
-                if i64::try_from(self.host.position()).expect("Host frame") >= required {
-                    break;
+            match self.kind {
+                MusicCase::Natural => {
+                    let final_end = self.deck.observe(|o| {
+                        o.capture
+                            .as_ref()
+                            .expect("capture")
+                            .ended
+                            .iter()
+                            .find(|(item, ..)| *item == self.voices[4].item)
+                            .map(|(_, _, at)| *at)
+                    });
+                    if let Some(at) = final_end {
+                        let required = *postroll.get_or_insert_with(|| frame(at) + BLOCK as i64);
+                        if i64::try_from(self.host.position()).expect("Host frame") >= required {
+                            break;
+                        }
+                    }
+                }
+                MusicCase::RealNext => {
+                    if self.advance_real(&snapshot, &grid, now, &mut data).await {
+                        break;
+                    }
                 }
             }
             let (frames, boundary) = pull_frames(&consumed, &grid, now);
             let render_started = Instant::now();
-            let started = self.render_block(frames, &mut data).await;
+            if tracing::enabled!(target: "kithara_test::sync::queue321::pacing", tracing::Level::DEBUG)
+            {
+                let elapsed = cadence.elapsed();
+                let frame = self.host.position();
+                let rendered_frames: f64 = frame.as_();
+                let deadline = Duration::from_secs_f64(rendered_frames / f64::from(RATE));
+                tracing::debug!(target: "kithara_test::sync::queue321::pacing",
+                    phase = "render", frame, frames,
+                    cadence_elapsed_ns = elapsed.as_nanos(), deadline_ns = deadline.as_nanos(),
+                    debt_ns = elapsed.saturating_sub(deadline).as_nanos(),
+                    lead_ns = deadline.saturating_sub(elapsed).as_nanos());
+            }
+            self.render_block(frames, &mut data).await;
             render_time += render_started.elapsed();
             if next_beat == Some(frame(now))
                 && snapshot.iter().any(|(_, slot)| {
@@ -893,10 +1006,10 @@ impl QueueMusic {
             }
             next_beat = Some(boundary);
             hang_reset!();
-            let rendered_frames: f64 = frames.as_();
+            let rendered_frames: f64 = self.host.position().as_();
             time::sleep(
                 Duration::from_secs_f64(rendered_frames / f64::from(RATE))
-                    .saturating_sub(started.elapsed()),
+                    .saturating_sub(cadence.elapsed()),
             )
             .await;
         }
@@ -911,6 +1024,80 @@ impl QueueMusic {
         tracing::info!(target: "kithara_test::sync::queue321", phase = "render_complete",
             wall_s = wall.elapsed().as_secs_f64(), frame = self.host.position(), frames = data.pcm.len() / 2);
         data
+    }
+
+    async fn advance_real(
+        &self,
+        snapshot: &[(LinkedSnapshot<TrackSnapshot>, SlotSnapshot)],
+        grid: &BeatGridSnapshot,
+        now: SessionFrame,
+        data: &mut CapturedMusic,
+    ) -> bool {
+        let (start, count, faded) = self.deck.observe(|o| {
+            let capture = o.capture.as_ref().expect("native capture");
+            assert!(
+                capture.ended.is_empty(),
+                "real tracks do not end inside the bounded take"
+            );
+            (
+                capture.starts.last().copied(),
+                capture.starts.len(),
+                capture.faded.len(),
+            )
+        });
+        let Some((item, _, started, _)) = start else {
+            return false;
+        };
+        assert!(count <= 5, "only the five declared real sources may start");
+        if count < 5 && data.next_requests.len() == count {
+            return false;
+        }
+        let beat = (host_beat(grid, frame(started)) / 4.0).ceil() * 4.0 + 32.0;
+        let due = beat_frame(grid, beat);
+        if frame(now) < due {
+            return false;
+        }
+        assert_eq!(
+            frame(now),
+            due,
+            "eight Host bars end on the observed bar boundary"
+        );
+        assert!(
+            snapshot
+                .iter()
+                .any(|(track, slot)| track.track.item == item && slot.state == SlotState::Playing),
+            "the current real source is actually Playing at the capture or Next boundary"
+        );
+        assert_eq!(
+            faded,
+            count - 1,
+            "the preceding outgoing fade completes before another Next"
+        );
+        assert_eq!(
+            data.next_requests.len(),
+            count - 1,
+            "one public Next per completed handover"
+        );
+        if count == 5 {
+            assert_eq!(
+                item, self.voices[4].item,
+                "the fifth real source owns the bounded end"
+            );
+            data.bounded_end = Some((item, now));
+            return true;
+        }
+        assert_eq!(
+            item,
+            self.voices[count - 1].item,
+            "Next belongs to the outgoing item"
+        );
+        let control = self.deck.control().clone();
+        self.host
+            .run(move || control.next(Transition::Crossfade))
+            .await
+            .expect("the public Next crossfade is accepted");
+        data.next_requests.push((item, now));
+        false
     }
 
     fn trace_runtime(
@@ -1113,11 +1300,7 @@ impl QueueMusic {
                         track.track.item == voice.item && track.track.slot == Some(seat)
                     })
                     .expect("the copied beat retains its actual item and slot");
-                let actual = Capture::for_track(u64::from(voice.item), RATE)
-                    .expect("the exact native copy history of this item");
-                copied_beat(voice.item, seat, *slot, after, &actual)
-                    .unwrap_or_else(|error| panic!("item {:?}: {error}", voice.item));
-                data.boundary_copy.get_or_insert_with(|| BoundaryCopy {
+                data.boundary_copies.push(BoundaryCopy {
                     item: voice.item,
                     seat,
                     before: *slot,
@@ -1148,7 +1331,24 @@ impl QueueMusic {
                 continue;
             }
             let result = self.deck.observe(|o| {
-                super::binding::executed_law(&voice.model, grid, grids, o, linked, first, *slot)
+                if self.forward_oracle {
+                    super::binding::queue_observation(
+                        &voice.model,
+                        grid,
+                        grids,
+                        o,
+                        linked,
+                        first,
+                        *slot,
+                    )
+                } else {
+                    super::binding::executed_law(&voice.model, grid, grids, o, linked, first, *slot)
+                        .map(|(speed, failures, mut evidence)| {
+                            evidence["supplemental_source_support"] =
+                                serde_json::json!("supported");
+                            (speed, failures, evidence)
+                        })
+                }
             });
             let (speed, failures, mut evidence) = result.unwrap_or_else(|error| {
                 self.deck.observe(|o| {
@@ -1182,6 +1382,8 @@ impl QueueMusic {
                     "exact_source_coordinates": [0, 1],
                 });
             }
+            evidence["item"] = serde_json::json!(u64::from(voice.item));
+            evidence["frame"] = serde_json::json!(frame(mark.session));
             let mut valid = failures.is_empty();
             evidence["law_failures"] = serde_json::json!(failures);
             data.failures.extend(
@@ -1189,7 +1391,9 @@ impl QueueMusic {
                     .into_iter()
                     .map(|failure| format!("item {:?} at {now:?}: {failure}", voice.item)),
             );
-            if !matches!(linked.sync, kithara::link::SyncStatus::Correcting { .. }) {
+            if evidence["supplemental_source_support"] == "supported"
+                && !matches!(linked.sync, kithara::link::SyncStatus::Correcting { .. })
+            {
                 let binding =
                     super::binding::check(&voice.model, sample_rate, grid, *slot, speed.as_(), 4)
                         .unwrap_or_else(|error| panic!("item {:?}: {error}", voice.item));
@@ -1235,6 +1439,7 @@ impl QueueMusic {
         if let Some(tap) = self.master_wav.as_mut() {
             tap.push(&block);
         }
+        data.output.extend(output);
         data.pcm.extend(block);
         started
     }
@@ -1259,15 +1464,30 @@ impl QueueMusic {
                 event.target == "kithara_render_probe" && event.probe == "pcm_consumed_geometry"
             })
             .count();
+        let mut negative_controls = vec![
+            "omit outgoing",
+            "omit incoming",
+            "one-frame source cue",
+            "supplied grid shift",
+        ];
+        if self.forward_oracle {
+            negative_controls.push("one-frame source cue forward law");
+        }
+        let negative_count = negative_controls.len();
         let evidence = serde_json::json!({
-            "scenario": "one actual Queue, five musical sources, four crossfades, second-overlap Host retarget",
-            "sources": SOURCES, "items": self.voices.iter().map(|voice| u64::from(voice.item)).collect::<Vec<_>>(),
+            "scenario": self.kind.label(),
+            "sources": self.kind.sources(), "items": self.voices.iter().map(|voice| u64::from(voice.item)).collect::<Vec<_>>(),
+            "source_grids": self.voices.iter().map(|voice| serde_json::json!({"item": u64::from(voice.item), "model": voice.model.as_raw()})).collect::<Vec<_>>(),
+            "public_next_requests": data.next_requests.iter().map(|(item, at)| serde_json::json!({"outgoing_item": u64::from(*item), "request_frame": frame(*at)})).collect::<Vec<_>>(),
+            "bounded_final_playing": data.bounded_end.map(|(item, at)| serde_json::json!({"item": u64::from(item), "capture_end": frame(at)})),
+            "crossfade_settings": format!("{:?}", self.kind.crossfade()),
+            "capture_claim": match self.kind { MusicCase::Natural => "automatic handovers and final natural Ended", MusicCase::RealNext => "four public Next handovers; bounded fifth source still Playing" },
             "capture_origin_session_frame": 0, "frames": data.pcm.len() / 2, "channels": 2, "sample_rate": RATE,
             "start_receipts": format!("{:?}", capture.starts), "outgoing_fades": format!("{:?}", capture.fades),
             "native_segments": format!("{:?}", capture.segments), "faded": format!("{:?}", capture.faded), "ended": format!("{:?}", capture.ended),
             "host_retarget_request_frame": frame(issued), "source_open_count": opens,
             "typed_source_intervals": interval_count, "all_host_beat_voice_checks": required_beats, "exact_pcm": true,
-            "negative_controls": ["omit outgoing", "omit incoming", "one-frame source cue", "supplied grid shift"],
+            "negative_controls": negative_controls,
             "grid_law_checks": data.checks, "nonblocking_underruns": 0, "tap_drops": self.master.drops(),
             "consumed_capture": {
                 "history_events": events.len(), "consumed_slices": consumed_slices,
@@ -1286,7 +1506,7 @@ impl QueueMusic {
         eprintln!(
             "QUEUE321_ACCEPTANCE {}",
             serde_json::json!({"sources": self.voices.len(), "crossfades": capture.faded.len(),
-        "frames": data.pcm.len() / 2, "source_opens": opens, "intervals": interval_count, "pcm": "exact-f32", "negative_controls": 4})
+        "frames": data.pcm.len() / 2, "source_opens": opens, "intervals": interval_count, "pcm": "exact-f32", "negative_controls": negative_count})
         );
     }
 }
@@ -1368,24 +1588,60 @@ fn copied_beat(
     Ok(())
 }
 
+fn copied_boundary_ledger(
+    data: &CapturedMusic,
+    consumed: &BTreeMap<TrackId, Capture>,
+) -> BTreeMap<(i64, TrackId), (usize, usize)> {
+    let mut copies = BTreeMap::<_, (usize, usize)>::new();
+    for BoundaryCopy {
+        item,
+        seat,
+        before,
+        after,
+    } in &data.boundary_copies
+    {
+        let at = frame(before.mark.expect("actual copied boundary mark").session);
+        copies.entry((at, *item)).or_default().0 += 1;
+        copied_beat(*item, *seat, *before, after, &consumed[item])
+            .unwrap_or_else(|error| panic!("item {item:?} at {at}: {error}"));
+    }
+    for check in &data.checks {
+        let Some(boundary) = check.get("copied_boundary") else {
+            continue;
+        };
+        let at = boundary["frame"]
+            .as_i64()
+            .expect("actual copied beat frame");
+        let item = TrackId::from(boundary["item"].as_u64().expect("actual copied beat item"));
+        copies.entry((at, item)).or_default().1 += 1;
+    }
+    for ((at, item), counts) in &copies {
+        assert_eq!(
+            *counts,
+            (1, 1),
+            "item {item:?} at {at}: each copied beat has exactly one retained witness and grid/law check"
+        );
+    }
+    copies
+}
+
 fn boundary_negative_controls(
     data: &CapturedMusic,
+    consumed: &BTreeMap<TrackId, Capture>,
     failures: &mut Vec<String>,
 ) -> serde_json::Value {
+    let copies = copied_boundary_ledger(data, consumed);
     let Some(BoundaryCopy {
         item,
         seat,
         before,
         after,
-    }) = data.boundary_copy.as_ref()
+    }) = data.boundary_copies.first()
     else {
         failures.push("no real copied packet boundary exercised the boundary controls".to_owned());
         return serde_json::json!({"error": "no real copied boundary"});
     };
-    let capture =
-        Capture::for_track(u64::from(*item), RATE).expect("actual copied boundary source history");
-    copied_beat(*item, *seat, *before, after, &capture)
-        .expect("retained actual boundary remains independently verifiable");
+    let capture = &consumed[item];
     let info = before.source.expect("actual boundary source");
     let span = info.source_span.expect("actual boundary geometry");
     let at = frame(before.mark.expect("actual boundary mark").session);
@@ -1456,31 +1712,31 @@ fn boundary_negative_controls(
         ("missing_duplicate_or_orphan_geometry", trace.is_ok()),
         (
             "wrong_item",
-            copied_beat(*item, *seat, *before, &wrong_item, &capture).is_err(),
+            copied_beat(*item, *seat, *before, &wrong_item, capture).is_err(),
         ),
         (
             "reused_segment",
-            copied_beat(*item, *seat, *before, &wrong_segment, &capture).is_err(),
+            copied_beat(*item, *seat, *before, &wrong_segment, capture).is_err(),
         ),
         (
             "wrong_owner_segment",
-            copied_beat(*item, *seat, *before, &wrong_owner_segment, &capture).is_err(),
+            copied_beat(*item, *seat, *before, &wrong_owner_segment, capture).is_err(),
         ),
         (
             "missing_owner_segment_mark",
-            copied_beat(*item, *seat, *before, &missing_owner_mark, &capture).is_err(),
+            copied_beat(*item, *seat, *before, &missing_owner_mark, capture).is_err(),
         ),
         (
             "wrong_source_revision",
-            copied_beat(*item, *seat, wrong_source, after, &capture).is_err(),
+            copied_beat(*item, *seat, wrong_source, after, capture).is_err(),
         ),
         (
             "new_render_revision_at_same_origin",
-            copied_beat(*item, *seat, wrong_render, after, &capture).is_err(),
+            copied_beat(*item, *seat, wrong_render, after, capture).is_err(),
         ),
         (
             "different_slope_at_same_origin_and_revision",
-            copied_beat(*item, *seat, wrong_slope, after, &capture).is_err(),
+            copied_beat(*item, *seat, wrong_slope, after, capture).is_err(),
         ),
     ];
     for (name, rejected) in outcomes {
@@ -1490,6 +1746,11 @@ fn boundary_negative_controls(
     }
     serde_json::json!({
         "item": u64::from(*item), "frame": at,
+        "copied_beat_checks": data.boundary_copies.len(),
+        "copied_beat_ledger": copies.iter().map(|((at, item), counts)| serde_json::json!({
+            "frame": at, "item": u64::from(*item),
+            "retained_witnesses": counts.0, "grid_law_checks": counts.1,
+        })).collect::<Vec<_>>(),
         "trace_error": trace.err(),
         "outcomes": outcomes.into_iter().collect::<BTreeMap<_, _>>()
     })
@@ -1530,9 +1791,10 @@ fn assert_transport(
     o: &LinkObservation,
     voices: &[Voice],
     data: &CapturedMusic,
+    kind: MusicCase,
     failures: &mut Vec<String>,
 ) {
-    let crossfade = CrossfadeSettings::default();
+    let crossfade = kind.crossfade();
     let capture = o.capture.as_ref().expect("capture");
     assert_eq!(capture.starts.len(), 5, "all five sources actually start");
     assert_eq!(o.loads.len(), 5, "one actual Load per source");
@@ -1548,19 +1810,19 @@ fn assert_transport(
     );
     assert!(
         o.seeks.is_empty(),
-        "automatic transitions never reopen a source to seek"
+        "Queue transitions never reopen a source to seek"
     );
     assert!(
         o.placements.iter().all(|placement| {
             voices.iter().any(|voice| {
-                voice.item == placement.item && placement.to == first_strong_beat(voice)
+                voice.item == placement.item && placement.to == first_grid_boundary(voice)
             })
         }) && o.cue_curves.iter().all(|cue| {
             voices
                 .iter()
-                .any(|voice| voice.item == cue.item && cue.position == first_strong_beat(voice))
+                .any(|voice| voice.item == cue.item && cue.position == first_grid_boundary(voice))
         }),
-        "every initial or reprepared cue uses that source's supplied first strong beat"
+        "every initial or reprepared cue uses that source's supplied first grid boundary"
     );
     for voice in voices {
         let loaded = o
@@ -1580,7 +1842,38 @@ fn assert_transport(
         capture.faults
     );
     assert_eq!(capture.faded.len(), 4, "four real outgoing crossfades");
-    assert_eq!(capture.ended.len(), 1, "last source reaches natural end");
+    match kind {
+        MusicCase::Natural => {
+            assert_eq!(capture.ended.len(), 1, "last source reaches natural end");
+            assert!(
+                data.next_requests.is_empty(),
+                "natural advance needs no public Next"
+            );
+            assert!(
+                data.bounded_end.is_none(),
+                "natural final Ended bounds the source"
+            );
+        }
+        MusicCase::RealNext => {
+            assert!(
+                capture.ended.is_empty(),
+                "bounded real take contains no natural Ended"
+            );
+            assert_eq!(
+                data.next_requests.len(),
+                4,
+                "four accepted public Next requests"
+            );
+            let (last, end) = data
+                .bounded_end
+                .expect("explicit final Playing capture boundary");
+            assert_eq!(last, voices[4].item, "fifth real source remains Playing");
+            assert_eq!(
+                frame(end),
+                i64::try_from(data.pcm.len() / 2).expect("capture frames")
+            );
+        }
+    }
     for (index, voice) in voices.iter().enumerate() {
         assert_eq!(
             capture.starts[index].0, voice.item,
@@ -1608,6 +1901,17 @@ fn assert_transport(
                 })
                 .expect("native outgoing Fade");
             assert_eq!(*previous, voices[index - 1].item);
+            if kind == MusicCase::RealNext {
+                let (outgoing, requested) = data.next_requests[index - 1];
+                assert_eq!(
+                    outgoing, *previous,
+                    "Next request retains its outgoing item"
+                );
+                assert!(
+                    requested <= *at,
+                    "native Applied F cannot precede the public Next request"
+                );
+            }
             assert_eq!(
                 *at, capture.starts[index].2,
                 "both crossfade voices share the actual Applied F"
@@ -1624,10 +1928,13 @@ fn assert_transport(
                 .find(|(owner, ..)| owner == previous)
                 .expect("native Faded")
                 .2;
+            let fade_frames: i64 = (f64::from(crossfade.duration) * f64::from(RATE))
+                .round()
+                .as_();
             assert_eq!(
                 frame(end) - frame(*at),
-                i64::from(RATE),
-                "one-second envelope survives Host retarget"
+                fade_frames,
+                "the entire declared envelope survives Host retarget"
             );
         }
     }
@@ -1736,6 +2043,24 @@ fn assert_retarget(o: &LinkObservation, data: &CapturedMusic) {
         })
         .collect();
     assert_eq!(retimes.len(), 1, "one actual owned Host retarget input");
+    let retime = retimes[0].1;
+    let at = retime.at.expect("actual owned retarget frame");
+    let trajectory = retime
+        .trajectory
+        .as_ref()
+        .expect("actual owned retarget trajectory");
+    assert_eq!(
+        trajectory
+            .anchor_at(SessionFrame::new(0))
+            .target_beats_per_second(),
+        100.0 / 60.0,
+        "the executed Host trajectory starts at the requested 100 BPM"
+    );
+    assert_eq!(
+        trajectory.anchor_at(at).target_beats_per_second(),
+        2.0,
+        "the owned retarget applies the requested 120 BPM target"
+    );
     let retime_input = retimes[0].0;
     for item in overlap_items {
         let applied: Vec<_> = o.speeds.iter().filter(|speed| speed.item == item
@@ -1753,74 +2078,128 @@ fn assert_retarget(o: &LinkObservation, data: &CapturedMusic) {
     }
 }
 
-fn native_segments(
-    o: &LinkObservation,
-    voices: &[Voice],
-) -> Vec<(TrackId, Slot, SessionFrame, u64, u64)> {
-    let attached: Vec<_> = usdt_trace::events()
+fn native_segments(o: &LinkObservation, voices: &[Voice]) -> Vec<NativeSegment> {
+    let events: Vec<_> = usdt_trace::events()
         .into_iter()
-        .filter(|event| event.probe == "deck_attached" && event.target == "kithara_render_probe")
-        .map(|event| {
-            let item = TrackId::from(event.field("track_id").expect("native item"));
-            let slot = Slot::new(
-                u16::try_from(event.field("slot").expect("native slot")).expect("slot fits"),
-            );
-            let at = SessionFrame::new(
-                i64::try_from(event.field("at").expect("native frame")).expect("nonnegative frame"),
-            );
-            let segment = event.field("segment").expect("native segment");
-            let seq = event.field("seq").expect("native batch sequence");
-            assert!(
-                o.deck.iter().any(
-                    |(actual, verdict)| actual.get() == seq && *verdict == LinkVerdict::Applied
-                ),
-                "an actual attachment also receives its Applied answer"
-            );
-            (item, slot, at, segment, seq)
+        .filter(|event| {
+            event.target == "kithara_render_probe"
+                && matches!(event.probe, "deck_attached" | "deck_adopted")
         })
         .collect();
-    assert_eq!(attached.len(), voices.len(), "one actual Attach per source");
-    for voice in voices {
-        assert_eq!(
-            attached
-                .iter()
-                .filter(|(item, ..)| *item == voice.item)
-                .count(),
-            1,
-            "every source owns exactly one native attachment"
-        );
-    }
-    for (index, &(_, slot, at, _, _)) in attached.iter().enumerate() {
-        assert!(
-            attached[..index]
-                .iter()
-                .all(|(_, seat, applied, _, _)| *seat != slot || *applied != at),
-            "UNSUPPORTED_ORACLE_WITNESS: same-frame slot reuse needs an execution ordinal"
-        );
-    }
-    let capture = o.capture.as_ref().expect("capture");
-    for &(item, slot, at, _, _) in &capture.segments {
-        assert!(
-            !attached
-                .iter()
-                .any(|(_, seat, applied, _, _)| *seat == slot && *applied == at),
-            "UNSUPPORTED_ORACLE_WITNESS: same-frame Attach/Adopt needs an execution ordinal"
-        );
-        let native = attached
+    let segments = native_segment_history(o, voices, &events)
+        .unwrap_or_else(|error| panic!("native segment custody: {error}"));
+    let mut missing = events.clone();
+    missing.remove(0);
+    assert!(
+        native_segment_history(o, voices, &missing).is_err(),
+        "native custody rejects a missing execution witness"
+    );
+    if let Some(adopted) = events
+        .iter()
+        .position(|event| event.probe == "deck_adopted")
+    {
+        let attached = events[..adopted]
             .iter()
-            .filter(|(_, seat, applied, _, _)| *seat == slot && *applied < at)
-            .max_by_key(|(_, _, applied, _, _)| *applied)
-            .expect("every Adopt follows a real attachment in its slot");
-        assert_eq!(
-            item, native.0,
-            "an Adopt receipt retains the actual RT slot owner"
+            .rposition(|event| {
+                event.probe == "deck_attached"
+                    && event.field("slot") == events[adopted].field("slot")
+            })
+            .expect("the validated Adopt has an earlier native Attach");
+        let mut reordered = events.clone();
+        reordered.swap(attached, adopted);
+        assert!(
+            native_segment_history(o, voices, &reordered).is_err(),
+            "native custody rejects an Adopt moved before its actual attachment"
         );
     }
-    let mut segments = attached;
-    segments.extend_from_slice(&capture.segments);
-    segments.sort_by_key(|(_, _, at, _, _)| *at);
-    assert!(segments.len() <= 16, "bounded native segment custody");
     segments
+}
+
+fn native_segment_history(
+    o: &LinkObservation,
+    voices: &[Voice],
+    events: &[usdt_trace::ProbeEvent],
+) -> Result<Vec<NativeSegment>, String> {
+    let capture = o.capture.as_ref().ok_or("missing native capture")?;
+    let mut attached: Vec<NativeSegment> = Vec::new();
+    let mut adopted: Vec<NativeSegment> = Vec::new();
+    let mut segments = Vec::new();
+    for (ordinal, event) in events.iter().enumerate() {
+        let field = |name| {
+            event
+                .field(name)
+                .ok_or_else(|| format!("missing native {name}"))
+        };
+        let slot = Slot::new(u16::try_from(field("slot")?).map_err(|_| "native slot overflows")?);
+        let at =
+            SessionFrame::new(i64::try_from(field("at")?).map_err(|_| "native frame overflows")?);
+        let segment = field("segment")?;
+        let seq = field("seq")?;
+        if !o
+            .deck
+            .iter()
+            .any(|(actual, verdict)| actual.get() == seq && *verdict == LinkVerdict::Applied)
+        {
+            return Err("an actual native operation also receives its Applied answer".to_owned());
+        }
+        let item = match event.probe {
+            "deck_attached" => TrackId::from(field("track_id")?),
+            "deck_adopted" => {
+                let owner = attached
+                    .iter()
+                    .rev()
+                    .find(|(_, seat, _, _, _)| *seat == slot)
+                    .ok_or("every Adopt follows a real attachment in its slot")?;
+                if owner.2 > at {
+                    return Err("an Adopt cannot precede its native attachment frame".to_owned());
+                }
+                owner.0
+            }
+            _ => return Err("unexpected native segment operation".to_owned()),
+        };
+        let entry = (item, slot, at, segment, seq);
+        if event.probe == "deck_attached" {
+            attached.push(entry);
+        } else {
+            if capture
+                .segments
+                .iter()
+                .filter(|receipt| **receipt == entry)
+                .count()
+                != 1
+            {
+                return Err(
+                    "an Adopt receipt retains the actual RT slot owner and execution identity"
+                        .to_owned(),
+                );
+            }
+            adopted.push(entry);
+        }
+        segments.push((ordinal, entry));
+    }
+    if attached.len() != voices.len() {
+        return Err("one actual Attach per source".to_owned());
+    }
+    for voice in voices {
+        if attached
+            .iter()
+            .filter(|(item, ..)| *item == voice.item)
+            .count()
+            != 1
+        {
+            return Err("every source owns exactly one native attachment".to_owned());
+        }
+    }
+    for receipt in &capture.segments {
+        if adopted.iter().filter(|native| **native == *receipt).count() != 1 {
+            return Err("every Applied Adopt receipt has exactly one native execution".to_owned());
+        }
+    }
+    if segments.len() > 16 {
+        return Err("bounded native segment custody".to_owned());
+    }
+    segments.sort_by_key(|(ordinal, (_, _, at, _, _))| (*at, *ordinal));
+    Ok(segments.into_iter().map(|(_, segment)| segment).collect())
 }
 
 fn native_capture(
@@ -1830,7 +2209,7 @@ fn native_capture(
 ) -> LinkCapture {
     case.deck.observe(|o| {
         let segments = native_segments(o, &case.voices);
-        assert_transport(o, &case.voices, data, failures);
+        assert_transport(o, &case.voices, data, case.kind, failures);
         assert_reuse(o, &case.voices, &segments);
         assert_gains(o, case.mixer);
         assert_retarget(o, data);
@@ -1853,6 +2232,7 @@ fn assert_all_beats(
     final_grid: &BeatGridSnapshot,
     primary_beats: &[(i64, TrackId)],
     domain: &Range<i64>,
+    bounded_end: Option<(TrackId, SessionFrame)>,
     failures: &mut Vec<String>,
 ) -> usize {
     let first_beat: i64 = host_beat(final_grid, domain.start).ceil().as_();
@@ -1867,7 +2247,7 @@ fn assert_all_beats(
                 .find(|(item, ..)| *item == voice.item)
                 .expect("native Start")
                 .2;
-            let end = native_end(capture, voice.item);
+            let end = native_end(capture, voice.item, bounded_end);
             if at > frame(start) && at < end {
                 required_beats += 1;
                 if !primary_beats.contains(&(at, voice.item)) {
@@ -1890,11 +2270,11 @@ fn assert_negative_controls(
     capture: &LinkCapture,
     intervals: &[Interval],
     mixer: DeckMixerConfig,
-    pcm: &[f32],
+    data: &CapturedMusic,
+    laws: &[super::binding::QueueLaw],
     failures: &mut Vec<String>,
 ) -> serde_json::Value {
     let mut outcomes = serde_json::Map::new();
-    let sample_rate = NonZeroU32::new(RATE).expect("source rate");
     let second_start: NativeStart = capture.starts[2];
     let overlap_end = capture
         .faded
@@ -1903,7 +2283,7 @@ fn assert_negative_controls(
         .expect("second outgoing Faded")
         .2;
     let overlap = (frame(second_start.2) + 1)..(frame(overlap_end) - 1);
-    let actual = &pcm[usize::try_from(overlap.start).expect("overlap start") * 2
+    let actual = &data.pcm[usize::try_from(overlap.start).expect("overlap start") * 2
         ..usize::try_from(overlap.end).expect("overlap end") * 2];
     for (omit, name) in [(1, "omit_outgoing"), (2, "omit_incoming")] {
         let negative = reference(
@@ -1942,28 +2322,39 @@ fn assert_negative_controls(
             "a one-frame wrong source cue must fail with retained metadata unchanged".to_owned(),
         );
     }
-    let Some((slot, grid, speed)) = voices[2].bound.as_ref() else {
-        failures
-            .push("supplied-grid negative has no valid actual settled source binding".to_owned());
-        outcomes.insert("supplied_grid_shift".to_owned(), serde_json::Value::Null);
-        return serde_json::Value::Object(outcomes);
-    };
-    let mut displaced = voices[2].model.as_raw().clone();
-    for beat in &mut displaced.beats {
-        beat.at += 1.0 / f64::from(RATE);
+    let mut shifted_spans: Vec<_> = intervals
+        .iter()
+        .filter(|interval| interval.voice == 2)
+        .map(|interval| {
+            (
+                interval.start,
+                interval
+                    .source
+                    .scaled_from(
+                        (0, std::num::NonZeroU128::MIN),
+                        (1, std::num::NonZeroU128::MIN),
+                        (1, std::num::NonZeroU128::MIN),
+                    )
+                    .expect("one-frame displaced source geometry"),
+            )
+        })
+        .collect();
+    shifted_spans.sort_by_key(|(start, _)| *start);
+    let forward_rejected = laws[2].check_spans(&shifted_spans).is_err();
+    outcomes.insert(
+        "one_frame_source_cue_forward".to_owned(),
+        serde_json::json!(forward_rejected),
+    );
+    if !forward_rejected {
+        failures.push(
+            "one-frame wrong source cue must fail the same independent forward law".to_owned(),
+        );
     }
-    for downbeat in &mut displaced.downbeats {
-        downbeat.at += 1.0 / f64::from(RATE);
-    }
-    let displaced = BeatGridModel::try_from(displaced).expect("valid wrongly placed supplied grid");
-    let negative = super::binding::check(&displaced, sample_rate, grid, *slot, *speed, 4);
-    let rejected =
-        negative.is_err() || negative.is_ok_and(|binding| !binding.failures().is_empty());
     outcomes.insert(
         "supplied_grid_shift".to_owned(),
-        serde_json::json!(rejected),
+        serde_json::json!(data.supplied_grid_shift_rejected),
     );
-    if !rejected {
+    if !data.supplied_grid_shift_rejected {
         failures.push("wrong supplied grid must fail independently of waveform peaks".to_owned());
     }
     serde_json::Value::Object(outcomes)
@@ -1972,23 +2363,75 @@ fn assert_negative_controls(
 fn assert_music(
     voices: &[Voice],
     capture: &LinkCapture,
-    pcm: &[f32],
+    consumed: &BTreeMap<TrackId, Capture>,
+    data: &CapturedMusic,
     final_grid: &BeatGridSnapshot,
-    primary_beats: &[(i64, TrackId)],
+    laws: &[super::binding::QueueLaw],
     mixer: DeckMixerConfig,
-    failures: &mut Vec<String>,
-) -> (Vec<Interval>, usize, serde_json::Value) {
+) -> (Vec<Interval>, usize, serde_json::Value, Vec<String>) {
+    let mut failures = Vec::new();
     let wall = Instant::now();
-    let intervals = intervals(voices, capture);
-    let domain = 0..i64::try_from(pcm.len() / 2).expect("captured frames");
+    let intervals = intervals(voices, capture, consumed, data.bounded_end);
+    let mut forward = Vec::new();
+    for (index, law) in laws.iter().enumerate() {
+        let mut spans: Vec<_> = intervals
+            .iter()
+            .filter(|interval| interval.voice == index)
+            .map(|interval| (interval.start, interval.source))
+            .collect();
+        spans.sort_by_key(|(start, _)| *start);
+        match law.check_spans(&spans) {
+            Ok(mut evidence) => {
+                let item = u64::from(voices[index].item);
+                let checks: Vec<_> = data
+                    .checks
+                    .iter()
+                    .filter(|check| check["item"].as_u64() == Some(item))
+                    .collect();
+                let supported = checks
+                    .iter()
+                    .filter(|check| check["supplemental_source_support"] == "supported")
+                    .count();
+                let tail = checks
+                    .iter()
+                    .filter(|check| check["supplemental_source_support"] == "uncovered_finite_tail")
+                    .count();
+                if supported == 0 {
+                    failures.push(format!(
+                        "item {:?}: no supported supplemental grid checks",
+                        voices[index].item
+                    ));
+                }
+                for check in checks {
+                    let at =
+                        SessionFrame::new(check["frame"].as_i64().expect("retained witness frame"));
+                    if let Err(error) = law.check_status(at, check["correction_end"].as_i64()) {
+                        failures.push(format!("item {:?}: {error}", voices[index].item));
+                    }
+                }
+                evidence["item"] = serde_json::json!(item);
+                evidence["supplemental_supported"] = serde_json::json!(supported);
+                evidence["supplemental_uncovered_finite_tail"] = serde_json::json!(tail);
+                forward.push(evidence);
+            }
+            Err(error) => failures.push(format!("item {:?}: {error}", voices[index].item)),
+        }
+    }
+    assert_eq!(
+        laws.len(),
+        voices.len(),
+        "each voice has an independent forward law"
+    );
+    let domain = 0..i64::try_from(data.pcm.len() / 2).expect("captured frames");
     let before_beats = failures.len();
     let required_beats = assert_all_beats(
         voices,
         capture,
         final_grid,
-        primary_beats,
+        &data.primary_beats,
         &domain,
-        failures,
+        data.bounded_end,
+        &mut failures,
     );
     let beat_failures = failures.len() - before_beats;
     tracing::info!(target: "kithara_test::sync::queue321", phase = "full_reference_begin");
@@ -2003,7 +2446,7 @@ fn assert_music(
     );
     tracing::info!(target: "kithara_test::sync::queue321", phase = "full_reference_complete",
         wall_s = wall.elapsed().as_secs_f64(), samples = expected.len());
-    let comparison = super::control::compare_pcm(pcm, &expected);
+    let comparison = super::control::compare_pcm(&data.pcm, &expected);
     let exact_pcm = comparison.is_ok();
     if let Err(error) = comparison {
         failures.push(format!(
@@ -2016,21 +2459,156 @@ fn assert_music(
         serde_json::json!({
             "all_beats": {"required": required_beats, "failures": beat_failures, "passed": beat_failures == 0},
             "exact_master_pcm": exact_pcm,
+            "independent_forward_laws": forward,
         }),
+        failures,
     )
 }
 
-#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
+fn output_contract(
+    output: &[f32],
+    data: &CapturedMusic,
+    voices: &[Voice],
+    capture: &LinkCapture,
+    grid: &BeatGridSnapshot,
+    config: MetronomeConfig,
+) -> Result<serde_json::Value, String> {
+    if output.len() != data.pcm.len() || output.is_empty() || !output.len().is_multiple_of(2) {
+        return Err("Output retains the complete stereo Master frame domain".to_owned());
+    }
+    if output
+        .iter()
+        .chain(&data.pcm)
+        .any(|sample| !sample.is_finite())
+    {
+        return Err("Output and Master contain only finite samples".to_owned());
+    }
+    let frames = i64::try_from(output.len() / 2).expect("bounded captured frames");
+    let tail = Duration::from_millis(2) + config.decay() + config.hold() + config.release();
+    let width: i64 = (tail.as_secs_f64() * f64::from(RATE)).ceil().as_();
+    let first: i64 = host_beat(grid, 0).ceil().as_();
+    let last: i64 = host_beat(grid, frames - 1).floor().as_();
+    let windows: Vec<_> = (first..=last)
+        .map(|beat| beat_frame(grid, beat.as_()))
+        .map(|start| start..start + width)
+        .collect();
+    let mut complete_clicks = 0;
+    for window in &windows {
+        if window.start < 0 || window.end > frames {
+            continue;
+        }
+        let samples = usize::try_from(window.start).expect("click start") * 2
+            ..usize::try_from(window.end).expect("click end") * 2;
+        if !output[samples.clone()]
+            .iter()
+            .zip(&data.pcm[samples])
+            .any(|(actual, master)| actual.to_bits() != master.to_bits())
+        {
+            return Err(format!(
+                "complete Host beat window {window:?} has no Output contribution"
+            ));
+        }
+        complete_clicks += 1;
+    }
+    if complete_clicks == 0 {
+        return Err("Output checks at least one complete Host beat window".to_owned());
+    }
+    let startup = (BLOCK - 1) * 2;
+    if output.len() < startup
+        || data.pcm[..startup].iter().any(|sample| *sample != 0.0)
+        || output[..startup].iter().all(|sample| *sample == 0.0)
+    {
+        return Err("the silent-Master startup contains its actual Output click".to_owned());
+    }
+    let solo: Vec<_> = voices
+        .iter()
+        .enumerate()
+        .map(|(index, voice)| {
+            let start = if index == 0 {
+                frame(capture.starts[index].2)
+            } else {
+                frame(
+                    capture
+                        .faded
+                        .iter()
+                        .find(|(owner, ..)| *owner == voices[index - 1].item)
+                        .expect("preceding completed outgoing fade")
+                        .2,
+                )
+            };
+            let end = if index + 1 < voices.len() {
+                frame(capture.starts[index + 1].2)
+            } else {
+                native_end(capture, voice.item, data.bounded_end)
+            };
+            start..end
+        })
+        .collect();
+    let mut heard = vec![0usize; voices.len()];
+    let mut checked = 0;
+    let mut window = 0;
+    for at in 0..frames {
+        while windows.get(window).is_some_and(|span| span.end <= at) {
+            window += 1;
+        }
+        if windows.get(window).is_some_and(|span| span.contains(&at)) {
+            continue;
+        }
+        let sample = usize::try_from(at).expect("captured frame") * 2;
+        let actual = &output[sample..sample + 2];
+        let master = &data.pcm[sample..sample + 2];
+        if actual
+            .iter()
+            .zip(master)
+            .any(|(actual, master)| actual.to_bits() != master.to_bits())
+        {
+            return Err(format!(
+                "Output differs from Master outside Host click/duck windows at {at}"
+            ));
+        }
+        checked += 1;
+        if master.iter().any(|sample| *sample != 0.0) {
+            for (count, span) in heard.iter_mut().zip(&solo) {
+                if span.contains(&at) {
+                    *count += 1;
+                }
+            }
+        }
+    }
+    if checked == 0 || heard.contains(&0) {
+        return Err(format!(
+            "Output passthrough needs nonzero solo music from every voice: {heard:?}"
+        ));
+    }
+    Ok(serde_json::json!({
+        "finite_complete_output": true,
+        "complete_host_click_windows": complete_clicks,
+        "bit_exact_passthrough_frames": checked,
+        "nonzero_solo_passthrough_frames": heard,
+        "startup_output_click": true,
+        "proof_limit": "passthrough and contribution presence; not a full Output waveform reference",
+    }))
+}
+
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
-async fn one_queue_crossfades_five_music_tracks_and_retargets_host_during_overlap() {
+async fn capture_music(kind: MusicCase) {
     let _trace = usdt_trace::scope();
     let wall = Instant::now();
     tracing::info!(target: "kithara_test::sync::queue321", phase = "setup_begin");
-    let mut case = QueueMusic::new().await;
+    let track = TrackSettings::default();
+    assert!(
+        !track.keylock()
+            && track
+                .backend()
+                .capabilities()
+                .contains(kithara::stretch::BackendCapabilities::RATE),
+        "UNSUPPORTED_ORACLE_WITNESS: residency proof requires the native no-keylock RATE chain"
+    );
+    let mut case = QueueMusic::new(kind, track).await;
     case.append_sources().await;
     tracing::info!(target: "kithara_test::sync::queue321", phase = "render_begin",
         wall_s = wall.elapsed().as_secs_f64(), frame = case.host.position());
-    let data = case.run().await;
+    let mut data = case.run().await;
     hang_tick!(
         "queue321: validating native starts, ends, exact SourceSpan and physical mixed PCM"
             .to_owned()
@@ -2056,18 +2634,110 @@ async fn one_queue_crossfades_five_music_tracks_and_retargets_host_during_overla
     let final_grid = case.host.session_grid().await;
     let voices = std::mem::take(&mut case.voices);
     let mixer = case.mixer;
+    let metronome = case.metronome;
+    let laws = case.deck.observe(|o| {
+        voices
+            .iter()
+            .map(|voice| {
+                let start = capture
+                    .starts
+                    .iter()
+                    .find(|(item, ..)| *item == voice.item)
+                    .expect("actual native Start")
+                    .2;
+                let first = *voice
+                    .first
+                    .values()
+                    .next()
+                    .expect("retained first consumed witness");
+                super::binding::queue_law(
+                    &voice.model,
+                    o,
+                    voice.item,
+                    start..SessionFrame::new(native_end(&capture, voice.item, data.bounded_end)),
+                    (
+                        first,
+                        residency_origin(voice, first.source.expect("first source identity")),
+                    ),
+                    first_grid_boundary(voice),
+                    &voice.decoded.lock(),
+                )
+                .unwrap_or_else(|error| {
+                    panic!("item {:?}: independent Queue law: {error}", voice.item)
+                })
+            })
+            .collect::<Vec<_>>()
+    });
+    data.supplied_grid_shift_rejected = case.deck.observe(|o| {
+        let voice = &voices[2];
+        let mut displaced = voice.model.as_raw().clone();
+        for beat in &mut displaced.beats {
+            beat.at += 1.0 / f64::from(RATE);
+        }
+        for beat in &mut displaced.downbeats {
+            beat.at += 1.0 / f64::from(RATE);
+        }
+        let displaced =
+            BeatGridModel::try_from(displaced).expect("valid wrongly placed supplied grid");
+        let start = capture
+            .starts
+            .iter()
+            .find(|(item, ..)| *item == voice.item)
+            .expect("actual native Start")
+            .2;
+        let first = *voice
+            .first
+            .values()
+            .next()
+            .expect("retained first consumed witness");
+        super::binding::queue_law(
+            &displaced,
+            o,
+            voice.item,
+            start..SessionFrame::new(native_end(&capture, voice.item, data.bounded_end)),
+            (
+                first,
+                residency_origin(voice, first.source.expect("first source identity")),
+            ),
+            first_grid_boundary(voice),
+            &voice.decoded.lock(),
+        )
+        .is_err()
+    });
     hang_reset!();
     let (voices, data, capture, interval_count, required_beats, final_checks, failures) =
         kithara::platform::tokio::task::spawn_blocking(move || {
-            let (intervals, required_beats, music_checks) = assert_music(
+            let consumed: BTreeMap<_, _> = voices
+                .iter()
+                .map(|voice| {
+                    let capture = Capture::for_track(u64::from(voice.item), RATE)
+                        .unwrap_or_else(|error| panic!("item {:?}: {error}", voice.item));
+                    (voice.item, capture)
+                })
+                .collect();
+            let (intervals, required_beats, music_checks, music_failures) = assert_music(
                 &voices,
                 &capture,
-                &data.pcm,
+                &consumed,
+                &data,
                 &final_grid,
-                &data.primary_beats,
+                &laws,
                 mixer,
-                &mut failures,
             );
+            failures.extend(music_failures);
+            let output_checks = match output_contract(&data.output, &data, &voices, &capture, &final_grid, metronome) {
+                Ok(checks) => checks,
+                Err(error) => {
+                    failures.push(format!("actual Output contract: {error}"));
+                    serde_json::Value::Null
+                }
+            };
+            let zero_output_rejected = output_contract(
+                &vec![0.0; data.output.len()], &data, &voices, &capture, &final_grid, metronome
+            ).is_err();
+            if !zero_output_rejected {
+                failures.push("the same Output contract must reject all-zero substitution".to_owned());
+            }
             tracing::info!(target: "kithara_test::sync::queue321", phase = "negative_controls_begin",
                 wall_s = wall.elapsed().as_secs_f64());
             let negative_controls = assert_negative_controls(
@@ -2075,10 +2745,11 @@ async fn one_queue_crossfades_five_music_tracks_and_retargets_host_during_overla
                 &capture,
                 &intervals,
                 mixer,
-                &data.pcm,
+                &data,
+                &laws,
                 &mut failures,
             );
-            let boundary_controls = boundary_negative_controls(&data, &mut failures);
+            let boundary_controls = boundary_negative_controls(&data, &consumed, &mut failures);
             tracing::info!(target: "kithara_test::sync::queue321", phase = "negative_controls_complete",
                 wall_s = wall.elapsed().as_secs_f64());
             let final_checks = serde_json::json!({
@@ -2094,7 +2765,9 @@ async fn one_queue_crossfades_five_music_tracks_and_retargets_host_during_overla
                     .collect::<Vec<_>>(),
                 "grid_law_checks": data.checks,
                 "music": music_checks,
-                "negative_control_count": 4,
+                "output": output_checks,
+                "all_zero_output_rejected": zero_output_rejected,
+                "negative_control_count": 5,
                 "negative_controls": negative_controls,
                 "boundary_controls": boundary_controls,
                 "failures": &failures,
@@ -2121,5 +2794,153 @@ async fn one_queue_crossfades_five_music_tracks_and_retargets_host_during_overla
     }
     assert!(failures.is_empty(), "queue321 final checks: {failures:#?}");
     case.publish(&data, &capture, interval_count, required_beats, opens);
+    hang_reset!();
+}
+
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    timeout(Duration::from_secs(300)),
+    tracing("kithara_test::sync::queue321=info")
+)]
+async fn one_queue_crossfades_five_music_tracks_and_retargets_host_during_overlap() {
+    capture_music(MusicCase::Natural).await;
+}
+
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
+async fn one_queue_crossfades_five_real_tracks_through_four_public_next_requests() {
+    capture_music(MusicCase::RealNext).await;
+}
+
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
+#[ignore = "writes opt-in listening artifacts; run explicitly with KITHARA_AUDIO_ARTIFACT_DIR"]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
+async fn record_five_real_tracks_with_keylock_through_four_public_next_requests() {
+    let _trace = usdt_trace::scope();
+    let track = TrackSettings::builder()
+        .backend(kithara::stretch::StretchKind::Signalsmith)
+        .keylock(true)
+        .build();
+    assert!(track.keylock());
+    assert!(
+        track
+            .backend()
+            .capabilities()
+            .contains(kithara::stretch::BackendCapabilities::KEYLOCK),
+        "the selected backend supports pitch-preserving playback"
+    );
+    let mut case = QueueMusic::new(MusicCase::RealNext, track).await;
+    assert!(
+        case.output_wav.is_some() && case.master_wav.is_some(),
+        "listening capture requires KITHARA_AUDIO_ARTIFACT_DIR"
+    );
+    case.append_sources().await;
+    let data = case.run().await;
+    let mut failures = data.failures.clone();
+    let capture = native_capture(&case, &data, &mut failures);
+    let opens = kithara_test_utils::test::usdt::events_of("source_opened").len();
+    assert_eq!(opens, 5, "exactly five real source opens");
+    assert!(data.output_delta > 0.0, "Output carries the Host metronome");
+    let final_grid = case.host.session_grid().await;
+    let voices = std::mem::take(&mut case.voices);
+    let metronome = case.metronome;
+    hang_reset!();
+    let final_checks = kithara::platform::tokio::task::spawn_blocking(move || {
+        let consumed: BTreeMap<_, _> = voices
+            .iter()
+            .map(|voice| {
+                let capture = Capture::for_track(u64::from(voice.item), RATE)
+                    .unwrap_or_else(|error| panic!("item {:?}: {error}", voice.item));
+                (voice.item, capture)
+            })
+            .collect();
+        let domain = 0..i64::try_from(data.pcm.len() / 2).expect("captured frames");
+        let required_beats = assert_all_beats(
+            &voices,
+            &capture,
+            &final_grid,
+            &data.primary_beats,
+            &domain,
+            data.bounded_end,
+            &mut failures,
+        );
+        let boundary_controls = boundary_negative_controls(&data, &consumed, &mut failures);
+        let output_checks = match output_contract(
+            &data.output,
+            &data,
+            &voices,
+            &capture,
+            &final_grid,
+            metronome,
+        ) {
+            Ok(checks) => checks,
+            Err(error) => {
+                failures.push(format!("actual Output contract: {error}"));
+                serde_json::Value::Null
+            }
+        };
+        let zero_output_rejected = output_contract(
+            &vec![0.0; data.output.len()],
+            &data,
+            &voices,
+            &capture,
+            &final_grid,
+            metronome,
+        )
+        .is_err();
+        if !zero_output_rejected {
+            failures.push("the Output contract must reject all-zero substitution".to_owned());
+        }
+        serde_json::json!({
+            "scenario": "five-real-tracks-four-next-keylock-100-to-120",
+            "requested_backend": "Signalsmith", "keylock": true,
+            "actual_backend": "not exposed by TrackSnapshot or existing probes",
+            "sources": REAL_SOURCES,
+            "source_grids": voices.iter().map(|voice| serde_json::json!({
+                "item": u64::from(voice.item), "model": voice.model.as_raw(),
+            })).collect::<Vec<_>>(),
+            "frames": data.pcm.len() / 2, "sample_rate": RATE, "channels": 2,
+            "source_open_count": opens,
+            "public_next_requests": data.next_requests.iter().map(|(item, at)| serde_json::json!({
+                "outgoing_item": u64::from(*item), "request_frame": frame(*at),
+            })).collect::<Vec<_>>(),
+            "crossfade_settings": format!("{:?}", MusicCase::RealNext.crossfade()),
+            "start_receipts": format!("{:?}", capture.starts),
+            "outgoing_fades": format!("{:?}", capture.fades),
+            "faded": format!("{:?}", capture.faded),
+            "bounded_final_playing": data.bounded_end.map(|(item, at)| serde_json::json!({
+                "item": u64::from(item), "capture_end": frame(at),
+            })),
+            "host_retarget_request_frame": frame(data.retarget.expect("actual Host retarget").0),
+            "required_host_beat_voice_checks": required_beats,
+            "online_failure_count": data.failures.len(),
+            "grid_law_checks": data.checks,
+            "valid_binding_checks": voices.iter().map(|voice| serde_json::json!({
+                "item": u64::from(voice.item), "checks": voice.checks,
+                "settled_binding": voice.bound.is_some(),
+            })).collect::<Vec<_>>(),
+            "boundary_controls": boundary_controls,
+            "output": output_checks,
+            "all_zero_output_rejected": zero_output_rejected,
+            "exact_master_pcm": "not_checked",
+            "pitch_preservation": "listening capture; separate Warp owner frequency test",
+            "failures": failures,
+            "passed": failures.is_empty(),
+        })
+    })
+    .await
+    .expect("keylocked listening capture analysis must join");
+    for tap in [&mut case.output_wav, &mut case.master_wav]
+        .into_iter()
+        .flatten()
+    {
+        tap.evidence("queue_keylock_listening", final_checks.clone());
+    }
+    assert_eq!(
+        final_checks["passed"], true,
+        "keylocked listening capture checks: {final_checks}"
+    );
     hang_reset!();
 }

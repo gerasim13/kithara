@@ -1042,6 +1042,41 @@ impl DecodedCapture {
             .collect()
     }
 
+    pub(super) fn physical_frame_basis(
+        &self,
+        info: impl Into<super::consumed::SourceIdentity>,
+        frame: u64,
+    ) -> Result<(u64, kithara::signal::SourceSpan), String> {
+        let info = info.into();
+        let (_, (decoded, _)) = self
+            .chunks
+            .range(..=(info.source_revision, frame))
+            .next_back()
+            .filter(|(_, (decoded, _))| {
+                decoded.source_revision == info.source_revision
+                    && decoded.spec == info.spec
+                    && decoded.media_origin == info.media_origin
+                    && decoded.frame_range().contains(&frame)
+            })
+            .ok_or_else(|| format!("decoder observer has no current physical frame {frame}"))?;
+        let position = kithara::signal::SourceSpan::new(
+            frame,
+            frame
+                .checked_add(1)
+                .ok_or_else(|| "decoder physical frame overflows".to_owned())?,
+            info.spec.sample_rate,
+            1,
+        )
+        .and_then(|span| {
+            decoded
+                .source_geometry()?
+                .map_output_span(decoded.frame_offset, span)
+        })
+        .and_then(|span| span.source_ratio_at(0))
+        .ok_or_else(|| "decoder physical frame has no source coordinate".to_owned())?;
+        self.physical_basis(info, position)
+    }
+
     pub(super) fn physical_basis(
         &self,
         info: impl Into<super::consumed::SourceIdentity>,
@@ -1077,7 +1112,34 @@ impl DecodedCapture {
                 return Ok((decoded.frame_offset, basis));
             }
         }
-        Err("decoder observer has no physical basis for the raw source position".to_owned())
+        let mut identities = std::collections::BTreeMap::new();
+        for (decoded, _) in self.chunks.values() {
+            let key = (
+                decoded.spec.sample_rate.get(),
+                decoded.spec.channels,
+                decoded.source_revision,
+                decoded.media_origin,
+            );
+            let extent = identities.entry(key).or_insert_with(|| {
+                (
+                    0_usize,
+                    decoded.frame_offset,
+                    decoded.frame_range().end,
+                    *decoded,
+                    *decoded,
+                )
+            });
+            extent.0 += 1;
+            extent.1 = extent.1.min(decoded.frame_offset);
+            extent.2 = extent.2.max(decoded.frame_range().end);
+            extent.4 = *decoded;
+        }
+        Err(format!(
+            "decoder observer has no physical basis for the raw source position; \
+             requested={info:?}; position={position:?}; rejected={}; \
+             captured_samples={}; identities={identities:?}",
+            self.rejected, self.samples,
+        ))
     }
 
     pub(super) fn sample_at(

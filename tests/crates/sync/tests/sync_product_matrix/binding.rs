@@ -5,8 +5,9 @@ use kithara::{
     platform::time::Duration,
     signal::{
         AudioChunkInfo, AudioSpec, ExponentialApproach, SegmentId, SessionEpoch, SessionFrame,
+        SourceSpan,
     },
-    sync::{SessionAnchor, SpeedCurve},
+    sync::{SessionAnchor, SourceGrid, SpeedCurve, corrected_speed_curve, speed_curve},
     warp::{
         AssetAxis, AssetExtent, AssetFrame, Beat, BeatGridId, BeatGridQuery, BeatGridRevision,
         BeatGridSnapshot, MapPoint, MapPosition,
@@ -69,6 +70,27 @@ impl GridBinding {
     }
 }
 
+fn consumed_media_seconds(
+    span: SourceSpan,
+    output_frame: u64,
+    media_origin: Duration,
+) -> Option<f64> {
+    let (numerator, denominator) = span.source_ratio_at(output_frame)?;
+    let denominator = denominator
+        .get()
+        .checked_mul(u128::from(span.sample_rate().get()))?;
+    let numerator = numerator
+        .checked_mul(1_000_000_000)?
+        .checked_sub(media_origin.as_nanos().checked_mul(denominator)?)?;
+    let denominator = denominator.checked_mul(1_000_000_000)?;
+    let mut divisor = numerator;
+    let mut remainder = denominator;
+    while remainder != 0 {
+        (divisor, remainder) = (remainder, divisor % remainder);
+    }
+    Some((numerator / divisor).to_f64()? / (denominator / divisor).to_f64()?)
+}
+
 pub(super) fn check(
     model: &BeatGridModel,
     source_rate: NonZeroU32,
@@ -86,15 +108,26 @@ pub(super) fn check(
     let mark = consumed
         .mark
         .ok_or_else(|| "binding has no consumed PCM mark".to_owned())?;
-    let media_origin = consumed
+    let source = consumed
         .source
         .filter(|info| info.segment == mark.lane.segment)
-        .and_then(|info| info.media_origin)
+        .ok_or_else(|| "binding has no current consumed source geometry".to_owned())?;
+    let media_origin = source
+        .media_origin
         .ok_or_else(|| "binding has no known media origin".to_owned())?;
-    let media = mark
-        .position
-        .checked_sub(media_origin)
-        .ok_or_else(|| "consumed raw position is before media zero".to_owned())?;
+    let span = source
+        .source_span
+        .ok_or_else(|| "binding has no exact consumed SourceSpan".to_owned())?;
+    let offset = mark
+        .lane
+        .frame
+        .checked_sub(source.lane_frame)
+        .ok_or_else(|| "consumed mark precedes its source geometry".to_owned())?;
+    if span.position_at(offset) != Some(mark.position) {
+        return Err("consumed mark disagrees with its exact source geometry".to_owned());
+    }
+    let media = consumed_media_seconds(span, offset, media_origin)
+        .ok_or_else(|| "consumed source coordinate cannot translate to media time".to_owned())?;
     let source_grid = BeatGridSnapshot::model(
         BeatGridId::allocate().map_err(|error| error.to_string())?,
         BeatGridRevision::first(),
@@ -102,11 +135,26 @@ pub(super) fn check(
         AssetAxis::new(source_rate, AssetExtent::Unknown),
     )
     .map_err(|error| error.to_string())?;
-    let source_frame = AssetFrame::new(media.as_secs_f64() * f64::from(source_rate.get()))
-        .map_err(|error| error.to_string())?;
+    let source_frame =
+        AssetFrame::new(media * f64::from(source_rate.get())).map_err(|error| error.to_string())?;
     let source_position = MapPoint::new(source_grid.stamp(), MapPosition::Asset(source_frame));
-    let BeatGridQuery::Resolved(source_beat) = source_grid.beat_at(source_position) else {
-        return Err("consumed source position lies outside the supplied grid".to_owned());
+    let source_query = source_grid.beat_at(source_position);
+    let BeatGridQuery::Resolved(source_beat) = source_query else {
+        return Err(format!(
+            "consumed source position has no resolved supplied-grid beat: {source_query:?}; \
+             mark={mark:?}; source={source:?}; offset={offset}; \
+             exact_source_ratio={:?}; media_seconds={media:.17}; \
+             source_frame={source_frame:?}; source_rate={source_rate}; \
+             grid_axis={:?}; grid_state={:?}; model_duration={:?}; \
+             model_bpm={}; first_beat={:?}; last_beat={:?}",
+            span.source_ratio_at(offset),
+            source_grid.axis(),
+            source_grid.state(),
+            model.as_raw().duration,
+            model.as_raw().bpm,
+            model.as_raw().beats.first(),
+            model.as_raw().beats.last(),
+        ));
     };
     let source_beat = f64::from(*source_beat.value().value());
     let host_position = MapPoint::new(host_grid.stamp(), MapPosition::Session(mark.session));
@@ -1798,17 +1846,7 @@ pub(super) fn commanded_span_failures(
             position = reset;
         }
         if start == at {
-            let scale = 1u128 << 32;
-            let scaled = position
-                .0
-                .checked_mul(scale)
-                .ok_or_else(|| "command physical phase overflows Q32".to_owned())?;
-            let denominator = position.1.get();
-            let remainder = scaled % denominator;
-            position = (
-                scaled / denominator + u128::from(remainder >= denominator - remainder),
-                NonZeroU128::new(scale).expect("Q32 source phase"),
-            );
+            position = physical_phase(position)?;
         }
         let stop = events
             .get(index + 1)
@@ -1817,11 +1855,8 @@ pub(super) fn commanded_span_failures(
             .frames_since(start)
             .filter(|frames| *frames > 0)
             .ok_or_else(|| "command law has nonpositive output extent".to_owned())?;
-        let span =
-            kithara::signal::SourceSpan::approaching(position.0, position.1, law, 0, rate, frames)
-                .ok_or_else(|| {
-                    "declared command law cannot represent its source span".to_owned()
-                })?;
+        let span = SourceSpan::approaching(position.0, position.1, law, 0, rate, frames)
+            .ok_or_else(|| "declared command law cannot represent its source span".to_owned())?;
         position = span
             .source_ratio_at(frames)
             .ok_or_else(|| "declared command law has no source endpoint".to_owned())?;
@@ -1837,7 +1872,7 @@ fn check_commanded_spans(
     marks: &[(SessionFrame, SlotSnapshot)],
     issued: SessionFrame,
     end: SessionFrame,
-    expected: &[(SessionFrame, kithara::signal::SourceSpan)],
+    expected: &[(SessionFrame, SourceSpan)],
 ) -> Result<Vec<String>, String> {
     let mut checked = std::collections::BTreeSet::new();
     for (_, slot) in marks {
@@ -1999,6 +2034,700 @@ pub(super) fn executed_law(
         failures,
         serde_json::json!({"host_history_input": host_history_input, "verified_applied": verified, "capture_start": format!("{start_mark:?}"), "capture_end": format!("{mark:?}"), "correction_end": claimed_end.map(i64::from), "projected_media_ns": projected.as_nanos().to_string()}),
     ))
+}
+
+fn source_regions(grid: &BeatGridSnapshot) -> Result<Vec<(MapPosition, MapPosition)>, String> {
+    let mut cursor = media_seconds_position(0.0, NonZeroU32::MIN)?;
+    let mut regions = Vec::new();
+    loop {
+        let BeatGridQuery::Resolved(kithara::warp::BeatGridRegion::Bounded(region)) =
+            grid.region_at(MapPoint::new(grid.stamp(), cursor))
+        else {
+            return Err("supplied grid has no complete bounded region traversal".to_owned());
+        };
+        if regions.last().is_some_and(|(_, end)| *end == region.end()) {
+            break;
+        }
+        regions.push((region.start(), region.end()));
+        cursor = region.end();
+    }
+    Ok(regions)
+}
+
+fn queue_source_supported(
+    model: &BeatGridModel,
+    rate: NonZeroU32,
+    consumed: SlotSnapshot,
+) -> Result<bool, String> {
+    let (mark, _) = consumed_media(consumed)?;
+    let info = consumed
+        .source
+        .filter(|info| info.segment == mark.lane.segment)
+        .ok_or_else(|| "Queue mark has no current source identity".to_owned())?;
+    let span = info
+        .source_span
+        .ok_or_else(|| "Queue mark has no exact source span".to_owned())?;
+    let offset = mark
+        .lane
+        .frame
+        .checked_sub(info.lane_frame)
+        .ok_or_else(|| "Queue mark precedes its source span".to_owned())?;
+    if span.position_at(offset) != Some(mark.position) {
+        return Err("Queue mark differs from its exact source span".to_owned());
+    }
+    let media = consumed_media_seconds(
+        span,
+        offset,
+        info.media_origin
+            .ok_or_else(|| "Queue source has no immutable media origin".to_owned())?,
+    )
+    .ok_or_else(|| "Queue exact source coordinate cannot translate to media".to_owned())?;
+    let grid = declared_source_grid(model, rate)?;
+    let point = media_seconds_position(media, rate)?;
+    match grid.beat_at(MapPoint::new(grid.stamp(), point)) {
+        BeatGridQuery::Resolved(_) => Ok(true),
+        BeatGridQuery::Uncovered { .. } => {
+            let regions = source_regions(&grid)?;
+            let MapPosition::Asset(last) = regions
+                .last()
+                .ok_or_else(|| "Queue supplied grid has no regions".to_owned())?
+                .1
+            else {
+                return Err("Queue supplied grid has a different source axis".to_owned());
+            };
+            let end = model
+                .as_raw()
+                .duration
+                .ok_or_else(|| "uncovered Queue position has no finite asset extent".to_owned())?;
+            if media * f64::from(rate.get()) > f64::from(last) && media <= end {
+                Ok(false)
+            } else {
+                Err(format!(
+                    "Queue source coordinate {point:?} is outside its finite tail"
+                ))
+            }
+        }
+        other => Err(format!("Queue supplied-grid query failed: {other:?}")),
+    }
+}
+
+pub(super) fn queue_observation(
+    model: &BeatGridModel,
+    host_grid: &BeatGridSnapshot,
+    host_grids: &[(SessionFrame, BeatGridSnapshot)],
+    observation: &LinkObservation,
+    snapshot: &kithara::link::LinkedSnapshot<kithara::play::TrackSnapshot>,
+    capture_start: SlotSnapshot,
+    consumed: SlotSnapshot,
+) -> Result<(f64, Vec<String>, serde_json::Value), String> {
+    let rate = observation
+        .consumed_rate
+        .ok_or_else(|| "Queue observation has no native clock".to_owned())?;
+    if queue_source_supported(model, rate, consumed)? {
+        let (speed, failures, mut evidence) = executed_law(
+            model,
+            host_grid,
+            host_grids,
+            observation,
+            snapshot,
+            capture_start,
+            consumed,
+        )?;
+        evidence["supplemental_source_support"] = serde_json::json!("supported");
+        return Ok((speed, failures, evidence));
+    }
+    let (mark, _) = consumed_media(consumed)?;
+    if snapshot.track.mark != Some(mark) {
+        return Err("Queue tail snapshot differs from its consumed PCM mark".to_owned());
+    }
+    let (first_mark, _) = consumed_media(capture_start)?;
+    if first_mark.lane.segment != mark.lane.segment
+        || mark.lane.frame.checked_sub(first_mark.lane.frame)
+            != mark.session.frames_since(first_mark.session)
+        || capture_start
+            .source
+            .map(|info| (info.source_revision, info.media_origin))
+            != consumed
+                .source
+                .map(|info| (info.source_revision, info.media_origin))
+    {
+        return Err("Queue tail lost its original source/lane/session custody".to_owned());
+    }
+    let correction_end = match snapshot.sync {
+        kithara::link::SyncStatus::On => None,
+        kithara::link::SyncStatus::Correcting { remaining } => {
+            Some(i64::from(mark.session + remaining))
+        }
+        other => {
+            return Err(format!(
+                "Queue tail has no playing SYNC contract: {other:?}"
+            ));
+        }
+    };
+    let curves = applied_curves(observation, snapshot.track.item, mark, rate)?;
+    let failures = configured_speed_failures(
+        observation,
+        snapshot.track.item,
+        mark.lane.segment,
+        &curves,
+        snapshot.track.speed,
+    )?;
+    let speed = if let Some(applied) = curves.iter().rev().find(|curve| curve.at <= mark.session) {
+        curve_rate(
+            &applied.command.curve,
+            mark.session
+                .frames_since(applied.at)
+                .ok_or_else(|| "Queue tail precedes its applied law".to_owned())?,
+        )?
+    } else {
+        curve_rate(
+            &owned_cue(observation, snapshot.track.item, mark.lane.segment)?.curve,
+            mark.lane.frame,
+        )?
+    };
+    Ok((
+        speed,
+        failures,
+        serde_json::json!({
+            "correction_end": correction_end,
+            "supplemental_source_support": "uncovered_finite_tail",
+            "primary_forward_check": "required_after_capture",
+            "capture_end": format!("{mark:?}"),
+        }),
+    ))
+}
+
+#[derive(Debug)]
+pub(super) struct QueueLaw {
+    anchor: SelectedBinding,
+    spans: Vec<(SessionFrame, SourceSpan)>,
+    curves: Vec<(SessionFrame, SpeedCurve)>,
+    deadlines: Vec<(SessionFrame, SessionFrame)>,
+    axes: (f64, f64, f64),
+    host: TempoTrajectory,
+    source: BeatGridSnapshot,
+    start: SessionFrame,
+    end: SessionFrame,
+}
+
+impl QueueLaw {
+    fn correction(
+        &self,
+        observation: &LinkObservation,
+        applied: &AppliedCurve<'_>,
+        grid: &SourceGrid,
+        media_origin: Duration,
+    ) -> Result<(SpeedCurve, u64), String> {
+        let command = applied.command;
+        if command.landing.is_some() {
+            return Err("Queue source law unexpectedly relocates after native Start".to_owned());
+        }
+        let input = command
+            .input
+            .and_then(|index| observation.owner_inputs.get(index))
+            .ok_or_else(|| "Queue applied law has no typed public operation input".to_owned())?;
+        let commanded = match input.kind {
+            LinkOwnerInputKind::Retime => true,
+            LinkOwnerInputKind::Realign => false,
+            _ => return Err("Queue applied correction has an unexpected public cause".to_owned()),
+        };
+        if input.at != Some(applied.at) {
+            return Err("Queue correction Applied frame differs from its public cause".to_owned());
+        }
+        let host = applied.owner_host(observation)?;
+        let before = command
+            .before
+            .mark
+            .ok_or_else(|| "Queue correction has no pre-command snapshot time".to_owned())?;
+        let planned = self.planned(before, applied.at, media_origin)?;
+        if &planned != applied.planned_input()? {
+            return Err("Queue planned(C) differs from independent prior source law".to_owned());
+        }
+        let (curve, deadline) = corrected_speed_curve(
+            host,
+            grid,
+            planned.0,
+            applied.at,
+            planned.1,
+            LinkConfig::default().epsilon(),
+            commanded,
+        )
+        .ok_or_else(|| "Queue public correction has no canonical finite law".to_owned())?;
+        if curve != command.curve {
+            return Err("Queue emitted correction differs from public Host/cue intent".to_owned());
+        }
+        Ok((curve, deadline))
+    }
+
+    fn span_at(&self, frame: SessionFrame) -> Result<(SessionFrame, SourceSpan), String> {
+        let index = self
+            .spans
+            .partition_point(|(at, _)| *at <= frame)
+            .checked_sub(1)
+            .ok_or_else(|| "Queue expected law precedes its native Start".to_owned())?;
+        let (at, span) = self.spans[index];
+        let offset = frame
+            .frames_since(at)
+            .ok_or_else(|| "Queue expected source axis reverses".to_owned())?;
+        if offset > span.output_frames() {
+            return Err("Queue expected source law has a coverage gap".to_owned());
+        }
+        Ok((at, span))
+    }
+
+    fn ratio_at(&self, frame: SessionFrame) -> Result<(u128, NonZeroU128), String> {
+        let (at, span) = self.span_at(frame)?;
+        span.source_ratio_at(
+            frame
+                .frames_since(at)
+                .ok_or_else(|| "Queue expected source axis reverses".to_owned())?,
+        )
+        .ok_or_else(|| "Queue expected source law has no exact coordinate".to_owned())
+    }
+
+    fn position_at(&self, frame: SessionFrame) -> Result<Duration, String> {
+        let (at, span) = self.span_at(frame)?;
+        span.position_at(
+            frame
+                .frames_since(at)
+                .ok_or_else(|| "Queue expected source axis reverses".to_owned())?,
+        )
+        .ok_or_else(|| "Queue expected source law has no media coordinate".to_owned())
+    }
+
+    fn planned(
+        &self,
+        before: SlotMark,
+        at: SessionFrame,
+        origin: Duration,
+    ) -> Result<(Duration, f64), String> {
+        if self.position_at(before.session)? != before.position {
+            return Err("Queue pre-command mark differs from independent expected PCM".to_owned());
+        }
+        let mut position = self.position_at(before.session)?.as_secs_f64();
+        let mut cursor = before.session;
+        for (index, (start, curve)) in self.curves.iter().enumerate() {
+            let stop = self
+                .curves
+                .get(index + 1)
+                .map_or(at, |(next, _)| (*next).min(at));
+            if stop <= cursor || *start > at {
+                continue;
+            }
+            position += curve_advance(
+                curve,
+                cursor
+                    .frames_since(*start)
+                    .ok_or_else(|| "Queue projection has no predecessor law".to_owned())?,
+                stop.frames_since(*start)
+                    .ok_or_else(|| "Queue projection reverses".to_owned())?,
+            )? / f64::from(self.host.sample_rate().get());
+            cursor = stop;
+            if cursor == at {
+                break;
+            }
+        }
+        if cursor != at {
+            return Err("Queue projection does not reach its command frame".to_owned());
+        }
+        let (start, curve) = self
+            .curves
+            .iter()
+            .rev()
+            .find(|(start, _)| *start <= at)
+            .ok_or_else(|| "Queue projection has no active expected law".to_owned())?;
+        let position = position - origin.as_secs_f64();
+        if position < 0.0 {
+            return Err("Queue projected media precedes its immutable origin".to_owned());
+        }
+        Ok((
+            Duration::try_from_secs_f64(position).map_err(|error| error.to_string())?,
+            curve_rate(
+                curve,
+                at.frames_since(*start)
+                    .ok_or_else(|| "Queue predecessor law reverses".to_owned())?,
+            )?,
+        ))
+    }
+
+    pub(super) fn check_status(
+        &self,
+        frame: SessionFrame,
+        claimed: Option<i64>,
+    ) -> Result<(), String> {
+        let expected = self
+            .deadlines
+            .iter()
+            .rev()
+            .find(|(at, _)| *at <= frame)
+            .and_then(|(_, end)| (frame < *end).then_some(i64::from(*end)));
+        if expected != claimed {
+            return Err(format!(
+                "Queue frame {frame:?}: published correction end {claimed:?}, public intent requires {expected:?}"
+            ));
+        }
+        Ok(())
+    }
+
+    pub(super) fn check_spans(
+        &self,
+        actual: &[(i64, SourceSpan)],
+    ) -> Result<serde_json::Value, String> {
+        let mut frontier = i64::from(self.start);
+        let mut frames = 0_u64;
+        for &(start, span) in actual {
+            let stop = start
+                .checked_add(
+                    i64::try_from(span.output_frames()).map_err(|error| error.to_string())?,
+                )
+                .ok_or_else(|| "Queue consumed span overflows".to_owned())?;
+            let from = start.max(i64::from(self.start));
+            let to = stop.min(i64::from(self.end));
+            if from != frontier || to <= from {
+                return Err(format!(
+                    "Queue forward ledger loses consumed coverage at {frontier}"
+                ));
+            }
+            for frame in from..=to {
+                let expected_frame = SessionFrame::new(frame);
+                let index = self
+                    .spans
+                    .partition_point(|(at, _)| {
+                        *at < expected_frame
+                            || *at == self.start
+                            || *at == expected_frame && frame != stop
+                    })
+                    .checked_sub(1)
+                    .ok_or_else(|| "Queue consumed span precedes its expected law".to_owned())?;
+                let (origin, law) = self.spans[index];
+                let expected = law
+                    .source_ratio_at(
+                        expected_frame
+                            .frames_since(origin)
+                            .ok_or_else(|| "Queue expected endpoint reverses".to_owned())?,
+                    )
+                    .ok_or_else(|| "Queue expected endpoint has no source coordinate".to_owned())?;
+                let observed = span
+                    .source_ratio_at(
+                        u64::try_from(frame - start).map_err(|error| error.to_string())?,
+                    )
+                    .ok_or_else(|| "Queue consumed span loses an exact coordinate".to_owned())?;
+                if observed != expected {
+                    return Err(format!(
+                        "Queue forward law at frame {frame}: consumed {observed:?}, expected {expected:?}"
+                    ));
+                }
+            }
+            frames += u64::try_from(to - from).map_err(|error| error.to_string())?;
+            frontier = to;
+        }
+        if frontier != i64::from(self.end) || frames == 0 {
+            return Err("Queue forward ledger does not reach the native end".to_owned());
+        }
+        let mut beats = std::collections::BTreeSet::new();
+        for (start, end) in source_regions(&self.source)? {
+            let first = grid_beat_at(&self.source, start)?
+                .ceil()
+                .to_i64()
+                .ok_or_else(|| "Queue first supported beat is unrepresentable".to_owned())?;
+            let last = grid_beat_at(&self.source, end)?
+                .floor()
+                .to_i64()
+                .ok_or_else(|| "Queue final supported beat is unrepresentable".to_owned())?;
+            beats.extend(first..=last);
+        }
+        let mut census = Vec::new();
+        for beat in beats {
+            let beat = beat
+                .to_f64()
+                .ok_or_else(|| "Queue supported beat is unrepresentable".to_owned())?;
+            let source = source_media_for_beat(&self.source, beat, self.host.sample_rate())?;
+            let host_beat = self.anchor.host_beat + (beat - self.anchor.source_beat);
+            let at = self
+                .host
+                .frame_at(SessionBeat::new(host_beat).map_err(|error| error.to_string())?);
+            let (origin, source_stride, host_stride) = self.axes;
+            let phase = (beat - origin).rem_euclid(source_stride);
+            let phase_beat = phase + ((host_beat - phase) / host_stride).round() * host_stride;
+            if self
+                .host
+                .frame_at(SessionBeat::new(phase_beat).map_err(|error| error.to_string())?)
+                != at
+            {
+                return Err(format!(
+                    "Queue source beat {beat} and Host beat {host_beat} have incompatible declared meter phases"
+                ));
+            }
+            let audible = at >= self.start && at < self.end;
+            if audible {
+                let index = actual
+                    .partition_point(|(start, _)| *start <= i64::from(at))
+                    .checked_sub(1)
+                    .ok_or_else(|| "Queue supported beat has no consumed witness".to_owned())?;
+                let (start, span) = actual[index];
+                let actual = span
+                    .source_ratio_at(
+                        u64::try_from(i64::from(at) - start).map_err(|error| error.to_string())?,
+                    )
+                    .ok_or_else(|| "Queue supported beat lies in a consumed gap".to_owned())?;
+                if actual != self.ratio_at(at)? {
+                    return Err(format!(
+                        "Queue supported source beat {beat} has the wrong exact native source coordinate"
+                    ));
+                }
+            }
+            census.push(
+                serde_json::json!({"source_beat": beat, "source_media": source,
+                "host_beat": host_beat, "native_frame": i64::from(at), "audible": audible,
+                "terminal_endpoint": at == self.end}),
+            );
+        }
+        if !census.iter().any(|entry| entry["audible"] == true) {
+            return Err("Queue has no audible supported source-beat witness".to_owned());
+        }
+        Ok(
+            serde_json::json!({"exact_forward_frames": frames, "supported_source_beats": census,
+            "law_basis": "declared cue, native Start, public Host trajectory and correction intent"}),
+        )
+    }
+}
+
+fn physical_phase(position: (u128, NonZeroU128)) -> Result<(u128, NonZeroU128), String> {
+    let scale = 1u128 << 32;
+    let scaled = position
+        .0
+        .checked_mul(scale)
+        .ok_or_else(|| "physical phase overflows Q32".to_owned())?;
+    let denominator = position.1.get();
+    let remainder = scaled % denominator;
+    Ok((
+        scaled / denominator + u128::from(remainder >= denominator - remainder),
+        NonZeroU128::new(scale).expect("Q32 source phase"),
+    ))
+}
+
+fn append_queue_curve(
+    spans: &mut Vec<(SessionFrame, SourceSpan)>,
+    curve: &SpeedCurve,
+    retained: std::ops::Range<SessionFrame>,
+    mut position: (u128, NonZeroU128),
+    input: SourceSpan,
+    input_origin: u64,
+    rate: NonZeroU32,
+) -> Result<(), String> {
+    let (start, end) = (retained.start, retained.end);
+    let parts = analytic_parts(curve)?;
+    for (index, &(offset, law)) in parts.iter().enumerate() {
+        let at = frame_after(start, offset)?;
+        if at >= end {
+            break;
+        }
+        let stop = parts
+            .get(index + 1)
+            .map(|(next, _)| frame_after(start, *next))
+            .transpose()?
+            .unwrap_or(end)
+            .min(end);
+        let frames = stop
+            .frames_since(at)
+            .filter(|frames| *frames > 0)
+            .ok_or_else(|| "Queue expected analytic part has no positive extent".to_owned())?;
+        let span = SourceSpan::approaching(position.0, position.1, law, 0, rate, frames)
+            .ok_or_else(|| "Queue expected analytic part is unrepresentable".to_owned())?;
+        position = span
+            .source_ratio_at(frames)
+            .ok_or_else(|| "Queue expected part has no exact endpoint".to_owned())?;
+        spans.push((
+            at,
+            input
+                .map_output_span(input_origin, span)
+                .ok_or_else(|| "Queue expected law cannot publish the decoder clock".to_owned())?,
+        ));
+    }
+    Ok(())
+}
+
+fn sync_source_grid(
+    model: &BeatGridModel,
+    rate: NonZeroU32,
+    duration: Option<Duration>,
+) -> Result<SourceGrid, String> {
+    let extent = duration
+        .map(|duration| {
+            AudioSpec::new(1, rate)
+                .frames_for(duration)
+                .map_err(|error| error.to_string())
+                .and_then(|frames| u64::try_from(frames.get()).map_err(|error| error.to_string()))
+        })
+        .transpose()?;
+    SourceGrid::new(
+        model.geometry(),
+        rate,
+        extent,
+        matches!(model.as_raw().state, BeatGridState::Final) && extent.is_some(),
+    )
+    .map_err(|error| error.to_string())
+}
+
+pub(super) fn queue_law(
+    model: &BeatGridModel,
+    observation: &LinkObservation,
+    item: kithara::events::TrackId,
+    retained: std::ops::Range<SessionFrame>,
+    first: (SlotSnapshot, u64),
+    declared_cue: Duration,
+    decoded: &super::control::DecodedCapture,
+) -> Result<QueueLaw, String> {
+    let (start, end) = (retained.start, retained.end);
+    let (first, ready_frame) = first;
+    let (mark, _) = consumed_media(first)?;
+    let info = first
+        .source
+        .ok_or_else(|| "Queue cue has no native source identity".to_owned())?;
+    let rate = info.spec.sample_rate;
+    let cue = owned_cue(observation, item, mark.lane.segment)?;
+    if cue.position != declared_cue
+        || mark.lane.frame
+            != mark
+                .session
+                .frames_since(start)
+                .ok_or_else(|| "Queue source precedes its native Start".to_owned())?
+    {
+        return Err("Queue cue or lane origin differs from its declared native entry".to_owned());
+    }
+    let host = cue
+        .host_input
+        .and_then(|index| observation.owner_inputs.get(index))
+        .and_then(|input| input.trajectory.as_ref())
+        .ok_or_else(|| "Queue cue has no public Host trajectory input".to_owned())?;
+    let source = source_with_duration(model, rate, cue.before.duration)?;
+    let source_beat = grid_beat_at(&source, media_position(declared_cue, rate)?)?;
+    let (origin, source_stride, host_stride) = phase_axes(model, 4)?;
+    let phase = (source_beat - origin).rem_euclid(source_stride);
+    let host_beat =
+        phase + ((f64::from(host.beat_at(start)) - phase) / host_stride).round() * host_stride;
+    if host.frame_at(SessionBeat::new(host_beat).map_err(|error| error.to_string())?) != start {
+        return Err("Queue native Start does not bind the declared selected cue".to_owned());
+    }
+    let anchor = SelectedBinding {
+        media: declared_cue,
+        source_beat,
+        host_beat,
+        frame: start,
+    };
+    let grid = sync_source_grid(model, rate, cue.before.duration)?;
+    let curve = speed_curve(host, &grid, declared_cue, start, None)
+        .ok_or_else(|| "Queue declared cue has no canonical source law".to_owned())?;
+    if curve != cue.curve {
+        return Err("Queue emitted cue law differs from declared cue/Host intent".to_owned());
+    }
+    let media_origin = info
+        .media_origin
+        .ok_or_else(|| "Queue source has no immutable media origin".to_owned())?;
+    let raw = media_origin
+        .checked_add(declared_cue)
+        .ok_or_else(|| "Queue declared raw cue overflows".to_owned())?;
+    let initial = (
+        raw.as_nanos()
+            .checked_mul(u128::from(rate.get()))
+            .ok_or_else(|| "Queue declared raw cue overflows its source clock".to_owned())?,
+        NonZeroU128::new(1_000_000_000).expect("nanosecond source clock"),
+    );
+    let (input_origin, decoder_input) =
+        decoded
+            .physical_frame_basis(info, ready_frame)
+            .map_err(|error| {
+                format!(
+                    "{error}; first_consumed={first:?}; native_ready_frame={ready_frame}; \
+             declared_cue={declared_cue:?}"
+                )
+            })?;
+    let initial = if decoder_input.position_at(0) == Some(raw) {
+        decoder_input
+            .source_ratio_at(0)
+            .ok_or_else(|| "Queue decoder basis has no exact origin".to_owned())?
+    } else {
+        initial
+    };
+    let initial = decoder_input
+        .output_ratio_at_source(input_origin, initial)
+        .ok_or_else(|| "Queue cue cannot translate through its decoder clock".to_owned())?;
+    let native_input = decoder_input
+        .scaled_from(
+            (0, NonZeroU128::MIN),
+            (0, NonZeroU128::MIN),
+            (
+                u128::from(decoder_input.sample_rate().get()),
+                NonZeroU128::from(rate),
+            ),
+        )
+        .ok_or_else(|| "Queue decoder source units cannot be restored".to_owned())?;
+    let mut result = QueueLaw {
+        anchor,
+        spans: Vec::new(),
+        curves: vec![(start, curve)],
+        deadlines: Vec::new(),
+        axes: phase_axes(model, 4)?,
+        host: host.clone(),
+        source,
+        start,
+        end,
+    };
+    append_queue_curve(
+        &mut result.spans,
+        &result.curves[0].1,
+        start..end,
+        initial,
+        native_input,
+        input_origin,
+        rate,
+    )?;
+    for applied in applied_curves(observation, item, mark, rate)? {
+        if applied.at < start {
+            return Err("Queue applied law precedes native Start".to_owned());
+        }
+        if applied.at >= end {
+            continue;
+        }
+        let (curve, deadline) = result.correction(observation, &applied, &grid, media_origin)?;
+        let host = applied.owner_host(observation)?;
+        let mut position = decoder_input
+            .output_ratio_at_source(input_origin, result.ratio_at(applied.at)?)
+            .ok_or_else(|| "Queue replacement cannot translate its decoder clock".to_owned())?;
+        position = physical_phase(position)?;
+        result.spans.retain(|(at, _)| *at < applied.at);
+        if let Some((at, span)) = result.spans.last_mut() {
+            let frames = applied
+                .at
+                .frames_since(*at)
+                .ok_or_else(|| "Queue replacement reverses".to_owned())?;
+            *span = span
+                .for_output_range(0..frames)
+                .ok_or_else(|| "Queue predecessor cannot retain its analytic basis".to_owned())?;
+        }
+        append_queue_curve(
+            &mut result.spans,
+            &curve,
+            applied.at..end,
+            position,
+            native_input,
+            input_origin,
+            rate,
+        )?;
+        result.curves.push((applied.at, curve));
+        result
+            .deadlines
+            .push((applied.at, frame_after(applied.at, deadline)?));
+        result.host = host.clone();
+    }
+    result.host = observation
+        .owner_inputs
+        .iter()
+        .rev()
+        .find_map(|input| input.trajectory.as_ref())
+        .cloned()
+        .ok_or_else(|| "Queue has no complete public Host history".to_owned())?;
+    Ok(result)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -2531,6 +3260,12 @@ fn direct_grid_binding_rejects_a_frame_a_beat_and_a_missing_origin() {
             spec: AudioSpec::new(2, output_rate),
             segment: SegmentId::FIRST,
             media_origin: Some(Duration::from_millis(12)),
+            source_span: Some(
+                SourceSpan::new(192_576, 192_624, source_rate, 49)
+                    .expect("declared consumed native geometry"),
+            ),
+            lane_frame: 171_500,
+            frames: 49,
             ..AudioChunkInfo::default()
         }),
         ..SlotSnapshot::default()
@@ -2635,6 +3370,89 @@ fn direct_grid_binding_rejects_a_frame_a_beat_and_a_missing_origin() {
         !ordinary_span_is_local(&source, 0.0, 8.0, source_rate, false)
             .expect("slope crossing in second half")
     );
+
+    let model = analysed_grid("library_flac_song2");
+    let anchor = SessionAnchor::new(
+        SessionFrame::new(0),
+        SessionBeat::default(),
+        100.0 / 60.0,
+        source_rate,
+    )
+    .expect("real Queue Host anchor");
+    let host_grid = BeatGridSnapshot::session(
+        BeatGridId::allocate().expect("Host grid id"),
+        BeatGridRevision::first(),
+        SessionEpoch::new(0),
+        anchor,
+        None,
+    );
+    let numerator = 6_865_075_725_926_399_u128;
+    let denominator = 1_u128 << 32;
+    for (at, numerator, denominator, speed) in [
+        (
+            431_999,
+            numerator * 5 - denominator * 4,
+            denominator * 5,
+            0.8,
+        ),
+        (432_000, numerator, denominator, 0.7666666666666748),
+    ] {
+        let span = SourceSpan::approaching(
+            numerator,
+            NonZeroU128::new(denominator).expect("exact source denominator"),
+            ExponentialApproach::new(speed, speed, 0.0).expect("local source rate"),
+            0,
+            source_rate,
+            1,
+        )
+        .expect("actual nonuniform consumed boundary");
+        let position = span.position_at(0).expect("actual consumed mark");
+        if at == 432_000 {
+            assert_eq!(span.seconds_at(0), Some(33.3));
+            assert_eq!(position, Duration::from_nanos(33_299_999_999));
+        }
+        let lane_frame = u64::try_from(at - 115_200).expect("actual lane frame");
+        let consumed = SlotSnapshot {
+            state: SlotState::Playing,
+            mark: Some(SlotMark {
+                session: SessionFrame::new(at),
+                lane: LaneFrame {
+                    segment: SegmentId::FIRST,
+                    frame: lane_frame,
+                },
+                position,
+            }),
+            source: Some(AudioChunkInfo {
+                spec: AudioSpec::new(2, source_rate),
+                segment: SegmentId::FIRST,
+                media_origin: Some(Duration::ZERO),
+                source_span: Some(span),
+                lane_frame,
+                frames: 1,
+                ..AudioChunkInfo::default()
+            }),
+            ..SlotSnapshot::default()
+        };
+        let binding = check(&model, source_rate, &host_grid, consumed, speed.as_(), 4)
+            .expect("exact source coordinate survives reporting truncation");
+        assert!(binding.failures().is_empty(), "{binding:?}");
+        let wrong_speed = if at == 432_000 { 0.8 } else { 0.76666665 };
+        assert_eq!(
+            check(&model, source_rate, &host_grid, consumed, wrong_speed, 4)
+                .expect("wrong local interval speed")
+                .failures()
+                .len(),
+            1
+        );
+        let wrong_mark = SlotSnapshot {
+            mark: consumed.mark.map(|mark| SlotMark {
+                position: mark.position + Duration::from_nanos(1),
+                ..mark
+            }),
+            ..consumed
+        };
+        assert!(check(&model, source_rate, &host_grid, wrong_mark, speed.as_(), 4).is_err());
+    }
 }
 
 #[kithara::test(native)]
@@ -2721,9 +3539,15 @@ fn direct_grid_anchor_rejects_a_whole_bar_and_a_wrong_selected_cue() {
             position: Duration::from_millis(4_012),
         }),
         source: Some(AudioChunkInfo {
-            spec: AudioSpec::new(2, evaluation_rate),
+            spec: AudioSpec::new(2, output_rate),
             segment: SegmentId::FIRST,
             media_origin: Some(Duration::from_millis(12)),
+            source_span: Some(
+                SourceSpan::new(192_576, 192_624, evaluation_rate, 49)
+                    .expect("declared consumed native geometry"),
+            ),
+            lane_frame: 171_500,
+            frames: 49,
             ..AudioChunkInfo::default()
         }),
         ..SlotSnapshot::default()
@@ -2747,6 +3571,18 @@ fn direct_grid_anchor_rejects_a_whole_bar_and_a_wrong_selected_cue() {
             mark: consumed.mark.map(|mark| SlotMark {
                 position: media + Duration::from_millis(12),
                 ..mark
+            }),
+            source: consumed.source.map(|info| AudioChunkInfo {
+                source_span: Some(
+                    SourceSpan::new(
+                        seconds * 48_000 + 576,
+                        seconds * 48_000 + 624,
+                        evaluation_rate,
+                        49,
+                    )
+                    .expect("wrong whole-bar consumed geometry"),
+                ),
+                ..info
             }),
             ..consumed
         };

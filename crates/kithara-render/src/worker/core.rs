@@ -10,7 +10,9 @@ use kithara_command::{ChannelConfig, Inbox, Sender, channel};
 use kithara_decode::DecodeError;
 use kithara_effects::EffectDrain;
 use kithara_events::EventBus;
-use kithara_platform::{sync::Arc, thread::ThreadClass, time::Duration};
+use kithara_platform::{
+    sync::Arc, thread::ThreadClass, time::Duration, tokio::task::spawn_blocking,
+};
 use kithara_signal::{AudioChunkInfo, FrameCount};
 use kithara_stream::{Stream, StreamType};
 use kithara_warp::Warp;
@@ -273,14 +275,34 @@ where
                 &warp.starting_at(warp.speed(), start.keylock, start.backend),
             );
             receiver.render_publisher = warp.take_publisher();
-            let mut renderer = warp.renderer(spec, self.pools().clone());
-            renderer
-                .set_speed(start.speed, 0)
-                .map_err(|error| DecodeError::audio_stream("initial lane speed curve", error))
-                .map_err(decode_refusal)?;
-            renderer
-                .prepare_engine_latency(spec)
-                .map_err(|error| DecodeError::audio_stream("lane engine preparation", error))
+            let pools = self.pools().clone();
+            let dispatch = tracing::dispatcher::get_default(Clone::clone);
+            let span = tracing::Span::current();
+            // Cold engine allocation must not stop service of resident lanes.
+            let prepared = spawn_blocking(move || {
+                tracing::dispatcher::with_default(&dispatch, || {
+                    let _entered = span.enter();
+                    let mut renderer = warp.renderer(spec, pools);
+                    renderer.set_speed(start.speed, 0).map_err(|error| {
+                        DecodeError::audio_stream("initial lane speed curve", error)
+                    })?;
+                    renderer.prepare_engine_latency(spec).map_err(|error| {
+                        DecodeError::audio_stream("lane engine preparation", error)
+                    })?;
+                    Ok::<_, DecodeError>(renderer)
+                })
+            })
+            .await;
+            if self.0.dispatcher.is_cancelled()
+                || cancel
+                    .as_ref()
+                    .is_some_and(kithara_platform::CancelToken::is_cancelled)
+            {
+                return Err(LoadRefusal::Cancelled);
+            }
+            let renderer = prepared
+                .map_err(|error| DecodeError::audio_stream("lane renderer preparation task", error))
+                .map_err(decode_refusal)?
                 .map_err(decode_refusal)?;
             let drain = EffectDrain::new(effects.len(), self.pools())?;
             let source = WarpSource::new(
