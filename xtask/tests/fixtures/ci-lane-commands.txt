@@ -2278,35 +2278,35 @@
 # quality-coverage-risk / branch
   <require os> linux
   <require tools> cargo just
-  just quality coverage-risk --baseline <root>/baseline/target/quality-lab
+  just quality coverage-risk
 # quality-coverage-risk / platforms
   <require os> linux
   <require tools> cargo just
-  just quality coverage-risk --baseline <root>/baseline/target/quality-lab
+  just quality coverage-risk
 # quality-coverage-risk / merge-request
   <require os> linux
   <require tools> cargo just
-  just quality coverage-risk --baseline <root>/baseline/target/quality-lab
+  just quality coverage-risk
 # quality-coverage-risk / quarantine
   <require os> linux
   <require tools> cargo just
-  just quality coverage-risk --baseline <root>/baseline/target/quality-lab
+  just quality coverage-risk
 # quality-coverage-risk / main
   <require os> linux
   <require tools> cargo just
-  just quality coverage-risk --baseline <root>/baseline/target/quality-lab
+  just quality coverage-risk
 # quality-coverage-risk / nightly
   <require os> linux
   <require tools> cargo just
-  just quality coverage-risk --baseline <root>/baseline/target/quality-lab
+  just quality coverage-risk
 # quality-coverage-risk / weekly
   <require os> linux
   <require tools> cargo just
-  just quality coverage-risk --baseline <root>/baseline/target/quality-lab
+  just quality coverage-risk
 # quality-coverage-risk / release
   <require os> linux
   <require tools> cargo just
-  just quality coverage-risk --baseline <root>/baseline/target/quality-lab
+  just quality coverage-risk
 # quality-health / branch
   <require os> linux
   <require tools> cargo just

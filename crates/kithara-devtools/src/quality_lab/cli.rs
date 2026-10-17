@@ -20,9 +20,7 @@ pub enum LabCommand {
 
 #[derive(Debug, Args)]
 pub struct RunArgs {
-    /// Quality Lab output directory of an earlier coverage run, holding its
-    /// one revision. Functions above the cyclomatic complexity limit that are
-    /// new or grew since that run are findings.
+    /// Absolute cargo-crap JSON report from a successful production run.
     #[arg(long, requires = "lcov")]
     pub(super) baseline: Option<PathBuf>,
     /// LCOV input for the cargo-crap coverage profile.

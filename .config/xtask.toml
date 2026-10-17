@@ -2607,17 +2607,7 @@ os = "linux"
 tools = ["cargo", "just"]
 program = "just"
 artifact = { name = "coverage-risk", path = "target/quality-lab/\ncoverage/" }
-# Judged against the Quality Lab output of its last success on the default
-# branch: a function above the cyclomatic limit may not appear or grow.
-baseline = true
-steps = [
-  { args = [
-    "quality",
-    "coverage-risk",
-    "--baseline",
-    "{root}/baseline/target/quality-lab",
-  ], label = "coverage risk" },
-]
+steps = [{ args = ["quality", "coverage-risk"], label = "coverage risk" }]
 role = "quality"
 kinds = []
 kinds_github = ["nightly", "weekly"]

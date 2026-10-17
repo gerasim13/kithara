@@ -1,15 +1,15 @@
 use std::{fmt::Write as _, fs, path::Path, process};
 
 use anyhow::{Context, Result, bail};
-use reqwest::blocking::Client;
+use reqwest::{
+    blocking::Client,
+    header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue, USER_AGENT},
+};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use super::profile::{LinuxHost, LinuxRunner, WindowsGuest};
-use crate::{
-    ci::{cache::client_environment, github::client},
-    consts,
-};
+use crate::{ci::cache::client_environment, consts};
 
 #[derive(Deserialize)]
 struct Registration {
@@ -217,6 +217,25 @@ fn prune_offline(client: &Client, endpoint: &str, prefix: &str) -> Result<()> {
 
 fn is_prunable(runner: &Registration, prefix: &str) -> bool {
     runner.status == "offline" && !runner.busy && runner.name.starts_with(prefix)
+}
+
+fn client(token: &str) -> Result<Client> {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        ACCEPT,
+        HeaderValue::from_static("application/vnd.github+json"),
+    );
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    headers.insert(USER_AGENT, HeaderValue::from_static("kithara-ci"));
+    headers.insert(consts::API_VERSION, HeaderValue::from_static("2022-11-28"));
+    let mut authorization = HeaderValue::from_str(&format!("Bearer {token}"))
+        .context("the runner token is not a usable header value")?;
+    authorization.set_sensitive(true);
+    headers.insert(AUTHORIZATION, authorization);
+    Client::builder()
+        .default_headers(headers)
+        .build()
+        .context("building the GitHub client")
 }
 
 fn read_token(path: &Path) -> Result<String> {

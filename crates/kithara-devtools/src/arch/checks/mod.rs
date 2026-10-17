@@ -21,6 +21,7 @@ pub(crate) mod file_size;
 pub(crate) mod firewheel_dsp_facade;
 pub(crate) mod flat_directory;
 pub(crate) mod fn_arg_count;
+pub(crate) mod fn_cyclomatic;
 pub(crate) mod generic_param_count;
 pub(crate) mod god_module;
 pub(crate) mod god_struct;

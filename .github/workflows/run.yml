@@ -121,7 +121,6 @@ jobs:
       kind: ${{ inputs.kind }}
       timeout-minutes: ${{ matrix.timeout }}
       history: ${{ matrix.history }}
-      baseline: ${{ matrix.baseline }}
       artifact-name: ${{ matrix.artifact.name || '' }}
       artifact-path: ${{ matrix.artifact.path || '' }}
       artifact-when: ${{ matrix.artifact.when || 'always' }}

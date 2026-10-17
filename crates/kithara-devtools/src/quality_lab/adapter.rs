@@ -8,8 +8,6 @@ use anyhow::{Context, Result, bail};
 use super::manifest::Tool;
 use crate::consts;
 
-const CRAP_REPORT: &str = "report.json";
-
 pub(super) struct AdapterOptions<'a> {
     pub(super) baseline: Option<&'a Path>,
     pub(super) lcov: Option<&'a Path>,
@@ -30,13 +28,9 @@ pub(super) struct InvocationSpec {
     pub(super) args: Vec<String>,
 }
 
+#[derive(Clone, Copy)]
 pub(super) enum ReportKind {
-    /// A cargo-crap JSON report judged against an earlier one measured in the
-    /// checkout at `root`.
-    CyclomaticGrowth {
-        baseline: PathBuf,
-        root: PathBuf,
-    },
+    CargoCrapDelta { threshold: f64 },
     Json,
     JsonStream,
     Markdown,
@@ -57,19 +51,26 @@ pub(super) fn build(
     }
 }
 
-fn cargo_crap(workspace_root: &Path, options: &AdapterOptions<'_>) -> Result<ToolSpec> {
+fn cargo_crap(_workspace_root: &Path, options: &AdapterOptions<'_>) -> Result<ToolSpec> {
     let lcov = required_file(options.lcov, "cargo-crap requires --lcov <FILE>")?;
     let scoring = crap_scoring(&lcov);
     let mut args = scoring.clone();
     args.extend(strings(&["--format", "json", "--sort", "file"]));
-    let report = match options.baseline {
-        Some(baseline) => ReportKind::CyclomaticGrowth {
-            baseline: baseline_report(baseline)?,
-            root: fs::canonicalize(workspace_root)
-                .with_context(|| format!("resolve workspace root: {}", workspace_root.display()))?,
-        },
-        None => ReportKind::Json,
-    };
+    let (finding_exit_codes, report): (&'static [i32], ReportKind) =
+        if let Some(baseline) = options.baseline {
+            let baseline = canonical_file(baseline, "cargo-crap baseline")?;
+            args.push("--baseline".to_owned());
+            args.push(path_arg(&baseline));
+            args.push("--fail-regression".to_owned());
+            (
+                &[1],
+                ReportKind::CargoCrapDelta {
+                    threshold: consts::CRAP_THRESHOLD,
+                },
+            )
+        } else {
+            (&[], ReportKind::Json)
+        };
     let mut readable = scoring;
     readable.extend(strings(&["--format", "markdown"]));
     Ok(ToolSpec {
@@ -79,8 +80,8 @@ fn cargo_crap(workspace_root: &Path, options: &AdapterOptions<'_>) -> Result<Too
             InvocationSpec {
                 name: "coverage-risk",
                 args,
-                artifact: CRAP_REPORT,
-                finding_exit_codes: &[],
+                artifact: "report.json",
+                finding_exit_codes,
                 report,
             },
             InvocationSpec {
@@ -93,27 +94,6 @@ fn cargo_crap(workspace_root: &Path, options: &AdapterOptions<'_>) -> Result<Too
         ],
         requires_clean_clone: false,
     })
-}
-
-/// The cargo-crap report of an earlier coverage run, found under that run's
-/// Quality Lab output directory, which must hold that one revision alone.
-fn baseline_report(output: &Path) -> Result<PathBuf> {
-    let revisions = fs::read_dir(output)
-        .with_context(|| format!("read baseline Quality Lab output: {}", output.display()))?
-        .map(|entry| entry.map(|entry| entry.path()))
-        .collect::<std::io::Result<Vec<_>>>()
-        .with_context(|| format!("list baseline revisions: {}", output.display()))?;
-    let [revision] = revisions.as_slice() else {
-        bail!(
-            "baseline Quality Lab output must hold one revision, found {}: {}",
-            revisions.len(),
-            output.display()
-        );
-    };
-    canonical_file(
-        &revision.join(Tool::CargoCrap.to_string()).join(CRAP_REPORT),
-        "cargo-crap baseline",
-    )
 }
 
 fn crap_scoring(lcov: &Path) -> Vec<String> {
@@ -306,21 +286,13 @@ mod tests {
         assert!(error.to_string().contains("requires --lcov"));
     }
 
-    /// A Quality Lab output directory holding one earlier coverage run.
-    fn baseline_output(root: &Path) -> PathBuf {
-        let output = root.join("baseline");
-        let tool = output.join("abc123").join(Tool::CargoCrap.to_string());
-        fs::create_dir_all(&tool).expect("baseline tool directory");
-        fs::write(tool.join(CRAP_REPORT), r#"{"entries":[]}"#).expect("baseline report");
-        output
-    }
-
     #[test]
-    fn cargo_crap_judges_complexity_growth_only_against_a_baseline() {
+    fn cargo_crap_only_enables_regression_exit_with_baseline() {
         let temp = tempdir().expect("tempdir");
         let lcov = temp.path().join("lcov.info");
+        let baseline = temp.path().join("baseline.json");
         fs::write(&lcov, "TN:\n").expect("lcov");
-        let baseline = baseline_output(temp.path());
+        fs::write(&baseline, "{}").expect("baseline");
 
         let absolute = build(
             Tool::CargoCrap,
@@ -331,7 +303,7 @@ mod tests {
             },
         )
         .expect("absolute spec");
-        let judged = build(
+        let delta = build(
             Tool::CargoCrap,
             temp.path(),
             &AdapterOptions {
@@ -339,32 +311,15 @@ mod tests {
                 baseline: Some(&baseline),
             },
         )
-        .expect("judged spec");
+        .expect("delta spec");
 
-        assert!(matches!(absolute.invocations[0].report, ReportKind::Json));
-        let ReportKind::CyclomaticGrowth {
-            baseline: report, ..
-        } = &judged.invocations[0].report
-        else {
-            panic!("a baseline judges the JSON report");
-        };
-        assert!(report.ends_with(Path::new("abc123/cargo-crap/report.json")));
+        assert!(absolute.invocations[0].finding_exit_codes.is_empty());
+        assert_eq!(delta.invocations[0].finding_exit_codes, &[1]);
         assert!(
-            !judged.invocations[0]
+            delta.invocations[0]
                 .args
-                .contains(&"--baseline".to_owned()),
-            "the report stays absolute, so it can serve as the next baseline"
+                .contains(&"--fail-regression".to_owned())
         );
-    }
-
-    #[test]
-    fn a_baseline_output_must_hold_one_revision() {
-        let temp = tempdir().expect("tempdir");
-        let baseline = baseline_output(temp.path());
-        fs::create_dir_all(baseline.join("def456")).expect("second revision");
-
-        let error = baseline_report(&baseline).expect_err("two revisions are ambiguous");
-        assert!(error.to_string().contains("found 2"), "{error}");
     }
 
     #[test]
@@ -395,8 +350,9 @@ mod tests {
     fn cargo_crap_scores_the_readable_report_at_the_gate_threshold() {
         let temp = tempdir().expect("tempdir");
         let lcov = temp.path().join("lcov.info");
+        let baseline = temp.path().join("baseline.json");
         fs::write(&lcov, "TN:\n").expect("lcov");
-        let baseline = baseline_output(temp.path());
+        fs::write(&baseline, "{}").expect("baseline");
 
         let spec = build(
             Tool::CargoCrap,
@@ -406,7 +362,7 @@ mod tests {
                 baseline: Some(&baseline),
             },
         )
-        .expect("judged spec");
+        .expect("delta spec");
 
         let threshold = consts::CRAP_THRESHOLD.to_string();
         assert!(
@@ -420,8 +376,9 @@ mod tests {
     fn cargo_crap_readable_report_never_gates_on_its_own() {
         let temp = tempdir().expect("tempdir");
         let lcov = temp.path().join("lcov.info");
+        let baseline = temp.path().join("baseline.json");
         fs::write(&lcov, "TN:\n").expect("lcov");
-        let baseline = baseline_output(temp.path());
+        fs::write(&baseline, "{}").expect("baseline");
 
         let spec = build(
             Tool::CargoCrap,
@@ -431,7 +388,7 @@ mod tests {
                 baseline: Some(&baseline),
             },
         )
-        .expect("judged spec");
+        .expect("delta spec");
 
         let readable = spec
             .invocations

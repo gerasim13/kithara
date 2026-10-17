@@ -391,9 +391,6 @@ pub(crate) const LINUX_CONFIG_PATH: &str = "/etc/kithara-ci/linux-host.toml";
 
 pub(crate) const API_VERSION: &str = "X-GitHub-Api-Version";
 
-/// Items asked for per page of a GitHub REST listing; the API's maximum.
-pub(crate) const GITHUB_PAGE_SIZE: usize = 100;
-
 /// The uid the runner image runs its jobs as. It is the image's, not this
 /// machine's, so it is written beside the code that mounts into that image.
 pub(crate) const JOB_USER: u32 = 1000;
