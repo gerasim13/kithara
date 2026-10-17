@@ -526,7 +526,13 @@ mod tests {
     fn a_retired_session_reads_as_an_interrupt_carrying_its_reason() {
         let (coord, _bus, _ctx, _abr) = switch_coord();
         let session = coord.active_session();
-        let mut reader = HlsSessionReader::new(Arc::clone(&session));
+        let mut reader = HlsSessionReader::open(
+            Arc::clone(&session),
+            session.new_reader_control(),
+            None,
+            Arc::clone(&coord.emit),
+        )
+        .into_inner();
         let mut buf = [0_u8; 8];
 
         // A live session stalls for transient reasons of its own; pinning that

@@ -343,8 +343,9 @@ impl<T: StreamType> StreamAudioSource<T> {
                 shared
                     .probe_seek(SeekFrom::Start(offset))
                     .map_err(|source| DecodeError::Io { source })?;
-                let reader =
-                    shared.open_rebuild_reader_with_control(offset, worker_control.clone());
+                let reader = shared
+                    .open_rebuild_reader_with_control(offset, worker_control.clone())
+                    .map_err(|source| DecodeError::Io { source })?;
                 let info = info.or_else(|| shared.media_info());
                 if require_current_media && info.is_none() {
                     return Err(DecodeError::InvalidData {

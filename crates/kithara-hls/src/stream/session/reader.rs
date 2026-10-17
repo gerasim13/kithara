@@ -1,28 +1,50 @@
 use std::io::{self, Error, ErrorKind, Read, Seek, SeekFrom};
 
 use kithara_bufpool::HasPool;
+use kithara_events::DeferredBus;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    NotReadyCause, PendingReason, ReadOutcome, SourceError, StreamError, StreamSeekPastEof,
+    ByteMap, ConstructionGate, NotReadyCause, OpenedReader, PendingReason, ReadOutcome,
+    ReaderControl, SourceError, StreamError, StreamSeekPastEof,
 };
 use tracing::debug;
 
 use super::{HlsSession, hls::pending};
+use crate::{HlsEvent, reader::HlsReaderEventSink};
 
 pub(in crate::stream) struct HlsSessionReader<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
     session: Arc<HlsSession<S>>,
+    control: ReaderControl,
+    construction_gate: Option<ConstructionGate>,
 }
 
 impl<S> HlsSessionReader<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
-    pub(in crate::stream) const fn new(session: Arc<HlsSession<S>>) -> Self {
-        Self { session }
+    pub(in crate::stream) fn open(
+        session: Arc<HlsSession<S>>,
+        control: ReaderControl,
+        construction_gate: Option<ConstructionGate>,
+        emit: Arc<DeferredBus<HlsEvent>>,
+    ) -> OpenedReader {
+        let reader = Self {
+            session: Arc::clone(&session),
+            control: control.clone(),
+            construction_gate: construction_gate.clone(),
+        };
+        OpenedReader::new(
+            reader,
+            session.len(),
+            Some(Arc::clone(&session) as Arc<dyn ByteMap>),
+            construction_gate,
+            control,
+            Some(Box::new(HlsReaderEventSink::for_session(emit, session))),
+        )
     }
 
     fn resolve_seek(&self, seek: SeekFrom) -> io::Result<u64> {
@@ -77,7 +99,7 @@ where
         }
         loop {
             self.session.check_live()?;
-            let reader_control = self.session.reader_control();
+            let reader_control = &self.control;
             let reader_cancel = reader_control.cancel_token();
             if reader_cancel.is_cancelled() {
                 return Err(pending(PendingReason::SessionRetired));
@@ -101,8 +123,11 @@ where
                 .map_or(buf.len(), |len| len.min(buf.len()));
             let buf = &mut buf[..read_len];
             let range = byte..read_end;
-            let wait_budget = if self.session.construction_blocking()
-                || self.session.reader_control().is_blocking()
+            let wait_budget = if self
+                .construction_gate
+                .as_ref()
+                .is_some_and(ConstructionGate::is_armed)
+                || reader_control.is_blocking()
             {
                 None
             } else {
@@ -110,7 +135,7 @@ where
             };
             match self
                 .session
-                .wait_range(range, wait_budget, Some(&reader_control))
+                .wait_range(range, wait_budget, Some(reader_control))
             {
                 Ok(WaitOutcome::Ready) => {}
                 Ok(WaitOutcome::Eof) => return Ok(0),
@@ -144,6 +169,9 @@ where
                 Ok(ReadOutcome::Bytes(count)) => {
                     self.session.check_live()?;
                     self.session.advance_from(position, count.get() as u64);
+                    if self.session.take_prefetch_resume() {
+                        self.session.arm_peer();
+                    }
                     Ok(count.get())
                 }
                 Ok(ReadOutcome::Eof) => Ok(0),

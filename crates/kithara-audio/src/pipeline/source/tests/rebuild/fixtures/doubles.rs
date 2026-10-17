@@ -447,6 +447,10 @@ impl TestControl {
 }
 
 impl VariantControl for TestControl {
+    fn bind_active_reader(&self, reader: OpenedReader) -> OpenedReader {
+        reader
+    }
+
     fn abort_variant(&self, transition: VariantTransition) -> bool {
         let mut exact_plan = self.exact_plan.lock();
         if exact_plan

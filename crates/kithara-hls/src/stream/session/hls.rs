@@ -13,8 +13,8 @@ use kithara_platform::{
 };
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    ByteMap, ConstructionGate, PendingReason, ReaderControl, ReaderProfile, SegmentDescriptor,
-    SourceError, SourcePhase, SourceSeekAnchor, StreamError, StreamResult, VariantTransition,
+    ByteMap, PendingReason, ReaderControl, ReaderProfile, SegmentDescriptor, SourceError,
+    SourcePhase, SourceSeekAnchor, StreamError, StreamResult, VariantTransition,
 };
 use tracing::debug;
 
@@ -33,8 +33,6 @@ where
     pub(super) variant: Arc<HlsVariant<S>>,
     active: AtomicBool,
     position: AtomicU64,
-    construction_gate: ConstructionGate,
-    reader_control: ReaderControl,
     #[field(get, vis = "pub(crate)", copy)]
     transition: Option<VariantTransition>,
     cancel: SessionCancel,
@@ -78,9 +76,7 @@ where
             variant,
             variant_index,
             active: AtomicBool::new(true),
-            reader_control: ReaderControl::new(Some(cancel.clone())),
             cancel: SessionCancel::new(cancel),
-            construction_gate: ConstructionGate::default(),
             position: AtomicU64::new(position),
             readiness: SessionReadiness::Active,
             transition: None,
@@ -213,9 +209,7 @@ where
             signal,
             variant,
             active: AtomicBool::new(false),
-            reader_control: ReaderControl::new(Some(cancel.clone())),
             cancel: SessionCancel::new(cancel),
-            construction_gate: ConstructionGate::default(),
             position: AtomicU64::new(0),
             readiness: SessionReadiness::Profiled {
                 profile,
@@ -242,7 +236,7 @@ where
         self.projected_position().byte
     }
 
-    fn prepare_at(&self, position: Duration) -> StreamResult<SourceSeekAnchor> {
+    fn prepare_at(&self, position: Duration) -> StreamResult<Option<SourceSeekAnchor>> {
         if self.cancel.is_cancelled() {
             return Err(StreamError::Source(SourceError::Cancelled));
         }
@@ -251,17 +245,20 @@ where
             profile,
         } = &self.readiness
         else {
-            return Err(StreamError::Source(SourceError::Io(Error::new(
-                ErrorKind::Unsupported,
-                "active HLS session does not carry a decoder reader profile",
-            ))));
+            let anchor = self.seek_time_anchor(position)?;
+            self.arm_peer();
+            return Ok(anchor);
         };
         let next = self.variant.prepare_reader(*profile, position)?;
         let anchor = next.anchor();
         *preparation.lock() = next;
         self.set_position(anchor.byte_offset);
         self.arm_peer();
-        Ok(anchor)
+        Ok(Some(anchor))
+    }
+
+    pub(crate) fn new_reader_control(&self) -> ReaderControl {
+        ReaderControl::new(Some(self.cancel.root.clone()))
     }
 
     pub(super) fn projected_position(&self) -> SessionPosition {
@@ -379,16 +376,6 @@ where
             #[call(wake_peer)]
             pub(crate) fn wake_peer_for_readiness(&self);
         }
-        to self.construction_gate {
-            #[call(is_armed)]
-            pub(crate) fn construction_blocking(&self) -> bool;
-            #[call(clone)]
-            pub(crate) fn construction_gate(&self) -> ConstructionGate;
-        }
-        to self.reader_control {
-            #[call(clone)]
-            pub(crate) fn reader_control(&self) -> ReaderControl;
-        }
         to self.variant {
             pub(crate) fn find_at_offset(&self, byte: u64) -> Option<(u32, u64, u64)>;
             #[call(stream_len)]
@@ -403,7 +390,7 @@ where
     S: HasPool<u8> + Send + Sync + 'static,
 {
     fn anchor_at_time(&self, position: Duration) -> StreamResult<Option<SourceSeekAnchor>> {
-        self.prepare_at(position).map(Some)
+        self.prepare_at(position)
     }
 
     fn segment_at_index(&self, segment_index: u32) -> Option<SegmentDescriptor> {

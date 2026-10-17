@@ -75,16 +75,23 @@ impl<T: StreamType> SharedStream<T> {
     }
 
     pub(crate) fn open_initial_reader(&self) -> OpenedReader {
+        self.open_reader_with_control(self.new_reader_control())
+    }
+
+    fn open_reader_with_control(&self, control: ReaderControl) -> OpenedReader {
         let construction_gate = ConstructionGate::default();
-        let control = ReaderControl::new(self.cancel.clone());
-        OpenedReader::new(
+        let reader = OpenedReader::new(
             self.with_reader(construction_gate.clone(), control.clone()),
             self.len(),
             self.byte_map(),
             Some(construction_gate),
             control,
             self.take_reader_event_sink(),
-        )
+        );
+        match &self.variants {
+            Some(variants) => variants.bind_active_reader(reader),
+            None => reader,
+        }
     }
 
     pub(crate) fn new_reader_control(&self) -> ReaderControl {
@@ -95,23 +102,24 @@ impl<T: StreamType> SharedStream<T> {
         &self,
         base_offset: u64,
         control: ReaderControl,
-    ) -> OpenedReader {
-        let byte_len = self.len().map(|length| length.saturating_sub(base_offset));
-        let byte_map = self.byte_map();
-        let event_sink = self.take_reader_event_sink();
-        let construction_gate = ConstructionGate::default();
-        let input = OffsetReader::new(
-            self.with_reader(construction_gate.clone(), control.clone()),
-            base_offset,
-        );
-        OpenedReader::new(
+    ) -> io::Result<OpenedReader> {
+        let mut reader = self.open_reader_with_control(control);
+        let byte_len = reader
+            .byte_len()
+            .map(|length| length.saturating_sub(base_offset));
+        let byte_map = reader.byte_map();
+        let construction_gate = reader.construction_gate();
+        let control = reader.control();
+        let event_sink = reader.take_event_sink();
+        let input = OffsetReader::new(reader.into_inner(), base_offset)?;
+        Ok(OpenedReader::new(
             input,
             byte_len,
             byte_map,
-            Some(construction_gate),
+            construction_gate,
             control,
             event_sink,
-        )
+        ))
     }
 
     /// Real-time on-core seek (FSM recreate/boundary, decoder

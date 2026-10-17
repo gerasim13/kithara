@@ -4,7 +4,7 @@ use kithara_abr::{PendingAbrClaim, VariantIndex};
 use kithara_bufpool::HasPool;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_stream::{
-    ByteMap, MediaInfo, OpenedReader, OpenedVariantReader, ReaderProfile, SourceError, StreamError,
+    ConstructionGate, MediaInfo, OpenedVariantReader, ReaderProfile, SourceError, StreamError,
     StreamResult, VariantReaderPlan, VariantTransition,
 };
 
@@ -12,10 +12,7 @@ use super::{
     super::coord::HlsCoord,
     slots::{IncomingSlot, transition_for_claim, unsupported_pending_claim},
 };
-use crate::{
-    reader::HlsReaderEventSink,
-    stream::session::{HlsSession, HlsSessionReader},
-};
+use crate::stream::session::{HlsSession, HlsSessionReader};
 
 impl<S> HlsCoord<S>
 where
@@ -132,16 +129,11 @@ where
             return Ok(None);
         }
 
-        let reader = OpenedReader::new(
-            HlsSessionReader::new(Arc::clone(&session)),
-            session.len(),
-            Some(Arc::clone(&session) as Arc<dyn ByteMap>),
-            Some(session.construction_gate()),
-            session.reader_control(),
-            Some(Box::new(HlsReaderEventSink::for_session(
-                Arc::clone(&self.emit),
-                Arc::clone(&session),
-            ))),
+        let reader = HlsSessionReader::open(
+            Arc::clone(&session),
+            session.new_reader_control(),
+            Some(ConstructionGate::default()),
+            Arc::clone(&self.emit),
         );
         let reader = OpenedVariantReader::new(plan, reader);
         let outgoing = self.active_session();

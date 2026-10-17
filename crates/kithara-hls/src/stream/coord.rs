@@ -14,14 +14,17 @@ use kithara_platform::{
 };
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    Activity, ActivityWriter, ByteMap, DeferredWake, MediaInfo, PlayheadRead, PlayheadState,
-    PlayheadWrite, ReadOutcome, ReaderProfile, SegmentDescriptor, SourcePhase, SourceProbe,
-    SourceSeekAnchor, StreamError, StreamResult, VariantControl, VariantPromotion,
+    Activity, ActivityWriter, ByteMap, DeferredWake, MediaInfo, OpenedReader, PlayheadRead,
+    PlayheadState, PlayheadWrite, ReadOutcome, ReaderProfile, SegmentDescriptor, SourcePhase,
+    SourceProbe, SourceSeekAnchor, StreamError, StreamResult, VariantControl, VariantPromotion,
     VariantReaderPlan, VariantReaderTake, VariantTransition,
 };
 use kithara_test_utils::kithara;
 
-use super::{session::HlsSession, transition::SessionSlots};
+use super::{
+    session::{HlsSession, HlsSessionReader},
+    transition::SessionSlots,
+};
 use crate::{
     HlsEvent,
     config::HlsConfig,
@@ -391,6 +394,15 @@ impl<S> VariantControl for HlsCoord<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
+    fn bind_active_reader(&self, reader: OpenedReader) -> OpenedReader {
+        HlsSessionReader::open(
+            self.active_session(),
+            reader.control(),
+            reader.construction_gate(),
+            Arc::clone(&self.emit),
+        )
+    }
+
     fn abort_variant(&self, transition: VariantTransition) -> bool {
         Self::abort_variant(self, transition)
     }
@@ -470,7 +482,7 @@ where
 #[cfg(test)]
 pub(super) mod tests {
     use std::{
-        io::{ErrorKind, Read},
+        io::{self, ErrorKind, Read, Seek, SeekFrom},
         num::NonZeroU64,
         sync::{
             OnceLock,
@@ -485,13 +497,15 @@ pub(super) mod tests {
     use kithara_download::RequestPriority;
     use kithara_events::EventBus;
     use kithara_platform::{
+        CancelScope,
         sync::{Arc, Mutex, Notify, mpsc},
         time::{Instant, timeout},
         tokio::{runtime::Handle, task::spawn_blocking_on},
     };
     use kithara_stream::{
-        AudioCodec, ContainerFormat, NotReadyCause, OutgoingDisposition, PendingReason,
-        PlayheadWrite, ReaderInput, ReaderWarmup, SourceError, WorkerWake,
+        AudioCodec, ConstructionGate, ContainerFormat, NotReadyCause, OutgoingDisposition,
+        PendingReason, PlayheadWrite, PrerollHint, ReaderControl, ReaderInput, ReaderSeekSignal,
+        ReaderWarmup, SourceError, Stream, StreamType, WorkerWake, resolve_seek_target,
     };
     use unimock::{MockFn, Unimock, matching};
 
@@ -500,6 +514,7 @@ pub(super) mod tests {
         config::HlsConfig,
         playlist::{PlaylistState, SegmentState, VariantState},
         segment::{MediaSegment, Segment, SegmentContent, SegmentSize, SegmentSlotState},
+        stream::source::HlsSource,
         variant::{PlanCtx, VariantParts},
     };
 
@@ -1500,6 +1515,11 @@ pub(super) mod tests {
     #[kithara::test]
     fn active_seek_anchor_updates_the_session_cursor() {
         let (coord, _bus, _ctx, _abr_state) = switch_coord();
+        let deferred = Arc::new(DeferredWake::default());
+        coord.set_peer_wake(
+            Arc::clone(&deferred),
+            Arc::new(CountingWake::default()) as Arc<dyn WorkerWake>,
+        );
         coord.set_position(17);
 
         let anchor = ByteMap::anchor_at_time(coord.as_ref(), Duration::from_secs(1))
@@ -1508,29 +1528,246 @@ pub(super) mod tests {
 
         assert_eq!(anchor.byte_offset, 0);
         assert_eq!(coord.position(), anchor.byte_offset);
+
+        let session = coord.active_session();
+        coord.set_position(17);
+        let fixed = HlsSessionReader::open(
+            Arc::clone(&session),
+            session.new_reader_control(),
+            None,
+            Arc::clone(&coord.emit),
+        );
+        deferred.flush();
+        assert!(
+            !deferred.flush(),
+            "fixture wake is drained before the fixed anchor"
+        );
+        let fixed_anchor = fixed
+            .byte_map()
+            .expect("fixed active byte map")
+            .anchor_at_time(Duration::from_secs(1))
+            .expect("fixed active seek anchor")
+            .expect("fixed active segmented anchor");
+        assert_eq!(fixed_anchor.byte_offset, anchor.byte_offset);
+        assert_eq!(coord.position(), fixed_anchor.byte_offset);
+        assert!(
+            deferred.flush(),
+            "the fixed active anchor must arm its own peer"
+        );
+        assert!(!deferred.flush(), "the anchor wake is delivered once");
+    }
+
+    struct ReadEntered {
+        entered: Notify,
+        release: Mutex<Option<mpsc::Receiver<()>>>,
+    }
+
+    impl WorkerWake for ReadEntered {
+        fn defer(&self) {
+            self.entered.notify_one();
+        }
+
+        fn wake(&self) {
+            let release = self.release.lock().take();
+            if let Some(release) = release {
+                self.entered.notify_one();
+                let _ = release.recv();
+            }
+        }
+    }
+
+    struct ReaderStream;
+
+    impl StreamType for ReaderStream {
+        type Config = HlsSource<crate::test_pools::TestPools>;
+        type Events = HlsEvent;
+        type Source = Self::Config;
+
+        async fn create(config: Self::Config) -> Result<Self::Source, SourceError> {
+            Ok(config)
+        }
+    }
+
+    struct TestReaderInput {
+        stream: Stream<ReaderStream>,
+        gate: ConstructionGate,
+        control: ReaderControl,
+    }
+
+    impl Read for TestReaderInput {
+        fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+            if self.gate.is_armed() || self.control.is_blocking() {
+                self.stream.read_with_control(bytes, Some(&self.control))
+            } else {
+                self.stream.probe_read(bytes)
+            }
+        }
+    }
+
+    impl Seek for TestReaderInput {
+        fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+            if self.gate.is_armed() || self.control.is_blocking() {
+                self.stream.seek_with_control(pos, Some(&self.control))
+            } else {
+                let position = resolve_seek_target(pos, self.stream.position(), self.stream.len())?;
+                self.stream.set_position(position);
+                Ok(position)
+            }
+        }
+    }
+
+    async fn open_active_test_reader(coord: &Arc<TestHlsCoord>) -> OpenedReader {
+        let source = HlsSource::new(
+            Arc::clone(coord),
+            Arc::clone(&coord.emit),
+            CancelScope::new(Some(coord.cancel.clone())),
+        );
+        let mut stream = Stream::<ReaderStream>::new(source)
+            .await
+            .expect("real HLS source adapter");
+        let len = stream.len();
+        let map = stream.byte_map();
+        let sink = stream.take_reader_event_sink();
+        let gate = ConstructionGate::default();
+        let control = ReaderControl::new(Some(coord.cancel.clone()));
+        let input = TestReaderInput {
+            stream,
+            gate: gate.clone(),
+            control: control.clone(),
+        };
+        let opened = OpenedReader::new(input, len, map, Some(gate), control, sink);
+        coord.bind_active_reader(opened)
+    }
+
+    async fn assert_active_reader_stays_pinned() {
+        let (coord, bus, ctx, _abr) = switch_coord();
+        coord.set_position(17);
+        let mut events = bus.subscribe();
+        let mut opened = open_active_test_reader(&coord).await;
+        let retired_control = opened.control();
+        let retired_map = opened.byte_map().expect("fixed outgoing byte map");
+        let mut retired_sink = opened.take_event_sink().expect("fixed outgoing event sink");
+        let retired_gate = opened
+            .construction_gate()
+            .expect("outgoing construction gate");
+        retired_gate.arm();
+        let mut reader = opened.into_inner();
+        let transition = prepare_incoming(&coord, incremental_profile(32))
+            .expect("prepare incoming")
+            .expect("pending switch");
+        let mut command = coord.dispatch_incoming(&ctx, 1).pop().expect("V1 fetch");
+        command.take_writer().expect("V1 writer")(&[0x5c; 100]).expect("V1 bytes");
+        command.take_on_complete().expect("V1 completion")(100, None, None);
+        let VariantReaderTake::Ready(incoming) = coord
+            .take_prepared_variant_reader(transition)
+            .expect("transfer V1 reader")
+        else {
+            panic!("resident V1 bytes must yield its exact reader");
+        };
+        let (_plan, incoming) = incoming.split();
+        let (release, released) = mpsc::channel::<()>();
+        let entered = Arc::new(ReadEntered {
+            entered: Notify::default(),
+            release: Mutex::new(Some(released)),
+        });
+        coord.set_peer_wake(Arc::new(DeferredWake::default()), entered.clone());
+        let (complete, completion) = mpsc::channel();
+        let runtime = Handle::try_current().expect("reader test runtime");
+        let owner = spawn_blocking_on(&runtime, move || {
+            let mut bytes = [0xa5; 16];
+            let result = reader.read(&mut bytes);
+            let _ = complete.send((result, bytes));
+        });
+        let parked = timeout(Duration::from_secs(1), entered.entered.notified()).await;
+        let before = completion.try_recv();
+        let was_pending = matches!(before, Err(mpsc::TryRecvError::Empty));
+        let promotion = coord.promote_planned_variant(transition);
+        let promoted_position = coord.position();
+        drop(release);
+        let joined = owner.await;
+        let (result, bytes) = before
+            .or_else(|_| completion.try_recv())
+            .expect("retired outgoing read must return");
+
+        assert!(parked.is_ok());
+        assert!(was_pending);
+        assert!(joined.is_ok());
+        assert_eq!(promotion, VariantPromotion::Promoted);
+        assert_eq!(promoted_position, 0);
+        assert_eq!(coord.variant_index(), 1);
+        assert_eq!(coord.position(), promoted_position);
+        assert_eq!(bytes, [0xa5; 16]);
+        let error = result.expect_err("an outgoing read cannot consume the promoted session");
+        assert_eq!(
+            error
+                .get_ref()
+                .and_then(|error| error.downcast_ref::<PendingReason>()),
+            Some(&PendingReason::SessionRetired)
+        );
+        assert_eq!(
+            retired_map
+                .segment_at_index(0)
+                .expect("V0 descriptor")
+                .variant_index,
+            0
+        );
+        retired_sink.on_seek(ReaderSeekSignal::Landed {
+            landed_byte: Some(17),
+            preroll: PrerollHint::NotNeeded,
+        });
+        retired_sink.flush();
+        let seek =
+            std::iter::from_fn(|| events.try_recv().ok()).find_map(|envelope| {
+                match envelope.event {
+                    HlsEvent::ReaderSeek { variant, .. } => Some(variant),
+                    _ => None,
+                }
+            });
+        assert_eq!(seek, Some(Some(0)));
+        retired_control.cancel();
+        let cancelled = open_active_test_reader(&coord).await;
+        let cancelled_control = cancelled.control();
+        let cancelled_gate = cancelled.construction_gate().expect("first V1 gate");
+        cancelled_gate.arm();
+        cancelled_control.cancel();
+        let mut cancelled = cancelled.into_inner();
+        let error = cancelled
+            .read(&mut [0; 16])
+            .expect_err("generation cancellation reaches its input");
+        assert_eq!(
+            error
+                .get_ref()
+                .and_then(|error| error.downcast_ref::<PendingReason>()),
+            Some(&PendingReason::SessionRetired)
+        );
+        assert_eq!(coord.position(), promoted_position);
+        let reopened = open_active_test_reader(&coord).await;
+        assert!(!reopened.control().is_cancelled());
+        assert!(!reopened.construction_gate().expect("fresh gate").is_armed());
+        assert!(cancelled_gate.is_armed());
+        assert!(retired_gate.is_armed());
+        assert_eq!(
+            reopened
+                .byte_map()
+                .expect("V1 map")
+                .segment_at_index(0)
+                .expect("V1 descriptor")
+                .variant_index,
+            1
+        );
+        let mut reopened = reopened.into_inner();
+        let mut bytes = [0; 16];
+        assert_eq!(
+            reopened.read(&mut bytes).expect("fresh reader serves V1"),
+            16
+        );
+        assert_eq!(bytes, [0x5c; 16]);
+        assert_eq!(coord.position(), promoted_position + 16);
+        drop(incoming);
     }
 
     #[kithara::test(tokio)]
     async fn seek_aborts_the_exact_incoming_session() {
-        struct ReadEntered {
-            entered: Notify,
-            release: Mutex<Option<mpsc::Receiver<()>>>,
-        }
-
-        impl WorkerWake for ReadEntered {
-            fn defer(&self) {
-                self.entered.notify_one();
-            }
-
-            fn wake(&self) {
-                let release = self.release.lock().take();
-                if let Some(release) = release {
-                    self.entered.notify_one();
-                    let _ = release.recv();
-                }
-            }
-        }
-
         for seek in [true, false] {
             let (coord, _bus, _ctx, _abr_state) = switch_coord();
             let transition = prepare_incoming(&coord, incremental_profile(32))
@@ -1606,6 +1843,7 @@ pub(super) mod tests {
             ));
             assert_eq!(coord.variant_index(), 0);
         }
+        assert_active_reader_stays_pinned().await;
     }
 
     #[kithara::test]

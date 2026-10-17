@@ -94,8 +94,9 @@ async fn decoder_readers_have_isolated_construction_gates() {
     };
     let shared_stream = SharedStream::new(stream);
     let initial = shared_stream.open_initial_reader();
-    let rebuild =
-        shared_stream.open_rebuild_reader_with_control(0, shared_stream.new_reader_control());
+    let rebuild = shared_stream
+        .open_rebuild_reader_with_control(0, shared_stream.new_reader_control())
+        .expect("rebuild reader origin");
     let Some(initial_gate) = initial.construction_gate() else {
         panic!("initial reader must carry a construction gate");
     };

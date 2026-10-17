@@ -15,8 +15,8 @@ use kithara_signal::AudioChunk;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     Activity, ActivityWriter, AudioCodec, ByteMap, ContainerFormat, DeferredWake, MediaInfo,
-    NotReadyCause, PendingReason, PlayheadRead, PlayheadState, PlayheadWrite, ReadOutcome,
-    ReaderProfile, SegmentDescriptor, Source, SourceError, SourcePhase, SourceProbe,
+    NotReadyCause, OpenedReader, PendingReason, PlayheadRead, PlayheadState, PlayheadWrite,
+    ReadOutcome, ReaderProfile, SegmentDescriptor, Source, SourceError, SourcePhase, SourceProbe,
     SourceSeekAnchor, Stream, StreamError, StreamResult, StreamType, VariantControl,
     VariantPromotion, VariantReaderPlan, VariantReaderTake, VariantTransition,
     mock::NoopWorkerWake,
@@ -127,6 +127,10 @@ impl SpliceState {
 }
 
 impl VariantControl for SpliceState {
+    fn bind_active_reader(&self, reader: OpenedReader) -> OpenedReader {
+        reader
+    }
+
     fn abort_variant(&self, _transition: VariantTransition) -> bool {
         false
     }
