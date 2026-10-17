@@ -281,8 +281,15 @@ async fn surface_settings_follow_owner_publication_and_report_refusal() {
         "enqueue must not publish volume"
     );
     assert!(!player.is_muted(), "enqueue must not publish mute");
+    let document = web_sys::window()
+        .expect("browser window")
+        .document()
+        .expect("browser document");
     wait_until(Duration::from_secs(5), "owner settings", || {
         player.tick_js();
+        // The backend installs its resume listener after the worklet starts.
+        let click = web_sys::Event::new("click").expect("build a click event");
+        document.dispatch_event(&click).expect("dispatch the click");
         player.playing_rate() == kithara::play::MIN_SPEED
             && player.volume() == 0.25
             && player.is_muted()
