@@ -1,7 +1,7 @@
 use kithara_assets::{AssetStore, StorageBackend};
 use kithara_bufpool::HasPool;
 use kithara_command::mailbox;
-use kithara_events::{EventBus, EventReceiver, TrackId};
+use kithara_events::{EventBus, TrackId};
 use kithara_platform::{CancelScope, CancelToken, tokio::runtime::Handle as RuntimeHandle};
 use kithara_play::{
     PlayError, Player, PlayerEvent, PlayerFactory, TrackFactory, TrackStatus as PlayingStatus,
@@ -48,7 +48,6 @@ where
     pub(super) view: QueueView<S>,
     pub(super) bus: EventBus,
     pub(super) loader: Option<Loader<S>>,
-    pub(super) player_events: EventReceiver<PlayerEvent>,
     pub(super) shutdown: CancelToken,
     pub(super) events: Vec<QueueEvent>,
     pub(super) clock: Option<(SessionFrame, FrameCount)>,
@@ -101,7 +100,6 @@ where
             config.action_at_item_end,
             deck.clone(),
         );
-        let player_events = bus.subscribe();
         Self {
             active: Slots::new(config.mixer.slots().get()),
             config,
@@ -116,7 +114,6 @@ where
             view,
             bus,
             loader,
-            player_events,
             shutdown,
             events: Vec::new(),
             clock: None,

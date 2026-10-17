@@ -4,6 +4,7 @@ use std::{
     future::{Future, poll_fn},
     marker::PhantomData,
     num::NonZeroUsize,
+    panic::{AssertUnwindSafe, catch_unwind},
     task::{Context, Poll, Waker},
 };
 
@@ -124,7 +125,10 @@ struct Resident<O, L> {
     admission: Option<(Seq, O, FrameCount)>,
 }
 
-struct DispatchState<I: Open> {
+struct DispatchState<I: Open>
+where
+    I::Lane: LaneTask,
+{
     inbox: Inbox<DispatcherProtocol<I>>,
     opening: FuturesUnordered<Opening<I::Opened, I::Lane>>,
     lanes: Vec<Resident<I::Opened, I::Lane>>,
@@ -132,6 +136,42 @@ struct DispatchState<I: Open> {
     capacity: NonZeroUsize,
     playing_opens: usize,
     outcome: TickResult,
+}
+
+impl<I: Open> DispatchState<I>
+where
+    I::Lane: LaneTask,
+{
+    fn remove_lane(&mut self, index: usize, refusal: LoadRefusal) {
+        let mut resident = self.lanes.remove(index);
+        let lane = resident.id;
+        if let Some((seq, _, _)) = resident.admission.as_ref()
+            && let Some(due) = self.inbox.resume(*seq, (), ())
+        {
+            due.refuse(refusal);
+        }
+        if catch_unwind(AssertUnwindSafe(|| resident.task.on_cancel())).is_err() {
+            tracing::error!(?lane, "render lane panicked during cancellation");
+        }
+        if catch_unwind(AssertUnwindSafe(|| drop(resident))).is_err() {
+            tracing::error!(?lane, "render lane panicked during cleanup");
+        }
+    }
+
+    fn cancel_lanes(&mut self) {
+        while !self.lanes.is_empty() {
+            self.remove_lane(self.lanes.len() - 1, LoadRefusal::Cancelled);
+        }
+    }
+}
+
+impl<I: Open> Drop for DispatchState<I>
+where
+    I::Lane: LaneTask,
+{
+    fn drop(&mut self) {
+        self.cancel_lanes();
+    }
 }
 
 impl<I> DispatchState<I>
@@ -159,15 +199,26 @@ where
                 self.playing_opens = self.playing_opens.saturating_sub(1);
             }
             match result {
-                Ok((opened, mut task, engine_latency)) => {
-                    task.warm_up();
-                    task.set_priority(class);
+                Ok((opened, task, engine_latency)) => {
+                    let index = self.lanes.len();
                     self.lanes.push(Resident {
                         id: lane,
                         class,
                         task,
                         admission: Some((seq, opened, engine_latency)),
                     });
+                    let prepared = catch_unwind(AssertUnwindSafe(|| {
+                        let task = &mut self.lanes[index].task;
+                        task.warm_up();
+                        task.set_priority(class);
+                    }));
+                    if prepared.is_err() {
+                        tracing::error!(?lane, "render lane panicked during preparation");
+                        self.remove_lane(
+                            index,
+                            LoadRefusal::Source(kithara_audio::TrackFailureKind::Render),
+                        );
+                    }
                 }
                 Err(refusal) => {
                     if let Some(due) = self.inbox.resume(seq, (), ()) {
@@ -228,35 +279,37 @@ where
                         ?lane,
                         class = ?request.class,
                     );
+                    let class = request.class;
                     self.opening.push(
                         async move {
-                            let result = request
-                                .item
-                                .open(request.position, request.start, request.inbox)
-                                .await;
+                            let result = AssertUnwindSafe(async move {
+                                request
+                                    .item
+                                    .open(request.position, request.start, request.inbox)
+                                    .await
+                            })
+                            .catch_unwind()
+                            .await
+                            .unwrap_or_else(|_| {
+                                tracing::error!(?lane, "source open panicked");
+                                Err(LoadRefusal::Source(kithara_audio::TrackFailureKind::Render))
+                            });
                             tracing::debug!(
                                 opened = result.is_ok(),
                                 error = ?result.as_ref().err(),
                                 "source open finished"
                             );
-                            (seq, lane, request.class, result)
+                            (seq, lane, class, result)
                         }
                         .instrument(span)
                         .boxed_local(),
                     );
                 }
                 DispatcherCommand::Release(lane) => {
+                    due.apply(Dispatched::Released);
                     if let Some(index) = self.lanes.iter().position(|resident| resident.id == lane)
                     {
-                        let resident = self.lanes.remove(index);
-                        due.apply(Dispatched::Released);
-                        if let Some((seq, _, _)) = resident.admission
-                            && let Some(load) = self.inbox.resume(seq, (), ())
-                        {
-                            load.refuse(LoadRefusal::Cancelled);
-                        }
-                    } else {
-                        due.commands_mut().push(DispatcherCommand::Release(lane));
+                        self.remove_lane(index, LoadRefusal::Cancelled);
                     }
                 }
                 DispatcherCommand::SetPriority(lane, class) => {
@@ -267,8 +320,7 @@ where
                         resident.class = class;
                         due.apply(Dispatched::Prioritized);
                     } else {
-                        due.commands_mut()
-                            .push(DispatcherCommand::SetPriority(lane, class));
+                        due.refuse(LoadRefusal::Cancelled);
                     }
                 }
             }
@@ -287,7 +339,9 @@ where
         });
         let mut waiting = false;
         let mut upstream = !self.opening.is_empty();
-        self.lanes.retain_mut(|resident| {
+        let mut index = 0;
+        while index < self.lanes.len() {
+            let resident = &mut self.lanes[index];
             let span = tracing::debug_span!(
                 "dispatcher_lane",
                 lane = ?resident.id,
@@ -300,10 +354,23 @@ where
                 probe = "dispatcher_resident_poll",
                 "polling resident lane",
             );
-            let lane = &mut resident.task;
-            let _ = lane.poll_commands(cx);
-            lane.recycle();
-            let result = lane.tick();
+            let visited = catch_unwind(AssertUnwindSafe(|| {
+                let lane = &mut resident.task;
+                let _ = lane.poll_commands(cx);
+                lane.recycle();
+                let result = lane.tick();
+                let preload = resident.admission.is_some().then(|| lane.preload_status());
+                (result, preload)
+            }));
+            let Ok((result, preload)) = visited else {
+                tracing::error!(lane = ?resident.id, "render lane panicked");
+                self.remove_lane(
+                    index,
+                    LoadRefusal::Source(kithara_audio::TrackFailureKind::Render),
+                );
+                progress = true;
+                continue;
+            };
             tracing::trace!(
                 target: "kithara_render_probe",
                 probe = "dispatcher_resident_tick",
@@ -313,28 +380,28 @@ where
             progress |= result == TickResult::Progress;
             waiting |= result == TickResult::Waiting;
             upstream |= result == TickResult::UpstreamPending;
-            if resident.admission.is_some() {
-                let status = lane.preload_status();
-                if !matches!(status, Ok(false)) {
+            match preload {
+                Some(Ok(true)) => {
                     progress = true;
-                    let keep = status.is_ok();
                     if let Some((seq, opened, engine_latency)) = resident.admission.take()
                         && let Some(due) = self.inbox.resume(seq, (), ())
                     {
-                        match status {
-                            Ok(_) => due.apply(Dispatched::Loaded(Loaded {
-                                lane: resident.id,
-                                opened,
-                                engine_latency,
-                            })),
-                            Err(refusal) => due.refuse(refusal),
-                        }
+                        due.apply(Dispatched::Loaded(Loaded {
+                            lane: resident.id,
+                            opened,
+                            engine_latency,
+                        }));
                     }
-                    return keep;
                 }
+                Some(Err(refusal)) => {
+                    progress = true;
+                    self.remove_lane(index, refusal);
+                    continue;
+                }
+                Some(Ok(false)) | None => {}
             }
-            true
-        });
+            index += 1;
+        }
         self.outcome = if progress {
             TickResult::Progress
         } else if waiting {
@@ -369,7 +436,10 @@ where
     poll_fn(|cx| dispatcher.poll(cx, true)).await;
 }
 
-pub(crate) struct DispatcherTask<I: Open> {
+pub(crate) struct DispatcherTask<I: Open>
+where
+    I::Lane: LaneTask,
+{
     dispatcher: DispatchState<I>,
     waker: Waker,
     runtime: Option<Handle>,
@@ -401,18 +471,11 @@ where
     I::Opened: 'static,
     I::Lane: LaneTask,
 {
-    fn priority(&self) -> Option<Priority> {
-        self.dispatcher.priority()
-    }
-
-    fn on_cancel(&mut self) {
-        for resident in &mut self.dispatcher.lanes {
-            resident.task.on_cancel();
-            if let Some((seq, _, _)) = resident.admission.take()
-                && let Some(due) = self.dispatcher.inbox.resume(seq, (), ())
-            {
-                due.refuse(LoadRefusal::Cancelled);
-            }
+    delegate::delegate! {
+        to self.dispatcher {
+            fn priority(&self) -> Option<Priority>;
+            #[call(cancel_lanes)]
+            fn on_cancel(&mut self);
         }
     }
 
@@ -428,6 +491,10 @@ where
         }
     }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "dispatcher_panic_tests.rs"]
+mod panic_tests;
 
 #[cfg(test)]
 mod tests {

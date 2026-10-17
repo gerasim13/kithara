@@ -1,9 +1,9 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 //! Two queue entries may name the same URL: a playlist that repeats a
-//! track, or one asset reachable under a single address. A player event
-//! must resolve to the entry that actually played. Resolving it by
-//! source alone answers with whichever entry holds that URL first,
+//! track, or one asset reachable under a single address. A source failure
+//! or natural EOF must resolve to the entry that actually played. Resolving
+//! it by source alone answers with whichever entry holds that URL first,
 //! which is the wrong track as soon as the second copy is the one
 //! playing.
 
@@ -11,8 +11,8 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara::{
     assets::AssetStore,
-    audio::{AudioConfig, DecodeErrorKind, NoResamplerBackend, TrackFailureKind},
-    events::{SlotId, TrackId},
+    audio::{AudioConfig, NoResamplerBackend, TrackFailureKind},
+    events::TrackId,
     file::{File, FileConfig, FileSrc},
     host::{HostConfig, HostSettings},
     platform::{
@@ -20,7 +20,7 @@ use kithara::{
         time::{Duration, WallInstant},
         tokio::sync::broadcast::error::TryRecvError,
     },
-    play::{ItemRole, PlaybackFault, PlayerEvent, TrackConfig, TrackRef},
+    play::{ItemRole, PlaybackFault, PlayerEvent, TrackConfig},
     queue::{QueueControl, QueueEvent, TrackStatus, Transition},
     warp::WarpConfig,
 };
@@ -88,7 +88,6 @@ fn status_of(queue: &QueueControl<TestPools>, id: TrackId) -> TrackStatus {
 struct SecondCopyPlaying {
     harness: OfflinePlayer,
     queue: QueueControl<TestPools>,
-    source: String,
     first: TrackId,
     playing: TrackId,
 }
@@ -107,45 +106,9 @@ async fn fixture_playing_the_second_copy(track: &Asset) -> SecondCopyPlaying {
     SecondCopyPlaying {
         harness,
         queue,
-        source,
         first,
         playing,
     }
-}
-
-#[kithara::test(tokio, flash(false))]
-#[case::played_entry(true)]
-#[case::same_url_entry(false)]
-async fn a_failure_only_flags_the_entry_that_played(#[case] played_entry: bool) {
-    let SecondCopyPlaying {
-        harness,
-        queue,
-        source,
-        first,
-        playing,
-    } = fixture_playing_the_second_copy(&assets::constant_wav_loud_30s()).await;
-    render_loop(&queue, &harness, WARMUP_BLOCKS).await;
-
-    harness
-        .player()
-        .bus()
-        .publish(TestEvent::Player(PlayerEvent::ItemDidFail {
-            item: ItemRole::Leading(TrackRef::new(playing, SlotId::new(0), Arc::from(source))),
-            fault: PlaybackFault::Source(TrackFailureKind::Decode {
-                kind: DecodeErrorKind::InvalidData,
-            }),
-        }));
-    render_loop(&queue, &harness, WARMUP_BLOCKS).await;
-
-    let id = if played_entry { playing } else { first };
-    let status = status_of(&queue, id);
-    assert_eq!(
-        matches!(status, TrackStatus::Failed(_)),
-        played_entry,
-        "only the entry that played may be flagged: {status:?}"
-    );
-    drop(queue);
-    harness.close().await;
 }
 
 #[kithara::test(tokio, flash(false))]
@@ -257,7 +220,22 @@ async fn a_real_source_cancellation_reaches_only_its_queue_entry_once() {
     );
     assert_eq!(queue.current().map(|entry| entry.id), Some(playing));
     assert_eq!(status_of(&queue, playing), TrackStatus::Consumed);
+    assert_ne!(
+        first, playing,
+        "repeated sources retain distinct item identities"
+    );
+    for id in [first, playing] {
+        assert_eq!(
+            queue.track(id).expect("duplicate entry").url.as_deref(),
+            Some(source.as_str()),
+            "both entries name the same source"
+        );
+    }
     let sibling_status = status_of(&queue, first);
+    assert!(
+        !matches!(sibling_status, TrackStatus::Failed(_)),
+        "the sibling must be healthy before the real source fails"
+    );
     let mut events = queue.subscribe::<TestEvent>();
 
     source_cancel.cancel();
@@ -348,7 +326,6 @@ async fn second_entry_with_the_same_source_owns_its_real_eof() {
     let SecondCopyPlaying {
         harness,
         queue,
-        source: _source,
         first,
         playing,
     } = fixture_playing_the_second_copy(&assets::constant_wav_loud_0_5s()).await;

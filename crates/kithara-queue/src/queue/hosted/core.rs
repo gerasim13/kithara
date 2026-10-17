@@ -3,9 +3,7 @@ use std::{num::NonZeroU32, task::Waker};
 use kithara_bufpool::HasPool;
 use kithara_command::{Batch, Outcome, Receipt, Rejection, Seq};
 use kithara_events::{SlotId, TrackId};
-use kithara_platform::{
-    maybe_send::MaybeSend, sync::Arc, tokio::sync::broadcast::error::TryRecvError,
-};
+use kithara_platform::{maybe_send::MaybeSend, sync::Arc};
 use kithara_play::{
     DeckEvent, DeckMixerConfig, DeckPass, DeckProtocol, HostedDeck, ItemRole, LoadRefusal, Outbox,
     OutputSnapshot, PlayError, PlayWorker, PlaybackFault, Player, PlayerEvent, Settled,
@@ -354,7 +352,6 @@ where
         for parked in self.active.parked_iter_mut() {
             parked.track.tick(now, out);
         }
-        self.drain_player_events(output, out);
         if let Err(error) = self.tick_deadlines(now, output, out) {
             warn!(%error, "queue deadline could not advance");
         }
@@ -638,30 +635,6 @@ where
             Role::Outgoing => ItemRole::Outgoing(track),
             _ => ItemRole::Background(track),
         })
-    }
-
-    #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
-    fn drain_player_events(&mut self, output: Option<&OutputSnapshot>, out: &mut Outbox<'_, S>) {
-        loop {
-            hang_tick!("queue player event drain".to_owned());
-            match self.player_events.try_recv() {
-                Ok(envelope) => {
-                    hang_reset!();
-                    if let PlayerEvent::ItemDidFail {
-                        item: ItemRole::Leading(track),
-                        fault,
-                    } = envelope.event
-                    {
-                        self.item_failed(track.id, fault, output, out);
-                    }
-                }
-                Err(TryRecvError::Lagged(_)) => {
-                    hang_reset!();
-                    self.announce(QueueEvent::CurrentTrackChanged { id: self.current });
-                }
-                Err(TryRecvError::Empty | TryRecvError::Closed) => break,
-            }
-        }
     }
 
     fn item_failed(

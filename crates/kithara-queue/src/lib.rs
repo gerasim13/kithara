@@ -17,7 +17,7 @@ pub use config::{QueueConfig, QueueConfigPatch, QueueSettings, QueueSettingsChan
 pub use error::QueueError;
 pub use event::{AdvanceReason, ItemEvent, QueueEvent, QueueRepeatMode, TrackStatus};
 pub use kithara_events::TrackId;
-pub use kithara_play::{CrossfadeCurve, CrossfadeSettings, SelectionPlayback};
+pub use kithara_play::{CrossfadeCurve, CrossfadeSettings};
 #[doc(hidden)]
 pub use loading::LoadReport;
 pub use navigation::{ActionAtItemEnd, NavigationState, PlaybackOrder, RepeatMode};

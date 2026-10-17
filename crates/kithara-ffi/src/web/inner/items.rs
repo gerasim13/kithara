@@ -5,6 +5,7 @@ use kithara::{
         sync::Arc,
         tokio::{sync::oneshot, task::spawn},
     },
+    play::Position,
     queue::{QueueCommand, TrackId},
 };
 use kithara_command::Seq;
@@ -105,7 +106,7 @@ impl WasmInner {
         self.enqueue(
             Some(item),
             QueueCommand::Append {
-                position: kithara_play::Position::ZERO,
+                position: Position::ZERO,
                 id: item.track_id(),
                 source,
             },
@@ -303,7 +304,7 @@ mod tests {
         let old_weak = Arc::downgrade(&old);
         let ticket = control
             .post(QueueCommand::Append {
-                position: kithara_play::Position::ZERO,
+                position: Position::ZERO,
                 id: old_id,
                 source: TrackSource::Uri(old.url()),
             })
@@ -420,7 +421,7 @@ mod tests {
         let weak = Arc::downgrade(&item);
         let ticket = control
             .post(QueueCommand::Append {
-                position: kithara_play::Position::ZERO,
+                position: Position::ZERO,
                 id,
                 source: TrackSource::Uri(item.url()),
             })
