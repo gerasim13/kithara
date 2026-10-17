@@ -822,7 +822,7 @@ impl QueueMusic {
         let mut render_time = Duration::ZERO;
         let mut history_visits = 0;
         let mut data = CapturedMusic::default();
-        let cadence = self.start_clock(&mut data).await;
+        let mut cadence = self.start_clock(&mut data).await;
         hang_reset!();
         let first_frames: f64 = (BLOCK - 1).as_();
         time::sleep(
@@ -830,6 +830,9 @@ impl QueueMusic {
                 .saturating_sub(cadence.elapsed()),
         )
         .await;
+        cadence = Instant::now();
+        let callback_frames: f64 = BLOCK.as_();
+        let callback_duration = Duration::from_secs_f64(callback_frames / f64::from(RATE));
         let source_count: f64 = self.kind.sources().len().as_();
         let max_frames: u64 = match self.kind {
             MusicCase::Natural => (((source_count * 4.0)
@@ -970,8 +973,8 @@ impl QueueMusic {
             {
                 let elapsed = cadence.elapsed();
                 let frame = self.host.position();
-                let rendered_frames: f64 = frame.as_();
-                let deadline = Duration::from_secs_f64(rendered_frames / f64::from(RATE));
+                let requested_frames: f64 = frames.as_();
+                let deadline = Duration::from_secs_f64(requested_frames / f64::from(RATE));
                 tracing::debug!(target: "kithara_test::sync::queue321::pacing",
                     phase = "render", frame, frames,
                     cadence_elapsed_ns = elapsed.as_nanos(), deadline_ns = deadline.as_nanos(),
@@ -1004,12 +1007,16 @@ impl QueueMusic {
             }
             next_beat = Some(boundary);
             hang_reset!();
-            let rendered_frames: f64 = self.host.position().as_();
-            time::sleep(
-                Duration::from_secs_f64(rendered_frames / f64::from(RATE))
-                    .saturating_sub(cadence.elapsed()),
-            )
-            .await;
+            let block_frames: f64 = frames.as_();
+            let deadline = cadence + Duration::from_secs_f64(block_frames / f64::from(RATE));
+            let ready = Instant::now();
+            // Carry timer jitter, but do not replay missed Host callbacks.
+            cadence = if ready.saturating_duration_since(deadline) > callback_duration {
+                ready
+            } else {
+                deadline
+            };
+            time::sleep(cadence.saturating_duration_since(ready)).await;
         }
         self.trace_runtime(
             wall.elapsed().as_secs_f64(),
@@ -2805,7 +2812,14 @@ async fn one_queue_crossfades_five_music_tracks_and_retargets_host_during_overla
     capture_music(MusicCase::Natural).await;
 }
 
-#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    timeout(Duration::from_secs(300)),
+    tracing("kithara_test::sync::queue321=info")
+)]
 async fn one_queue_crossfades_five_real_tracks_through_four_public_next_requests() {
     capture_music(MusicCase::RealNext).await;
 }
