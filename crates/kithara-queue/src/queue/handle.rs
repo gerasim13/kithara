@@ -260,33 +260,20 @@ where
         let mut ticket = self.postbox.post(command).map_err(|_| PlayError::Closed)?;
         let seq = ticket.seq().get();
         loop {
-            let mut answer = None;
-            hang_park!(
-                |remaining: Duration| {
-                    let now = Instant::now();
-                    answer = Some(ticket.wait_until(now + remaining));
-                },
-                format!(
-                    "queue post {seq} wait_outcome={}",
-                    match answer.as_ref() {
-                        Some(Ok(Ok(()))) => "applied",
-                        Some(Ok(Err(Refused::Owner(_)))) => "refused",
-                        Some(Ok(Err(Refused::Unanswered))) => "unanswered",
-                        Some(Err(_)) => "timeout",
-                        None => "not-entered",
-                    }
-                )
-            );
-            match answer {
-                Some(Ok(answer)) => {
+            let remaining = __hang_detector.remaining();
+            let now = Instant::now();
+            match ticket.wait_until(now + remaining) {
+                Ok(answer) => {
                     hang_reset!();
                     return answer.map_err(|refused| match refused {
                         Refused::Owner(error) => error,
                         Refused::Unanswered => PlayError::Closed.into(),
                     });
                 }
-                Some(Err(pending)) => ticket = pending,
-                None => unreachable!("the watchdog executes its wait closure"),
+                Err(pending) => {
+                    ticket = pending;
+                    hang_tick!(format!("queue post {seq} wait_outcome=timeout"));
+                }
             }
         }
     }
