@@ -703,3 +703,55 @@ fn probe_wait<T: StreamType>(
 ) -> StreamResult<WaitOutcome> {
     stream.source.wait_range(range, Some(Duration::ZERO), None)
 }
+
+struct RetiringRead<'a> {
+    stream: &'a mut Stream<DummyType>,
+    control: &'a crate::ReaderControl,
+    calls: usize,
+}
+
+impl Read for RetiringRead<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.calls += 1;
+        assert!(
+            self.calls <= 2,
+            "read_exact retried a permanently retired reader"
+        );
+        let result = self.stream.read_with_control(buf, Some(self.control));
+        if self.calls == 1 {
+            self.control.cancel();
+        }
+        result
+    }
+}
+
+#[kithara::test]
+fn read_exact_stops_when_its_decoder_generation_retires_after_a_prefix() {
+    let source = ScriptSource::new(
+        ActivityWriter::new(),
+        [WaitOutcome::Ready],
+        [ScriptRead::Data(1)],
+        vec![7, 8],
+    );
+    let mut stream = Stream::<DummyType> { source };
+    let control = crate::ReaderControl::new(None);
+    let mut input = RetiringRead {
+        stream: &mut stream,
+        control: &control,
+        calls: 0,
+    };
+    let mut bytes = [0; 2];
+    let error = input
+        .read_exact(&mut bytes)
+        .expect_err("the reader generation retired");
+    assert_eq!(input.calls, 2);
+    assert_eq!(error.kind(), ErrorKind::ConnectionAborted);
+    assert_eq!(
+        error
+            .get_ref()
+            .and_then(|source| source.downcast_ref::<PendingReason>()),
+        Some(&PendingReason::SessionRetired)
+    );
+    assert_eq!(bytes, [7, 0]);
+    assert_eq!(stream.position(), 1);
+}

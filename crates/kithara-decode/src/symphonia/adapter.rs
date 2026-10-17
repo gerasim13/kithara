@@ -123,7 +123,7 @@ impl<R: Read> Read for ReadSeekAdapter<R> {
                 .is_some_and(ReaderControl::is_cancelled)
             {
                 return Err(io::Error::new(
-                    io::ErrorKind::Interrupted,
+                    io::ErrorKind::ConnectionAborted,
                     PendingReason::SessionRetired,
                 ));
             }
@@ -167,7 +167,7 @@ fn resume_pending_read(
             control.set_pending(reason);
             if !control.wait(revision) {
                 return Err(io::Error::new(
-                    io::ErrorKind::Interrupted,
+                    io::ErrorKind::ConnectionAborted,
                     PendingReason::SessionRetired,
                 ));
             }
@@ -366,6 +366,36 @@ mod tests {
             assert_eq!(adapter.read(&mut bytes).expect("released source"), 3);
             assert_eq!(&bytes[..3], &[4, 5, 6]);
         }
+    }
+
+    #[kithara::test]
+    fn cancelled_input_is_terminal_while_transient_interruptions_still_resume() {
+        let control = ReaderControl::new(None);
+        let mut adapter =
+            ReadSeekAdapter::new(Cursor::new(vec![1, 2]), None, true).with_control(control.clone());
+        control.cancel();
+        let error = adapter.read(&mut [0; 1]).expect_err("cancelled reader");
+        assert_eq!(error.kind(), io::ErrorKind::ConnectionAborted);
+        assert_eq!(
+            error
+                .get_ref()
+                .and_then(|source| source.downcast_ref::<PendingReason>()),
+            Some(&PendingReason::SessionRetired)
+        );
+        assert_eq!(adapter.byte_pos_handle().load(Ordering::Acquire), 0);
+        let interrupted = io::Error::new(io::ErrorKind::Interrupted, "temporary signal");
+        let active = ReaderControl::new(None);
+        assert!(
+            resume_pending_read(Some((&active, active.revision())), &interrupted)
+                .expect("ordinary interruption resumes")
+        );
+        let pending = io::Error::new(io::ErrorKind::WouldBlock, PendingReason::Retry);
+        assert_eq!(
+            resume_pending_read(Some((&control, control.revision())), &pending)
+                .expect_err("retired pending read")
+                .kind(),
+            io::ErrorKind::ConnectionAborted
+        );
     }
 
     #[kithara::test]

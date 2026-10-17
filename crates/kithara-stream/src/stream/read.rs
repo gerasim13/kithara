@@ -187,8 +187,8 @@ impl<T: StreamType> Stream<T> {
     /// waking an obsolete peer, leaving rebuild and peer arming to the new owner.
     ///
     /// # Errors
-    /// Propagates source errors; `Interrupted` carries [`StreamPending`] or `SessionRetired`,
-    /// and `Other` carries [`VariantChangeError`] at a variant boundary.
+    /// Retirement carries `SessionRetired` as `ConnectionAborted`; pending input carries
+    /// [`StreamPending`] and a variant boundary carries [`VariantChangeError`].
     pub fn probe_read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         match self.try_read(buf) {
             Ok(StreamReadOutcome::Bytes { count, .. }) => Ok(count.get()),
@@ -206,7 +206,7 @@ impl<T: StreamType> Stream<T> {
                 Err(IoError::other(VariantChangeError))
             }
             Ok(StreamReadOutcome::Pending(reason @ PendingReason::SessionRetired)) => {
-                Err(IoError::new(ErrorKind::Interrupted, reason))
+                Err(IoError::new(ErrorKind::ConnectionAborted, reason))
             }
             Err(StreamReadError::Source(e)) => Err(e),
         }
@@ -244,7 +244,7 @@ impl<T: StreamType> Stream<T> {
         loop {
             if cancel.is_some_and(crate::ReaderControl::is_cancelled) {
                 return Err(IoError::new(
-                    ErrorKind::Interrupted,
+                    ErrorKind::ConnectionAborted,
                     PendingReason::SessionRetired,
                 ));
             }
@@ -261,7 +261,7 @@ impl<T: StreamType> Stream<T> {
                     return Err(IoError::other(VariantChangeError));
                 }
                 Ok(StreamReadOutcome::Pending(reason @ PendingReason::SessionRetired)) => {
-                    return Err(IoError::new(ErrorKind::Interrupted, reason));
+                    return Err(IoError::new(ErrorKind::ConnectionAborted, reason));
                 }
                 Err(StreamReadError::Source(e)) => return Err(e),
             }

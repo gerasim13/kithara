@@ -2,11 +2,9 @@ use std::{error::Error as StdError, io, io::ErrorKind, num::TryFromIntError};
 
 use kithara_bufpool::PoolError;
 use kithara_signal::SignalError;
-#[cfg(any(apple_backend, android_backend))]
-use kithara_stream::PendingReason;
-use kithara_stream::{AudioCodec, ContainerFormat, VariantChangeError};
-#[cfg(any(apple_backend, android_backend))]
-use kithara_stream::{NotReadyCause, StreamPending};
+use kithara_stream::{
+    AudioCodec, ContainerFormat, NotReadyCause, PendingReason, StreamPending, VariantChangeError,
+};
 
 /// Errors that can occur during audio decoding.
 ///
@@ -162,10 +160,29 @@ where
     }
 }
 
+pub(crate) fn pending_input(error: &io::Error) -> Option<PendingReason> {
+    let reason = error.get_ref().and_then(|source| {
+        source
+            .downcast_ref::<StreamPending>()
+            .map(StreamPending::reason)
+            .or_else(|| source.downcast_ref::<PendingReason>().copied())
+    });
+    match (error.kind(), reason) {
+        (_, Some(PendingReason::SessionRetired)) => Some(PendingReason::SessionRetired),
+        (ErrorKind::Interrupted | ErrorKind::WouldBlock, reason) => {
+            Some(reason.unwrap_or(PendingReason::NotReady(NotReadyCause::SourcePending)))
+        }
+        _ => None,
+    }
+}
+
 fn error_chain_is_interrupted(err: &(dyn StdError + 'static)) -> bool {
     walk_error_chain(
         err,
-        &|io_err| io_err.kind() == ErrorKind::Interrupted,
+        &|io_err| {
+            io_err.kind() == ErrorKind::Interrupted
+                || pending_input(io_err) == Some(PendingReason::SessionRetired)
+        },
         &|_| false,
     )
 }
@@ -230,7 +247,9 @@ impl DecodeError {
             Self::Io { source } => {
                 if is_variant_change_io(source) {
                     ErrorClass::VariantChange
-                } else if source.kind() == ErrorKind::Interrupted {
+                } else if source.kind() == ErrorKind::Interrupted
+                    || pending_input(source) == Some(PendingReason::SessionRetired)
+                {
                     ErrorClass::Interrupted
                 } else {
                     ErrorClass::Other
@@ -264,13 +283,8 @@ impl DecodeError {
         }
     }
 
-    /// Typed [`PendingReason`] carried by a transient source-read error
-    /// (`Interrupted`/`WouldBlock` `io::Error` with a `StreamPending` /
-    /// `PendingReason` payload). Demuxers use this to honour the
-    /// [`Demuxer::next_frame`](crate::demuxer::Demuxer::next_frame)
-    /// contract — "data not ready" returns `Ok(DemuxOutcome::Pending)`,
-    /// never `Err`. Mirrors the Symphonia demuxer's not-ready guard
-    /// (including the bare-`Interrupted` → `SourcePending` default).
+    /// Typed source-read condition, including permanent retirement of this reader generation.
+    /// Untyped transient interruptions retain the ordinary source-pending classification.
     #[must_use]
     #[cfg(any(apple_backend, android_backend))]
     pub(crate) fn pending_reason(&self) -> Option<PendingReason> {
@@ -279,18 +293,7 @@ impl DecodeError {
             Self::Backend { source } => source.as_ref().downcast_ref::<io::Error>()?,
             _ => return None,
         };
-        if io_err.kind() != ErrorKind::Interrupted && io_err.kind() != ErrorKind::WouldBlock {
-            return None;
-        }
-        let reason = io_err
-            .get_ref()
-            .and_then(|src| {
-                src.downcast_ref::<StreamPending>()
-                    .map(StreamPending::reason)
-                    .or_else(|| src.downcast_ref::<PendingReason>().copied())
-            })
-            .unwrap_or(PendingReason::NotReady(NotReadyCause::SourcePending));
-        Some(reason)
+        pending_input(io_err)
     }
 }
 
@@ -406,6 +409,17 @@ mod tests {
     #[case::seek_pending_counts_as_interrupted(
         DecodeError::backend(IoError::new(std::io::ErrorKind::Interrupted, "interrupted")),
         true
+    )]
+    #[case::retired_input_is_interrupted(
+        DecodeError::backend(IoError::new(
+            ErrorKind::ConnectionAborted,
+            PendingReason::SessionRetired
+        )),
+        true
+    )]
+    #[case::unrelated_aborted_input_is_not_interrupted(
+        DecodeError::backend(IoError::new(ErrorKind::ConnectionAborted, "connection failed")),
+        false
     )]
     #[case::other_io_is_not_interrupted(
         DecodeError::backend(IoError::other("other backend error")),

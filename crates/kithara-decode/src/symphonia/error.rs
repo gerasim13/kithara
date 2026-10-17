@@ -1,6 +1,6 @@
 use std::io::ErrorKind;
 
-use kithara_stream::{NotReadyCause, PendingReason, StreamPending, StreamSeekPastEof};
+use kithara_stream::{PendingReason, StreamSeekPastEof};
 use symphonia_core::errors::{Error as SymphoniaError, SeekErrorKind};
 
 use crate::DecodeError;
@@ -30,7 +30,7 @@ pub(super) fn classify_seek_err(err: &SymphoniaError) -> DecodeError {
             if matches!(
                 io_err.kind(),
                 ErrorKind::Interrupted | ErrorKind::WouldBlock
-            ) =>
+            ) || crate::error::pending_input(io_err) == Some(PendingReason::SessionRetired) =>
         {
             tracing::debug!(error = ?io_err, "demuxer seek interrupted");
             DecodeError::Interrupted
@@ -63,18 +63,36 @@ pub(super) fn pending_reason(error: &SymphoniaError) -> Option<PendingReason> {
     let SymphoniaError::IoError(error) = error else {
         return None;
     };
-    if !matches!(error.kind(), ErrorKind::Interrupted | ErrorKind::WouldBlock) {
-        return None;
+    crate::error::pending_input(error)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test]
+    fn a_retired_input_keeps_its_typed_reason_without_an_interrupted_io_kind() {
+        let error = SymphoniaError::IoError(io::Error::new(
+            ErrorKind::ConnectionAborted,
+            PendingReason::SessionRetired,
+        ));
+        assert_eq!(pending_reason(&error), Some(PendingReason::SessionRetired));
+        assert!(matches!(
+            classify_seek_err(&error),
+            DecodeError::Interrupted
+        ));
+        let unrelated = SymphoniaError::IoError(io::Error::new(
+            ErrorKind::ConnectionAborted,
+            "connection failed",
+        ));
+        assert_eq!(pending_reason(&unrelated), None);
+        assert!(matches!(
+            classify_seek_err(&unrelated),
+            DecodeError::SeekFailed { .. }
+        ));
     }
-    Some(
-        error
-            .get_ref()
-            .and_then(|source| {
-                source
-                    .downcast_ref::<StreamPending>()
-                    .map(StreamPending::reason)
-                    .or_else(|| source.downcast_ref::<PendingReason>().copied())
-            })
-            .unwrap_or(PendingReason::NotReady(NotReadyCause::SourcePending)),
-    )
 }

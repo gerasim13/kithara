@@ -73,7 +73,7 @@ impl<T: StreamType> Stream<T> {
             .map_err(IoError::other)?;
         if cancel.is_some_and(crate::ReaderControl::is_cancelled) {
             return Err(IoError::new(
-                ErrorKind::Interrupted,
+                ErrorKind::ConnectionAborted,
                 PendingReason::SessionRetired,
             ));
         }
@@ -149,7 +149,7 @@ impl<T: StreamType> Stream<T> {
     ) -> io::Result<u64> {
         if cancel.is_some_and(crate::ReaderControl::is_cancelled) {
             return Err(IoError::new(
-                ErrorKind::Interrupted,
+                ErrorKind::ConnectionAborted,
                 PendingReason::SessionRetired,
             ));
         }
