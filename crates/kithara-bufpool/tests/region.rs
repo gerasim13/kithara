@@ -593,3 +593,25 @@ fn idle_capacity_on_other_shards_does_not_refuse_a_live_request() {
     }
     assert!(pools.stats().allocated_bytes <= 4 * MIB);
 }
+
+#[kithara::test]
+fn sample_reservation_grows_capacity_without_writing_samples() {
+    let pools = pools(4096);
+    let mut samples = pools.get::<f32>();
+
+    samples
+        .try_reserve(64)
+        .unwrap_or_else(|error| panic!("reserve samples: {error}"));
+
+    assert!(samples.is_empty());
+    assert!(samples.capacity() >= 64);
+}
+
+#[kithara::test]
+fn sample_reservation_stays_under_the_region_budget() {
+    let pools = pools(64);
+    let mut samples = pools.get::<f32>();
+
+    assert!(samples.try_reserve(64).is_err());
+    assert!(samples.is_empty());
+}
