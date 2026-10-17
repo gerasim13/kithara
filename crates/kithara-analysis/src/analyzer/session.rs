@@ -6,6 +6,8 @@ use std::{
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::time::Duration;
 use kithara_resampler::ResamplerBackend;
+#[cfg(feature = "analysis-beat")]
+use kithara_signal::AudioSpec;
 use kithara_signal::{AudioChunk, FrameCoverage};
 use num_traits::cast::ToPrimitive;
 use rangemap::RangeSet;
@@ -80,8 +82,18 @@ where
             );
             return false;
         }
+        let visible_origin = self.visible_origin.or(visible_origin);
+        #[cfg(feature = "analysis-beat")]
+        if let Some(origin) = visible_origin {
+            let Ok(frame) = AudioSpec::new(1, self.source_sample_rate).frame_at(origin) else {
+                return false;
+            };
+            if !self.beat.observe_origin(frame) {
+                return false;
+            }
+        }
         self.media_origin = self.media_origin.or(media_origin);
-        self.visible_origin = self.visible_origin.or(visible_origin);
+        self.visible_origin = visible_origin;
         true
     }
 
@@ -122,6 +134,14 @@ where
         let took = self
             .beat
             .push(&self.pools, pcm, channels, range.start, opens, detector);
+        tracing::debug!(
+            ?range,
+            seen,
+            beat_took = took,
+            coverage = ?self.coverage,
+            beat_coverage = ?self.beat.coverage(&RangeSet::new()),
+            "analysis: PCM admission completed"
+        );
         if took || !seen {
             return Ingest::Accepted;
         }

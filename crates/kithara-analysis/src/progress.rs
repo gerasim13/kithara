@@ -139,6 +139,7 @@ pub(crate) struct ResumeState {
 }
 
 pub(crate) struct BeatResume {
+    pub(crate) origin: Option<u64>,
     pub(crate) short: BTreeSet<usize>,
     pub(crate) taken: RangeSet<u64>,
     pub(crate) runs: Vec<BeatRunResume>,
@@ -164,21 +165,17 @@ pub(crate) struct BeatMarkResume {
 
 impl BeatResume {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, BlobError> {
+        let origin = reader.read_bool()?.then(|| reader.read_u64()).transpose()?;
         let run_count = reader.read_count(24)?;
         let mut runs: Vec<BeatRunResume> = Vec::with_capacity(run_count.min(MAX_PREALLOC));
         let mut previous_end = None;
         for _ in 0..run_count {
-            let start = reader.read_u64()?;
-            let end = reader.read_u64()?;
-            if start >= end || previous_end.is_some_and(|previous| previous >= start) {
+            let run = BeatRunResume::decode(reader)?;
+            if previous_end.is_some_and(|previous| previous >= run.start) {
                 return Err(BlobError::Corrupt);
             }
-            previous_end = Some(end);
-            runs.push(BeatRunResume {
-                start,
-                end,
-                mono: reader.read_samples()?,
-            });
+            previous_end = Some(run.end);
+            runs.push(run);
         }
 
         let taken = reader.read_coverage()?;
@@ -210,6 +207,7 @@ impl BeatResume {
             short.insert(index);
         }
         let resume = Self {
+            origin,
             short,
             taken,
             runs,
@@ -240,6 +238,21 @@ impl BeatResume {
             return Err(BlobError::Corrupt);
         }
         Ok(())
+    }
+}
+
+impl BeatRunResume {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, BlobError> {
+        let start = reader.read_u64()?;
+        let end = reader.read_u64()?;
+        if start >= end {
+            return Err(BlobError::Corrupt);
+        }
+        Ok(Self {
+            start,
+            end,
+            mono: reader.read_samples()?,
+        })
     }
 }
 

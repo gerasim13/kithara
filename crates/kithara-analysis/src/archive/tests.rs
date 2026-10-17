@@ -88,6 +88,7 @@ fn progress(analysis: TrackAnalysis, chunk_frames: NonZeroU64) -> AnalysisProgre
         let beat = || {
             let mut out = Vec::new();
             let mut writer = Writer::new(&mut out);
+            writer.write_bool(false);
             for _ in 0..4 {
                 writer.write_len(0);
             }
