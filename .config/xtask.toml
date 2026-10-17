@@ -2615,7 +2615,12 @@ os = "linux"
 tools = ["cargo", "just"]
 program = "just"
 artifact = { name = "coverage-risk", path = "target/quality-lab/\ncoverage/" }
-steps = [{ args = ["quality", "coverage-risk"], label = "coverage risk" }]
+steps = [
+  { args = [
+    "quality",
+    "coverage-risk",
+  ], label = "coverage risk", env = { KITHARA_HANG_DUMP_DIR = "{root}/coverage/hang" } },
+]
 role = "quality"
 kinds = []
 kinds_github = ["nightly", "weekly"]

@@ -172,8 +172,18 @@ impl SimHarness {
         let batch = u64::from(self.rig.queue.host().max_block_frames().get())
             .saturating_mul(RENDER_BATCH_BLOCKS);
         let step = async {
+            tracing::debug!(
+                batch,
+                cursor = self.rig.queue.host().position(),
+                "user simulation render batch submitted"
+            );
             let rendered = self.rig.queue.host().render_forward(batch).await;
+            tracing::debug!(
+                rendered,
+                "user simulation render batch complete; queue tick submitted"
+            );
             let _ = self.run(QueueControl::tick).await;
+            tracing::debug!("user simulation queue tick complete");
             rendered
         };
         tokio::pin!(step);
@@ -267,6 +277,7 @@ impl SimHarness {
     /// on spurious auto-advance, and on quality-switch cross-codec
     /// recreate — that's what gives the bug repros their teeth.
     pub async fn apply(&mut self, action: Action) {
+        tracing::debug!(action = %action.label(), "user simulation action started");
         match action {
             Action::SeekRatio(r) => self.do_seek(r, false).await,
             Action::SeekNearEnd(r) => self.do_seek(r, true).await,

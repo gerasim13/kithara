@@ -706,7 +706,12 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) 
                 ChunkOutcome::Eof { .. } => None,
                 ChunkOutcome::Pending { .. } => panic!("blocking post-seek read remained pending"),
             }
-            .expect("ABR must move off the top variant before the track ends");
+            .unwrap_or_else(|| {
+                drain_abr_decisions(&mut events, &mut decisions);
+                panic!(
+                    "ABR must move off the top variant before the track ends; decisions={decisions:?}"
+                );
+            });
             hang_reset!();
             let variant = chunk.meta.variant_index.expect("HLS chunk has a variant");
             drain_abr_decisions(&mut events, &mut decisions);
