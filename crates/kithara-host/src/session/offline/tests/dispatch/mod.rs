@@ -48,6 +48,7 @@ use crate::{
 };
 
 mod command_contracts;
+mod manual_crossfade;
 mod membership;
 #[cfg(feature = "mock")]
 mod mock;

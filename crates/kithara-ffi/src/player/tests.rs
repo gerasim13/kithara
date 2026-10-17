@@ -170,6 +170,22 @@ fn anchorless_insert_goes_to_the_head_and_append_to_the_tail() {
             .insert(test_item(url), None)
             .expect("queue accepts the item");
     }
+    assert_eq!(player.item_count(), 2);
+    let before = player.items();
+    let refused = player.replace_item(3, test_item("https://example.test/replacement.mp3"));
+    assert!(
+        matches!(&refused, Err(FfiError::InvalidArgument { .. })),
+        "an absent replacement index is an invalid argument: {refused:?}"
+    );
+    assert_eq!(player.item_count(), 2);
+    assert_eq!(
+        player
+            .items()
+            .iter()
+            .map(|item| item.url())
+            .collect::<Vec<_>>(),
+        before.iter().map(|item| item.url()).collect::<Vec<_>>()
+    );
     player
         .append(test_item("https://example.test/c.mp3"))
         .expect("queue accepts the item");

@@ -213,13 +213,16 @@ struct ChurnSnapshot {
 }
 
 /// Tallies the three `kithara_hls_probe` reset-site counts in one pass.
-fn snapshot_hls_churn(events: &[ProbeEvent]) -> ChurnSnapshot {
+fn snapshot_hls_churn() -> ChurnSnapshot {
     let mut snap = ChurnSnapshot {
         recompute: 0,
         rebuild_queue: 0,
         reset_for_seek: 0,
     };
-    for event in events {
+    for event in ["recompute", "rebuild_queue", "reset_for_seek"]
+        .into_iter()
+        .flat_map(usdt_trace::events_of)
+    {
         if event.target != "kithara_hls_probe" {
             continue;
         }
@@ -473,7 +476,7 @@ fn random_seek_reads(
         hang_reset!();
 
         if i + 1 == WARMUP_K {
-            warmup_churn = Some(snapshot_hls_churn(&usdt_trace::events()));
+            warmup_churn = Some(snapshot_hls_churn());
         }
         if (i + 1) % 200 == 0 {
             check.log(&format!("Progress: iteration {}", i + 1));
@@ -767,7 +770,7 @@ async fn stress_seek_audio_hls(
         drain_tail_to_eof(&mut audio, &mut buf, max_seek_secs);
         resume_after_eof(&mut audio, &mut buf, total_secs);
 
-        let end_churn = snapshot_hls_churn(&usdt_trace::events());
+        let end_churn = snapshot_hls_churn();
         (warmup_churn, end_churn)
     })
     .await;
@@ -779,7 +782,11 @@ async fn stress_seek_audio_hls(
                 fixture,
                 segment_count,
                 cache_capacity_override,
-                &trace.events(),
+                &trace
+                    .events_of("acquire_resource_with_ctx")
+                    .into_iter()
+                    .chain(trace.events_of("open_resource_with_ctx"))
+                    .collect::<Vec<_>>(),
             );
             let full_cache = cache_capacity_override.is_some_and(|cap| cap >= segment_count);
             if ephemeral && matches!(fixture, SeekAudioFixture::WavFileLike) && full_cache {

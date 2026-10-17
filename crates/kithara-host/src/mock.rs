@@ -72,17 +72,17 @@ mod fixture {
         }
     }
 
-    pub(crate) struct TestState {
-        pub(crate) owner: HostCore<TestPools, Queue<TestPools>>,
+    pub(crate) struct TestState<D: HostedDeck<TestPools> = Queue<TestPools>> {
+        pub(crate) owner: HostCore<TestPools, D>,
         pub(crate) messages: kithara_platform::sync::mpsc::Receiver<DeckMsg>,
     }
-    impl std::ops::Deref for TestState {
+    impl<D: HostedDeck<TestPools>> std::ops::Deref for TestState<D> {
         type Target = SessionState<SessionStream, TestPools>;
         fn deref(&self) -> &Self::Target {
             &self.owner.session
         }
     }
-    impl std::ops::DerefMut for TestState {
+    impl<D: HostedDeck<TestPools>> std::ops::DerefMut for TestState<D> {
         fn deref_mut(&mut self) -> &mut Self::Target {
             &mut self.owner.session
         }
@@ -91,17 +91,30 @@ mod fixture {
     pub(crate) fn test_state(
         start: impl FnMut(&mut FirewheelContext, u32) -> Result<SessionStream, String> + Send + 'static,
     ) -> TestState {
-        let state = session_state(start);
-        let (tx, messages) = kithara_platform::sync::mpsc::channel();
-        let inbox = Arc::new(Inbox(kithara_platform::sync::Mutex::new(tx)));
-        TestState {
-            owner: HostCore::new(state, inbox),
-            messages,
+        TestState::new(start)
+    }
+
+    impl<D: HostedDeck<TestPools>> TestState<D> {
+        pub(crate) fn new(
+            start: impl FnMut(&mut FirewheelContext, u32) -> Result<SessionStream, String>
+            + Send
+            + 'static,
+        ) -> Self {
+            let state = session_state(start);
+            let (tx, messages) = kithara_platform::sync::mpsc::channel();
+            let inbox = Arc::new(Inbox(kithara_platform::sync::Mutex::new(tx)));
+            Self {
+                owner: HostCore::new(state, inbox),
+                messages,
+            }
         }
     }
 
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-    pub(crate) fn ask(state: &mut TestState, command: Command) -> Result<(), PlayError> {
+    pub(crate) fn ask<D: HostedDeck<TestPools>>(
+        state: &mut TestState<D>,
+        command: HostCommand<TestPools, D>,
+    ) -> Result<(), PlayError> {
         kithara_platform::flash::participate_sync(|| {
             hang_tick!();
             state.owner.begin_pass();
@@ -123,7 +136,10 @@ mod fixture {
     }
 
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-    pub(crate) fn render_block(state: &mut TestState, clock: u64) -> Vec<f32> {
+    pub(crate) fn render_block<D: HostedDeck<TestPools>>(
+        state: &mut TestState<D>,
+        clock: u64,
+    ) -> Vec<f32> {
         kithara_platform::flash::participate_sync(|| {
             hang_tick!();
             let mut block = vec![0.0; 1024];
@@ -192,8 +208,8 @@ mod fixture {
         state.owner.pass();
     }
 
-    pub(crate) fn deck_snapshot(
-        state: &mut TestState,
+    pub(crate) fn deck_snapshot<D: HostedDeck<TestPools>>(
+        state: &mut TestState<D>,
         id: BeatGridId,
     ) -> kithara_render::bridge::DeckSnapshot {
         let mut snapshot = None;
@@ -215,7 +231,10 @@ mod fixture {
     }
 
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-    pub(crate) fn fixture_pass(state: &mut TestState, clock: &mut u64) -> Vec<f32> {
+    pub(crate) fn fixture_pass<D: HostedDeck<TestPools>>(
+        state: &mut TestState<D>,
+        clock: &mut u64,
+    ) -> Vec<f32> {
         kithara_platform::flash::participate_sync(|| {
             hang_tick!();
             state.owner.begin_pass();

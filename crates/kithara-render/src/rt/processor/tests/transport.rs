@@ -226,6 +226,162 @@ async fn a_crossfade_start_follows_the_incoming_gains(constant_half: &'static [u
             LEVEL * into
         );
     }
+
+    const FADE_AT: usize = BLOCK + 100;
+    const FADE_FRAMES: usize = 4 * RATE as usize;
+    const END: usize = FADE_AT + FADE_FRAMES + BLOCK;
+    let settings =
+        CrossfadeSettings::new(4.0, CrossfadeCurve::EqualPower, 0.7, 0.3).expect("four seconds");
+    let outgoing: Vec<_> = (0..END)
+        .flat_map(|frame| {
+            let sample = 0.25 + cast::<usize, f32>(frame % 97).expect("fixture frame") * 0.0005;
+            [sample, sample]
+        })
+        .collect();
+    let incoming: Vec<_> = (0..END)
+        .flat_map(|frame| {
+            let sample = 0.125 + cast::<usize, f32>(frame % 89).expect("fixture frame") * 0.0007;
+            [sample, sample]
+        })
+        .collect();
+    let (mut mixer, mut ends) = mixer_without_declick();
+    let attached = send_on(
+        &mut ends,
+        When::Next,
+        &[(A, None), (B, None)],
+        vec![
+            DeckPart::Attach {
+                item_id: kithara_events::TrackId::allocate(),
+                slot: A,
+                pcm: pcm_samples("four-second-outgoing", 5.0, &outgoing, true),
+                segment: SegmentId::FIRST,
+            },
+            DeckPart::Attach {
+                item_id: kithara_events::TrackId::allocate(),
+                slot: B,
+                pcm: pcm_samples("four-second-incoming", 5.0, &incoming, true),
+                segment: SegmentId::FIRST,
+            },
+            DeckPart::Start {
+                slot: A,
+                fade: Fade::Declick,
+            },
+        ],
+    );
+    let before = render(&mut mixer, 0);
+    assert_eq!(
+        before,
+        outgoing
+            .iter()
+            .step_by(2)
+            .take(BLOCK)
+            .copied()
+            .collect::<Vec<_>>()
+    );
+    let initial = receipts(&mut ends);
+    assert_eq!(initial.len(), 1);
+    assert_applied_at(outcome_of(&initial, attached), 0);
+    assert_eq!(
+        mixer.track(A).map(PlayerTrack::state),
+        Some(SlotState::Playing)
+    );
+    assert_eq!(
+        mixer.track(B).map(PlayerTrack::state),
+        Some(SlotState::Stopped)
+    );
+    assert!(ends.events.drain().next().is_none());
+
+    let transition = send_on(
+        &mut ends,
+        at(FADE_AT),
+        &[(A, Some(attached)), (B, Some(attached))],
+        vec![
+            DeckPart::Start {
+                slot: B,
+                fade: Fade::Crossfade(settings),
+            },
+            DeckPart::Fade {
+                slot: A,
+                settings,
+                dir: FadeDir::Out,
+            },
+        ],
+    );
+    let mut cursor = BLOCK;
+    let mut answered = false;
+    let mut events = Vec::new();
+    while cursor < END {
+        let count = BLOCK.min(END - cursor);
+        let rendered = render_frames(&mut mixer, cursor, count);
+        for (offset, sample) in rendered.into_iter().enumerate() {
+            let frame = cursor + offset;
+            let expected = if frame < FADE_AT {
+                outgoing[frame * 2]
+            } else {
+                let elapsed = frame - FADE_AT;
+                let progress = cast::<usize, f32>(elapsed).expect("fixture frame")
+                    / cast::<usize, f32>(FADE_FRAMES - 1).expect("fixture duration");
+                let (out, into) = settings.gains(progress);
+                outgoing[frame * 2] * out + incoming[elapsed * 2] * into
+            };
+            assert!(
+                (sample - expected).abs() < 1e-6,
+                "four-second frame {frame}: {sample} against {expected}"
+            );
+        }
+        let replies = receipts(&mut ends);
+        if answered {
+            assert!(replies.is_empty(), "one answer for the manual transition");
+        } else {
+            assert_eq!(replies.len(), 1);
+            let (seq, outcome, parts) = &replies[0];
+            assert_eq!(*seq, transition);
+            assert_applied_at(outcome, FADE_AT);
+            assert!(matches!(parts.as_slice(), [
+                DeckPart::Start { slot: incoming, fade: Fade::Crossfade(applied_in) },
+                DeckPart::Fade { slot: outgoing, settings: applied_out, dir: FadeDir::Out },
+            ] if *incoming == B && *outgoing == A
+                && *applied_in == settings && *applied_out == settings));
+            answered = true;
+        }
+        events.extend(ends.events.drain());
+        cursor += count;
+    }
+    assert!(answered);
+    assert_eq!(
+        events,
+        [DeckEvent::Faded {
+            slot: A,
+            at: frame_at(FADE_AT + FADE_FRAMES)
+        }]
+    );
+    assert_eq!(
+        mixer.track(A).map(PlayerTrack::state),
+        Some(SlotState::Stopped)
+    );
+    assert_eq!(
+        mixer.track(B).map(PlayerTrack::state),
+        Some(SlotState::Playing)
+    );
+    let snapshot = ends.deck.snapshot.read();
+    assert_eq!(snapshot.metrics.underruns(), 0);
+    assert_eq!(snapshot.metrics.decode_errors(), 0);
+    assert_eq!(
+        snapshot.slots[usize::from(A.get())]
+            .mark
+            .expect("outgoing mark")
+            .lane
+            .frame,
+        (FADE_AT + FADE_FRAMES) as u64
+    );
+    assert_eq!(
+        snapshot.slots[usize::from(B.get())]
+            .mark
+            .expect("incoming mark")
+            .lane
+            .frame,
+        (END - FADE_AT) as u64
+    );
 }
 
 /// A fade down to silence stops its slot and reports the frame it went silent on.

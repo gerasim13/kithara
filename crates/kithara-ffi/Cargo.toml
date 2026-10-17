@@ -208,7 +208,7 @@ tracing-android = { workspace = true }
 kithara-apple = { workspace = true, features = ["foundation"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-kithara = { workspace = true, features = ["usdt", "audio", "download", "net", "offline", "signal"] }
+kithara = { workspace = true, features = ["usdt", "audio", "decode", "download", "net", "offline", "signal"] }
 kithara-ffi = { path = ".", default-features = false, features = ["mock"] }
 kithara-platform = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["wav"] }
