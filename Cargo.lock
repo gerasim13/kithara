@@ -5420,6 +5420,7 @@ dependencies = [
  "kithara-android",
  "kithara-apple",
  "kithara-audio",
+ "kithara-command",
  "kithara-config",
  "kithara-derive",
  "kithara-events",

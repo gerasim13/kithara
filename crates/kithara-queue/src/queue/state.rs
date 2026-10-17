@@ -961,6 +961,65 @@ pub(crate) mod tests {
     }
 
     #[kithara::test]
+    fn queue_control_post_preserves_order_and_reports_the_owner_outcome() {
+        let (mut queue, mut rig) = make_queue();
+        let control = queue.control();
+        let first = TrackId(41);
+        let second = TrackId(42);
+        let append = control
+            .post(QueueCommand::Append {
+                id: first,
+                source: "https://example.com/first.mp3".into(),
+            })
+            .expect("post before the owner runs");
+        let insert = control
+            .post(QueueCommand::Insert {
+                id: second,
+                source: "https://example.com/second.mp3".into(),
+                after: Some(first),
+            })
+            .expect("the second post shares the first mailbox");
+        let unknown = TrackId(99);
+        let refused = control
+            .post(QueueCommand::Remove(unknown))
+            .expect("a post does not claim owner acceptance");
+        assert!(
+            control.is_empty(),
+            "posting must not mutate the published view"
+        );
+        let Err(append) = append.wait_until(kithara_platform::time::Instant::now()) else {
+            panic!("the owner has not run yet");
+        };
+        with_outbox(&mut queue, &mut rig, |queue, pass, out| {
+            HostedDeck::drain(queue, pass, out);
+        });
+        answered(append).expect("first command applied");
+        answered(insert).expect("insertion observes the earlier append");
+        assert!(matches!(
+            answered(refused),
+            Err(kithara_command::Refused::Owner(QueueError::UnknownTrackId(id))) if id == unknown
+        ));
+        assert_eq!(
+            control
+                .tracks()
+                .iter()
+                .map(|track| track.id)
+                .collect::<Vec<_>>(),
+            [first, second]
+        );
+        let unanswered = control.post(QueueCommand::Tick).expect("live mailbox");
+        drop(queue);
+        assert!(matches!(
+            answered(unanswered),
+            Err(kithara_command::Refused::Unanswered)
+        ));
+        assert!(matches!(
+            control.post(QueueCommand::Tick),
+            Err(QueueError::Play(PlayError::Closed))
+        ));
+    }
+
+    #[kithara::test]
     fn queue_control_rejects_mutation_after_close() {
         let (mut queue, mut rig) = make_queue();
         let control = queue.control();

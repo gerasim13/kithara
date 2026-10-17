@@ -471,6 +471,7 @@ fn derived_uuid_i64(url: &str, queue_id: TrackId) -> i64 {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(target_arch = "wasm32"))]
     use std::collections::HashMap;
 
     use super::*;
@@ -671,7 +672,7 @@ mod tests {
         assert!(!*item.inserted.lock());
     }
 
-    #[kithara::test]
+    #[kithara::test(native)]
     fn headers_roundtrip() {
         let mut headers = HashMap::new();
         headers.insert("Authorization".into(), "Bearer token".into());

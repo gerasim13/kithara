@@ -208,9 +208,9 @@ impl AudioPlayer {
     /// `seek_with_tolerance` wiring without forcing callers to migrate
     /// twice; `None` preserves legacy behaviour.
     ///
-    /// The callback is invoked synchronously with `true` if the seek
-    /// command was accepted, `false` otherwise (matches `AVPlayer`
-    /// semantics).
+    /// The callback reports owner admission: `true` if the seek command was
+    /// accepted, `false` otherwise. On the browser, callbacks for posted commands
+    /// are delivered asynchronously.
     #[cfg_attr(
         all(),
         expect(

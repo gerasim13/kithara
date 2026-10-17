@@ -1,5 +1,5 @@
 use kithara_bufpool::HasPool;
-use kithara_command::{Refused, When};
+use kithara_command::{Refused, Ticket, When};
 use kithara_events::TrackId;
 use kithara_platform::time::{Duration, Instant};
 use kithara_play::{
@@ -255,9 +255,20 @@ where
         self.postbox.is_closed()
     }
 
+    /// Posts to the owner without waiting for admission or execution.
+    /// The ticket reports the owner's outcome; dropping it does not cancel the command.
+    ///
+    /// # Errors
+    /// Returns a closed mailbox. Observe the ticket off the owner's executor thread.
+    pub fn post(&self, command: QueueCommand<S>) -> Result<Ticket<QueueError>, QueueError> {
+        self.postbox
+            .post(command)
+            .map_err(|_| PlayError::Closed.into())
+    }
+
     #[kithara::hang_watchdog(ctx = String, timeout = kithara_test_utils::hang::default_timeout().min(Duration::from_secs(4)))]
     fn call(&self, command: QueueCommand<S>) -> Result<(), QueueError> {
-        let mut ticket = self.postbox.post(command).map_err(|_| PlayError::Closed)?;
+        let mut ticket = self.post(command)?;
         let seq = ticket.seq().get();
         loop {
             let remaining = __hang_detector.remaining();
