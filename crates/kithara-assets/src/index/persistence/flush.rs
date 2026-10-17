@@ -255,7 +255,6 @@ impl Drop for FlushHub {
             let _g = self.wait.state.lock();
             self.wait.cv.notify_all();
         }
-        self.worker.shutdown_join();
     }
 }
 
@@ -282,11 +281,9 @@ pub(crate) fn flush_sync(source: &dyn Flushable) -> AssetsResult<()> {
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
-    use std::sync::{
-        atomic::AtomicUsize,
-        mpsc::{self, Sender, TryRecvError},
-    };
+    use std::sync::atomic::AtomicUsize;
 
+    use kithara_platform::sync::mpsc::{self, Sender, TryRecvError};
     use kithara_storage::StorageError;
     use kithara_test_utils::kithara;
 

@@ -2786,10 +2786,6 @@ fn superseding_a_scheduled_batch_leaves_the_slot_sounding_as_it_was(
         })
         .expect("deck scope")
         .expect("configuration after cancellation is ready and timely");
-        rig.runtime.block_on(async {
-            a_cancelled_repeat_reaches_its_original_end(441).await;
-            a_cancelled_repeat_reaches_its_original_end(66_150).await;
-        });
         return;
     }
     let mut new = unseated_track();
@@ -2935,8 +2931,11 @@ fn repeat_wav_load(
     (worker, item)
 }
 
+#[kithara::test(tokio)]
+#[case::short(441)]
+#[case::long(66_150)]
 #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
-pub(super) async fn a_cancelled_repeat_reaches_its_original_end(frames: usize) {
+async fn a_cancelled_repeat_reaches_its_original_end(#[case] frames: usize) {
     use kithara_render::rt::StreamShape;
 
     let dir = TestTempDir::new();
