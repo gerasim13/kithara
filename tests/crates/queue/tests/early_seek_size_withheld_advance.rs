@@ -279,11 +279,17 @@ async fn run_case(gated_source: (CreatedHls, SegmentGateHandle), mode: GateMode)
         .await
         .expect("select track 0");
     harness.run(&queue, QueueControl::play).await;
-    assert_eq!(queue.current_index(), Some(0), "starts on track 0");
+    assert_eq!(queue.current_index(), None, "Start has not rendered yet");
 
     // Warm up: render some blocks so segment 0 decodes and the track is
     // genuinely playing before the seek arrives.
     warm_up(&harness, &queue, &gate, mode).await;
+    assert_eq!(queue.current_index(), Some(0), "starts on track 0");
+    assert_eq!(queue.current().map(|entry| entry.id), Some(id0));
+    assert!(
+        queue.is_playing(),
+        "native Start must apply before the seek"
+    );
 
     // The user taps the slider immediately: seek into the gated segment's time
     // region while exact size is unavailable and the body may still be withheld.

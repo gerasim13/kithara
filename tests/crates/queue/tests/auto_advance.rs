@@ -90,6 +90,48 @@ async fn render_loop(
     pcm
 }
 
+async fn render_committed_queue(
+    queue: &QueueControl<TestPools>,
+    harness: &OfflinePlayer,
+    block_budget: usize,
+    expected: (TrackId, usize),
+) -> Vec<f32> {
+    let mut events: EventReceiver<QueueEvent> = queue.subscribe();
+    let mut pcm = Vec::new();
+    let mut committed = false;
+    let mut ended = 0;
+    for _ in 0..block_budget {
+        pcm.extend(render_loop(queue, harness, 1).await);
+        while let Ok(envelope) = events.try_recv() {
+            match envelope.event {
+                QueueEvent::CurrentTrackAdvance { id: Some(id), .. } if id == expected.0 => {
+                    assert!(!committed, "the expected track becomes current once");
+                    assert_eq!(queue.current().map(|entry| entry.id), Some(id));
+                    assert_eq!(queue.current_index(), Some(expected.1));
+                    committed = true;
+                }
+                QueueEvent::QueueEnded => {
+                    assert!(
+                        committed,
+                        "the expected track must become current before EOF"
+                    );
+                    assert_eq!(queue.current().map(|entry| entry.id), None);
+                    assert_eq!(queue.current_index(), None);
+                    assert!(!queue.is_playing());
+                    ended += 1;
+                }
+                _ => {}
+            }
+        }
+    }
+    assert!(
+        committed,
+        "a native transition must make the expected track current"
+    );
+    assert_eq!(ended, 1, "the completed queue publishes one terminal EOF");
+    pcm
+}
+
 #[kithara::test(tokio)]
 #[kithara::flash(io)]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
@@ -317,13 +359,13 @@ async fn cf_zero_queue_tick_advances_to_second_track_audio() {
     let a = assets::constant_wav_quiet_0_4s();
     let id_a = append_loaded(&harness, &queue, &a).await;
     let b = assets::constant_wav_loud_0_4s();
-    let _ = append_loaded(&harness, &queue, &b).await;
+    let id_b = append_loaded(&harness, &queue, &b).await;
     harness
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
         .expect("select track A");
 
-    let pcm = render_loop(&queue, &harness, MAX_BLOCKS).await;
+    let pcm = render_committed_queue(&queue, &harness, MAX_BLOCKS, (id_b, 1)).await;
 
     let onset = first_onset_frame(&pcm, 0.005)
         .expect("track A must produce non-silence within the render budget");
@@ -358,8 +400,8 @@ async fn cf_zero_queue_tick_advances_to_second_track_audio() {
 
     assert_eq!(
         queue.current_index(),
-        Some(1),
-        "queue.current_index must follow the audio thread to track B"
+        None,
+        "the completed queue has no current item after track B ends"
     );
     drop(queue);
     harness.close().await;
@@ -471,6 +513,7 @@ async fn a_gapless_queue_meets_its_next_track_without_a_gap() {
     let mut pcm = Vec::new();
     let mut advances_to_b = Vec::new();
     let mut crossfades = 0_usize;
+    let mut ended = 0_usize;
     for _ in 0..MAX_BLOCKS {
         let _ = harness.run(&queue, QueueControl::tick).await;
         pcm.extend(harness.render(BLOCK_FRAMES).await);
@@ -480,8 +523,18 @@ async fn a_gapless_queue_meets_its_next_track_without_a_gap() {
                 TestEvent::Queue(QueueEvent::CurrentTrackAdvance {
                     id: Some(id),
                     reason,
-                }) if id == id_b => advances_to_b.push(reason),
+                }) if id == id_b => {
+                    assert_eq!(queue.current().map(|entry| entry.id), Some(id_b));
+                    assert_eq!(queue.current_index(), Some(1));
+                    advances_to_b.push(reason);
+                }
                 TestEvent::Queue(QueueEvent::CrossfadeStarted { .. }) => crossfades += 1,
+                TestEvent::Queue(QueueEvent::QueueEnded) => {
+                    assert_eq!(queue.current().map(|entry| entry.id), None);
+                    assert_eq!(queue.current_index(), None);
+                    assert!(!queue.is_playing());
+                    ended += 1;
+                }
                 _ => {}
             }
             hang_reset!();
@@ -524,10 +577,11 @@ async fn a_gapless_queue_meets_its_next_track_without_a_gap() {
         "B becomes current once, by A's natural end"
     );
     assert_eq!(crossfades, 0, "a gapless transition starts no crossfade");
+    assert_eq!(ended, 1, "the complete gapless queue ends once");
     assert_eq!(
         queue.current_index(),
-        Some(1),
-        "queue.current_index must follow the deck to track B"
+        None,
+        "the completed gapless queue has no current item after B ends"
     );
     drop(queue);
     harness.close().await;
@@ -965,13 +1019,13 @@ async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio() {
     let a = assets::constant_wav_quiet_1_5s();
     let id_a = append_loaded(&harness, &queue, &a).await;
     let b = assets::constant_wav_loud_1_5s();
-    let _ = append_loaded(&harness, &queue, &b).await;
+    let id_b = append_loaded(&harness, &queue, &b).await;
     harness
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
         .expect("select track A");
 
-    let pcm = render_loop(&queue, &harness, MAX_BLOCKS).await;
+    let pcm = render_committed_queue(&queue, &harness, MAX_BLOCKS, (id_b, 1)).await;
 
     let onset = first_onset_frame(&pcm, 0.005)
         .expect("track A must produce non-silence within the render budget");
@@ -1009,8 +1063,8 @@ async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio() {
 
     assert_eq!(
         queue.current_index(),
-        Some(1),
-        "queue.current_index must advance to track B after crossfade commit"
+        None,
+        "the completed queue has no current item after the crossfaded B ends"
     );
     drop(queue);
     harness.close().await;
@@ -1294,17 +1348,17 @@ async fn cf_zero_replay_after_full_playthrough_still_advances() {
     let a = assets::constant_wav_quiet_0_4s();
     let id_a = append_loaded(&harness, &queue, &a).await;
     let b = assets::constant_wav_loud_0_4s();
-    append_loaded(&harness, &queue, &b).await;
+    let id_b = append_loaded(&harness, &queue, &b).await;
 
     harness
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
         .expect("first select track A");
-    let _first_pcm = render_loop(&queue, &harness, MAX_BLOCKS).await;
+    let _first_pcm = render_committed_queue(&queue, &harness, MAX_BLOCKS, (id_b, 1)).await;
     assert_eq!(
         queue.current_index(),
-        Some(1),
-        "first playthrough must reach track B"
+        None,
+        "the first complete playthrough ends with no current item"
     );
 
     let mut reload_events = queue.subscribe();
@@ -1316,7 +1370,7 @@ async fn cf_zero_replay_after_full_playthrough_still_advances() {
         .await
         .expect("the fixture track loads");
 
-    let pcm = render_loop(&queue, &harness, MAX_BLOCKS).await;
+    let pcm = render_committed_queue(&queue, &harness, MAX_BLOCKS, (id_b, 1)).await;
 
     let onset = first_onset_frame(&pcm, 0.005).expect("track A must produce non-silence on replay");
     let track_a_frames =
@@ -1337,8 +1391,8 @@ async fn cf_zero_replay_after_full_playthrough_still_advances() {
 
     assert_eq!(
         queue.current_index(),
-        Some(1),
-        "second playthrough must also reach track B"
+        None,
+        "the second complete playthrough also ends with no current item"
     );
     drop(queue);
     harness.close().await;
@@ -1579,7 +1633,7 @@ async fn autoplay_first_appended_track_plays_first_even_when_loaded_last() {
         .await
         .expect("the fixture track loads");
 
-    let pcm = render_loop(&queue, &harness, MAX_BLOCKS).await;
+    let pcm = render_committed_queue(&queue, &harness, MAX_BLOCKS, (id_b, 1)).await;
 
     let onset = first_onset_frame(&pcm, 0.005)
         .expect("autoplay must start producing audio without an explicit select");
@@ -1598,8 +1652,8 @@ async fn autoplay_first_appended_track_plays_first_even_when_loaded_last() {
     );
     assert_eq!(
         queue.current_index(),
-        Some(1),
-        "after A finishes the queue must advance to B"
+        None,
+        "after A and B finish the queue has no current item"
     );
     drop(queue);
     harness.close().await;
@@ -1620,9 +1674,9 @@ async fn autoplay_first_track_does_not_self_arm_and_kill_its_own_decoder() {
     .await;
     let queue = autoplay_queue(&harness).await;
     let solo = assets::constant_wav_three_0_4s();
-    let _ = append_loaded(&harness, &queue, &solo).await;
+    let id = append_loaded(&harness, &queue, &solo).await;
 
-    let pcm = render_loop(&queue, &harness, MAX_BLOCKS).await;
+    let pcm = render_committed_queue(&queue, &harness, MAX_BLOCKS, (id, 0)).await;
 
     let onset =
         first_onset_frame(&pcm, 0.005).expect("the autoplayed track must produce audible samples");
@@ -1638,8 +1692,8 @@ async fn autoplay_first_track_does_not_self_arm_and_kill_its_own_decoder() {
     );
     assert_eq!(
         queue.current_index(),
-        Some(0),
-        "current_index must stay on the only track"
+        None,
+        "the sole track leaves no current item after its genuine end"
     );
     drop(queue);
     harness.close().await;
