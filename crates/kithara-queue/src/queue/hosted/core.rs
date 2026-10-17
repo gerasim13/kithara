@@ -5,9 +5,10 @@ use kithara_command::{Batch, Outcome, Receipt, Rejection, Seq};
 use kithara_events::{SlotId, TrackId};
 use kithara_platform::{maybe_send::MaybeSend, sync::Arc};
 use kithara_play::{
-    DeckEvent, DeckMixerConfig, DeckPass, DeckProtocol, HostedDeck, ItemRole, LoadRefusal, Outbox,
-    OutputSnapshot, PlayError, PlayWorker, PlaybackFault, Player, PlayerEvent, Settled,
-    TrackCommand, TrackFactory, TrackReceipt, TrackRef, TrackStatus as PlayingStatus,
+    DeckEvent, DeckMixerConfig, DeckPass, DeckProtocol, DeckRefusal, DispatcherProtocol,
+    HostedDeck, ItemRole, LoadRefusal, Outbox, OutputSnapshot, PlayError, PlayWorker,
+    PlaybackFault, Player, PlayerEvent, ResourceLoad, Settled, TrackCommand, TrackFactory,
+    TrackReceipt, TrackRef, TrackStatus as PlayingStatus,
 };
 use kithara_signal::SessionFrame;
 use tracing::warn;
@@ -74,48 +75,10 @@ where
                 self.item_event(event, output, out);
             }
             TrackReceipt::Loaded(receipt) => {
-                let seq = receipt.seq();
-                if let Some(index) = self
-                    .active
-                    .position(|active| active.load == Some(LoadState::Opening(seq)))
-                {
-                    let opened = matches!(receipt.outcome(), Outcome::Applied { .. });
-                    let Some(active) = self.active.get(index) else {
-                        return Settled::Pending;
-                    };
-                    let id = active.item;
-                    let leaving = active.role == Role::Leaving;
-                    let wanted = self.target.is_some_and(|target| target.to == id)
-                        && matches!(active.role, Role::Incoming);
-                    let host_can_answer_later =
-                        self.classify_load(id, leaving, wanted, receipt.outcome());
-                    if let Some(active) = self.active.get_mut(index) {
-                        let settled = active.track.settle(TrackReceipt::Loaded(receipt), out);
-                        if host_can_answer_later {
-                            if let Err(error) = self.reopen_requested_load(index, output, out) {
-                                let error = play_error(error);
-                                outcomes.push((
-                                    index,
-                                    Settled::Rejected {
-                                        seq,
-                                        reason: Rejection::Refused(error),
-                                    },
-                                ));
-                            }
-                        } else {
-                            if opened {
-                                self.accept_load(index, seq);
-                            }
-                            outcomes.push((index, settled));
-                        }
-                    }
-                } else if let Some(index) = self
-                    .active
-                    .parked_position(|parked| parked.load == Some(LoadState::Opening(seq)))
-                {
-                    self.settle_parked(index, receipt, out);
-                }
-                self.pump_loads(output, out);
+                let Some(settled) = self.settle_loaded_receipt(receipt, output, out) else {
+                    return Settled::Pending;
+                };
+                outcomes = settled;
             }
         }
         let track_result = self.settle_transitions(outcomes, out);
@@ -147,6 +110,55 @@ where
         self.reap_released();
         self.publish();
         result
+    }
+
+    fn settle_loaded_receipt(
+        &mut self,
+        receipt: Receipt<DispatcherProtocol<ResourceLoad<S>>>,
+        output: Option<&OutputSnapshot>,
+        out: &mut Outbox<'_, S>,
+    ) -> Option<Vec<(usize, Settled)>> {
+        let mut outcomes: Vec<(usize, Settled)> = Vec::new();
+        let seq = receipt.seq();
+        if let Some(index) = self
+            .active
+            .position(|active| active.load == Some(LoadState::Opening(seq)))
+        {
+            let opened = matches!(receipt.outcome(), Outcome::Applied { .. });
+            let active = self.active.get(index)?;
+            let id = active.item;
+            let leaving = active.role == Role::Leaving;
+            let wanted = self.target.is_some_and(|target| target.to == id)
+                && matches!(active.role, Role::Incoming);
+            let host_can_answer_later = self.classify_load(id, leaving, wanted, receipt.outcome());
+            if let Some(active) = self.active.get_mut(index) {
+                let settled = active.track.settle(TrackReceipt::Loaded(receipt), out);
+                if host_can_answer_later {
+                    if let Err(error) = self.reopen_requested_load(index, output, out) {
+                        let error = play_error(error);
+                        outcomes.push((
+                            index,
+                            Settled::Rejected {
+                                seq,
+                                reason: Rejection::Refused(error),
+                            },
+                        ));
+                    }
+                } else {
+                    if opened {
+                        self.accept_load(index, seq);
+                    }
+                    outcomes.push((index, settled));
+                }
+            }
+        } else if let Some(index) = self
+            .active
+            .parked_position(|parked| parked.load == Some(LoadState::Opening(seq)))
+        {
+            self.settle_parked(index, receipt, out);
+        }
+        self.pump_loads(output, out);
+        Some(outcomes)
     }
 
     fn settle_deck_receipt(
@@ -182,27 +194,39 @@ where
             && outcomes.iter().any(|(_, settled)| matches!(settled, Settled::Rejected { seq: owned, .. } if *owned == seq))
             && let Outcome::Rejected(reason) = outcome
         {
-            if self.target.is_some_and(|target| target.reason == crate::AdvanceReason::RemovedCurrent) {
-                if let Err(error) = self.abandon_removal_entry() {
-                    warn!(%error, "rejected removal could not retain its neighbor");
-                }
-            } else if let Err(error) = self.cancel_target(out) {
-                warn!(%error, "rejected removal could not cancel its dependent entry");
-            }
-            removal_result = Some(Settled::Rejected {
-                seq,
-                reason: match reason {
-                    Rejection::Late => Rejection::Late,
-                    Rejection::Stale => Rejection::Stale,
-                    Rejection::Unanswered => Rejection::Unanswered,
-                    Rejection::Refused(refusal) => Rejection::Refused(PlayError::Deck(*refusal)),
-                },
-            });
+            removal_result = Some(self.reject_removal(seq, *reason, out));
         }
         DeckSettlement {
             outcomes,
             handover,
             removal_result,
+        }
+    }
+
+    fn reject_removal(
+        &mut self,
+        seq: Seq,
+        reason: Rejection<DeckRefusal>,
+        out: &mut Outbox<'_, S>,
+    ) -> Settled {
+        if self
+            .target
+            .is_some_and(|target| target.reason == crate::AdvanceReason::RemovedCurrent)
+        {
+            if let Err(error) = self.abandon_removal_entry() {
+                warn!(%error, "rejected removal could not retain its neighbor");
+            }
+        } else if let Err(error) = self.cancel_target(out) {
+            warn!(%error, "rejected removal could not cancel its dependent entry");
+        }
+        Settled::Rejected {
+            seq,
+            reason: match reason {
+                Rejection::Late => Rejection::Late,
+                Rejection::Stale => Rejection::Stale,
+                Rejection::Unanswered => Rejection::Unanswered,
+                Rejection::Refused(refusal) => Rejection::Refused(PlayError::Deck(refusal)),
+            },
         }
     }
 
@@ -311,7 +335,7 @@ where
     fn settle_parked(
         &mut self,
         index: usize,
-        receipt: Receipt<kithara_play::DispatcherProtocol<kithara_play::ResourceLoad<S>>>,
+        receipt: Receipt<DispatcherProtocol<ResourceLoad<S>>>,
         out: &mut Outbox<'_, S>,
     ) {
         let Some(parked) = self.active.parked_get_mut(index) else {
@@ -509,7 +533,7 @@ where
         id: TrackId,
         leaving: bool,
         wanted: bool,
-        outcome: &Outcome<kithara_play::DispatcherProtocol<kithara_play::ResourceLoad<S>>>,
+        outcome: &Outcome<DispatcherProtocol<ResourceLoad<S>>>,
     ) -> bool {
         if leaving {
             return false;

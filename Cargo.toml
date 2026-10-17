@@ -411,6 +411,8 @@ cpu-time = "1"
 criterion = "0.8.2"
 crossbeam-queue = "0.3"
 dashmap = "6.2.1"
+# The Linux secret-service store for keyring-core.
+dbus-secret-service-keyring-store = { version = "1.0.1", features = ["crypto-rust"] }
 delegate = "0.13"
 derive-where = "1.7"
 derive_more = { version = "2.1", features = ["debug", "deref", "deref_mut", "display", "error", "from", "into"] }
@@ -589,8 +591,6 @@ windows-sys = "0.61"
 winit = "0.30"
 wreq = "=6.0.0-rc.31"
 wreq-util = "=3.0.0-rc.14"
-# The Linux secret-service store for keyring-core.
-zbus-secret-service-keyring-store = { version = "1.0.1", features = ["crypto-rust"] }
 
 # Optimise CPU-heavy audio dependencies in debug builds so the audio
 # worker thread can keep up with real-time playback.  Without this,

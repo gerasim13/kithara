@@ -253,7 +253,9 @@ impl<S> PlayerImpl<S> {
             attach.obsolete = true;
         }
     }
+}
 
+impl<S> PlayerImpl<S> {
     pub(super) fn configuring(
         &self,
         change: TrackSettingsChange,
@@ -276,7 +278,22 @@ impl<S> PlayerImpl<S> {
         let change = TrackSettings::check(change)?;
         if let TrackSettingsChange::Speed(speed) = change
             && matches!(when, When::Next)
-            && speed == self.settings.config().speed()
+            && self.unchanged_speed(speed)
+        {
+            return Ok((Configuring::Unchanged, None));
+        }
+        if matches!(change, TrackSettingsChange::Speed(_)) {
+            let cost = self.speed_admission(at, out)?;
+            return Ok((Configuring::Send(when, change), cost));
+        }
+        if self.lane.as_ref().is_none_or(|lane| lane.available() == 0) {
+            return Err(PlayError::Full("lane"));
+        }
+        Ok((Configuring::Send(when, change), Some(0)))
+    }
+
+    fn unchanged_speed(&self, speed: f32) -> bool {
+        speed == self.settings.config().speed()
             && self
                 .loading
                 .as_ref()
@@ -311,17 +328,6 @@ impl<S> PlayerImpl<S> {
                             }
                     )
                 })
-        {
-            return Ok((Configuring::Unchanged, None));
-        }
-        if matches!(change, TrackSettingsChange::Speed(_)) {
-            let cost = self.speed_admission(at, out)?;
-            return Ok((Configuring::Send(when, change), cost));
-        }
-        if self.lane.as_ref().is_none_or(|lane| lane.available() == 0) {
-            return Err(PlayError::Full("lane"));
-        }
-        Ok((Configuring::Send(when, change), Some(0)))
     }
 
     pub(super) fn speed_admission(

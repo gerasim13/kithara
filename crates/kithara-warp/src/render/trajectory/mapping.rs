@@ -181,6 +181,57 @@ impl Trajectory {
         )
     }
 
+    fn ramp_coefficients(
+        &self,
+        speed: Fraction,
+        common: u128,
+        to: f32,
+        duration: u64,
+    ) -> Result<(u128, u128, i128), ElasticError> {
+        let target = Fraction::speed(to)?;
+        let basis = self
+            .origin_speed
+            .common(target)
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let delta = i128::try_from(target.at(basis).ok_or(ElasticError::SampleCountOverflow)?)
+            .ok()
+            .and_then(|target| {
+                i128::try_from(self.origin_speed.at(basis)?)
+                    .ok()
+                    .and_then(|origin| target.checked_sub(origin))
+            })
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let ramp_denominator = basis
+            .checked_mul(u128::from(duration))
+            .and_then(|value| value.checked_mul(2))
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let denominator = common
+            .checked_div(divisor(common, ramp_denominator))
+            .and_then(|value| value.checked_mul(ramp_denominator))
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let scaled_delta = delta
+            .checked_mul(
+                i128::try_from(denominator / ramp_denominator)
+                    .map_err(|_| ElasticError::SampleCountOverflow)?,
+            )
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let step = u128::try_from(
+            i128::try_from(
+                speed
+                    .at(denominator)
+                    .ok_or(ElasticError::SampleCountOverflow)?,
+            )
+            .map_err(|_| ElasticError::SampleCountOverflow)?
+            .checked_add(scaled_delta)
+            .ok_or(ElasticError::SampleCountOverflow)?,
+        )
+        .map_err(|_| ElasticError::SampleCountOverflow)?;
+        let change = scaled_delta
+            .checked_mul(2)
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        Ok((denominator, step, change))
+    }
+
     pub(super) fn source_span(
         &self,
         start: u64,
@@ -204,47 +255,8 @@ impl Trajectory {
         } = &self.curve
             && self.elapsed < duration.get()
         {
-            let target = Fraction::speed(*to)?;
-            let basis = self
-                .origin_speed
-                .common(target)
-                .ok_or(ElasticError::SampleCountOverflow)?;
-            let delta = i128::try_from(target.at(basis).ok_or(ElasticError::SampleCountOverflow)?)
-                .ok()
-                .and_then(|target| {
-                    i128::try_from(self.origin_speed.at(basis)?)
-                        .ok()
-                        .and_then(|origin| target.checked_sub(origin))
-                })
-                .ok_or(ElasticError::SampleCountOverflow)?;
-            let ramp_denominator = basis
-                .checked_mul(u128::from(duration.get()))
-                .and_then(|value| value.checked_mul(2))
-                .ok_or(ElasticError::SampleCountOverflow)?;
-            denominator = common
-                .checked_div(divisor(common, ramp_denominator))
-                .and_then(|value| value.checked_mul(ramp_denominator))
-                .ok_or(ElasticError::SampleCountOverflow)?;
-            let scaled_delta = delta
-                .checked_mul(
-                    i128::try_from(denominator / ramp_denominator)
-                        .map_err(|_| ElasticError::SampleCountOverflow)?,
-                )
-                .ok_or(ElasticError::SampleCountOverflow)?;
-            step = u128::try_from(
-                i128::try_from(
-                    speed
-                        .at(denominator)
-                        .ok_or(ElasticError::SampleCountOverflow)?,
-                )
-                .map_err(|_| ElasticError::SampleCountOverflow)?
-                .checked_add(scaled_delta)
-                .ok_or(ElasticError::SampleCountOverflow)?,
-            )
-            .map_err(|_| ElasticError::SampleCountOverflow)?;
-            change = scaled_delta
-                .checked_mul(2)
-                .ok_or(ElasticError::SampleCountOverflow)?;
+            (denominator, step, change) =
+                self.ramp_coefficients(speed, common, *to, duration.get())?;
         }
         SourceSpan::try_from((
             position

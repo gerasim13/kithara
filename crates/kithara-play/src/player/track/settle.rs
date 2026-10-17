@@ -2,9 +2,10 @@ use std::num::NonZeroU32;
 
 use kithara_command::{Batch, Outcome, Rejection, Seq, When};
 use kithara_render::{
-    LaneApplied, LaneCommand,
+    LaneApplied, LaneCommand, LaneFrame,
     bridge::{DeckPart, DeckProtocol, DeckRefusal, Returned, SlotMark},
 };
+use kithara_signal::SessionFrame;
 use kithara_sync::SpeedCurve;
 use tracing::warn;
 
@@ -43,13 +44,7 @@ impl<S> PlayerImpl<S> {
     ) -> Result<Option<Seq>, PlayError> {
         let final_speed = super::geometry::check_curve(&mut speed)?;
         let change = TrackSettingsChange::Speed(final_speed);
-        let starting_speed = match &speed {
-            SpeedCurve::Ramp { .. } => Some(self.consumed_speed()?),
-            SpeedCurve::Steps(steps) if steps.first().is_some_and(|(at, _)| *at > 0) => {
-                Some(self.consumed_speed()?)
-            }
-            _ => None,
-        };
+        let starting_speed = self.segment_start_speed(&speed)?;
         self.check_segment(out)?;
         let attached = self.attached();
         let origin = if rate.is_some() {
@@ -109,6 +104,16 @@ impl<S> PlayerImpl<S> {
         Ok(Some(seq))
     }
 
+    fn segment_start_speed(&self, speed: &SpeedCurve) -> Result<Option<f32>, PlayError> {
+        Ok(match speed {
+            SpeedCurve::Ramp { .. } => Some(self.consumed_speed()?),
+            SpeedCurve::Steps(steps) if steps.first().is_some_and(|(at, _)| *at > 0) => {
+                Some(self.consumed_speed()?)
+            }
+            _ => None,
+        })
+    }
+
     pub(super) fn check_segment(&self, out: &Outbox<'_, S>) -> Result<(), PlayError> {
         let attached = self.attached();
         if attached && out.is_grouped() {
@@ -139,76 +144,15 @@ impl<S> PlayerImpl<S> {
         if let Some(index) = self.adopting.iter().position(|adopt| adopt.seq == seq) {
             let adoption = self.adopting.remove(index);
             answered = adoption.caller;
-            if self.preparation_closed() {
-                self.repeat = false;
-                return Settled::Pending;
-            }
-            if adoption.cancelled {
-                if adoption.segment == self.segment
-                    && matches!(outcome, Outcome::Rejected(Rejection::Stale))
-                    && let Some((segment, position)) = adoption.parked
-                {
-                    if let Err(error) = self.send_lane(
-                        LaneCommand::Segment {
-                            id: segment,
-                            from: position,
-                            speed: SpeedCurve::Constant(self.settings.projected().speed()),
-                        },
-                        When::Next,
-                    ) {
-                        return Settled::Rejected {
-                            seq: answered,
-                            reason: Rejection::Refused(error),
-                        };
-                    }
-                    self.segment = segment;
-                    self.segment_origin = Some(position);
-                    self.observed_source = None;
-                    self.ready = None;
-                }
-                self.repeat = false;
-                return Settled::Pending;
-            }
-            if matches!(
-                outcome,
-                Outcome::Rejected(
-                    Rejection::Stale | Rejection::Refused(DeckRefusal::Outdated { .. })
-                )
-            ) {
-                self.newest_epoch_pending = Some(adoption.caller);
-                self.adopt_newest_epoch(out);
-                return Settled::Pending;
-            }
-            if matches!(outcome, Outcome::Applied { .. }) && adoption.segment == self.segment {
-                self.repeat = false;
-                if matches!(self.status, TrackStatus::Ended { .. }) {
-                    self.status = TrackStatus::Loaded;
-                }
+            if let Some(settled) = self.apply_adoption(&adoption, outcome, out) {
+                return settled;
             }
         }
         let at = match outcome {
             Outcome::Applied { at, .. } => *at,
             Outcome::Rejected(reason) => {
                 if attaching.is_some() {
-                    self.attaching = None;
-                    let returned = self.restore_attachment(&mut batch.commands);
-                    self.loading = None;
-                    self.attach_at = None;
-                    if self.releasing
-                        || !matches!(self.status, TrackStatus::Failed { .. })
-                            && self.preparation_failure().is_none()
-                    {
-                        self.status = TrackStatus::Released;
-                    }
-                    self.releasing = false;
-                    self.ready = None;
-                    self.play = None;
-                    self.playback_commands.clear();
-                    self.adopting.clear();
-                    self.newest_epoch_pending = None;
-                    if let Err(error) = self.release_lane(out) {
-                        warn!(%error, "refused attachment waits for lane release room");
-                    }
+                    let returned = self.reject_attachment(batch, out);
                     if !returned {
                         return Settled::Rejected {
                             seq: answered,
@@ -232,6 +176,99 @@ impl<S> PlayerImpl<S> {
                 self.status = TrackStatus::Loaded;
             }
         }
+        self.settle_parts(batch, attaching.is_some(), transport_current, at, out);
+        self.promote(out);
+        Settled::Applied { seq: answered, at }
+    }
+
+    fn apply_adoption(
+        &mut self,
+        adoption: &Adoption,
+        outcome: &Outcome<DeckProtocol>,
+        out: &mut Outbox<'_, S>,
+    ) -> Option<Settled> {
+        if self.preparation_closed() {
+            self.repeat = false;
+            return Some(Settled::Pending);
+        }
+        if adoption.cancelled {
+            if adoption.segment == self.segment
+                && matches!(outcome, Outcome::Rejected(Rejection::Stale))
+                && let Some((segment, position)) = adoption.parked
+            {
+                if let Err(error) = self.send_lane(
+                    LaneCommand::Segment {
+                        id: segment,
+                        from: position,
+                        speed: SpeedCurve::Constant(self.settings.projected().speed()),
+                    },
+                    When::Next,
+                ) {
+                    return Some(Settled::Rejected {
+                        seq: adoption.caller,
+                        reason: Rejection::Refused(error),
+                    });
+                }
+                self.segment = segment;
+                self.segment_origin = Some(position);
+                self.observed_source = None;
+                self.ready = None;
+            }
+            self.repeat = false;
+            return Some(Settled::Pending);
+        }
+        if matches!(
+            outcome,
+            Outcome::Rejected(Rejection::Stale | Rejection::Refused(DeckRefusal::Outdated { .. }))
+        ) {
+            self.newest_epoch_pending = Some(adoption.caller);
+            self.adopt_newest_epoch(out);
+            return Some(Settled::Pending);
+        }
+        if matches!(outcome, Outcome::Applied { .. }) && adoption.segment == self.segment {
+            self.repeat = false;
+            if matches!(self.status, TrackStatus::Ended { .. }) {
+                self.status = TrackStatus::Loaded;
+            }
+        }
+        None
+    }
+
+    fn reject_attachment(
+        &mut self,
+        batch: &mut Batch<DeckProtocol>,
+        out: &mut Outbox<'_, S>,
+    ) -> bool {
+        self.attaching = None;
+        let returned = self.restore_attachment(&mut batch.commands);
+        self.loading = None;
+        self.attach_at = None;
+        if self.releasing
+            || !matches!(self.status, TrackStatus::Failed { .. })
+                && self.preparation_failure().is_none()
+        {
+            self.status = TrackStatus::Released;
+        }
+        self.releasing = false;
+        self.ready = None;
+        self.play = None;
+        self.playback_commands.clear();
+        self.adopting.clear();
+        self.newest_epoch_pending = None;
+        if let Err(error) = self.release_lane(out) {
+            warn!(%error, "refused attachment waits for lane release room");
+        }
+        returned
+    }
+
+    fn settle_parts(
+        &mut self,
+        batch: &Batch<DeckProtocol>,
+        attaching: bool,
+        transport_current: bool,
+        at: SessionFrame,
+        out: &mut Outbox<'_, S>,
+    ) {
         for part in &batch.commands {
             match part {
                 DeckPart::Start { slot, .. } | DeckPart::Chain { to: slot, .. }
@@ -246,15 +283,13 @@ impl<S> PlayerImpl<S> {
                     self.stopped(*resume);
                 }
                 DeckPart::Returned(Returned::Pcm { slot, .. })
-                    if Some(*slot) == self.slot && attaching.is_none() =>
+                    if Some(*slot) == self.slot && !attaching =>
                 {
                     self.released(out);
                 }
                 _ => {}
             }
         }
-        self.promote(out);
-        Settled::Applied { seq: answered, at }
     }
 
     fn stopped(&mut self, resume: Option<SlotMark>) {
@@ -351,6 +386,55 @@ impl<S> PlayerImpl<S> {
         }
     }
 
+    fn apply_lane(&mut self, seq: Seq, at: LaneFrame, data: &LaneApplied, segment: bool) {
+        let operations = self
+            .lane_commands
+            .iter_mut()
+            .filter(|operation| operation.seq == seq);
+        let mut speed_session = None;
+        for operation in operations {
+            tracing::debug!(
+                item = u64::from(self.item),
+                seq = seq.get(),
+                actual_apply_segment = at.segment.get(),
+                actual_apply_frame = at.frame,
+                current_segment = self.segment.get(),
+                requested_when = ?operation.when,
+                paused_resume = ?self.resume,
+                mark = ?self.mark,
+                ready_segment = ?data.ready,
+                command = ?operation.command,
+                "lane command settled"
+            );
+            let session = match operation.when {
+                When::At(requested) if requested == at => operation.session,
+                _ => self.mark.and_then(|mark| session_at(mark, at)),
+            };
+            operation.when = When::At(at);
+            operation.verdict = Some(Ok(()));
+            if matches!(&operation.command, LaneCommand::SetSpeed(_)) {
+                speed_session = Some(session);
+            }
+            if let LaneCommand::Segment { id, from, .. } = operation.command
+                && data.ready == Some(id)
+                && id == self.segment
+                && !matches!(self.status, TrackStatus::Playing { .. })
+                && let Some(origin) = self.media_origin
+            {
+                self.position = from.saturating_sub(origin);
+                if matches!(self.status, TrackStatus::Paused { .. }) {
+                    self.status = TrackStatus::Paused { at: self.position };
+                }
+            }
+        }
+        if let Some(session) = speed_session
+            && !segment
+        {
+            self.speed_answers.push_back((seq, Ok((at, session))));
+        }
+        self.accept_ready(seq, data);
+    }
+
     pub(super) fn settle_lane(&mut self) {
         if self.lane.is_none() {
             return;
@@ -362,57 +446,15 @@ impl<S> PlayerImpl<S> {
                 .commands
                 .iter()
                 .any(|command| matches!(command, LaneCommand::Segment { .. }));
-            let operations = self
-                .lane_commands
-                .iter_mut()
-                .filter(|operation| operation.seq == receipt.seq());
             if let Outcome::Applied { at, data } = receipt.outcome() {
-                let mut speed_session = None;
-                for operation in operations {
-                    tracing::debug!(
-                        item = u64::from(self.item),
-                        seq = receipt.seq().get(),
-                        actual_apply_segment = at.segment.get(),
-                        actual_apply_frame = at.frame,
-                        current_segment = self.segment.get(),
-                        requested_when = ?operation.when,
-                        paused_resume = ?self.resume,
-                        mark = ?self.mark,
-                        ready_segment = ?data.ready,
-                        command = ?operation.command,
-                        "lane command settled"
-                    );
-                    let session = match operation.when {
-                        When::At(requested) if requested == *at => operation.session,
-                        _ => self.mark.and_then(|mark| session_at(mark, *at)),
-                    };
-                    operation.when = When::At(*at);
-                    operation.verdict = Some(Ok(()));
-                    if matches!(&operation.command, LaneCommand::SetSpeed(_)) {
-                        speed_session = Some(session);
-                    }
-                    if let LaneCommand::Segment { id, from, .. } = operation.command
-                        && data.ready == Some(id)
-                        && id == self.segment
-                        && !matches!(self.status, TrackStatus::Playing { .. })
-                        && let Some(origin) = self.media_origin
-                    {
-                        self.position = from.saturating_sub(origin);
-                        if matches!(self.status, TrackStatus::Paused { .. }) {
-                            self.status = TrackStatus::Paused { at: self.position };
-                        }
-                    }
-                }
-                if let Some(session) = speed_session
-                    && !segment
-                {
-                    self.speed_answers
-                        .push_back((receipt.seq(), Ok((*at, session))));
-                }
-                self.accept_ready(receipt.seq(), data);
+                self.apply_lane(receipt.seq(), *at, data, segment);
             } else if let Outcome::Rejected(reason) = receipt.outcome() {
                 let mut speed = false;
-                for operation in operations {
+                for operation in self
+                    .lane_commands
+                    .iter_mut()
+                    .filter(|operation| operation.seq == receipt.seq())
+                {
                     operation.verdict = Some(Err(*reason));
                     speed |= matches!(operation.command, LaneCommand::SetSpeed(_));
                 }

@@ -426,18 +426,18 @@ fn bridge_beat(
     Some(beat)
 }
 
-pub(super) fn curve(
+struct CurveSchedule {
+    boundaries: Vec<u64>,
+    landing: Option<(Duration, u64)>,
+}
+
+fn curve_boundaries(
     host: &TempoTrajectory,
-    source: &SourceGrid,
-    media: Duration,
     start: SessionFrame,
     landing: Option<(Duration, SessionFrame)>,
     offsets: &[(u64, f64)],
     correction: Option<&Correction>,
-) -> Option<(SpeedCurve, u64)> {
-    let rate = f64::from(host.sample_rate().get());
-    let first_beat = source.beat_at(media.as_secs_f64())?;
-    let mut beat = first_beat;
+) -> Option<CurveSchedule> {
     let mut boundaries = host
         .changes_after(start)
         .map(|frame| frame.frames_since(start))
@@ -460,105 +460,231 @@ pub(super) fn curve(
     }
     boundaries.sort_unstable();
     boundaries.dedup();
+    Some(CurveSchedule {
+        boundaries,
+        landing,
+    })
+}
+
+fn landed_interval(
+    source: &SourceGrid,
+    mut beat: f64,
+    frame: u64,
+    landing: Option<(Duration, u64)>,
+) -> Option<(f64, f64, Option<f64>)> {
+    if let Some((position, at)) = landing
+        && frame == at
+    {
+        beat = source.beat_at(position.as_secs_f64())?;
+    }
+    let (slope, source_end) = source.interval_at(beat)?;
+    Some((beat, slope, source_end))
+}
+
+fn correction_terminal(
+    host: &TempoTrajectory,
+    source: &SourceGrid,
+    start: SessionFrame,
+    first_beat: f64,
+    beat: f64,
+    frame: u64,
+    correction: &Correction,
+) -> Option<(u64, f64)> {
+    let rate = f64::from(host.sample_rate().get());
+    let phase = correction.phase + beat
+        - first_beat
+        - host_advance(host, start, session_frame(start, frame)?)?;
+    let frames = (phase.abs() * rate * correction.scale / f64::from(correction.epsilon))
+        .ceil()
+        .to_u64()?;
+    let end = frame.checked_add(frames)?;
+    let offset = if frames == 0 {
+        0.0
+    } else {
+        -phase * rate / frames.to_f64()?
+    };
+    let target =
+        beat + host_advance(
+            host,
+            session_frame(start, frame)?,
+            session_frame(start, end)?,
+        )? + offset * frames.to_f64()? / rate;
+    source.media_at(target)?;
+    Some((end, offset))
+}
+
+fn source_law(
+    host: &TempoTrajectory,
+    start: SessionFrame,
+    frame: u64,
+    slope: f64,
+    terminal: Option<(u64, f64)>,
+    offsets: &[(u64, f64)],
+    laws: &mut Vec<(u64, ExponentialApproach)>,
+) -> Option<(ExponentialApproach, CorrectionOffset)> {
+    let offset = match terminal {
+        Some((end, offset)) if frame < end => CorrectionOffset::Beat(offset),
+        Some(_) => CorrectionOffset::Beat(0.0),
+        None => CorrectionOffset::Media(
+            offsets
+                .get(
+                    offsets
+                        .partition_point(|(at, _)| *at <= frame)
+                        .checked_sub(1)?,
+                )?
+                .1,
+        ),
+    };
+    let law = host_law(host, session_frame(start, frame)?, offset.beats(slope))?;
+    push_law(laws, frame, law.scaled(slope)?)?;
+    Some((law, offset))
+}
+
+struct CurveCrossing {
+    through: u64,
+    source_crossing: Option<u64>,
+}
+
+fn next_curve_frame(
+    next: Option<u64>,
+    source_end: Option<f64>,
+    law: ExponentialApproach,
+    beat: f64,
+    rate: f64,
+    frame: u64,
+) -> Result<Option<CurveCrossing>, ()> {
+    let source_crossing = match source_end {
+        Some(end) => Some(crossing(law, end - beat, rate).ok_or(())?),
+        None => None,
+    };
+    let through = match (next, source_crossing) {
+        (Some(next), Some(crossing)) => next.min(frame.checked_add(crossing).ok_or(())?),
+        (Some(next), None) => next,
+        (None, Some(crossing)) => frame.checked_add(crossing).ok_or(())?,
+        (None, None) => return Ok(None),
+    };
+    Ok(Some(CurveCrossing {
+        through,
+        source_crossing,
+    }))
+}
+
+fn bridge_source_law(
+    source: &SourceGrid,
+    host: &TempoTrajectory,
+    start: SessionFrame,
+    frames: std::ops::Range<u64>,
+    beat: f64,
+    law: ExponentialApproach,
+    offset: CorrectionOffset,
+) -> Option<(f64, f64)> {
+    let rate = f64::from(host.sample_rate().get());
+    let before = frames.end.checked_sub(1)?;
+    let preceding = beat + law.advance(before.checked_sub(frames.start)?.to_f64()?)? / rate;
+    let reached = bridge_beat(
+        source,
+        host_law(host, session_frame(start, before)?, 0.0)?,
+        preceding,
+        offset,
+        rate,
+    )?;
+    let speed = (source.media_at(reached)? - source.media_at(preceding)?) * rate;
+    Some((reached, speed))
+}
+
+fn curve_reached(
+    source: &SourceGrid,
+    host: &TempoTrajectory,
+    start: SessionFrame,
+    frames: std::ops::Range<u64>,
+    source_basis: (f64, Option<f64>, Option<u64>),
+    law: (ExponentialApproach, CorrectionOffset),
+    laws: &mut Vec<(u64, ExponentialApproach)>,
+) -> Option<f64> {
+    let (beat, source_end, source_crossing) = source_basis;
+    let (law, offset) = law;
+    let rate = f64::from(host.sample_rate().get());
+    let elapsed = frames.end.checked_sub(frames.start)?.to_f64()?;
+    let mut reached = beat + law.advance(elapsed)? / rate;
+    if source_end.is_some_and(|end| reached > end)
+        && source_crossing
+            .is_some_and(|crossing| frames.start.checked_add(crossing) == Some(frames.end))
+    {
+        let before = frames.end.checked_sub(1)?;
+        let (bridged, speed) = bridge_source_law(source, host, start, frames, beat, law, offset)?;
+        reached = bridged;
+        push_law(laws, before, ExponentialApproach::new(speed, speed, 0.0)?)?;
+    }
+    Some(reached)
+}
+
+fn speed_curve(laws: Vec<(u64, ExponentialApproach)>) -> Option<SpeedCurve> {
+    if laws.len() > 1 {
+        Some(SpeedCurve::ApproachSteps(laws.into()))
+    } else {
+        let first = laws.first()?.1;
+        let rounded = first.target().to_f32()?;
+        if first.time_constant() == 0.0 && f64::from(rounded) == first.target() {
+            Some(SpeedCurve::Constant(rounded))
+        } else {
+            Some(SpeedCurve::Approach(first))
+        }
+    }
+}
+
+pub(super) fn curve(
+    host: &TempoTrajectory,
+    source: &SourceGrid,
+    media: Duration,
+    start: SessionFrame,
+    landing: Option<(Duration, SessionFrame)>,
+    offsets: &[(u64, f64)],
+    correction: Option<&Correction>,
+) -> Option<(SpeedCurve, u64)> {
+    let rate = f64::from(host.sample_rate().get());
+    let first_beat = source.beat_at(media.as_secs_f64())?;
+    let mut beat = first_beat;
+    let CurveSchedule {
+        mut boundaries,
+        landing,
+    } = curve_boundaries(host, start, landing, offsets, correction)?;
     let mut frame = 0;
     let mut terminal = None;
     let mut laws = Vec::new();
     loop {
-        if let Some((position, at)) = landing
-            && frame == at
-        {
-            beat = source.beat_at(position.as_secs_f64())?;
-        }
-        let (slope, source_end) = source.interval_at(beat)?;
+        let (landed, slope, source_end) = landed_interval(source, beat, frame, landing)?;
+        beat = landed;
         if let Some(correction) = &correction
             && frame >= correction.starts
             && terminal.is_none()
         {
-            let phase = correction.phase + beat
-                - first_beat
-                - host_advance(host, start, session_frame(start, frame)?)?;
-            let frames = (phase.abs() * rate * correction.scale / f64::from(correction.epsilon))
-                .ceil()
-                .to_u64()?;
-            let end = frame.checked_add(frames)?;
-            let offset = if frames == 0 {
-                0.0
-            } else {
-                -phase * rate / frames.to_f64()?
-            };
-            let target =
-                beat + host_advance(
-                    host,
-                    session_frame(start, frame)?,
-                    session_frame(start, end)?,
-                )? + offset * frames.to_f64()? / rate;
-            source.media_at(target)?;
+            let (end, offset) =
+                correction_terminal(host, source, start, first_beat, beat, frame, correction)?;
             terminal = Some((end, offset));
             boundaries.push(end);
             boundaries.sort_unstable();
             boundaries.dedup();
         }
-        let offset = match terminal {
-            Some((end, offset)) if frame < end => CorrectionOffset::Beat(offset),
-            Some(_) => CorrectionOffset::Beat(0.0),
-            None => CorrectionOffset::Media(
-                offsets
-                    .get(
-                        offsets
-                            .partition_point(|(at, _)| *at <= frame)
-                            .checked_sub(1)?,
-                    )?
-                    .1,
-            ),
-        };
-        let law = host_law(host, session_frame(start, frame)?, offset.beats(slope))?;
-        push_law(&mut laws, frame, law.scaled(slope)?)?;
+        let (law, offset) = source_law(host, start, frame, slope, terminal, offsets, &mut laws)?;
         let next = boundaries.iter().copied().find(|next| *next > frame);
-        let source_crossing = match source_end {
-            Some(end) => Some(crossing(law, end - beat, rate)?),
-            None => None,
+        let Some(CurveCrossing {
+            through,
+            source_crossing,
+        }) = next_curve_frame(next, source_end, law, beat, rate, frame).ok()?
+        else {
+            break;
         };
-        let through = match (next, source_crossing) {
-            (Some(next), Some(crossing)) => next.min(frame.checked_add(crossing)?),
-            (Some(next), None) => next,
-            (None, Some(crossing)) => frame.checked_add(crossing)?,
-            (None, None) => break,
-        };
-        let elapsed = through.checked_sub(frame)?.to_f64()?;
-        let mut reached = beat + law.advance(elapsed)? / rate;
-        if source_end.is_some_and(|end| reached > end)
-            && source_crossing.is_some_and(|crossing| frame.checked_add(crossing) == Some(through))
-        {
-            let before = through.checked_sub(1)?;
-            let preceding = beat + law.advance(before.checked_sub(frame)?.to_f64()?)? / rate;
-            reached = bridge_beat(
-                source,
-                host_law(host, session_frame(start, before)?, 0.0)?,
-                preceding,
-                offset,
-                rate,
-            )?;
-            let speed = (source.media_at(reached)? - source.media_at(preceding)?) * rate;
-            push_law(
-                &mut laws,
-                before,
-                ExponentialApproach::new(speed, speed, 0.0)?,
-            )?;
-        }
-        beat = reached;
+        beat = curve_reached(
+            source,
+            host,
+            start,
+            frame..through,
+            (beat, source_end, source_crossing),
+            (law, offset),
+            &mut laws,
+        )?;
         frame = through;
     }
     let frames = terminal.map_or(0, |(end, _)| end);
-    let curve = if laws.len() > 1 {
-        SpeedCurve::ApproachSteps(laws.into())
-    } else {
-        let first = laws.first()?.1;
-        let rounded = first.target().to_f32()?;
-        if first.time_constant() == 0.0 && f64::from(rounded) == first.target() {
-            SpeedCurve::Constant(rounded)
-        } else {
-            SpeedCurve::Approach(first)
-        }
-    };
-    Some((curve, frames))
+    Some((speed_curve(laws)?, frames))
 }

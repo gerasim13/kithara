@@ -196,7 +196,7 @@ impl PeakLimiter {
             return 0.0;
         };
         let mut peak = 0.0_f32;
-        for branch in self.taps.chunks_exact(Self::DETECTOR_TAPS) {
+        for branch in self.taps.as_chunks::<{ Self::DETECTOR_TAPS }>().0 {
             let mut sum = 0.0_f32;
             for (tap, coefficient) in branch.iter().enumerate() {
                 let position = base + tap as isize - Self::DETECTOR_HALF_WIDTH as isize;

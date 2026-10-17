@@ -205,13 +205,7 @@ where
             block_on_underrun,
         } = config.into();
         let cancel = audio.cancel().cloned();
-        if self.0.dispatcher.is_cancelled()
-            || cancel
-                .as_ref()
-                .is_some_and(kithara_platform::CancelToken::is_cancelled)
-        {
-            return Err(LoadRefusal::Cancelled);
-        }
+        self.check_load_cancelled(cancel.as_ref())?;
         if preload_chunks > audio_buffer_chunks {
             return Err(LoadRefusal::Open(DecodeError::InvalidData {
                 detail: "lane preload quota exceeds PCM ring capacity",
@@ -226,32 +220,9 @@ where
                 self.pools().clone(),
             ))
             .await;
-            if self.0.dispatcher.is_cancelled()
-                || cancel
-                    .as_ref()
-                    .is_some_and(kithara_platform::CancelToken::is_cancelled)
-            {
-                return Err(LoadRefusal::Cancelled);
-            }
+            self.check_load_cancelled(cancel.as_ref())?;
             let mut audio = prepared.map_err(decode_refusal)?;
-            let position = if position.is_zero() {
-                position
-            } else {
-                let raw_position = audio
-                    .media_origin()
-                    .and_then(|origin| origin.checked_add(position))
-                    .ok_or(LoadRefusal::Open(DecodeError::InvalidData {
-                        detail: "initial media target has no raw source translation",
-                    }))?;
-                match audio.seek(raw_position).map_err(|error| match error {
-                    AudioReadError::Decode(error) => decode_refusal(error),
-                    error => LoadRefusal::Source(TrackFailureKind::from(&error)),
-                })? {
-                    SeekOutcome::Pending { .. } => audio.position(),
-                    SeekOutcome::Landed { landed_at, .. } => landed_at,
-                    SeekOutcome::PastEof { duration, .. } => duration,
-                }
-            };
+            let position = initial_position(&mut audio, position)?;
             let spec = audio.spec();
             let initial = AudioChunkInfo {
                 spec,
@@ -293,13 +264,7 @@ where
                 })
             })
             .await;
-            if self.0.dispatcher.is_cancelled()
-                || cancel
-                    .as_ref()
-                    .is_some_and(kithara_platform::CancelToken::is_cancelled)
-            {
-                return Err(LoadRefusal::Cancelled);
-            }
+            self.check_load_cancelled(cancel.as_ref())?;
             let renderer = prepared
                 .map_err(|error| DecodeError::audio_stream("lane renderer preparation task", error))
                 .map_err(decode_refusal)?
@@ -329,16 +294,43 @@ where
             ));
             (receiver, lane)
         };
-        if self.0.dispatcher.is_cancelled()
-            || cancel
-                .as_ref()
-                .is_some_and(kithara_platform::CancelToken::is_cancelled)
-        {
-            return Err(LoadRefusal::Cancelled);
-        }
+        self.check_load_cancelled(cancel.as_ref())?;
         let latency = lane.engine_latency();
         Ok((receiver, *lane, latency))
     }
+
+    fn check_load_cancelled(
+        &self,
+        cancel: Option<&kithara_platform::CancelToken>,
+    ) -> Result<(), LoadRefusal> {
+        if self.0.dispatcher.is_cancelled()
+            || cancel.is_some_and(kithara_platform::CancelToken::is_cancelled)
+        {
+            return Err(LoadRefusal::Cancelled);
+        }
+        Ok(())
+    }
+}
+
+fn initial_position<S>(audio: &mut Audio<S>, position: Duration) -> Result<Duration, LoadRefusal> {
+    Ok(if position.is_zero() {
+        position
+    } else {
+        let raw_position = audio
+            .media_origin()
+            .and_then(|origin| origin.checked_add(position))
+            .ok_or(LoadRefusal::Open(DecodeError::InvalidData {
+                detail: "initial media target has no raw source translation",
+            }))?;
+        match audio.seek(raw_position).map_err(|error| match error {
+            AudioReadError::Decode(error) => decode_refusal(error),
+            error => LoadRefusal::Source(TrackFailureKind::from(&error)),
+        })? {
+            SeekOutcome::Pending { .. } => audio.position(),
+            SeekOutcome::Landed { landed_at, .. } => landed_at,
+            SeekOutcome::PastEof { duration, .. } => duration,
+        }
+    })
 }
 
 fn decode_refusal(error: DecodeError) -> LoadRefusal {

@@ -150,16 +150,7 @@ impl PlayerTrack {
             self.gate.apply(scratch, written.clone());
             self.fade.mix_range(scratch, bus, written);
         }
-        if frames < limit && self.state == SlotState::Playing {
-            if self.gap == 0 && !self.stopping() {
-                sink.metrics.record_underrun();
-            }
-            if !self.stopping() {
-                self.gap = self
-                    .gap
-                    .saturating_add(u32::try_from(limit - frames).unwrap_or(u32::MAX));
-            }
-        }
+        self.record_missing_frames(frames, limit, sink);
         match outcome {
             ReadOutcome::Partial { .. } => TrackReadOutcome::Partial {
                 frames,
@@ -172,6 +163,19 @@ impl PlayerTrack {
                 frames_until_eof: self.resource.frames_until_eof(),
             },
             ReadOutcome::Eof | ReadOutcome::Failed(_) => unreachable!(),
+        }
+    }
+
+    fn record_missing_frames(&mut self, frames: usize, limit: usize, sink: &mut RtSink<'_>) {
+        if frames < limit && self.state == SlotState::Playing {
+            if self.gap == 0 && !self.stopping() {
+                sink.metrics.record_underrun();
+            }
+            if !self.stopping() {
+                self.gap = self
+                    .gap
+                    .saturating_add(u32::try_from(limit - frames).unwrap_or(u32::MAX));
+            }
         }
     }
 

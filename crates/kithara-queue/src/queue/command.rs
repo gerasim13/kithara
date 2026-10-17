@@ -113,45 +113,24 @@ where
     ) -> Result<Option<Seq>, QueueError> {
         self.validate_command(&command)?;
         match command {
-            QueueCommand::Append {
-                id,
-                source,
-                position,
-            } => {
-                self.insert_entry(id, source, position, Placement::Append);
-                self.arm_initial_load(output, out);
-                Ok(None)
-            }
-            QueueCommand::Insert { id, source, after } => {
-                let index = match after {
-                    Some(after) => {
-                        self.tracks
-                            .records()
-                            .iter()
-                            .position(|record| record.id == after)
-                            .ok_or(QueueError::UnknownTrackId(after))?
-                            + 1
-                    }
-                    None => 0,
-                };
-                self.insert_entry(id, source, Position::ZERO, Placement::At(index));
-                if after == self.current && self.current.is_some() {
-                    self.cancel_auto(out)?;
-                }
-                self.arm_initial_load(output, out);
-                Ok(None)
-            }
-            QueueCommand::Remove(id) => self.remove_entry(id, output, out),
-            QueueCommand::RemoveAll => self.clear_entries(out),
-            QueueCommand::SetTracks(sources) => {
-                self.clear_entries(out)?;
-                for source in sources {
-                    let id = TrackId::allocate();
-                    self.insert_entry(id, source, Position::ZERO, Placement::Append);
-                }
-                self.arm_initial_load(output, out);
-                Ok(None)
-            }
+            command @ (QueueCommand::Append { .. }
+            | QueueCommand::Insert { .. }
+            | QueueCommand::Remove(_)
+            | QueueCommand::RemoveAll
+            | QueueCommand::SetTracks(_)
+            | QueueCommand::Load(_)
+            | QueueCommand::Tick
+            | QueueCommand::Close) => self.apply_items(command, output, out),
+            command @ (QueueCommand::ConfigureQueue(..)
+            | QueueCommand::SetActionAtItemEnd(_)
+            | QueueCommand::SetPlaybackOrder(_)
+            | QueueCommand::SetRepeat(_)
+            | QueueCommand::SetVolume(_)
+            | QueueCommand::SetLevel(_)
+            | QueueCommand::SetMuted(_)
+            | QueueCommand::SetEqGain { .. }
+            | QueueCommand::SetEqLayout(_)
+            | QueueCommand::ResetEq) => self.apply_queue_settings(command, out),
             QueueCommand::Select { id, transition } => self.request_transition(
                 TransitionRequest {
                     id,
@@ -191,7 +170,97 @@ where
             QueueCommand::Pause { at } => self.pause_at(at, out),
             QueueCommand::Seek { to } => self.seek_to(to, out),
             QueueCommand::ConfigureTrack(change, at) => self.configure_tracks(change, at, out),
-            QueueCommand::ConfigureQueue(change, at) => self.configure_queue(change, at, out),
+            QueueCommand::NotifyInterruption(kind) => {
+                self.deck.suspended = out.notify_interruption(kind)?;
+                Ok(None)
+            }
+        }
+    }
+}
+
+impl<S, F> Queue<S, F>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    F: TrackFactory<S>,
+{
+    fn apply_items(
+        &mut self,
+        command: QueueCommand<S>,
+        output: Option<&OutputSnapshot>,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<Option<Seq>, QueueError> {
+        match command {
+            QueueCommand::Append {
+                id,
+                source,
+                position,
+            } => {
+                self.insert_entry(id, source, position, Placement::Append);
+                self.arm_initial_load(output, out);
+                Ok(None)
+            }
+            QueueCommand::Insert { id, source, after } => {
+                self.insert_after(id, source, after, output, out)
+            }
+            QueueCommand::Remove(id) => self.remove_entry(id, output, out),
+            QueueCommand::RemoveAll => self.clear_entries(out),
+            QueueCommand::SetTracks(sources) => {
+                self.clear_entries(out)?;
+                for source in sources {
+                    let id = TrackId::allocate();
+                    self.insert_entry(id, source, Position::ZERO, Placement::Append);
+                }
+                self.arm_initial_load(output, out);
+                Ok(None)
+            }
+            QueueCommand::Load(report) => {
+                self.tracks.apply_report(report);
+                Ok(None)
+            }
+            QueueCommand::Tick => {
+                if let Some((now, _)) = self.clock {
+                    Player::tick(self, now, out);
+                }
+                Ok(None)
+            }
+            QueueCommand::Close => self.close_tracks(out).map_err(Into::into),
+            _ => unreachable!("item dispatch accepts only item lifecycle commands"),
+        }
+    }
+
+    fn insert_after(
+        &mut self,
+        id: TrackId,
+        source: TrackSource<S>,
+        after: Option<TrackId>,
+        output: Option<&OutputSnapshot>,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<Option<Seq>, QueueError> {
+        let index = match after {
+            Some(after) => {
+                self.tracks
+                    .records()
+                    .iter()
+                    .position(|record| record.id == after)
+                    .ok_or(QueueError::UnknownTrackId(after))?
+                    + 1
+            }
+            None => 0,
+        };
+        self.insert_entry(id, source, Position::ZERO, Placement::At(index));
+        if after == self.current && self.current.is_some() {
+            self.cancel_auto(out)?;
+        }
+        self.arm_initial_load(output, out);
+        Ok(None)
+    }
+
+    fn apply_queue_settings(
+        &mut self,
+        command: QueueCommand<S>,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<Option<Seq>, QueueError> {
+        match command {
             QueueCommand::SetActionAtItemEnd(action) => {
                 self.config.action_at_item_end = action;
                 self.announce(QueueEvent::ActionAtItemEndChanged { action });
@@ -207,28 +276,7 @@ where
                 self.cancel_auto(out)?;
                 Ok(None)
             }
-            QueueCommand::SetRepeat(mode) => {
-                self.navigation.set_repeat(mode);
-                let mode = match mode {
-                    RepeatMode::Off => QueueRepeatMode::Off,
-                    RepeatMode::One => QueueRepeatMode::One,
-                    RepeatMode::All => QueueRepeatMode::All,
-                };
-                self.announce(QueueEvent::RepeatModeChanged { mode });
-                self.cancel_auto(out)?;
-                Ok(None)
-            }
-            QueueCommand::Load(report) => {
-                self.tracks.apply_report(report);
-                Ok(None)
-            }
-            QueueCommand::Tick => {
-                if let Some((now, _)) = self.clock {
-                    Player::tick(self, now, out);
-                }
-                Ok(None)
-            }
-            QueueCommand::Close => self.close_tracks(out).map_err(Into::into),
+            QueueCommand::SetRepeat(mode) => self.set_repeat_mode(mode, out),
             QueueCommand::SetVolume(volume) => out
                 .mix(
                     When::Next,
@@ -256,11 +304,25 @@ where
                     })
                     .collect())
                 .map_err(Into::into),
-            QueueCommand::NotifyInterruption(kind) => {
-                self.deck.suspended = out.notify_interruption(kind)?;
-                Ok(None)
-            }
+            QueueCommand::ConfigureQueue(change, at) => self.configure_queue(change, at, out),
+            _ => unreachable!("settings dispatch accepts only queue settings commands"),
         }
+    }
+
+    fn set_repeat_mode(
+        &mut self,
+        mode: RepeatMode,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<Option<Seq>, QueueError> {
+        self.navigation.set_repeat(mode);
+        let mode = match mode {
+            RepeatMode::Off => QueueRepeatMode::Off,
+            RepeatMode::One => QueueRepeatMode::One,
+            RepeatMode::All => QueueRepeatMode::All,
+        };
+        self.announce(QueueEvent::RepeatModeChanged { mode });
+        self.cancel_auto(out)?;
+        Ok(None)
     }
 }
 
@@ -414,25 +476,8 @@ where
             return Err(PlayError::Untimed.into());
         }
         let current = self.active_current_index();
-        let mut deck_cost = 0;
-        let mut moves_current = false;
-        for &(index, when) in &receivers {
-            let cost = self
-                .active
-                .get_mut(index)
-                .ok_or(PlayError::NoActiveSlot)?
-                .track
-                .admit(change, when, out)?;
-            deck_cost += cost.unwrap_or(0);
-            moves_current |= Some(index) == current && cost.is_some();
-        }
-        for parked in self
-            .active
-            .parked_iter_mut()
-            .filter(|parked| parked.track.snapshot().as_ref().status != PlayingStatus::Released)
-        {
-            deck_cost += parked.track.admit(change, When::Next, out)?.unwrap_or(0);
-        }
+        let (deck_cost, moves_current) =
+            self.admit_track_settings(change, &receivers, current, out)?;
         let withdraw = matches!(change, TrackSettingsChange::Speed(_))
             && moves_current
             && self.target.is_some_and(|target| {
@@ -450,6 +495,50 @@ where
         if deck_cost + usize::from(withdraw) > out.deck_available() {
             return Err(PlayError::Full("deck").into());
         }
+        let moved = self.apply_track_settings(change, receivers, current, out)?;
+        self.config.track.apply_change(change);
+        if withdraw && moved {
+            self.withdraw_auto(out)?;
+        }
+        Ok(None)
+    }
+
+    fn admit_track_settings(
+        &mut self,
+        change: TrackSettingsChange,
+        receivers: &[(usize, When<SessionFrame>)],
+        current: Option<usize>,
+        out: &Outbox<'_, S>,
+    ) -> Result<(usize, bool), PlayError> {
+        let mut deck_cost = 0;
+        let mut moves_current = false;
+        for &(index, when) in receivers {
+            let cost = self
+                .active
+                .get_mut(index)
+                .ok_or(PlayError::NoActiveSlot)?
+                .track
+                .admit(change, when, out)?;
+            deck_cost += cost.unwrap_or(0);
+            moves_current |= Some(index) == current && cost.is_some();
+        }
+        for parked in self
+            .active
+            .parked_iter_mut()
+            .filter(|parked| parked.track.snapshot().as_ref().status != PlayingStatus::Released)
+        {
+            deck_cost += parked.track.admit(change, When::Next, out)?.unwrap_or(0);
+        }
+        Ok((deck_cost, moves_current))
+    }
+
+    fn apply_track_settings(
+        &mut self,
+        change: TrackSettingsChange,
+        receivers: Vec<(usize, When<SessionFrame>)>,
+        current: Option<usize>,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<bool, PlayError> {
         let mut moved = false;
         for (index, when) in receivers {
             let sent = self
@@ -469,11 +558,7 @@ where
                 .track
                 .apply(TrackCommand::Configure(change, When::Next), out)?;
         }
-        self.config.track.apply_change(change);
-        if withdraw && moved {
-            self.withdraw_auto(out)?;
-        }
-        Ok(None)
+        Ok(moved)
     }
 
     fn set_eq_gain(

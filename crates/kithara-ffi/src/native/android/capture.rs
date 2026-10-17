@@ -133,37 +133,7 @@ fn render(input: &Path, output: &Path, seconds: u32) -> Result<(), CaptureError>
     let id = control
         .append(config)
         .map_err(|err| CaptureError::step("queue-append", err))?;
-    crate::FFI_RUNTIME.block_on(async {
-        timeout(Duration::from_secs(20), async {
-            loop {
-                let event = events
-                    .recv()
-                    .await
-                    .map_err(|err| CaptureError::step("resource-preload", err))?
-                    .event;
-                match event {
-                    QueueEvent::TrackStatusChanged {
-                        id: loaded,
-                        status: TrackStatus::Loaded,
-                    } if loaded == id => return Ok(()),
-                    QueueEvent::TrackStatusChanged {
-                        id: failed,
-                        status: TrackStatus::Failed(reason),
-                    } if failed == id => {
-                        return Err(CaptureError::step(
-                            "resource-preload",
-                            format!("{}: {reason}", input.display()),
-                        ));
-                    }
-                    _ => {}
-                }
-            }
-        })
-        .await
-        .map_err(|err| {
-            CaptureError::step("resource-preload", format!("{}: {err}", input.display()))
-        })?
-    })?;
+    wait_for_track(&mut events, id, input)?;
 
     let mut file = File::create(output)
         .map_err(|err| CaptureError::step("output-open", format!("{}: {err}", output.display())))?;
@@ -205,6 +175,45 @@ fn render(input: &Path, output: &Path, seconds: u32) -> Result<(), CaptureError>
         samples = sink.samples,
         "offline capture: done"
     );
+    Ok(())
+}
+
+fn wait_for_track(
+    events: &mut kithara::events::EventReceiver<QueueEvent>,
+    id: kithara::events::TrackId,
+    input: &Path,
+) -> Result<(), CaptureError> {
+    crate::FFI_RUNTIME.block_on(async {
+        timeout(Duration::from_secs(20), async {
+            loop {
+                let event = events
+                    .recv()
+                    .await
+                    .map_err(|err| CaptureError::step("resource-preload", err))?
+                    .event;
+                match event {
+                    QueueEvent::TrackStatusChanged {
+                        id: loaded,
+                        status: TrackStatus::Loaded,
+                    } if loaded == id => return Ok(()),
+                    QueueEvent::TrackStatusChanged {
+                        id: failed,
+                        status: TrackStatus::Failed(reason),
+                    } if failed == id => {
+                        return Err(CaptureError::step(
+                            "resource-preload",
+                            format!("{}: {reason}", input.display()),
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+        })
+        .await
+        .map_err(|err| {
+            CaptureError::step("resource-preload", format!("{}: {err}", input.display()))
+        })?
+    })?;
     Ok(())
 }
 

@@ -63,14 +63,7 @@ impl TryFrom<(&[u8], &AnalysisFingerprint)> for TrackAnalysis {
         }
 
         let token = reader.read_str()?;
-        let source_sample_rate = NonZeroU32::new(reader.read_u32()?).ok_or(BlobError::Corrupt)?;
-        let has_origin = reader.read_bool()?;
-        let origin_secs = reader.read_u64()?;
-        let origin_nanos = reader.read_u32()?;
-        if origin_nanos >= 1_000_000_000 || !has_origin && (origin_secs != 0 || origin_nanos != 0) {
-            return Err(BlobError::Corrupt);
-        }
-        let media_origin = has_origin.then(|| Duration::new(origin_secs, origin_nanos));
+        let (source_sample_rate, media_origin) = read_source_axis(&mut reader)?;
         let extent = reader.read_optional_u64()?;
         let revision = reader.read_u64()?;
         let settled = reader.read_bool()?;
@@ -128,6 +121,20 @@ impl TryFrom<(&[u8], &AnalysisFingerprint)> for TrackAnalysis {
             .maybe_beat(grid.map(|grid| BeatSnapshot::new(grid, state, unanalysed)))
             .build())
     }
+}
+
+fn read_source_axis(reader: &mut Reader<'_>) -> Result<(NonZeroU32, Option<Duration>), BlobError> {
+    let source_sample_rate = NonZeroU32::new(reader.read_u32()?).ok_or(BlobError::Corrupt)?;
+    let has_origin = reader.read_bool()?;
+    let origin_secs = reader.read_u64()?;
+    let origin_nanos = reader.read_u32()?;
+    if origin_nanos >= 1_000_000_000 || !has_origin && (origin_secs != 0 || origin_nanos != 0) {
+        return Err(BlobError::Corrupt);
+    }
+    Ok((
+        source_sample_rate,
+        has_origin.then(|| Duration::new(origin_secs, origin_nanos)),
+    ))
 }
 
 fn write_ranges(writer: &mut Writer<'_>, ranges: &[Range<u64>]) {

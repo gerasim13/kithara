@@ -148,22 +148,7 @@ impl AppleAudioFileDemuxer {
     where
         S: HasPool<u8>,
     {
-        let pcm_data_bytes = if codec == AudioCodec::Pcm
-            && hint == Some(consts::FILE_WAVE_TYPE)
-            && open_mode != SourceOpenMode::Complete
-        {
-            let data = crate::factory::wav_data_range(&mut source)?;
-            if let SourceOpenMode::Segmented(end) = open_mode
-                && data.end > end
-            {
-                return Err(DecodeError::InvalidData {
-                    detail: "apple.audio_file: WAV data exceeds the declared source extent",
-                });
-            }
-            Some(data.end - data.start)
-        } else {
-            None
-        };
+        let pcm_data_bytes = Self::pcm_data_bytes(&mut source, hint, codec, open_mode)?;
         let file = match (open_mode, codec) {
             (SourceOpenMode::Segmented(end), _) => {
                 AppleAudioFile::open_segmented(source, hint, end, pools)?
@@ -174,40 +159,8 @@ impl AppleAudioFileDemuxer {
             _ => AppleAudioFile::open(source, hint, pools)?,
         };
         let mut asbd = file.data_format;
-        let matches_codec = match codec {
-            AudioCodec::Pcm => asbd.format_id == consts::FORMAT_LINEAR_PCM,
-            AudioCodec::Flac => asbd.format_id == consts::FORMAT_FLAC,
-            AudioCodec::Alac => asbd.format_id == consts::FORMAT_APPLE_LOSSLESS,
-            AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => matches!(
-                asbd.format_id,
-                consts::FORMAT_MPEG4_AAC | AUDIO_FORMAT_MPEG4_AAC_HE | AUDIO_FORMAT_MPEG4_AAC_HE_V2
-            ),
-            _ => false,
-        };
-        if !matches_codec {
-            return Err(DecodeError::InvalidData {
-                detail: "apple.audio_file: codec does not match supplied metadata",
-            });
-        }
-        let total_packets = match pcm_data_bytes {
-            Some(bytes) => {
-                let packet_bytes = u64::from(asbd.bytes_per_packet);
-                let packet_frames = u64::from(asbd.frames_per_packet);
-                let frame_bytes = u64::from(asbd.bytes_per_frame);
-                if packet_bytes == 0
-                    || packet_frames == 0
-                    || frame_bytes == 0
-                    || frame_bytes.checked_mul(packet_frames) != Some(packet_bytes)
-                    || !bytes.is_multiple_of(packet_bytes)
-                {
-                    return Err(DecodeError::InvalidData {
-                        detail: "apple.audio_file: WAV data does not match native PCM packet geometry",
-                    });
-                }
-                Some(bytes / packet_bytes)
-            }
-            None => file.packet_count,
-        };
+        Self::validate_codec(codec, asbd.format_id)?;
+        let total_packets = Self::packet_count(&file, pcm_data_bytes)?;
         let extra_data = match codec {
             AudioCodec::Pcm => pod_to_vec(&asbd),
             _ => file.magic_cookie().unwrap_or_default(),
@@ -302,6 +255,75 @@ impl AppleAudioFileDemuxer {
             next_packet: 0,
             byte_len: None,
             byte_map: None,
+        })
+    }
+
+    fn validate_codec(codec: AudioCodec, format_id: u32) -> DecodeResult<()> {
+        let matches_codec = match codec {
+            AudioCodec::Pcm => format_id == consts::FORMAT_LINEAR_PCM,
+            AudioCodec::Flac => format_id == consts::FORMAT_FLAC,
+            AudioCodec::Alac => format_id == consts::FORMAT_APPLE_LOSSLESS,
+            AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => matches!(
+                format_id,
+                consts::FORMAT_MPEG4_AAC | AUDIO_FORMAT_MPEG4_AAC_HE | AUDIO_FORMAT_MPEG4_AAC_HE_V2
+            ),
+            _ => false,
+        };
+        if !matches_codec {
+            return Err(DecodeError::InvalidData {
+                detail: "apple.audio_file: codec does not match supplied metadata",
+            });
+        }
+        Ok(())
+    }
+
+    fn pcm_data_bytes(
+        source: &mut BoxedSource,
+        hint: Option<u32>,
+        codec: AudioCodec,
+        open_mode: SourceOpenMode,
+    ) -> DecodeResult<Option<u64>> {
+        if codec == AudioCodec::Pcm
+            && hint == Some(consts::FILE_WAVE_TYPE)
+            && open_mode != SourceOpenMode::Complete
+        {
+            let data = crate::factory::wav_data_range(source)?;
+            if let SourceOpenMode::Segmented(end) = open_mode
+                && data.end > end
+            {
+                return Err(DecodeError::InvalidData {
+                    detail: "apple.audio_file: WAV data exceeds the declared source extent",
+                });
+            }
+            Ok(Some(data.end - data.start))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn packet_count(
+        file: &AppleAudioFile,
+        pcm_data_bytes: Option<u64>,
+    ) -> DecodeResult<Option<u64>> {
+        let asbd = file.data_format;
+        Ok(match pcm_data_bytes {
+            Some(bytes) => {
+                let packet_bytes = u64::from(asbd.bytes_per_packet);
+                let packet_frames = u64::from(asbd.frames_per_packet);
+                let frame_bytes = u64::from(asbd.bytes_per_frame);
+                if packet_bytes == 0
+                    || packet_frames == 0
+                    || frame_bytes == 0
+                    || frame_bytes.checked_mul(packet_frames) != Some(packet_bytes)
+                    || !bytes.is_multiple_of(packet_bytes)
+                {
+                    return Err(DecodeError::InvalidData {
+                        detail: "apple.audio_file: WAV data does not match native PCM packet geometry",
+                    });
+                }
+                Some(bytes / packet_bytes)
+            }
+            None => file.packet_count,
         })
     }
 

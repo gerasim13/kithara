@@ -24,7 +24,9 @@ fn pcm_deck_preserves_rate_samples_and_file_lifetime() {
     assert_eq!(bytes.len(), 76);
     assert_eq!(bytes[44..].len() / (2 * 4), samples.len());
     for (encoded, sample) in bytes[44..]
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .zip(samples.into_iter().flat_map(|sample| [sample, sample]))
     {
         assert_eq!(encoded, &sample.to_le_bytes());

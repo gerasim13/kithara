@@ -427,6 +427,30 @@ impl From<SourceSpan> for [u64; 24] {
     }
 }
 
+fn read_approach(words: &[u64; 24]) -> Result<Approach, ()> {
+    let offset = read_ratio(&words[19..23])?;
+    let offset = match words[18] {
+        0 => Offset::Add(offset),
+        1 => Offset::Subtract(offset),
+        _ => return Err(()),
+    };
+    let scale = read_ratio(&words[14..18])?;
+    if scale.numerator == 0 {
+        return Err(());
+    }
+    Ok(Approach {
+        curve: ExponentialApproach::new(
+            f64::from_bits(words[6]),
+            f64::from_bits(words[7]),
+            f64::from_bits(words[8]),
+        )
+        .ok_or(())?,
+        elapsed: words[9],
+        origin: read_ratio(&words[10..14])?,
+        affine: Affine { scale, offset },
+    })
+}
+
 impl TryFrom<[u64; 24]> for SourceSpan {
     type Error = ();
 
@@ -443,29 +467,7 @@ impl TryFrom<[u64; 24]> for SourceSpan {
                 step: joined(&words[10..12]),
                 step_change: i128::from_le_bytes(joined(&words[12..14]).to_le_bytes()),
             }),
-            1 => {
-                let offset = read_ratio(&words[19..23])?;
-                let offset = match words[18] {
-                    0 => Offset::Add(offset),
-                    1 => Offset::Subtract(offset),
-                    _ => return Err(()),
-                };
-                let scale = read_ratio(&words[14..18])?;
-                if scale.numerator == 0 {
-                    return Err(());
-                }
-                Mapping::Approach(Approach {
-                    curve: ExponentialApproach::new(
-                        f64::from_bits(words[6]),
-                        f64::from_bits(words[7]),
-                        f64::from_bits(words[8]),
-                    )
-                    .ok_or(())?,
-                    elapsed: words[9],
-                    origin: read_ratio(&words[10..14])?,
-                    affine: Affine { scale, offset },
-                })
-            }
+            1 => Mapping::Approach(read_approach(&words)?),
             _ => return Err(()),
         };
         mapping.validate(words[3]).ok_or(())?;

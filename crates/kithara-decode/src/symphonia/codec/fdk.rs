@@ -238,27 +238,20 @@ impl AacDecoder {
         let layout = channel_layout(channels)
             .ok_or(Error::Unsupported("aac: unsupported number of channels"))?;
         let spec = AudioSpec::new(output_rate, layout);
-        if let Some(output_delay) = self.output_delay {
-            if core_rate != self.config.sample_rate
-                || channels != self.config.channels
-                || object_type != self.config.object_type
-                || *self.buf.spec() != spec
-                || self.codec_params.max_frames_per_packet != Some(u64::from(frame_size))
-                || output_delay != info.outputDelay
-            {
-                return decode_error("aac: decoded stream geometry changed");
-            }
-            return Ok(frame_size);
-        }
-        if *self.buf.spec() != spec || self.buf.capacity() < samples_per_frame {
-            self.buf = audio_buffer(channels, output_rate, samples_per_frame)?;
-        }
-        self.config = AacStreamConfig {
+        let config = AacStreamConfig {
             channels,
             object_type,
             sample_rate: core_rate,
             sample_rate_index: sample_rate_index(core_rate),
         };
+        if self.output_delay.is_some() {
+            self.validate_metadata(config, &spec, frame_size, info.outputDelay)?;
+            return Ok(frame_size);
+        }
+        if *self.buf.spec() != spec || self.buf.capacity() < samples_per_frame {
+            self.buf = audio_buffer(channels, output_rate, samples_per_frame)?;
+        }
+        self.config = config;
         self.codec_params.sample_rate = Some(output_rate);
         self.codec_params.max_frames_per_packet = Some(u64::from(frame_size));
         self.delay_remaining = info.outputDelay;
@@ -274,6 +267,25 @@ impl AacDecoder {
             "AAC stream metadata refreshed from decoder",
         );
         Ok(frame_size)
+    }
+
+    fn validate_metadata(
+        &self,
+        config: AacStreamConfig,
+        spec: &AudioSpec,
+        frame_size: u32,
+        output_delay: u32,
+    ) -> Result<()> {
+        if config.sample_rate != self.config.sample_rate
+            || config.channels != self.config.channels
+            || config.object_type != self.config.object_type
+            || self.buf.spec() != spec
+            || self.codec_params.max_frames_per_packet != Some(u64::from(frame_size))
+            || self.output_delay != Some(output_delay)
+        {
+            return decode_error("aac: decoded stream geometry changed");
+        }
+        Ok(())
     }
 
     fn render_decoded(&mut self, info: &StreamInfo, draining: bool) -> Result<()> {

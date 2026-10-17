@@ -200,24 +200,7 @@ where
         }
         crate::session::state::ensure_ctx(&mut self.session)?;
         let prep = deck.resource_prep();
-        if let Some(prep) = prep
-            && let Some(quantum) = prep.warp.render_quantum_frames()
-        {
-            let shape = self
-                .session
-                .root_view
-                .output
-                .get()
-                .stream_shape
-                .ok_or(SessionError::NoContext)?;
-            if let Err(error) = shape.playback_buffers(quantum, prep.response_budget_frames) {
-                if self.decks.0.is_empty() {
-                    graph::idle(&mut self.session)?;
-                    graph::drop_idle_context(&mut self.session)?;
-                }
-                return Err(error.into());
-            }
-        }
+        self.validate_deck_buffers(prep)?;
         let bus = prep.map(|prep| prep.bus.clone());
         let worker = deck.worker().ok_or_else(|| {
             PlayError::Internal("a hosted deck requires its resource worker".into())
@@ -235,22 +218,7 @@ where
                 worker.clone(),
             ));
         }
-        let scope = self
-            .session
-            .channel
-            .as_mut()
-            .ok_or(PlayError::Closed)?
-            .open(deck.mixer_config().slots().get());
-        let scope = match scope {
-            Ok(scope) => scope,
-            Err(error) => {
-                if self.decks.0.is_empty() {
-                    graph::idle(&mut self.session)?;
-                    graph::drop_idle_context(&mut self.session)?;
-                }
-                return Err(PlayError::Internal(error.to_string()));
-            }
-        };
+        let scope = self.open_deck_scope(deck.mixer_config().slots().get())?;
         let (mut record, inputs) = Deck::new(deck, scope)?;
         if let Err(error) = graph::install_deck(&mut self.session, id, inputs, pools, bus) {
             if let Some(channel) = &mut self.session.channel {
@@ -273,6 +241,50 @@ where
         self.session.iteration_clock = self.session.iteration_clock.map(|(now, _)| (now, delivery));
         self.with_deck(id, &mut |deck, out, pass| deck.drain(pass, out))?;
         self.publish_root();
+        Ok(())
+    }
+
+    fn open_deck_scope(&mut self, slots: usize) -> Result<kithara_command::ScopeId, PlayError> {
+        let scope = self
+            .session
+            .channel
+            .as_mut()
+            .ok_or(PlayError::Closed)?
+            .open(slots);
+        match scope {
+            Ok(scope) => Ok(scope),
+            Err(error) => {
+                if self.decks.0.is_empty() {
+                    graph::idle(&mut self.session)?;
+                    graph::drop_idle_context(&mut self.session)?;
+                }
+                Err(PlayError::Internal(error.to_string()))
+            }
+        }
+    }
+
+    fn validate_deck_buffers(
+        &mut self,
+        prep: Option<&kithara_play::ResourcePrep<S>>,
+    ) -> Result<(), PlayError> {
+        if let Some(prep) = prep
+            && let Some(quantum) = prep.warp.render_quantum_frames()
+        {
+            let shape = self
+                .session
+                .root_view
+                .output
+                .get()
+                .stream_shape
+                .ok_or(SessionError::NoContext)?;
+            if let Err(error) = shape.playback_buffers(quantum, prep.response_budget_frames) {
+                if self.decks.0.is_empty() {
+                    graph::idle(&mut self.session)?;
+                    graph::drop_idle_context(&mut self.session)?;
+                }
+                return Err(error.into());
+            }
+        }
         Ok(())
     }
 
@@ -867,9 +879,8 @@ fn map_deck_rejection(
     }
 }
 
-impl<S: 'static, D: ?Sized + HostedDeck<S>> Drop for HostCore<S, D> {
-    #[kithara_test_utils::kithara::hang_watchdog(name = "host owner processor shutdown", timeout = kithara_test_utils::hang::default_timeout().min(kithara_platform::time::Duration::from_secs(4)))]
-    fn drop(&mut self) {
+impl<S: 'static, D: ?Sized + HostedDeck<S>> HostCore<S, D> {
+    fn close_decks_for_shutdown(&mut self) {
         for (_, record) in &mut self.decks.0 {
             if let Some(channel) = &mut self.session.channel {
                 if let Some(mut port) = channel.scope(record.scope) {
@@ -887,6 +898,13 @@ impl<S: 'static, D: ?Sized + HostedDeck<S>> Drop for HostCore<S, D> {
         if let Some(channel) = &mut self.session.channel {
             let _ = channel.publish();
         }
+    }
+}
+
+impl<S: 'static, D: ?Sized + HostedDeck<S>> Drop for HostCore<S, D> {
+    #[kithara_test_utils::kithara::hang_watchdog(name = "host owner processor shutdown", timeout = kithara_test_utils::hang::default_timeout().min(kithara_platform::time::Duration::from_secs(4)))]
+    fn drop(&mut self) {
+        self.close_decks_for_shutdown();
         self.session.stream = None;
         if let Some(ctx) = &mut self.session.ctx {
             #[cfg(not(target_arch = "wasm32"))]
@@ -921,17 +939,7 @@ impl<S: 'static, D: ?Sized + HostedDeck<S>> Drop for HostCore<S, D> {
                             if let Err(error) = context.update() {
                                 tracing::warn!(?error, "browser shutdown graph update failed");
                             }
-                            if !retired && let Some(store) = context.proc_store_mut() {
-                                if let Some(transport) = store.try_get_mut::<TransportState>() {
-                                    if let Err(error) = transport.retire_closing() {
-                                        tracing::error!(%error, "stopped transport could not retire its scopes");
-                                    }
-                                }
-                                if let std::collections::hash_map::Entry::Occupied(entry) =
-                                    store.entry::<TransportState>().boxed_entry
-                                {
-                                    drop(entry.remove());
-                                }
+                            if !retired && graph::retire_browser_transport(&mut context) {
                                 retired = true;
                                 hang_reset!();
                             }

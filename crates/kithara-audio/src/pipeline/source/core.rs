@@ -111,6 +111,94 @@ pub(in crate::pipeline::source) fn initial_promotion_frontier(
     }
 }
 
+impl<T: StreamType> StreamAudioSource<T> {
+    fn apply_decode_action(&mut self, action: DecodeAction) -> TrackStep<AudioChunk> {
+        match action {
+            DecodeAction::Produced(fetch) => {
+                self.refresh_visible_duration();
+                TrackStep::Produced(*fetch)
+            }
+            DecodeAction::Progress => {
+                self.wake.wake();
+                TrackStep::StateChanged
+            }
+            DecodeAction::Pending(reason) => {
+                self.waiting_for_source = true;
+                TrackStep::Blocked(reason)
+            }
+            DecodeAction::TransitionPending => TrackStep::Blocked(self.transition_wait_reason()),
+            DecodeAction::StartRecreate(recreate) => {
+                let offset = recreate.offset;
+                match self.install_replacement(
+                    recreate,
+                    self.resume.source_end().map(ResumeTarget::Source),
+                ) {
+                    Ok(_) => {
+                        self.wake.wake();
+                        TrackStep::StateChanged
+                    }
+                    Err(error) => {
+                        let failure = TrackFailureKind::RecreateFailed { offset };
+                        TrackStep::Failed(self.fail(failure, Some(error)))
+                    }
+                }
+            }
+            DecodeAction::ReaderRetired => {
+                let target = self.resume_target();
+                match self.replace_retired_reader(target) {
+                    Ok(_) => {
+                        self.wake.wake();
+                        TrackStep::StateChanged
+                    }
+                    Err((failure, error)) => TrackStep::Failed(self.fail(failure, Some(error))),
+                }
+            }
+            DecodeAction::Eof => self.finish_decoding(),
+            DecodeAction::Failed(error) => {
+                let failure = TrackFailureKind::Decode {
+                    kind: crate::map_decode_error_kind(&error),
+                };
+                TrackStep::Failed(self.fail(failure, Some(error)))
+            }
+        }
+    }
+
+    fn finish_decoding(&mut self) -> TrackStep<AudioChunk> {
+        if let Some(duration) = self
+                    .decode
+                    .active()
+                    .visible_origin()
+                    .zip(
+                        self.resume
+                            .decoded_end(self.decode.discontinuity().revision()),
+                    )
+                    .and_then(|(origin, end)| {
+                        let duration = end.checked_sub(origin)?;
+                        tracing::debug!(
+                            source_revision = self.decode.discontinuity().revision(),
+                            visible_origin = ?origin,
+                            raw_end = ?end,
+                            visible_duration = ?duration,
+                            decoder_origin = ?self.decode.active().decoder().initial_pcm_origin().map(PcmOrigin::position),
+                            gapless_profile = ?self.decode.active().gapless_profile(),
+                            "refined visible duration at natural EOF"
+                        );
+                        Some(duration)
+                    })
+                {
+                    self.playhead.set_duration(Some(duration));
+                    self.duration_reconciled = true;
+                }
+        self.release_seek_abr();
+        if !matches!(self.phase, OwnerPhase::Failed { .. }) {
+            self.abandon_incoming();
+            self.phase = OwnerPhase::AtEof;
+        }
+        self.emit.enqueue(AudioEvent::EndOfStream);
+        TrackStep::Eof
+    }
+}
+
 impl<T: StreamType> AudioSource for StreamAudioSource<T> {
     type Chunk = AudioChunk;
     fn commit_source_end(&mut self, end: crate::SourceEnd, meta: kithara_signal::AudioChunkInfo) {
@@ -253,87 +341,7 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
                 emit: Some(&self.emit),
             },
         );
-        match action {
-            DecodeAction::Produced(fetch) => {
-                self.refresh_visible_duration();
-                TrackStep::Produced(*fetch)
-            }
-            DecodeAction::Progress => {
-                self.wake.wake();
-                TrackStep::StateChanged
-            }
-            DecodeAction::Pending(reason) => {
-                self.waiting_for_source = true;
-                TrackStep::Blocked(reason)
-            }
-            DecodeAction::TransitionPending => TrackStep::Blocked(self.transition_wait_reason()),
-            DecodeAction::StartRecreate(recreate) => {
-                let offset = recreate.offset;
-                match self.install_replacement(
-                    recreate,
-                    self.resume.source_end().map(ResumeTarget::Source),
-                ) {
-                    Ok(_) => {
-                        self.wake.wake();
-                        TrackStep::StateChanged
-                    }
-                    Err(error) => {
-                        let failure = TrackFailureKind::RecreateFailed { offset };
-                        TrackStep::Failed(self.fail(failure, Some(error)))
-                    }
-                }
-            }
-            DecodeAction::ReaderRetired => {
-                let target = self.resume_target();
-                match self.replace_retired_reader(target) {
-                    Ok(_) => {
-                        self.wake.wake();
-                        TrackStep::StateChanged
-                    }
-                    Err((failure, error)) => TrackStep::Failed(self.fail(failure, Some(error))),
-                }
-            }
-            DecodeAction::Eof => {
-                if let Some(duration) = self
-                    .decode
-                    .active()
-                    .visible_origin()
-                    .zip(
-                        self.resume
-                            .decoded_end(self.decode.discontinuity().revision()),
-                    )
-                    .and_then(|(origin, end)| {
-                        let duration = end.checked_sub(origin)?;
-                        tracing::debug!(
-                            source_revision = self.decode.discontinuity().revision(),
-                            visible_origin = ?origin,
-                            raw_end = ?end,
-                            visible_duration = ?duration,
-                            decoder_origin = ?self.decode.active().decoder().initial_pcm_origin().map(PcmOrigin::position),
-                            gapless_profile = ?self.decode.active().gapless_profile(),
-                            "refined visible duration at natural EOF"
-                        );
-                        Some(duration)
-                    })
-                {
-                    self.playhead.set_duration(Some(duration));
-                    self.duration_reconciled = true;
-                }
-                self.release_seek_abr();
-                if !matches!(self.phase, OwnerPhase::Failed { .. }) {
-                    self.abandon_incoming();
-                    self.phase = OwnerPhase::AtEof;
-                }
-                self.emit.enqueue(AudioEvent::EndOfStream);
-                TrackStep::Eof
-            }
-            DecodeAction::Failed(error) => {
-                let failure = TrackFailureKind::Decode {
-                    kind: crate::map_decode_error_kind(&error),
-                };
-                TrackStep::Failed(self.fail(failure, Some(error)))
-            }
-        }
+        self.apply_decode_action(action)
     }
     fn warm_up(&mut self) {
         let _ = self.shared_stream.len();

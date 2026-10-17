@@ -39,22 +39,42 @@ pub(super) fn source_frame(
         Ok::<_, ElasticError>(resident.range(frame, end, channels)?.start)
     };
     if speed <= 1.0 {
-        let current = sample_offset(0)?;
-        if fraction == 0.0 {
-            output.copy_from_slice(&resident.samples[current..current + channels]);
-            return Ok(());
-        }
-        let next = sample_offset(1)?;
-        for (channel, sample) in output.iter_mut().enumerate() {
-            let current = f64::from(resident.samples[current + channel]);
-            let next = f64::from(resident.samples[next + channel]);
-            *sample = (next - current)
-                .mul_add(fraction, current)
-                .to_f32()
-                .ok_or(ElasticError::SampleCountOverflow)?;
-        }
+        return interpolate_source_frame(resident, sample_offset, fraction, output);
+    }
+    downsample_source_frame(resident, sample_offset, fraction, speed, output)
+}
+
+fn interpolate_source_frame(
+    resident: &SourceResidency,
+    sample_offset: impl Fn(i64) -> Result<usize, ElasticError>,
+    fraction: f64,
+    output: &mut [f32],
+) -> Result<(), ElasticError> {
+    let channels = output.len();
+    let current = sample_offset(0)?;
+    if fraction == 0.0 {
+        output.copy_from_slice(&resident.samples[current..current + channels]);
         return Ok(());
     }
+    let next = sample_offset(1)?;
+    for (channel, sample) in output.iter_mut().enumerate() {
+        let current = f64::from(resident.samples[current + channel]);
+        let next = f64::from(resident.samples[next + channel]);
+        *sample = (next - current)
+            .mul_add(fraction, current)
+            .to_f32()
+            .ok_or(ElasticError::SampleCountOverflow)?;
+    }
+    Ok(())
+}
+
+fn downsample_source_frame(
+    resident: &SourceResidency,
+    sample_offset: impl Fn(i64) -> Result<usize, ElasticError>,
+    fraction: f64,
+    speed: f64,
+    output: &mut [f32],
+) -> Result<(), ElasticError> {
     let radius = i64::try_from(crate::consts::SOURCE_RADIUS)
         .map_err(|_| ElasticError::SampleCountOverflow)?;
     let cutoff = speed.recip();

@@ -238,6 +238,102 @@ where
         }
         self.retired_input = Some(pending.chunk);
     }
+}
+
+impl<T, S> WarpSource<T, S>
+where
+    T: AudioSource<Chunk = AudioChunk>,
+    S: HasPool<f32>,
+{
+    fn step_buffered(&mut self) -> Option<TrackStep<AudioChunk>> {
+        if matches!(self.drain_state, DrainState::Exhausted) {
+            return Some(TrackStep::Eof);
+        }
+        if let Some(step) = self.drain_step() {
+            return Some(step);
+        }
+        if let Some(step) = self.render_whole_pending() {
+            return Some(step);
+        }
+        if let Some(step) = self.render_full_quantum() {
+            return Some(step);
+        }
+        if self.pending_input.is_some() {
+            if self.prepared_frames.is_none() {
+                return Some(TrackStep::Blocked(WaitingReason::Waiting));
+            }
+            self.stage_pending();
+            return Some(
+                self.render_full_quantum()
+                    .unwrap_or(TrackStep::StateChanged),
+            );
+        }
+        None
+    }
+
+    fn accept_source_chunk(&mut self, mut data: AudioChunk) -> TrackStep<AudioChunk> {
+        let Some(geometry) = data.meta.source_geometry() else {
+            tracing::error!("decoded source has invalid PCM geometry");
+            return self.fail(TrackFailureKind::Render);
+        };
+        if !geometry.is_affine() {
+            tracing::error!(error = %WarpRenderError::UnsupportedSourceGeometry,
+                        "decoded source cannot enter Warp");
+            return self.fail(TrackFailureKind::Render);
+        }
+        data.meta.source_span = Some(geometry);
+        if let Err(error) =
+            self.lane
+                .observe_input(&mut self.warp, data.meta, self.source.visible_origin())
+        {
+            tracing::error!(%error, "decoded source misses the segment entry");
+            return self.fail(TrackFailureKind::Render);
+        }
+        if data.spec() == self.spec
+            && self.prepared_frames.is_none()
+            && self
+                .prepare_quantum(data.meta, data.frames())
+                .is_ok_and(|frames| frames.get() == data.frames())
+        {
+            return self
+                .render_source_quantum(data)
+                .map_or(TrackStep::StateChanged, TrackStep::Produced);
+        }
+        self.pending_input = Some(PendingInput {
+            chunk: data,
+            consumed_frames: 0,
+        });
+        TrackStep::StateChanged
+    }
+
+    fn step_source(&mut self) -> TrackStep<AudioChunk> {
+        match self.source.step_track() {
+            TrackStep::Produced(Fetch::Data { data, .. }) => self.accept_source_chunk(data),
+            TrackStep::Produced(Fetch::Failure { failure }) | TrackStep::Failed(failure) => {
+                self.fail(failure)
+            }
+            TrackStep::Produced(fetch) => TrackStep::Produced(fetch),
+            TrackStep::Eof => {
+                self.begin_drain();
+                let frames = self.staged_frames();
+                if frames == 0 {
+                    TrackStep::StateChanged
+                } else {
+                    let Some(frames) = self.warp.prepare_terminal_quantum(frames) else {
+                        self.quantum_failed = true;
+                        return self.fail(TrackFailureKind::Render);
+                    };
+                    self.prepared_frames = Some(frames.get());
+                    self.render_staged(frames.get())
+                }
+            }
+            TrackStep::StateChanged => {
+                self.sync_discontinuity();
+                TrackStep::StateChanged
+            }
+            TrackStep::Blocked(reason) => TrackStep::Blocked(reason),
+        }
+    }
 
     fn span_meta(original: AudioChunkInfo, offset: usize, frames: usize) -> Option<AudioChunkInfo> {
         let offset = u64::try_from(offset).ok()?;
@@ -256,6 +352,15 @@ where
             meta.end_of_track = original.end_of_track && end == u64::from(original.frames);
             return Some(meta);
         }
+        Self::affine_span_meta(meta, offset, frames)
+    }
+
+    fn affine_span_meta(
+        original: AudioChunkInfo,
+        offset: u64,
+        frames: u32,
+    ) -> Option<AudioChunkInfo> {
+        let mut meta = original;
         meta.frame_offset = original.frame_offset.checked_add(offset)?;
         meta.timestamp = original
             .timestamp
@@ -699,90 +804,14 @@ where
             return self.fail(TrackFailureKind::Render);
         }
 
-        if matches!(self.drain_state, DrainState::Exhausted) {
-            return TrackStep::Eof;
-        }
-        if let Some(step) = self.drain_step() {
+        if let Some(step) = self.step_buffered() {
             return step;
-        }
-        if let Some(step) = self.render_whole_pending() {
-            return step;
-        }
-        if let Some(step) = self.render_full_quantum() {
-            return step;
-        }
-        if self.pending_input.is_some() {
-            if self.prepared_frames.is_none() {
-                return TrackStep::Blocked(WaitingReason::Waiting);
-            }
-            self.stage_pending();
-            return self
-                .render_full_quantum()
-                .unwrap_or(TrackStep::StateChanged);
         }
         if !self.warp.accepts_input() {
             return self.fail(TrackFailureKind::Render);
         }
 
-        match self.source.step_track() {
-            TrackStep::Produced(Fetch::Data { mut data, .. }) => {
-                let Some(geometry) = data.meta.source_geometry() else {
-                    tracing::error!("decoded source has invalid PCM geometry");
-                    return self.fail(TrackFailureKind::Render);
-                };
-                if !geometry.is_affine() {
-                    tracing::error!(error = %WarpRenderError::UnsupportedSourceGeometry,
-                        "decoded source cannot enter Warp");
-                    return self.fail(TrackFailureKind::Render);
-                }
-                data.meta.source_span = Some(geometry);
-                if let Err(error) =
-                    self.lane
-                        .observe_input(&mut self.warp, data.meta, self.source.visible_origin())
-                {
-                    tracing::error!(%error, "decoded source misses the segment entry");
-                    return self.fail(TrackFailureKind::Render);
-                }
-                if data.spec() == self.spec
-                    && self.prepared_frames.is_none()
-                    && self
-                        .prepare_quantum(data.meta, data.frames())
-                        .is_ok_and(|frames| frames.get() == data.frames())
-                {
-                    return self
-                        .render_source_quantum(data)
-                        .map_or(TrackStep::StateChanged, TrackStep::Produced);
-                }
-                self.pending_input = Some(PendingInput {
-                    chunk: data,
-                    consumed_frames: 0,
-                });
-                TrackStep::StateChanged
-            }
-            TrackStep::Produced(Fetch::Failure { failure }) | TrackStep::Failed(failure) => {
-                self.fail(failure)
-            }
-            TrackStep::Produced(fetch) => TrackStep::Produced(fetch),
-            TrackStep::Eof => {
-                self.begin_drain();
-                let frames = self.staged_frames();
-                if frames == 0 {
-                    TrackStep::StateChanged
-                } else {
-                    let Some(frames) = self.warp.prepare_terminal_quantum(frames) else {
-                        self.quantum_failed = true;
-                        return self.fail(TrackFailureKind::Render);
-                    };
-                    self.prepared_frames = Some(frames.get());
-                    self.render_staged(frames.get())
-                }
-            }
-            TrackStep::StateChanged => {
-                self.sync_discontinuity();
-                TrackStep::StateChanged
-            }
-            TrackStep::Blocked(reason) => TrackStep::Blocked(reason),
-        }
+        self.step_source()
     }
 }
 

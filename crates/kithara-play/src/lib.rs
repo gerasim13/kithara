@@ -6,6 +6,7 @@ mod error;
 mod guard;
 #[cfg(test)]
 pub(crate) use kithara_test_utils::bufpool as test_pools;
+use serde as _;
 
 pub mod api;
 pub mod player;

@@ -74,7 +74,14 @@ fn native_keylock_preserves_the_physical_source_frequency(#[case] quantum: usize
             .expect("prepared shape")
             .expect("continuous audio");
         assert_eq!(output.frames(), quantum);
-        capture.extend(output.samples.chunks_exact(2).map(|frame| frame[0]));
+        capture.extend(
+            output
+                .samples
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|frame| frame[0]),
+        );
         source += u64::try_from(frames).expect("source frames");
         hang_reset!();
     }

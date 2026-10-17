@@ -102,6 +102,14 @@ warn = 6
 # hard ceiling.
 warn = 5
 
+[fn_cyclomatic]
+# Cyclomatic complexity a function may reach. Every point above it is one
+# ratchet unit under the function's key, so a function may not cross the limit
+# afresh nor grow once above it; the functions already above it are seeded in
+# the baseline and may only shrink. Counts conditionals, loops, `match` arms
+# past the first and their guards, `&&`/`||`, `?` and `let ... else`.
+deny = 15
+
 [generic_param_count]
 # Items (fn/struct/enum/trait/type) with this many generic params
 # (type+lifetime+const combined) trigger a warn. Sister threshold

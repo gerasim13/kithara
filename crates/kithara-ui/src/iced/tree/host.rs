@@ -5457,11 +5457,13 @@ mod tests {
             };
             let (black, white) = (over(Color::BLACK), over(Color::WHITE));
             let pixels: Vec<(usize, [u8; 4])> = black
-                .chunks_exact(4)
-                .zip(white.chunks_exact(4))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(white.as_chunks::<4>().0)
                 .enumerate()
                 .filter(|(_, (black, white))| black == white)
-                .map(|(at, (black, _))| (at, [black[0], black[1], black[2], black[3]]))
+                .map(|(at, (black, _))| (at, *black))
                 .collect();
             assert!(
                 !pixels.is_empty(),

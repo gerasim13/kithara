@@ -59,10 +59,12 @@ fn spec() -> AudioSpec {
 }
 fn packet(input: &'static [u8], frames: usize, source: u64, segment: SegmentId) -> PcmPacket {
     let samples: Vec<_> = input
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .cycle()
         .take(frames * 2)
-        .map(|bytes| f32::from_le_bytes(bytes.try_into().expect("sample bytes")))
+        .map(|bytes| f32::from_le_bytes(*bytes))
         .collect();
     let pcm = chunk(spec(), segment, 0, source, &samples);
     PcmPacket::Chunk(Box::new(pcm))

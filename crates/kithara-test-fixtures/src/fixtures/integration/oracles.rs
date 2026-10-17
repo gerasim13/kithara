@@ -64,13 +64,13 @@ pub fn phase_sine_dropped() -> Vec<f32> {
 
 #[kithara::fixture]
 #[must_use]
-/// # Panics
-/// Panics if a prepared sample does not contain eight bytes.
 pub fn phase_noise() -> Vec<f64> {
     assets::phase_noise_default()
         .bytes()
-        .chunks_exact(size_of::<f64>())
-        .map(|bytes| f64::from_le_bytes(bytes.try_into().expect("prepared f64 sample")))
+        .as_chunks::<{ size_of::<f64>() }>()
+        .0
+        .iter()
+        .map(|bytes| f64::from_le_bytes(*bytes))
         .collect()
 }
 

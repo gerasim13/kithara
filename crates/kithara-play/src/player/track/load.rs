@@ -1,7 +1,7 @@
 use kithara_command::{Outcome, Receipt, Rejection, Seq, Target, When};
 use kithara_config::ConfigOwner;
 use kithara_render::{
-    Dispatched, DispatcherProtocol, LoadRequest, ServiceClass,
+    Dispatched, DispatcherProtocol, LoadRequest, Loaded, ServiceClass,
     bridge::{DeckPart, Fade, Slot, SlotState},
 };
 use kithara_signal::{SegmentId, SessionFrame};
@@ -80,61 +80,7 @@ impl<S> PlayerImpl<S> {
             Outcome::Applied {
                 data: Dispatched::Loaded(loaded),
                 ..
-            } => {
-                self.lane_id = Some(loaded.lane);
-                self.engine_latency = loaded.engine_latency;
-                if self.segment == SegmentId::FIRST {
-                    self.ready = Some(SegmentId::FIRST);
-                }
-                let prepared = loaded.opened.pcm.next_chunk_info();
-                if let Some(meta) = prepared.filter(|meta| meta.segment == self.segment) {
-                    self.segment_origin = Some(meta.timestamp);
-                }
-                self.source_basis = prepared;
-                self.observed_source = prepared;
-                self.duration = prepared.and_then(|meta| meta.media_end);
-                self.visible_origin = prepared.and_then(|meta| meta.visible_origin);
-                self.media_origin = prepared.and_then(|meta| meta.media_origin);
-                self.abr = loaded.opened.abr.clone();
-                self.metadata = loaded.opened.metadata.clone();
-                if let Some(loading) = self.loading.as_mut() {
-                    loading.opened = Some(loaded.opened);
-                }
-                if self.status == TrackStatus::Released || self.preparation_failure().is_some() {
-                    self.loading = None;
-                    if let Err(error) = self.release_lane(out) {
-                        warn!(%error, "released open waits for dispatcher room");
-                    }
-                    return Settled::Pending;
-                }
-                self.reserved_ready();
-                let speed = self
-                    .loading
-                    .as_mut()
-                    .and_then(|loading| loading.speed.take());
-                let entry = match speed {
-                    Some((speed, _)) => prepared
-                        .map(|meta| meta.timestamp)
-                        .ok_or(PlayError::Untimed)
-                        .and_then(|from| self.segment_with(from, None, speed, out))
-                        .map(drop),
-                    None => Ok(()),
-                };
-                if let Err(error) = entry.and_then(|()| self.attach(out)) {
-                    self.loading = None;
-                    self.lane = None;
-                    self.status = TrackStatus::Idle;
-                    if let Err(error) = self.release_lane(out) {
-                        warn!(%error, "refused open waits for dispatcher room");
-                    }
-                    return Settled::Rejected {
-                        seq,
-                        reason: Rejection::Refused(error),
-                    };
-                }
-                self.promote(out);
-                Settled::Pending
-            }
+            } => self.accept_opened(seq, loaded, out),
             Outcome::Rejected(refused) => {
                 self.loading = None;
                 self.lane = None;
@@ -155,6 +101,67 @@ impl<S> PlayerImpl<S> {
                 )),
             },
         }
+    }
+
+    fn accept_opened(
+        &mut self,
+        seq: Seq,
+        loaded: Loaded<OpenedTrack>,
+        out: &mut Outbox<'_, S>,
+    ) -> Settled {
+        self.lane_id = Some(loaded.lane);
+        self.engine_latency = loaded.engine_latency;
+        if self.segment == SegmentId::FIRST {
+            self.ready = Some(SegmentId::FIRST);
+        }
+        let prepared = loaded.opened.pcm.next_chunk_info();
+        if let Some(meta) = prepared.filter(|meta| meta.segment == self.segment) {
+            self.segment_origin = Some(meta.timestamp);
+        }
+        self.source_basis = prepared;
+        self.observed_source = prepared;
+        self.duration = prepared.and_then(|meta| meta.media_end);
+        self.visible_origin = prepared.and_then(|meta| meta.visible_origin);
+        self.media_origin = prepared.and_then(|meta| meta.media_origin);
+        self.abr = loaded.opened.abr.clone();
+        self.metadata = loaded.opened.metadata.clone();
+        if let Some(loading) = self.loading.as_mut() {
+            loading.opened = Some(loaded.opened);
+        }
+        if self.status == TrackStatus::Released || self.preparation_failure().is_some() {
+            self.loading = None;
+            if let Err(error) = self.release_lane(out) {
+                warn!(%error, "released open waits for dispatcher room");
+            }
+            return Settled::Pending;
+        }
+        self.reserved_ready();
+        let speed = self
+            .loading
+            .as_mut()
+            .and_then(|loading| loading.speed.take());
+        let entry = match speed {
+            Some((speed, _)) => prepared
+                .map(|meta| meta.timestamp)
+                .ok_or(PlayError::Untimed)
+                .and_then(|from| self.segment_with(from, None, speed, out))
+                .map(drop),
+            None => Ok(()),
+        };
+        if let Err(error) = entry.and_then(|()| self.attach(out)) {
+            self.loading = None;
+            self.lane = None;
+            self.status = TrackStatus::Idle;
+            if let Err(error) = self.release_lane(out) {
+                warn!(%error, "refused open waits for dispatcher room");
+            }
+            return Settled::Rejected {
+                seq,
+                reason: Rejection::Refused(error),
+            };
+        }
+        self.promote(out);
+        Settled::Pending
     }
 
     pub(super) fn settle_release(
@@ -280,26 +287,7 @@ impl<S> PlayerImpl<S> {
             return Err(PlayError::Internal("a track is seated once".into()));
         }
         if at == When::Next {
-            if self
-                .loading
-                .as_ref()
-                .is_none_or(|loading| loading.opened.is_none())
-            {
-                self.slot = Some(slot);
-                return Ok(None);
-            }
-            if out.deck_available() == 0 {
-                return Err(PlayError::Full("deck"));
-            }
-            self.slot = Some(slot);
-            self.status = TrackStatus::Loading;
-            if let Err(error) = self.attach(out) {
-                self.slot = None;
-                self.reserved_ready();
-                return Err(error);
-            }
-            self.promote(out);
-            return Ok(None);
+            return self.seat_next(slot, out);
         }
         if self.attaching.is_some() || self.ready != Some(self.segment) {
             return Err(PlayError::NotReady);
@@ -329,7 +317,7 @@ impl<S> PlayerImpl<S> {
                 self.slot = Some(slot);
                 self.attaching = Some(Attaching {
                     seq,
-                    caller: seq.map_or(loading.seq, |seq| seq),
+                    caller: seq.unwrap_or(loading.seq),
                     at,
                     replacement: true,
                     play: self.play.take(),
@@ -356,6 +344,29 @@ impl<S> PlayerImpl<S> {
                 Err(error)
             }
         }
+    }
+
+    fn seat_next(&mut self, slot: Slot, out: &mut Outbox<'_, S>) -> Result<Option<Seq>, PlayError> {
+        if self
+            .loading
+            .as_ref()
+            .is_none_or(|loading| loading.opened.is_none())
+        {
+            self.slot = Some(slot);
+            return Ok(None);
+        }
+        if out.deck_available() == 0 {
+            return Err(PlayError::Full("deck"));
+        }
+        self.slot = Some(slot);
+        self.status = TrackStatus::Loading;
+        if let Err(error) = self.attach(out) {
+            self.slot = None;
+            self.reserved_ready();
+            return Err(error);
+        }
+        self.promote(out);
+        Ok(None)
     }
 
     pub(super) fn promote(&mut self, out: &mut Outbox<'_, S>) {

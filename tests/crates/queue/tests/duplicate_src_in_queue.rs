@@ -198,7 +198,12 @@ async fn a_real_source_cancellation_reaches_only_its_queue_entry_once() {
         )
         .await;
     let samples = render_loop(&queue, &harness, WARMUP_BLOCKS).await;
-    for (block, samples) in samples.chunks_exact(BLOCK_FRAMES * 2).enumerate() {
+    for (block, samples) in samples
+        .as_chunks::<{ BLOCK_FRAMES * 2 }>()
+        .0
+        .iter()
+        .enumerate()
+    {
         let level = rms(samples);
         assert!(
             level > 0.0,

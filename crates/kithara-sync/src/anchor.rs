@@ -215,6 +215,15 @@ impl SessionAnchor {
                 lower + (upper - lower) * 0.5
             };
         }
+        self.round_ramped_frame(beats, elapsed, rate)
+    }
+
+    fn round_ramped_frame(
+        self,
+        beats: f64,
+        elapsed: f64,
+        rate: f64,
+    ) -> Result<SessionFrame, CoordinateError> {
         let tempo = self
             .approach
             .rate_at(elapsed)

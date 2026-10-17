@@ -62,10 +62,12 @@ pub(in crate::rt) fn resource(
         .expect("fixture frame count fits usize")
         .min(160_000);
     let samples = input
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .cycle()
         .take(frames * usize::from(spec.channels))
-        .map(|bytes| f32::from_le_bytes(bytes.try_into().expect("sample bytes")))
+        .map(|bytes| f32::from_le_bytes(*bytes))
         .collect::<Vec<_>>();
     let mut packets = PacketRing::new(spec, Duration::from_secs_f64(seconds), 8);
     let packet = chunk(spec, SegmentId::FIRST, 0, 0, &samples);

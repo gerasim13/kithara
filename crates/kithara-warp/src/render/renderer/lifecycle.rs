@@ -9,6 +9,55 @@ use tracing::warn;
 
 use super::core::{PreparedQuantum, WarpRenderer};
 
+fn copy_cached_tail(
+    mapped_render: bool,
+    projection: Option<&mut super::projected::Projection>,
+    scratch: &mut [f32],
+    mut start: usize,
+    sample_limit: usize,
+) -> usize {
+    if mapped_render
+        && let Some(projection) = projection
+        && projection.feed.is_some()
+    {
+        let cached = (projection.buffers[0].len() - projection.offset).min(sample_limit - start);
+        scratch[start..start + cached]
+            .copy_from_slice(&projection.buffers[0][projection.offset..projection.offset + cached]);
+        projection.offset += cached;
+        start += cached;
+    }
+    start
+}
+
+fn finish_tail_drain(
+    scratch: &mut SampleBuffer,
+    start: usize,
+    sample_limit: usize,
+    channels: usize,
+    drain: kithara_stretch::ElasticDrain,
+) -> Result<bool, ElasticError> {
+    let rendered_frames = FrameCount::new(drain.frames());
+    let available_frames = (sample_limit - start) / channels;
+    if rendered_frames.get() > available_frames {
+        return Err(ElasticError::EngineOutputFrameCount {
+            actual: rendered_frames.get(),
+            expected: available_frames,
+        });
+    }
+    let rendered_samples = rendered_frames
+        .get()
+        .checked_mul(channels)
+        .map(SampleCount::new)
+        .ok_or(ElasticError::SampleCountOverflow)?;
+    scratch.truncate(start + rendered_samples.get());
+    if !drain.complete() && rendered_frames.get() == 0 {
+        return Err(ElasticError::EnginePreparation(
+            "time-stretch terminal drain stopped advancing",
+        ));
+    }
+    Ok(drain.complete())
+}
+
 impl<S> WarpRenderer<S>
 where
     S: HasPool<f32>,
@@ -120,21 +169,15 @@ where
         scratch
             .ensure_len(sample_limit)
             .map_err(|_| ElasticError::PoolCapacity)?;
-        let mut start = start;
-        if self.mapped_render
-            && let Some(projection) = self.projection.as_mut()
-            && projection.feed.is_some()
-        {
-            let cached =
-                (projection.buffers[0].len() - projection.offset).min(sample_limit - start);
-            scratch[start..start + cached].copy_from_slice(
-                &projection.buffers[0][projection.offset..projection.offset + cached],
-            );
-            projection.offset += cached;
-            start += cached;
-            if start == sample_limit {
-                return Ok(false);
-            }
+        let start = copy_cached_tail(
+            self.mapped_render,
+            self.projection.as_mut(),
+            scratch,
+            start,
+            sample_limit,
+        );
+        if start == sample_limit {
+            return Ok(false);
         }
         let engine = if self.mapped_render
             && self
@@ -151,26 +194,7 @@ where
                 .as_mut()
         };
         let drain = engine.flush(&mut scratch[start..sample_limit])?;
-        let rendered_frames = FrameCount::new(drain.frames());
-        let available_frames = (sample_limit - start) / channels;
-        if rendered_frames.get() > available_frames {
-            return Err(ElasticError::EngineOutputFrameCount {
-                actual: rendered_frames.get(),
-                expected: available_frames,
-            });
-        }
-        let rendered_samples = rendered_frames
-            .get()
-            .checked_mul(channels)
-            .map(SampleCount::new)
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        scratch.truncate(start + rendered_samples.get());
-        if !drain.complete() && rendered_frames.get() == 0 {
-            return Err(ElasticError::EnginePreparation(
-                "time-stretch terminal drain stopped advancing",
-            ));
-        }
-        Ok(drain.complete())
+        finish_tail_drain(scratch, start, sample_limit, channels, drain)
     }
 
     /// Assemble an output chunk from `scratch`, preserving the exact source
@@ -223,31 +247,11 @@ where
         replacement: Option<SampleBuffer>,
         output_limit: usize,
     ) -> Option<AudioChunk> {
-        let mut meta = self.pending_unity_meta?;
+        let meta = self.pending_unity_meta?;
         let channels = usize::from(meta.spec.channels);
         let frames = usize::try_from(meta.frames).ok()?;
         if frames > output_limit {
-            let count = output_limit.checked_mul(channels)?;
-            let scratch = self.scratch.as_mut()?;
-            if count > scratch.capacity() {
-                return None;
-            }
-            scratch.ensure_len(count).ok()?;
-            let pending = self.pending_source.as_mut()?;
-            scratch.copy_from_slice(pending.get(..count)?);
-            drop(pending.drain(..count));
-            let mut next = Self::meta_at_frame(
-                meta,
-                meta.frame_offset
-                    .checked_add(u64::try_from(output_limit).ok()?)?,
-            )
-            .ok()?;
-            next.frames = u32::try_from(frames - output_limit).ok()?;
-            self.pending_unity_meta = Some(next);
-            meta.frames = u32::try_from(output_limit).ok()?;
-            let samples = self.scratch.take()?;
-            self.defer_scratch(replacement);
-            return Some(AudioChunk::new(meta, samples));
+            return self.emit_unity_prefix(meta, frames, channels, replacement, output_limit);
         }
         let replacement = replacement
             .or_else(|| self.scratch.take())
@@ -268,6 +272,37 @@ where
         self.last_input_meta = Some(meta);
         self.output_start_meta = None;
         self.record_rendered_source_end(meta, 0);
+        Some(AudioChunk::new(meta, samples))
+    }
+
+    fn emit_unity_prefix(
+        &mut self,
+        mut meta: AudioChunkInfo,
+        frames: usize,
+        channels: usize,
+        replacement: Option<SampleBuffer>,
+        output_limit: usize,
+    ) -> Option<AudioChunk> {
+        let count = output_limit.checked_mul(channels)?;
+        let scratch = self.scratch.as_mut()?;
+        if count > scratch.capacity() {
+            return None;
+        }
+        scratch.ensure_len(count).ok()?;
+        let pending = self.pending_source.as_mut()?;
+        scratch.copy_from_slice(pending.get(..count)?);
+        drop(pending.drain(..count));
+        let mut next = Self::meta_at_frame(
+            meta,
+            meta.frame_offset
+                .checked_add(u64::try_from(output_limit).ok()?)?,
+        )
+        .ok()?;
+        next.frames = u32::try_from(frames - output_limit).ok()?;
+        self.pending_unity_meta = Some(next);
+        meta.frames = u32::try_from(output_limit).ok()?;
+        let samples = self.scratch.take()?;
+        self.defer_scratch(replacement);
         Some(AudioChunk::new(meta, samples))
     }
 
@@ -487,6 +522,13 @@ where
             .for_output_range(0..outputs)
             .ok_or(ElasticError::SampleCountOverflow)?;
         self.render_mapped(span)?;
+        self.emit_mapped_drain(span).map(Some)
+    }
+
+    fn emit_mapped_drain(
+        &mut self,
+        span: kithara_signal::SourceSpan,
+    ) -> Result<AudioChunk, ElasticError> {
         let channels = usize::from(self.spec.channels);
         self.residency
             .as_mut()
@@ -500,7 +542,7 @@ where
         output.meta.source_span = Some(span);
         self.map_output(&mut output)?;
         self.commit_render(self.context.load(), &output);
-        Ok(Some(output))
+        Ok(output)
     }
 
     fn finish_flush(

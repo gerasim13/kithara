@@ -79,7 +79,9 @@ fn kick_train(history: usize) -> Vec<f32> {
 /// [`consts::ONSET_FRACTION`] of that window's peak.
 fn onsets(interleaved: &[f32], expected: &[f64]) -> Vec<Option<f64>> {
     let mono: Vec<f32> = interleaved
-        .chunks_exact(CHANNELS)
+        .as_chunks::<CHANNELS>()
+        .0
+        .iter()
         .map(|frame| frame.iter().map(|sample| sample.abs()).sum::<f32>())
         .collect();
     let width = consts::ENVELOPE_FRAMES.to_f32().expect("width fits f32");

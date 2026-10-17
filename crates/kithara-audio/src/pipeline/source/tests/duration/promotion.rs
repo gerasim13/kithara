@@ -44,7 +44,7 @@ async fn promoted_known_raw_clocks_keep_full_visible_length_and_seek_the_actual_
         first_incoming.meta.timestamp - expected_origin,
         outgoing_end - original.meta.visible_origin.expect("original origin")
     );
-    for (offset, samples) in first_incoming.samples.chunks_exact(2).enumerate() {
+    for (offset, &samples) in first_incoming.samples.as_chunks::<2>().0.iter().enumerate() {
         let absolute = first_incoming.meta.frame_offset + offset as u64;
         assert_eq!(
             samples,
@@ -412,7 +412,7 @@ async fn promotion_seals_a_retained_source_mapping_before_native_incoming_pcm(
             .clone(),
     );
     assert!(incoming.meta.timestamp >= last_retained_point);
-    for (offset, samples) in incoming.samples.chunks_exact(2).enumerate() {
+    for (offset, &samples) in incoming.samples.as_chunks::<2>().0.iter().enumerate() {
         let at = incoming.meta.frame_offset + offset as u64;
         let expected = f32::from(
             u16::try_from(at * 1_000 / u64::from(host_rate)).expect("fixture marker fits u16"),

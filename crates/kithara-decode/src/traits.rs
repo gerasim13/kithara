@@ -326,6 +326,9 @@ pub trait Decoder: Send + 'static {
     fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome>;
 
     /// Seek with an explicit front-side waiting policy.
+    ///
+    /// # Errors
+    /// Returns the errors described by [`Self::seek`].
     fn seek_with_wait(
         &mut self,
         pos: Duration,
@@ -346,6 +349,9 @@ pub trait Decoder: Send + 'static {
     }
 
     /// Settle the same pending seek with an explicit waiting policy.
+    ///
+    /// # Errors
+    /// Returns the errors described by [`Self::prepare_seek`].
     fn prepare_seek_with_wait(
         &mut self,
         _wait: PrepareWait,
@@ -367,6 +373,9 @@ pub trait Decoder: Send + 'static {
     }
 
     /// Seek a native prefix with an explicit front-side waiting policy.
+    ///
+    /// # Errors
+    /// Returns the errors described by [`Self::seek_prefix`].
     fn seek_prefix_with_wait(
         &mut self,
         pos: Duration,

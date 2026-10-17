@@ -153,19 +153,11 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .ok_or(ElasticError::SampleCountOverflow)
     }
 
-    pub(in crate::render) fn mapping_span(
+    fn region_span(
         &self,
         start: u64,
-        rate: NonZeroU32,
-        frames: usize,
-    ) -> Result<SourceSpan, ElasticError> {
-        if !self.requires_staging() {
-            return self.trajectory.unity_span(start, rate, frames);
-        }
-        let nominal = self.trajectory.span(start, rate, frames)?;
-        if self.plan.is_none() {
-            return Ok(nominal);
-        }
+        nominal: SourceSpan,
+    ) -> Result<(SourceSpan, u64), ElasticError> {
         let nominal_start = nominal
             .source_ratio_at(0)
             .ok_or(ElasticError::SampleCountOverflow)?;
@@ -181,6 +173,13 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
                 ),
             )
             .ok_or(ElasticError::SampleCountOverflow)?;
+        Ok((mapped, end))
+    }
+
+    fn span_within_region(
+        mapped: SourceSpan,
+        end: u64,
+    ) -> Result<Option<SourceSpan>, ElasticError> {
         let mut lower = 0;
         let mut upper = mapped.output_frames();
         while lower < upper {
@@ -205,7 +204,28 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         if lower > 0 {
             return mapped
                 .for_output_range(0..lower)
+                .map(Some)
                 .ok_or(ElasticError::SampleCountOverflow);
+        }
+        Ok(None)
+    }
+
+    pub(in crate::render) fn mapping_span(
+        &self,
+        start: u64,
+        rate: NonZeroU32,
+        frames: usize,
+    ) -> Result<SourceSpan, ElasticError> {
+        if !self.requires_staging() {
+            return self.trajectory.unity_span(start, rate, frames);
+        }
+        let nominal = self.trajectory.span(start, rate, frames)?;
+        if self.plan.is_none() {
+            return Ok(nominal);
+        }
+        let (mapped, end) = self.region_span(start, nominal)?;
+        if let Some(span) = Self::span_within_region(mapped, end)? {
+            return Ok(span);
         }
         let first = fraction(self.mapped_position(start, rate, 0)?);
         let advance = fraction(self.mapped_position(start, rate, 1)?)

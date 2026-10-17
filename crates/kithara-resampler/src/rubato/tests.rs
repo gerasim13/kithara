@@ -46,7 +46,12 @@ fn rubato_resamples_borrowed_planar_slices(rubato_stereo: Vec<f32>) {
         .build();
     let mut resampler =
         create_resampler(&config).unwrap_or_else(|err| panic!("rubato build failed: {err}"));
-    let input = rubato_stereo.chunks_exact(256).collect::<Vec<_>>();
+    let input = rubato_stereo
+        .as_chunks::<256>()
+        .0
+        .iter()
+        .map(<[f32; 256]>::as_slice)
+        .collect::<Vec<_>>();
     let mut output: [Vec<f32>; 2] =
         std::array::from_fn(|_| vec![0.0; resampler.output_frames_next()]);
     let input_refs = [input[0], input[1]];
@@ -80,7 +85,12 @@ fn rubato_resamples_nine_channels_without_touching_extra_output(rubato_nine: Vec
         .build();
     let mut resampler =
         create_resampler(&config).unwrap_or_else(|err| panic!("rubato build failed: {err}"));
-    let input = rubato_nine.chunks_exact(256).collect::<Vec<_>>();
+    let input = rubato_nine
+        .as_chunks::<256>()
+        .0
+        .iter()
+        .map(<[f32; 256]>::as_slice)
+        .collect::<Vec<_>>();
     let output_frames = resampler.output_frames_next();
     let mut output = (0..=channels.get())
         .map(|_| vec![0.0; output_frames])

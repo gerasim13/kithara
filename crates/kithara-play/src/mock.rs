@@ -68,10 +68,43 @@ pub fn write_pcm_wav(
     samples: &[f32],
     spec: kithara_signal::AudioSpec,
 ) -> std::io::Result<()> {
-    use std::io::{BufWriter, Error, ErrorKind, Write};
+    use std::io::{BufWriter, Write};
 
     let _io = kithara_platform::flash::real_io();
     hang_tick!("write_pcm_wav: writing fixture PCM".to_owned());
+    let (data_bytes, riff_size, block_align, byte_rate) = wav_sizes(samples, spec)?;
+    let mut file = BufWriter::new(std::fs::File::create(path)?);
+    write_wav_header(
+        &mut file,
+        spec,
+        data_bytes,
+        riff_size,
+        block_align,
+        byte_rate,
+    )?;
+    hang_reset!();
+    let mut bytes = [0_u8; 4096];
+    for (index, chunk) in samples.chunks(bytes.len() / 4).enumerate() {
+        hang_tick!(format!("write_pcm_wav: {path:?}, chunk {index}"));
+        let encoded = &mut bytes[..chunk.len() * 4];
+        encoded
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(chunk)
+            .for_each(|(target, sample)| target.copy_from_slice(&sample.to_le_bytes()));
+        file.write_all(encoded)?;
+        hang_reset!();
+    }
+    file.flush()
+}
+
+fn wav_sizes(
+    samples: &[f32],
+    spec: kithara_signal::AudioSpec,
+) -> std::io::Result<(u32, u32, u16, u32)> {
+    use std::io::{Error, ErrorKind};
+
     let invalid = || {
         Error::new(
             ErrorKind::InvalidInput,
@@ -93,7 +126,17 @@ pub fn write_pcm_wav(
     if spec.channels == 0 || !samples.len().is_multiple_of(usize::from(spec.channels)) {
         return Err(invalid());
     }
-    let mut file = BufWriter::new(std::fs::File::create(path)?);
+    Ok((data_bytes, riff_size, block_align, byte_rate))
+}
+
+fn write_wav_header(
+    file: &mut impl std::io::Write,
+    spec: kithara_signal::AudioSpec,
+    data_bytes: u32,
+    riff_size: u32,
+    block_align: u16,
+    byte_rate: u32,
+) -> std::io::Result<()> {
     file.write_all(b"RIFF")?;
     file.write_all(&riff_size.to_le_bytes())?;
     file.write_all(b"WAVEfmt ")?;
@@ -106,19 +149,7 @@ pub fn write_pcm_wav(
     file.write_all(&32_u16.to_le_bytes())?;
     file.write_all(b"data")?;
     file.write_all(&data_bytes.to_le_bytes())?;
-    hang_reset!();
-    let mut bytes = [0_u8; 4096];
-    for (index, chunk) in samples.chunks(bytes.len() / 4).enumerate() {
-        hang_tick!(format!("write_pcm_wav: {path:?}, chunk {index}"));
-        let encoded = &mut bytes[..chunk.len() * 4];
-        encoded
-            .chunks_exact_mut(4)
-            .zip(chunk)
-            .for_each(|(target, sample)| target.copy_from_slice(&sample.to_le_bytes()));
-        file.write_all(encoded)?;
-        hang_reset!();
-    }
-    file.flush()
+    Ok(())
 }
 
 /// The output of a session at [`SAMPLE_RATE`] that measured `shape`.
@@ -219,25 +250,12 @@ where
     let frames = NonZeroU32::new(128).ok_or(PlayError::Closed)?;
     let shape = StreamShape::new(frames, rate);
     let mut events = bus.subscribe::<RenderEvents>();
-    let mut opening = std::pin::pin!(request.item.open(
-        request.position,
-        request.start,
-        request.inbox
-    ));
-    let (opened, mut lane, _) = {
-        // WHY: Source reads run on real threads, so their watchdog must not leap in virtual time.
-        let _real_io = kithara_platform::flash::real_io();
-        loop {
-            hang_tick!();
-            if let Ok(opened) = timeout(Duration::from_millis(10), opening.as_mut()).await {
-                break opened.map_err(|error| PlayError::Internal(format!("{error:?}")))?;
-            }
-        }
-    };
+    let position = request.position;
+    let (opened, mut lane) = open_render_request(request).await?;
     hang_reset!();
     preload_lane(&mut lane).await?;
     let required_span = f64::from(frames.get() * 2) / f64::from(rate.get());
-    let mut buffered = (opened.pcm.decoded_frontier() - request.position.as_secs_f64()).max(0.0);
+    let mut buffered = (opened.pcm.decoded_frontier() - position.as_secs_f64()).max(0.0);
     while buffered < required_span {
         hang_tick!();
         {
@@ -249,7 +267,7 @@ where
         lane.preload_status()
             .map_err(|error| PlayError::Internal(format!("{error:?}")))?;
         kithara_platform::time::sleep(Duration::from_millis(1)).await;
-        let available = (opened.pcm.decoded_frontier() - request.position.as_secs_f64()).max(0.0);
+        let available = (opened.pcm.decoded_frontier() - position.as_secs_f64()).max(0.0);
         if available > buffered {
             hang_reset!();
         }
@@ -295,6 +313,31 @@ where
         hang_reset!();
     }
     Ok(())
+}
+
+#[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+async fn open_render_request<S>(
+    request: LoadRequest<ResourceLoad<S>>,
+) -> Result<(OpenedTrack, crate::ResourceLane), PlayError>
+where
+    S: kithara_bufpool::HasPool<u8> + kithara_bufpool::HasPool<f32> + Send + Sync + 'static,
+{
+    let mut opening = std::pin::pin!(request.item.open(
+        request.position,
+        request.start,
+        request.inbox
+    ));
+    let (opened, lane, _) = {
+        // WHY: Source reads run on real threads, so their watchdog must not leap in virtual time.
+        let _real_io = kithara_platform::flash::real_io();
+        loop {
+            hang_tick!();
+            if let Ok(opened) = timeout(Duration::from_millis(10), opening.as_mut()).await {
+                break opened.map_err(|error| PlayError::Internal(format!("{error:?}")))?;
+            }
+        }
+    };
+    Ok((opened, lane))
 }
 
 /// Drives a directly opened lane through the dispatcher's preload admission.

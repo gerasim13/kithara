@@ -127,7 +127,7 @@ impl TreeDigest {
     fn fold(&mut self, digest: [u8; 32]) {
         const ROTATIONS: [u32; 4] = [7, 20, 33, 46];
         self.entries = self.entries.wrapping_add(1);
-        for (index, chunk) in digest.chunks_exact(8).enumerate() {
+        for (index, chunk) in digest.as_chunks::<8>().0.iter().enumerate() {
             let mut bytes = [0_u8; 8];
             bytes.copy_from_slice(chunk);
             let value = u64::from_be_bytes(bytes);

@@ -563,7 +563,7 @@ fn unity_after_a_fractional_phase_reads_the_final_interpolation_sample() {
             .source_ratio_at(0),
         Some(phase)
     );
-    for (frame, samples) in output.samples.chunks_exact(2).enumerate() {
+    for (frame, samples) in output.samples.as_chunks::<2>().0.iter().enumerate() {
         assert_eq!(
             samples,
             &[(frame.to_f32().expect("test frame count fits f32") + 0.5) / 64.0; 2]
@@ -651,7 +651,9 @@ fn primed_native_unity_keeps_the_physical_impulse_at_its_source_frame(
     });
     let peak = output
         .samples
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .enumerate()
         .max_by(|(_, first), (_, second)| first[0].abs().total_cmp(&second[0].abs()))
         .map(|(frame, _)| frame)
@@ -1182,7 +1184,7 @@ fn resampled_pcm_uses_the_published_fractional_phase() {
     for budget in [7, 3, 1, 11] {
         let output = mapped_render(&mut renderer, &mut source, budget);
         let span = output.meta.source_span.expect("mapping");
-        for (frame, samples) in output.samples.chunks_exact(2).enumerate() {
+        for (frame, &samples) in output.samples.as_chunks::<2>().0.iter().enumerate() {
             let (numerator, denominator) = span.source_ratio_at(frame as u64).expect("position");
             let numerator = u32::try_from(numerator).expect("test phase numerator fits u32");
             let denominator =
@@ -1227,7 +1229,7 @@ fn backend_retirement_does_not_blend_old_control_pcm_into_mapped_output(
     renderer.set_keylock(false);
     let output = mapped_render(&mut renderer, &mut source, 5);
     assert_positions(&output, 0, |frame| 3.5 + frame_f64(frame));
-    for (frame, samples) in output.samples.chunks_exact(2).enumerate() {
+    for (frame, &samples) in output.samples.as_chunks::<2>().0.iter().enumerate() {
         let position = 3.5 + frame.to_f32().expect("test frame count fits f32");
         let first = position.floor() / 4096.0;
         let second = (position.floor() + 1.0) / 4096.0;

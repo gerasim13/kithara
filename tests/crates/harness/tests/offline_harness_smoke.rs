@@ -134,7 +134,9 @@ async fn audible_frames_until_end(harness: &OfflinePlayer) -> usize {
         ));
         let block = harness.render(BLOCK_FRAMES).await;
         let progress = block
-            .chunks_exact(OUTPUT_CHANNELS)
+            .as_chunks::<OUTPUT_CHANNELS>()
+            .0
+            .iter()
             .filter(|frame| frame.iter().any(|sample| *sample != 0.0))
             .count();
         audible += progress;

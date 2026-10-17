@@ -83,6 +83,33 @@ impl<S, O: HostOwner<S>> OfflineSessionTask<S, O>
 where
     S: HasPool<f32>,
 {
+    fn answer_request(&mut self, request: OfflineRequest) -> bool {
+        match request {
+            OfflineRequest::Position(answer) => {
+                let _ = answer.send(self.position);
+                false
+            }
+            OfflineRequest::Render {
+                position,
+                frames,
+                answer,
+            } => {
+                let prepared = self.owner.prepare_offline();
+                self.owner.begin_pass();
+                self.posts.pass(&mut self.owner, true);
+                let result = prepared
+                    .map_err(OfflineSessionError::Owner)
+                    .and_then(|()| self.render(position, frames));
+                if result.is_ok() {
+                    self.owner.begin_pass();
+                    self.posts.pass(&mut self.owner, false);
+                }
+                drop(answer.send(result));
+                true
+            }
+        }
+    }
+
     fn render(&mut self, position: u64, frames: u32) -> Result<SampleBuffer, OfflineSessionError> {
         if position != self.position {
             return Err(OfflineSessionError::CursorChanged {
@@ -258,29 +285,7 @@ where
         let mut published = false;
         for request in requests {
             hang_tick!();
-            match request {
-                OfflineRequest::Position(answer) => {
-                    let _ = answer.send(self.position);
-                }
-                OfflineRequest::Render {
-                    position,
-                    frames,
-                    answer,
-                } => {
-                    let prepared = self.owner.prepare_offline();
-                    self.owner.begin_pass();
-                    self.posts.pass(&mut self.owner, true);
-                    published = true;
-                    let result = prepared
-                        .map_err(OfflineSessionError::Owner)
-                        .and_then(|()| self.render(position, frames));
-                    if result.is_ok() {
-                        self.owner.begin_pass();
-                        self.posts.pass(&mut self.owner, false);
-                    }
-                    drop(answer.send(result));
-                }
-            }
+            published |= self.answer_request(request);
             hang_reset!();
         }
         if !published {

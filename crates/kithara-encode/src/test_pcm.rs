@@ -21,7 +21,9 @@ impl TestPcm {
     #[cfg(feature = "ffmpeg")]
     pub(crate) fn samples_f32(&self) -> Vec<f32> {
         self.bytes
-            .chunks_exact(size_of::<i16>())
+            .as_chunks::<{ size_of::<i16>() }>()
+            .0
+            .iter()
             .map(|pair| f32::from(i16::from_le_bytes([pair[0], pair[1]])) / consts::I16_SCALE)
             .collect()
     }

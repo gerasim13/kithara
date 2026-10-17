@@ -17,6 +17,7 @@ pub(crate) use state::{ComposedDecoder, DecoderRuntime};
 use state::{HeadStrip, PcmOriginState, Prefill};
 #[cfg(test)]
 use test_frame::write_silent_test_frame;
+#[cfg(test)]
 use trim::frames_to_trim;
 
 #[cfg(test)]

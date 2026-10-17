@@ -350,8 +350,10 @@ mod tests {
         trim_silence: Vec<f32>,
     ) {
         let input = apple_planar_44100
-            .chunks_exact(1024)
-            .map(<[f32]>::to_vec)
+            .as_chunks::<1024>()
+            .0
+            .iter()
+            .map(|chunk| chunk.to_vec())
             .collect::<Vec<_>>();
         let rendered = render(TestBackend::Apple, &input, 44_100, 48_000, &trim_silence);
         let input_energy = energy(&input);
@@ -367,8 +369,10 @@ mod tests {
         trim_silence: Vec<f32>,
     ) {
         let input = apple_planar_48000
-            .chunks_exact(1024)
-            .map(<[f32]>::to_vec)
+            .as_chunks::<1024>()
+            .0
+            .iter()
+            .map(|chunk| chunk.to_vec())
             .collect::<Vec<_>>();
         let rendered = render(TestBackend::Apple, &input, 48_000, 48_000, &trim_silence);
         let rms = rms_diff(&input, &rendered.output);
@@ -383,8 +387,10 @@ mod tests {
         trim_silence: Vec<f32>,
     ) {
         let input = apple_planar_44100
-            .chunks_exact(1024)
-            .map(<[f32]>::to_vec)
+            .as_chunks::<1024>()
+            .0
+            .iter()
+            .map(|chunk| chunk.to_vec())
             .collect::<Vec<_>>();
         let apple = render(TestBackend::Apple, &input, 44_100, 48_000, &trim_silence);
         let rubato = render(TestBackend::Rubato, &input, 44_100, 48_000, &trim_silence);
@@ -403,8 +409,10 @@ mod tests {
         trim_silence: &[f32],
     ) {
         let input = pcm
-            .chunks_exact(1024)
-            .map(<[f32]>::to_vec)
+            .as_chunks::<1024>()
+            .0
+            .iter()
+            .map(|chunk| chunk.to_vec())
             .collect::<Vec<_>>();
         let expected = expected_frames(consts::CHUNK_FRAMES, source_rate, target_rate);
         let apple = render(

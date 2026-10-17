@@ -2,7 +2,10 @@ use std::num::{NonZeroU32, NonZeroU128};
 
 use kithara_command::{Seq, When};
 use kithara_config::LiveConfig;
-use kithara_render::{LaneCommand, LaneFrame, bridge::DeckPart};
+use kithara_render::{
+    LaneCommand, LaneFrame,
+    bridge::{DeckPart, SlotMark},
+};
 use kithara_signal::{AudioChunkInfo, SessionFrame, SourceSpan};
 use kithara_sync::SpeedCurve;
 use kithara_warp::SourceTrajectory;
@@ -155,17 +158,7 @@ impl<S> Track<S> for PlayerImpl<S> {
         sample_rate: NonZeroU32,
     ) -> Result<(Position, f64), PlayError> {
         let media_origin = self.media_origin.ok_or(PlayError::Untimed)?;
-        let mark = self.mark.ok_or(PlayError::Untimed)?;
-        if mark.lane.segment != self.segment || !matches!(self.status, TrackStatus::Playing { .. })
-        {
-            return Err(PlayError::Untimed);
-        }
-        let elapsed = at.frames_since(mark.session).ok_or(PlayError::Untimed)?;
-        let target = mark
-            .lane
-            .frame
-            .checked_add(elapsed)
-            .ok_or(PlayError::Untimed)?;
+        let (mark, target) = self.planned_target(at)?;
         let commands = self.planned_changes(mark.lane.segment, true)?;
         let base = SpeedCurve::Constant(self.segment_speed);
         let mut curve = &base;
@@ -224,60 +217,18 @@ impl<S> Track<S> for PlayerImpl<S> {
         if !matches!(self.status, TrackStatus::Playing { .. }) {
             return Ok(None);
         }
-        let mark = self.mark.ok_or(PlayError::Untimed)?;
-        let source = self.observed_source.ok_or(PlayError::Untimed)?;
-        if mark.lane.segment != self.segment || source.segment != self.segment {
-            return Err(PlayError::Untimed);
-        }
-        let span = source
-            .source_geometry()
-            .ok_or_else(|| PlayError::Internal("invalid PCM source geometry".into()))?;
-        let offset = mark
-            .lane
-            .frame
-            .checked_sub(source.lane_frame)
-            .filter(|offset| *offset <= span.output_frames())
-            .ok_or(PlayError::Untimed)?;
-        if span.position_at(offset) != Some(mark.position)
-            || span.render_revision() != source.render_revision
-            || span.mapping_revision() != source.mapping_revision
-        {
-            return Err(PlayError::Untimed);
-        }
+        let (mark, span, offset) = self.planned_span()?;
         let basis = self.source_basis.ok_or(PlayError::Untimed)?;
         let endpoint = source_endpoint(basis, endpoint, sample_rate)?;
         let commands = self.planned_changes(mark.lane.segment, true)?;
-        let mut trajectory = SourceTrajectory::new(self.segment_speed);
-        let mut cursor = 0;
-        for (at, _, change) in commands.iter().filter(|(at, _, _)| *at <= mark.lane.frame) {
-            trajectory
-                .advance_by(0, sample_rate, at - cursor)
-                .map_err(|error| PlayError::Internal(error.to_string()))?;
-            cursor = *at;
-            project_change(&mut trajectory, change, sample_rate)?;
-        }
-        trajectory
-            .advance_by(0, sample_rate, mark.lane.frame - cursor)
-            .map_err(|error| PlayError::Internal(error.to_string()))?;
-        trajectory
-            .reanchor(0, sample_rate, source_ratio(span, offset, sample_rate)?)
-            .map_err(|error| PlayError::Internal(error.to_string()))?;
-        cursor = mark.lane.frame;
+        let mut trajectory = self.trajectory_at(mark, span, offset, sample_rate, &commands)?;
+        let mut cursor = mark.lane.frame;
         for (at, _, change) in commands.iter().filter(|(at, _, _)| *at > mark.lane.frame) {
             if let Some(offset) = trajectory
                 .first_at_or_after(0, sample_rate, endpoint, Some(at - cursor))
                 .map_err(|error| PlayError::Internal(error.to_string()))?
             {
-                let end = cursor.checked_add(offset).ok_or(PlayError::Untimed)?;
-                return session_at(
-                    mark,
-                    LaneFrame {
-                        segment: self.segment,
-                        frame: end,
-                    },
-                )
-                .map(Some)
-                .ok_or(PlayError::Untimed);
+                return self.planned_session_end(mark, cursor, offset);
             }
             trajectory
                 .advance_by(0, sample_rate, at - cursor)
@@ -289,16 +240,7 @@ impl<S> Track<S> for PlayerImpl<S> {
             .first_at_or_after(0, sample_rate, endpoint, None)
             .map_err(|error| PlayError::Internal(error.to_string()))?
             .ok_or(PlayError::Untimed)?;
-        let end = cursor.checked_add(offset).ok_or(PlayError::Untimed)?;
-        session_at(
-            mark,
-            LaneFrame {
-                segment: self.segment,
-                frame: end,
-            },
-        )
-        .map(Some)
-        .ok_or(PlayError::Untimed)
+        self.planned_session_end(mark, cursor, offset)
     }
 
     fn speed_receipt(&mut self) -> Option<Settled> {
@@ -344,6 +286,91 @@ impl<S> Track<S> for PlayerImpl<S> {
         let position = self.raw_position(position)?;
         self.segment_with(position, None, speed, out)?;
         Ok(self.lane_commands.last().map(|operation| operation.seq))
+    }
+}
+
+impl<S> PlayerImpl<S> {
+    fn planned_target(&self, at: SessionFrame) -> Result<(SlotMark, u64), PlayError> {
+        let mark = self.mark.ok_or(PlayError::Untimed)?;
+        if mark.lane.segment != self.segment || !matches!(self.status, TrackStatus::Playing { .. })
+        {
+            return Err(PlayError::Untimed);
+        }
+        let elapsed = at.frames_since(mark.session).ok_or(PlayError::Untimed)?;
+        let target = mark
+            .lane
+            .frame
+            .checked_add(elapsed)
+            .ok_or(PlayError::Untimed)?;
+        Ok((mark, target))
+    }
+
+    fn planned_span(&self) -> Result<(SlotMark, SourceSpan, u64), PlayError> {
+        let mark = self.mark.ok_or(PlayError::Untimed)?;
+        let source = self.observed_source.ok_or(PlayError::Untimed)?;
+        if mark.lane.segment != self.segment || source.segment != self.segment {
+            return Err(PlayError::Untimed);
+        }
+        let span = source
+            .source_geometry()
+            .ok_or_else(|| PlayError::Internal("invalid PCM source geometry".into()))?;
+        let offset = mark
+            .lane
+            .frame
+            .checked_sub(source.lane_frame)
+            .filter(|offset| *offset <= span.output_frames())
+            .ok_or(PlayError::Untimed)?;
+        if span.position_at(offset) != Some(mark.position)
+            || span.render_revision() != source.render_revision
+            || span.mapping_revision() != source.mapping_revision
+        {
+            return Err(PlayError::Untimed);
+        }
+        Ok((mark, span, offset))
+    }
+
+    fn trajectory_at(
+        &self,
+        mark: SlotMark,
+        span: SourceSpan,
+        offset: u64,
+        sample_rate: NonZeroU32,
+        commands: &[(u64, Seq, PlannedChange<'_>)],
+    ) -> Result<SourceTrajectory, PlayError> {
+        let mut trajectory = SourceTrajectory::new(self.segment_speed);
+        let mut cursor = 0;
+        for (at, _, change) in commands.iter().filter(|(at, _, _)| *at <= mark.lane.frame) {
+            trajectory
+                .advance_by(0, sample_rate, at - cursor)
+                .map_err(|error| PlayError::Internal(error.to_string()))?;
+            cursor = *at;
+            project_change(&mut trajectory, change, sample_rate)?;
+        }
+        trajectory
+            .advance_by(0, sample_rate, mark.lane.frame - cursor)
+            .map_err(|error| PlayError::Internal(error.to_string()))?;
+        trajectory
+            .reanchor(0, sample_rate, source_ratio(span, offset, sample_rate)?)
+            .map_err(|error| PlayError::Internal(error.to_string()))?;
+        Ok(trajectory)
+    }
+
+    fn planned_session_end(
+        &self,
+        mark: SlotMark,
+        cursor: u64,
+        offset: u64,
+    ) -> Result<Option<SessionFrame>, PlayError> {
+        let end = cursor.checked_add(offset).ok_or(PlayError::Untimed)?;
+        session_at(
+            mark,
+            LaneFrame {
+                segment: self.segment,
+                frame: end,
+            },
+        )
+        .map(Some)
+        .ok_or(PlayError::Untimed)
     }
 }
 

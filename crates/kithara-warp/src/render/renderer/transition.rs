@@ -18,6 +18,40 @@ pub(in crate::render) struct RetiringTarget {
 }
 
 impl RetiringTarget {
+    fn blend_output(
+        &mut self,
+        output: &mut [f32],
+        frames: usize,
+        channels: usize,
+    ) -> Result<(), ElasticError> {
+        let old = self
+            .target
+            .scratch
+            .as_ref()
+            .ok_or(ElasticError::PoolCapacity)?;
+        for (frame, (old, output)) in old
+            .chunks_exact(channels)
+            .zip(output.chunks_exact_mut(channels))
+            .take(frames)
+            .enumerate()
+        {
+            let mix = (self.rendered + frame + 1)
+                .to_f32()
+                .ok_or(ElasticError::SampleCountOverflow)?
+                / self
+                    .frames
+                    .to_f32()
+                    .ok_or(ElasticError::SampleCountOverflow)?;
+            for (old, output) in old.iter().zip(output) {
+                if old != output {
+                    *output = old.mul_add(1.0 - mix, *output * mix);
+                }
+            }
+        }
+        self.rendered += frames;
+        Ok(())
+    }
+
     pub(in crate::render) fn complete(&self) -> bool {
         self.rendered == self.frames
     }
@@ -203,32 +237,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         self.swap_target(&mut retiring.target);
         result?;
         let channels = usize::from(self.spec.channels);
-        let old = retiring
-            .target
-            .scratch
-            .as_ref()
-            .ok_or(ElasticError::PoolCapacity)?;
         let output = self.scratch.as_mut().ok_or(ElasticError::PoolCapacity)?;
-        for (frame, (old, output)) in old
-            .chunks_exact(channels)
-            .zip(output.chunks_exact_mut(channels))
-            .take(frames)
-            .enumerate()
-        {
-            let mix = (retiring.rendered + frame + 1)
-                .to_f32()
-                .ok_or(ElasticError::SampleCountOverflow)?
-                / retiring
-                    .frames
-                    .to_f32()
-                    .ok_or(ElasticError::SampleCountOverflow)?;
-            for (old, output) in old.iter().zip(output) {
-                if old != output {
-                    *output = old.mul_add(1.0 - mix, *output * mix);
-                }
-            }
-        }
-        retiring.rendered += frames;
-        Ok(())
+        retiring.blend_output(output, frames, channels)
     }
 }

@@ -422,7 +422,7 @@ fn copy_packet(
             seconds = origin.as_secs(),
             nanos = origin.subsec_nanos()
         );
-        for (part, words) in words.chunks_exact(4).enumerate() {
+        for (part, words) in words.as_chunks::<4>().0.iter().enumerate() {
             kithara::probe_event!(
                 pcm_consumed_geometry,
                 part,

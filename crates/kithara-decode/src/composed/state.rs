@@ -6,7 +6,10 @@ use kithara_signal::AudioSpec;
 use kithara_stream::{BoxedEventSink, PendingReason};
 
 use crate::{
-    PcmOrigin, codec::FrameCodec, demuxer::Demuxer, error::DecodeResult,
+    PcmOrigin,
+    codec::FrameCodec,
+    demuxer::{Demuxer, Frame},
+    error::DecodeResult,
     traits::DecoderChunkOutcome,
 };
 
@@ -90,4 +93,16 @@ pub(super) enum Prefill {
     Needed,
     Buffered(DecodeResult<DecoderChunkOutcome>),
     Complete,
+}
+
+impl PcmOriginState {
+    pub(super) fn observe_packet(&mut self, frame: Option<Frame<'_>>, at_eof: bool) {
+        if !at_eof
+            && let Some(frame) = frame
+            && let Self::Observing(packet) = self
+            && packet.is_none()
+        {
+            *packet = Some(frame.pts);
+        }
+    }
 }

@@ -21,7 +21,10 @@ use crate::{
 /// one tick later.
 #[kithara::measure(label = "audio.decode.step")]
 #[kithara::hang_watchdog]
-pub(crate) fn tick<T: StreamType>(core: &mut ActiveDecode, ctx: DecodeCtx<'_, T>) -> DecodeAction {
+pub(crate) fn tick<T: StreamType>(
+    core: &mut ActiveDecode,
+    mut ctx: DecodeCtx<'_, T>,
+) -> DecodeAction {
     let mut decoded = false;
     loop {
         hang_tick!();
@@ -41,29 +44,7 @@ pub(crate) fn tick<T: StreamType>(core: &mut ActiveDecode, ctx: DecodeCtx<'_, T>
             return transition_hold(core, &ctx);
         }
         if core.active().is_source_exhausted() {
-            if core.has_live_incoming() {
-                return transition_hold(core, &ctx);
-            }
-            if !core.active().is_exhaustion_observed() {
-                core.observe_source_exhaustion();
-                return DecodeAction::Progress;
-            }
-            if let Err(error) = core.finish_active() {
-                return decode_failed(core, error, &ctx);
-            }
-            match core.next_output_unheld(
-                &mut *ctx.cursor,
-                ctx.physical_duration,
-                ctx.physical_reconciled,
-            ) {
-                Ok(Some(chunk)) => return DecodeAction::Produced(Box::new(Fetch::data(chunk))),
-                Ok(None) => {}
-                Err(error) => return decode_failed(core, error, &ctx),
-            }
-            if let FormatDecision::Recreate(recreate) = detect(ctx.stream, core.active()) {
-                return DecodeAction::StartRecreate(recreate);
-            }
-            return DecodeAction::Eof;
+            return finish_exhausted(core, &mut ctx);
         }
         if decoded {
             return DecodeAction::Progress;
@@ -112,6 +93,35 @@ pub(crate) fn tick<T: StreamType>(core: &mut ActiveDecode, ctx: DecodeCtx<'_, T>
             Err(error) => return decode_failed(core, error, &ctx),
         }
     }
+}
+
+fn finish_exhausted<T: StreamType>(
+    core: &mut ActiveDecode,
+    ctx: &mut DecodeCtx<'_, T>,
+) -> DecodeAction {
+    if core.has_live_incoming() {
+        return transition_hold(core, ctx);
+    }
+    if !core.active().is_exhaustion_observed() {
+        core.observe_source_exhaustion();
+        return DecodeAction::Progress;
+    }
+    if let Err(error) = core.finish_active() {
+        return decode_failed(core, error, ctx);
+    }
+    match core.next_output_unheld(
+        &mut *ctx.cursor,
+        ctx.physical_duration,
+        ctx.physical_reconciled,
+    ) {
+        Ok(Some(chunk)) => return DecodeAction::Produced(Box::new(Fetch::data(chunk))),
+        Ok(None) => {}
+        Err(error) => return decode_failed(core, error, ctx),
+    }
+    if let FormatDecision::Recreate(recreate) = detect(ctx.stream, core.active()) {
+        return DecodeAction::StartRecreate(recreate);
+    }
+    DecodeAction::Eof
 }
 
 fn transition_hold<T: StreamType>(core: &mut ActiveDecode, ctx: &DecodeCtx<'_, T>) -> DecodeAction {

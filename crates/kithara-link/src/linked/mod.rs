@@ -1,3 +1,4 @@
+mod command;
 mod core;
 mod geometry;
 mod state;

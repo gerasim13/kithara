@@ -95,8 +95,8 @@ where
         let samples = frames * channels;
         let mut output = self.runtime.pools.get_with_len::<f32>(samples)?;
         let bytes = &self.pcm[self.pcm_offset..self.pcm_offset + samples * 2];
-        for (sample, pair) in output.iter_mut().zip(bytes.chunks_exact(2)) {
-            *sample = f32::from(i16::from_le_bytes([pair[0], pair[1]])) / 32_768.0;
+        for (sample, pair) in output.iter_mut().zip(bytes.as_chunks::<2>().0) {
+            *sample = f32::from(i16::from_le_bytes(*pair)) / 32_768.0;
         }
         self.pcm_offset += samples * 2;
         let start = self.frame_offset;

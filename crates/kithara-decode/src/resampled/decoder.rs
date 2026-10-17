@@ -15,8 +15,8 @@ use smallvec::SmallVec;
 
 use crate::{
     BlenderProfile, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome,
-    DecoderResamplerConfig, DecoderSeekOutcome, DecoderTrackInfo, GaplessInfo,
-    GaplessTailCompensation, InputState, PcmOrigin, PrepareWait, TrackMetadata,
+    DecoderResamplerConfig, DecoderSeekOutcome, DecoderTrackInfo, GaplessTailCompensation,
+    InputState, PcmOrigin, PrepareWait, TrackMetadata,
 };
 
 pub(crate) fn wrap<B, S>(
@@ -37,14 +37,14 @@ where
     Ok(Box::new(ResampledDecoder::new(decoder, config, pools)?))
 }
 
-struct ResampledDecoder<B, S>
+pub(super) struct ResampledDecoder<B, S>
 where
     B: ResamplerBackend,
 {
-    source_spec: AudioSpec,
+    pub(super) source_spec: AudioSpec,
     target_spec: AudioSpec,
-    config: DecoderResamplerConfig<B>,
-    decoder: Box<dyn Decoder>,
+    pub(super) config: DecoderResamplerConfig<B>,
+    pub(super) decoder: Box<dyn Decoder>,
     last_input_meta: Option<AudioChunkInfo>,
     source_basis: Option<AudioChunkInfo>,
     pending_meta: Option<AudioChunkInfo>,
@@ -478,15 +478,6 @@ where
         self.source_frames_seen = 0;
         self.resampler.reset();
     }
-
-    fn scaled_gapless(&self, info: GaplessInfo) -> DecodeResult<GaplessInfo> {
-        let source_rate = self.source_spec.sample_rate.get();
-        let target_rate = self.config.target_sample_rate.get();
-        Ok(GaplessInfo {
-            leading_frames: round_scaled_frames(info.leading_frames, source_rate, target_rate)?,
-            trailing_frames: round_scaled_frames(info.trailing_frames, source_rate, target_rate)?,
-        })
-    }
 }
 
 impl<B, S> Decoder for ResampledDecoder<B, S>
@@ -500,16 +491,7 @@ where
 
     fn duration(&self) -> Option<crate::DecoderDuration> {
         let declared = self.decoder.duration()?;
-        let native_frames = match declared {
-            crate::DecoderDuration::RawLength(length) => self.source_spec.frame_at(length).ok()?,
-            crate::DecoderDuration::MediaEnd(end) => {
-                let raw_end = self.decoder.media_origin()?.checked_add(end)?;
-                let origin = self.decoder.initial_pcm_origin()?.position();
-                self.source_spec
-                    .frame_at(raw_end.checked_sub(origin)?)
-                    .ok()?
-            }
-        };
+        let native_frames = self.native_duration_frames(declared)?;
         let output_frames = round_scaled_frames(
             native_frames,
             self.source_spec.sample_rate.get(),
@@ -680,7 +662,11 @@ where
     create_resampler(&config).map_err(DecodeError::backend)
 }
 
-fn round_scaled_frames(count: u64, source_rate: u32, target_rate: u32) -> DecodeResult<u64> {
+pub(super) fn round_scaled_frames(
+    count: u64,
+    source_rate: u32,
+    target_rate: u32,
+) -> DecodeResult<u64> {
     if source_rate == 0 {
         return Err(DecodeError::InvalidSampleRate {
             resource: "decoder.resampler.source",
@@ -1064,7 +1050,7 @@ mod origin_tests {
                     .source_ratio_at(0),
                 span.source_ratio_at(span.output_frames())
             );
-            let mut trimmer = crate::GaplessTrimmer::from(GaplessInfo {
+            let mut trimmer = crate::GaplessTrimmer::from(crate::GaplessInfo {
                 leading_frames: 2,
                 trailing_frames: 2,
             });

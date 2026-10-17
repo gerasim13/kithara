@@ -80,9 +80,9 @@ where
             .map_err(|error| EncodeError::Backend(Box::new(error)))?;
         for (sample, pair) in samples
             .iter_mut()
-            .zip(frames.chunks_exact(size_of::<i16>()))
+            .zip(frames.as_chunks::<{ size_of::<i16>() }>().0)
         {
-            *sample = f32::from(i16::from_le_bytes([pair[0], pair[1]])) / consts::I16_SCALE;
+            *sample = f32::from(i16::from_le_bytes(*pair)) / consts::I16_SCALE;
         }
         on_samples(&samples)
     })

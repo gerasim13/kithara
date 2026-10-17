@@ -192,7 +192,7 @@ impl AnalysisFile {
         }
 
         let mut index: Vec<IndexEntry> = Vec::with_capacity(count);
-        for raw in index_bytes.chunks_exact(consts::INDEX_ENTRY_LEN) {
+        for raw in index_bytes.as_chunks::<{ consts::INDEX_ENTRY_LEN }>().0 {
             let entry = IndexEntry::decode(raw)?;
             index.push(entry);
         }

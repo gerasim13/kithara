@@ -64,6 +64,14 @@ impl Rational {
         Some(self)
     }
 
+    fn transformed_step_change(self, magnitude: u128) -> Option<i128> {
+        if self.step_change < 0 && magnitude != 0 {
+            Some(-i128::try_from(magnitude - 1).ok()? - 1)
+        } else {
+            i128::try_from(magnitude).ok()
+        }
+    }
+
     fn transformed(self, affine: Affine) -> Option<Self> {
         let origin = affine.apply(Ratio::new(self.numerator, self.denominator)?)?;
         let step = affine.scale(Ratio::new(self.step, self.denominator)?)?;
@@ -78,11 +86,7 @@ impl Rational {
         }
         .common(change)?;
         let magnitude = change.at(denominator)?;
-        let step_change = if self.step_change < 0 && magnitude != 0 {
-            -i128::try_from(magnitude - 1).ok()? - 1
-        } else {
-            i128::try_from(magnitude).ok()?
-        };
+        let step_change = self.transformed_step_change(magnitude)?;
         Some(Self {
             numerator: origin.at(denominator)?,
             denominator,

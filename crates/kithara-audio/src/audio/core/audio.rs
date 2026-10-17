@@ -1,6 +1,7 @@
 use std::{
     marker::PhantomData,
     num::{NonZeroU32, NonZeroUsize},
+    ops::ControlFlow,
 };
 
 use kithara_decode::{DecodeError, TrackMetadata};
@@ -319,38 +320,27 @@ impl<S> Audio<S> {
         let mut eof = false;
         while written < capacity {
             hang_tick!();
-            if self.current_chunk.is_none() {
-                match self.pull_chunk() {
-                    Err(_) if written > 0 => break,
-                    Err(error) => return Err(error),
-                    Ok(outcome) => match outcome {
-                        ChunkOutcome::Chunk(chunk) => {
-                            self.cursor.begin_chunk(&chunk);
-                            self.current_chunk = Some(*chunk);
-                        }
-                        ChunkOutcome::Eof { .. } => {
-                            eof = true;
-                            break;
-                        }
-                        ChunkOutcome::Pending { .. } => break,
-                    },
+            match self.ensure_read_chunk() {
+                Err(_) if written > 0 => break,
+                Err(error) => return Err(error),
+                Ok(ControlFlow::Break(outcome)) => {
+                    eof = matches!(outcome, ChunkOutcome::Eof { .. });
+                    break;
                 }
+                Ok(ControlFlow::Continue(())) => {}
             }
             let Some(chunk) = self.current_chunk.as_mut() else {
                 break;
             };
             let span = Some(normalize_geometry(&mut chunk.meta)?);
             if written > 0
-                && (source_meta.is_some_and(|previous| {
-                    previous.source_revision != chunk.meta.source_revision
-                        || previous.visible_origin != chunk.meta.visible_origin
-                        || previous.media_origin != chunk.meta.media_origin
-                }) || !source_spans_coalesce(
+                && !read_geometry_coalesces(
+                    source_meta,
+                    &chunk.meta,
                     source_span,
                     output_frames,
                     span,
-                    u64::from(chunk.meta.frames),
-                ))
+                )
             {
                 break;
             }
@@ -369,36 +359,55 @@ impl<S> Audio<S> {
                 hang_reset!();
             }
             output_frames = output_frames.saturating_add(copied.output_frames);
-            source_span = match (source_span, copied.source_span) {
-                (Some(previous), Some(next)) => previous.followed_by(next),
-                (None, span) => span,
-                _ => None,
-            };
+            source_span = join_read_spans(source_span, copied.source_span);
             if copied.finished {
                 self.current_chunk = None;
             } else if copied.count == 0 {
                 break;
             }
         }
+        Ok(self.finish_read(written, source_span, eof))
+    }
+
+    fn ensure_read_chunk(&mut self) -> Result<ControlFlow<ChunkOutcome>, AudioReadError> {
+        if self.current_chunk.is_some() {
+            return Ok(ControlFlow::Continue(()));
+        }
+        match self.pull_chunk()? {
+            ChunkOutcome::Chunk(chunk) => {
+                self.cursor.begin_chunk(&chunk);
+                self.current_chunk = Some(*chunk);
+                Ok(ControlFlow::Continue(()))
+            }
+            outcome => Ok(ControlFlow::Break(outcome)),
+        }
+    }
+
+    fn finish_read(
+        &mut self,
+        written: usize,
+        source_span: Option<SourceSpan>,
+        eof: bool,
+    ) -> ReadOutcome {
         if let Some(count) = NonZeroUsize::new(written) {
             self.release_seek_lock();
             self.publish_progress();
             self.emit.flush();
-            return Ok(ReadOutcome::Frames {
+            return ReadOutcome::Frames {
                 count,
                 position: self.position(),
                 source_span,
-            });
+            };
         }
         if eof {
-            Ok(ReadOutcome::Eof {
+            ReadOutcome::Eof {
                 position: self.position(),
-            })
+            }
         } else {
-            Ok(ReadOutcome::Pending {
+            ReadOutcome::Pending {
                 reason: PendingReason::StreamBackpressure,
                 position: self.position(),
-            })
+            }
         }
     }
 
@@ -461,6 +470,35 @@ impl<S> Audio<S> {
             total_ms,
             buffered_ms: Some(total_ms.map_or(decoded_ms, |total| decoded_ms.min(total))),
         });
+    }
+}
+
+fn read_geometry_coalesces(
+    previous_meta: Option<AudioChunkInfo>,
+    current_meta: &AudioChunkInfo,
+    previous_span: Option<SourceSpan>,
+    output_frames: u64,
+    current_span: Option<SourceSpan>,
+) -> bool {
+    let changed = previous_meta.is_some_and(|previous| {
+        previous.source_revision != current_meta.source_revision
+            || previous.visible_origin != current_meta.visible_origin
+            || previous.media_origin != current_meta.media_origin
+    });
+    !changed
+        && source_spans_coalesce(
+            previous_span,
+            output_frames,
+            current_span,
+            u64::from(current_meta.frames),
+        )
+}
+
+fn join_read_spans(previous: Option<SourceSpan>, next: Option<SourceSpan>) -> Option<SourceSpan> {
+    match (previous, next) {
+        (Some(previous), Some(next)) => previous.followed_by(next),
+        (None, span) => span,
+        _ => None,
     }
 }
 
