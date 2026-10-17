@@ -1589,6 +1589,7 @@ async fn newer_ticket_supersedes_only_incoming_generation(route_pcm: RoutePcm) {
             .and_then(|info| info.variant_index),
         Some(0)
     );
+    wait_for_retired_decoder(&fixture.drops, 99).await;
     assert_eq!(fixture.drops.lock().as_slice(), &[99]);
 }
 
