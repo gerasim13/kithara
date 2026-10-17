@@ -1,16 +1,16 @@
 use kithara_command::{Batch, Outcome, Rejection, Seq, When};
-use kithara_host::{HostCommand, HostOwner, HostSettingsChange, HostSettled, api::Tempo};
-use kithara_play::{PlayError, TrackCommand, TrackReceipt};
+use kithara_host::{DeckId, HostCommand, HostOwner, HostSettingsChange, HostSettled, api::Tempo};
+use kithara_play::{HostedDeck, PlayError, SessionError, TrackCommand, TrackReceipt};
 use kithara_render::bridge::{DeckProtocol, Slot};
-use kithara_signal::SessionFrame;
+use kithara_signal::{FrameCount, SessionFrame};
 use kithara_sync::SpeedCurve;
 use kithara_test_utils::kithara;
 
 use super::{
-    fixtures::{Command, deck as new_deck, grid, loaded, position, sounding, trajectory},
-    host_fixture::{Host, Probe, finish, host, register, tempo},
+    fixtures::{Command, deck as new_deck, grid, loaded, ordinary, position, sounding, trajectory},
+    host_fixture::{Host, Probe, finish, host, register, register_ordinary, tempo},
 };
-use crate::{LinkedHostCommand, LinkedPlayer, SyncStatus};
+use crate::{GridAnswer, LinkedHostCommand, LinkedPlayer, SyncStatus};
 
 fn beats(probe: &Probe, frame: i64) -> f64 {
     f64::from(probe.trajectory().beat_at(SessionFrame::new(frame)))
@@ -23,7 +23,7 @@ fn bpm(probe: &Probe, frame: i64) -> f64 {
         .beats_per_minute()
 }
 
-fn settle_deck(host: &mut Host, id: kithara_host::DeckId, seq: Seq, frame: i64) {
+fn settle_deck(host: &mut Host, id: DeckId, seq: Seq, frame: i64) {
     let outcome: Outcome<DeckProtocol> = Outcome::Applied {
         at: SessionFrame::new(frame),
         data: (),
@@ -81,7 +81,7 @@ fn registration_projects_the_canonical_member_grid() {
     assert!(matches!(
         host.apply(LinkedHostCommand::Grid {
             deck: id,
-            answer: crate::GridAnswer {
+            answer: GridAnswer {
                 item: identity.0,
                 load,
                 model: Ok(model.clone()),
@@ -178,7 +178,7 @@ fn registration_projects_the_canonical_member_grid() {
     assert!(matches!(
         host.apply(LinkedHostCommand::Grid {
             deck: id,
-            answer: crate::GridAnswer {
+            answer: GridAnswer {
                 item: identity.0,
                 load,
                 model: Ok(model)
@@ -310,7 +310,7 @@ fn refused_tempo_preserves_committed_mode_and_trajectory() {
     assert_eq!(bpm(&observed, 96_000), 90.0);
     assert!(
         host.apply(LinkedHostCommand::Sync {
-            deck: kithara_host::DeckId::allocate().expect("unknown deck"),
+            deck: DeckId::allocate().expect("unknown deck"),
             on: true
         })
         .is_err()
@@ -699,7 +699,7 @@ fn a_terminal_next_tempo_refusal_settles_without_readmission() {
 fn rejected_next_tempo_replans_with_lane_lead_and_keeps_the_caller() {
     let (mut host, clock) = host();
     let (deck, control, _, _) = sounding();
-    control.edit(|script| script.snapshot.ring_depth = kithara_signal::FrameCount::new(256));
+    control.edit(|script| script.snapshot.ring_depth = FrameCount::new(256));
     let (_, probe) = register(&mut host, deck, &control);
     let caller = host
         .apply(
@@ -781,4 +781,105 @@ fn a_newer_next_tempo_supersedes_a_rejected_older_one() {
     );
     clock.answer(newer, 90.0, Ok(SessionFrame::new(256)));
     finish(&mut host);
+}
+
+#[kithara::test]
+fn ordinary_members_keep_their_law_while_linked_members_follow_host_tempo() {
+    let (mut host, clock) = host();
+    clock.edit(|script| script.clock = Some((SessionFrame::new(0), FrameCount::new(0))));
+    let (plain, ordinary) = ordinary();
+    let ordinary_id = register_ordinary(&mut host, plain);
+    let (linked, linked_control, _, _) = sounding();
+    let (linked_id, probe) = register(&mut host, linked, &linked_control);
+    probe.clear();
+
+    tempo(&mut host, 180.0, 48_000).expect("shared Host tempo");
+
+    assert!(ordinary.commands().is_empty());
+    assert!(!linked_control.commands().is_empty());
+    assert_eq!(probe.read(|observation| observation.trajectories.len()), 1);
+    assert_eq!(
+        probe
+            .trajectory()
+            .anchor_at(SessionFrame::new(48_000))
+            .target_beats_per_second(),
+        3.0
+    );
+    let mut held = Vec::new();
+    host.each_deck(&mut |id, _, _, _| held.push(id));
+    assert_eq!(held, [ordinary_id, linked_id]);
+    host.with_deck(ordinary_id, &mut |deck, out, _| {
+        deck.close(out)
+            .expect("ordinary member closes through Host");
+    })
+    .expect("registered ordinary member");
+    assert!(matches!(
+        ordinary.commands().as_slice(),
+        [(_, Command::Release)]
+    ));
+}
+
+#[kithara::test]
+fn addressed_link_commands_refuse_ordinary_and_missing_members_without_retiming() {
+    let (mut host, _) = host();
+    let (plain, ordinary) = ordinary();
+    let ordinary_id = register_ordinary(&mut host, plain);
+    let (linked, control, _, load) = sounding();
+    let (_, probe) = register(&mut host, linked, &control);
+    probe.clear();
+    let before = probe.read(|observation| observation.snapshot.clone());
+    let missing = DeckId::allocate().expect("missing member identity");
+    for id in [ordinary_id, missing] {
+        let commands = [
+            ("sync", LinkedHostCommand::Sync { deck: id, on: true }),
+            (
+                "grid",
+                LinkedHostCommand::Grid {
+                    deck: id,
+                    answer: GridAnswer {
+                        item: before.as_ref().item,
+                        load,
+                        model: Ok(grid(24_000, 0, Some((4, 0)), 960_000)),
+                    },
+                },
+            ),
+        ];
+        for (name, command) in commands {
+            let refusal = host
+                .apply(command)
+                .expect_err("only linked members accept link commands");
+            if id == ordinary_id {
+                assert!(
+                    matches!(refusal, PlayError::InvalidParameter { name: refused_name, .. } if refused_name == name)
+                );
+            } else {
+                assert!(
+                    matches!(refusal, PlayError::Session(SessionError::DeckNotFound(refused)) if refused == missing)
+                );
+            }
+        }
+    }
+    assert!(ordinary.commands().is_empty());
+    assert!(control.commands().is_empty());
+    probe.read(|observation| {
+        assert!(observation.trajectories.is_empty());
+        assert_eq!(observation.snapshot.sync, before.sync);
+        assert_eq!(observation.snapshot.as_ref().item, before.as_ref().item);
+        assert_eq!(observation.snapshot.as_ref().slot, before.as_ref().slot);
+        assert_eq!(
+            observation.snapshot.as_ref().pending_lane,
+            before.as_ref().pending_lane
+        );
+        assert_eq!(observation.snapshot.as_ref().mark, before.as_ref().mark);
+        assert_eq!(
+            observation.snapshot.as_ref().attached,
+            before.as_ref().attached
+        );
+        assert_eq!(observation.snapshot.as_ref().speed, before.as_ref().speed);
+        assert_eq!(
+            observation.snapshot.as_ref().position,
+            before.as_ref().position
+        );
+        assert_eq!(observation.snapshot.as_ref().status, before.as_ref().status);
+    });
 }

@@ -27,4 +27,6 @@ mod consts;
 #[cfg(all(feature = "offline", feature = "mock", not(target_arch = "wasm32")))]
 pub mod mock;
 
-pub use owner::{DeckControl, DeckId, HostCommand, HostCore, HostOwner, HostSettled};
+pub use owner::{
+    DeckControl, DeckId, HostCommand, HostCore, HostOwner, HostRegistration, HostSettled,
+};

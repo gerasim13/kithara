@@ -3,9 +3,9 @@ use std::{num::NonZeroU32, ops::Deref, task::Waker};
 use kithara::{
     bufpool::HasPool,
     events::TrackId,
-    host::{DeckId, HostCommand, HostCore},
+    host::{DeckControl, DeckId, HostCore},
     link::{
-        GridAnswer, LinkedDeck, LinkedFactory, LinkedHost, LinkedPlayer, LinkedSnapshot,
+        GridAnswer, LinkedFactory, LinkedHost, LinkedHostDeck, LinkedPlayer, LinkedSnapshot,
         TempoTrajectory,
     },
     platform::{
@@ -29,7 +29,7 @@ use kithara_render::{
 
 use super::OfflineHostHarness;
 
-pub type LinkedOwner<S> = LinkedHost<S, HostCore<S, dyn LinkedDeck<S>>>;
+pub type LinkedOwner<S> = LinkedHost<S, HostCore<S, LinkedHostDeck<S>>>;
 pub type LinkedQueue<S> = Queue<S, LinkedFactory<ObservedFactory<S>>>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1061,6 +1061,17 @@ where
     }
 }
 
+impl<S> DeckControl for ObservedQueue<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    type Control = QueueControl<S>;
+
+    fn control(&self) -> Self::Control {
+        self.inner.control()
+    }
+}
+
 impl<S> HostedDeck<S> for ObservedQueue<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
@@ -1312,26 +1323,18 @@ where
         observation: Arc<Mutex<LinkObservation>>,
     ) -> Result<LinkedQueueHandle<S>, PlayError> {
         self.with(move |host| {
-            let id = host.deck_id()?;
-            let control = queue.control();
             let commands = Arc::new(Mutex::new(LinkProbes {
                 commands: Vec::new(),
                 wake: None,
             }));
-            host.send(
-                HostCommand::Register {
-                    id,
-                    deck: Box::new(ObservedQueue {
-                        inner: queue,
-                        observation: observation.clone(),
-                        commands: commands.clone(),
-                    }) as Box<dyn LinkedDeck<S>>,
-                }
-                .into(),
-            )?;
+            let deck = host.insert(ObservedQueue {
+                inner: queue,
+                observation: observation.clone(),
+                commands: commands.clone(),
+            })?;
             Ok(LinkedQueueHandle {
-                id,
-                control,
+                id: deck.id(),
+                control: deck.control().clone(),
                 observation,
                 commands,
             })

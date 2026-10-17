@@ -1,11 +1,11 @@
 use std::{marker::PhantomData, ops::Deref};
 
 use kithara_bufpool::HasPool;
-use kithara_command::{Live, Seq, When};
+use kithara_command::{Live, Ticket, When};
 use kithara_config::{ConfigOwner, Configure};
 use kithara_output::OutputGroup;
 use kithara_platform::{maybe_send::MaybeSend, sync::Arc};
-use kithara_play::{HostedDeck, PlayError};
+use kithara_play::PlayError;
 use kithara_signal::SessionFrame;
 use kithara_warp::{BeatGrid, BeatGridId};
 
@@ -16,7 +16,7 @@ use super::{
     platform::{Platform, PlatformResult},
 };
 use crate::{
-    DeckControl, DeckId, HostCommand, HostCore, HostOwner,
+    DeckControl, DeckId, HostCommand, HostCore, HostOwner, HostRegistration,
     api::Tap,
     session::{HostDispatcher, HostRoot, RootView, SessionError, SessionSampleRate, ask},
 };
@@ -100,16 +100,14 @@ impl<S, O: HostOwner<S>> Host<S, O> {
         }
     }
 
-    /// Posts an owner command and returns its ticket number without waiting.
-    /// The owner answers after checks and sending; effects publish on receipts.
+    /// Posts an owner command and retains its answer ticket.
+    /// Ordinary answers confirm admission; Release waits for scope retirement.
+    /// Timed effects publish on executor receipts.
     ///
     /// # Errors
     /// Returns [`PlayError::SessionGone`] if the owner no longer accepts posts.
-    pub fn send(&self, command: O::Command) -> Result<Seq, PlayError> {
-        self.dispatcher
-            .dispatch(command)
-            .map(|ticket| ticket.seq())
-            .map_err(Into::into)
+    pub fn send(&self, command: O::Command) -> Result<Ticket<PlayError>, PlayError> {
+        self.dispatcher.dispatch(command).map_err(Into::into)
     }
 
     /// Allocates a fresh identity for a deck registered through this handle.
@@ -133,6 +131,31 @@ impl<S, O: HostOwner<S>> Host<S, O> {
             HostCommand::_Marker(_) => "_Marker",
         };
         ask(&*self.dispatcher, command.into(), command_name).map_err(Into::into)
+    }
+
+    /// Transfers a fully constructed deck, retaining only its public control handle.
+    ///
+    /// # Errors
+    /// Returns [`PlayError::Internal`] when deck identities are exhausted.
+    /// Propagates the registration errors described by [`HostOwner::register`],
+    /// or [`PlayError::SessionGone`] if the owner stops or drops the post.
+    pub fn insert<D, Face: ?Sized>(&mut self, deck: D) -> Result<HostOwned<D>, PlayError>
+    where
+        D: DeckControl,
+        O: HostRegistration<S, D, Face>,
+    {
+        let id = DeckId::allocate().map_err(|error| PlayError::Internal(error.to_string()))?;
+        let control = deck.control();
+        self.ask(HostCommand::Register {
+            id,
+            deck: O::into_deck(deck),
+        })?;
+        Ok(HostOwned {
+            host_id: self.id,
+            id,
+            control,
+            marker: PhantomData,
+        })
     }
 
     /// Attaches one output group to a session tap.
@@ -290,30 +313,6 @@ where
     /// startup failures.
     pub fn new(config: HostConfig<S>) -> Result<Self, PlayError> {
         Self::layered(config, |core| core)
-    }
-
-    /// Transfers a fully constructed deck, retaining only its public control handle.
-    ///
-    /// # Errors
-    /// Returns [`PlayError::Internal`] when deck identities are exhausted.
-    /// Propagates the registration errors described by [`HostOwner::register`],
-    /// or [`PlayError::SessionGone`] if the owner stops or drops the post.
-    pub fn insert<D>(&mut self, deck: D) -> Result<HostOwned<D>, PlayError>
-    where
-        D: HostedDeck<S> + DeckControl,
-    {
-        let id = DeckId::allocate().map_err(|error| PlayError::Internal(error.to_string()))?;
-        let control = deck.control();
-        self.ask(HostCommand::Register {
-            id,
-            deck: Box::new(deck),
-        })?;
-        Ok(HostOwned {
-            host_id: self.id,
-            id,
-            control,
-            marker: PhantomData,
-        })
     }
 }
 

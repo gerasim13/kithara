@@ -2,12 +2,15 @@ use std::{marker::PhantomData, num::NonZeroU32};
 
 use kithara_command::{Rejection, Seq, When};
 use kithara_host::{
-    DeckId, HostCommand, HostOwner, HostSettingsChange, HostSettingsExec, HostSettled, api::Tempo,
+    DeckId, HostCommand, HostOwner, HostRegistration, HostSettingsChange, HostSettingsExec,
+    HostSettled, api::Tempo,
 };
-use kithara_play::{DeckPass, Outbox, PlayError, SessionTransportSnapshot};
+use kithara_play::{
+    DeckControl, DeckPass, HostedDeck, Outbox, PlayError, SessionTransportSnapshot,
+};
 use kithara_signal::{FrameCount, SessionEpoch, SessionFrame};
 
-use crate::{GridAnswer, LinkedDeck, LinkedHostConfig, TempoTrajectory};
+use crate::{GridAnswer, LinkedDeck, LinkedHostConfig, LinkedHostDeck, TempoTrajectory, Unlinked};
 
 /// A tempo batch whose projected step is retained until the Host answers it.
 #[derive(Clone, Copy, Debug)]
@@ -29,7 +32,7 @@ struct TempoOperation {
 pub enum LinkedHostCommand<S> {
     /// A Host command: registration and tempo go through the decorator,
     /// the rest to the owner it wraps.
-    Host(HostCommand<S, dyn LinkedDeck<S>>),
+    Host(HostCommand<S, LinkedHostDeck<S>>),
     Sync {
         deck: DeckId,
         on: bool,
@@ -40,8 +43,8 @@ pub enum LinkedHostCommand<S> {
     },
 }
 
-impl<S> From<HostCommand<S, dyn LinkedDeck<S>>> for LinkedHostCommand<S> {
-    fn from(command: HostCommand<S, dyn LinkedDeck<S>>) -> Self {
+impl<S> From<HostCommand<S, LinkedHostDeck<S>>> for LinkedHostCommand<S> {
+    fn from(command: HostCommand<S, LinkedHostDeck<S>>) -> Self {
         Self::Host(command)
     }
 }
@@ -74,7 +77,7 @@ impl<S, H> LinkedHost<S, H> {
     }
 }
 
-impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> LinkedHost<S, H> {
+impl<S: 'static, H: HostOwner<S, Deck = LinkedHostDeck<S>>> LinkedHost<S, H> {
     fn observe_axis(&mut self) {
         let Some(transport) = self.inner.transport() else {
             return;
@@ -89,7 +92,9 @@ impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> LinkedHost<S, H> {
             let at = now + self.lead(delivery);
             let trajectory = &self.trajectory;
             self.inner.each_deck(&mut |_id, deck, out, _pass| {
-                deck.realign(trajectory, at, out);
+                if let LinkedHostDeck::Linked(deck) = deck {
+                    deck.realign(trajectory, at, out);
+                }
             });
         }
     }
@@ -97,7 +102,8 @@ impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> LinkedHost<S, H> {
     fn lead(&mut self, delivery: FrameCount) -> FrameCount {
         let mut lead = delivery;
         self.inner.each_deck(&mut |_id, deck, _out, _pass| {
-            if deck.synced()
+            if let LinkedHostDeck::Linked(deck) = deck
+                && deck.synced()
                 && let Some(lane) = deck.lead(delivery)
             {
                 lead = lead.max(lane);
@@ -112,7 +118,9 @@ impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> LinkedHost<S, H> {
             .chain(trajectory.changes_after(frame))
             .collect();
         self.inner.each_deck(&mut |_id, deck, out, _pass| {
-            if deck.synced() {
+            if let LinkedHostDeck::Linked(deck) = deck
+                && deck.synced()
+            {
                 for &frame in &frames {
                     deck.retime(trajectory, frame, out);
                 }
@@ -143,11 +151,13 @@ impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> LinkedHost<S, H> {
         let mut lanes_full = false;
         let mut scopes_full = false;
         self.inner.each_deck(&mut |_id, deck, out, _pass| {
-            if deck.synced() && deck.lane_room() == 0 {
-                lanes_full = true;
-            }
-            if out.deck_available() < deck.scope_parts() {
-                scopes_full = true;
+            if let LinkedHostDeck::Linked(deck) = deck {
+                if deck.synced() && deck.lane_room() == 0 {
+                    lanes_full = true;
+                }
+                if out.deck_available() < deck.scope_parts() {
+                    scopes_full = true;
+                }
             }
         });
         if lanes_full {
@@ -270,9 +280,31 @@ impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> LinkedHost<S, H> {
     }
 }
 
-impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> HostOwner<S> for LinkedHost<S, H> {
+impl<S, H, D> HostRegistration<S, D, dyn LinkedDeck<S>> for LinkedHost<S, H>
+where
+    S: 'static,
+    H: HostOwner<S, Deck = LinkedHostDeck<S>>,
+    D: LinkedDeck<S> + DeckControl,
+{
+    fn into_deck(deck: D) -> Box<Self::Deck> {
+        Box::new(LinkedHostDeck::Linked(Box::new(deck)))
+    }
+}
+
+impl<S, H, D> HostRegistration<S, Unlinked<D>, dyn HostedDeck<S>> for LinkedHost<S, H>
+where
+    S: 'static,
+    H: HostOwner<S, Deck = LinkedHostDeck<S>>,
+    D: HostedDeck<S> + DeckControl,
+{
+    fn into_deck(deck: Unlinked<D>) -> Box<Self::Deck> {
+        Box::new(LinkedHostDeck::Ordinary(Box::new(deck.0)))
+    }
+}
+
+impl<S: 'static, H: HostOwner<S, Deck = LinkedHostDeck<S>>> HostOwner<S> for LinkedHost<S, H> {
     type Command = LinkedHostCommand<S>;
-    type Deck = dyn LinkedDeck<S>;
+    type Deck = LinkedHostDeck<S>;
 
     fn apply(&mut self, command: Self::Command) -> Result<Option<Seq>, PlayError> {
         match command {
@@ -287,27 +319,49 @@ impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> HostOwner<S> for Lin
                 let mut sent = Ok(None);
                 let trajectory = &self.trajectory;
                 self.inner.with_deck(deck, &mut |deck, out, pass| {
-                    if on && !deck.synced() {
-                        deck.retime(trajectory, pass.now, out);
-                    }
-                    sent = deck.sync(on, out);
+                    sent = match deck {
+                        LinkedHostDeck::Linked(deck) => {
+                            if on && !deck.synced() {
+                                deck.retime(trajectory, pass.now, out);
+                            }
+                            deck.sync(on, out)
+                        }
+                        LinkedHostDeck::Ordinary(_) => Err(PlayError::InvalidParameter {
+                            name: "sync".into(),
+                            value: if on { 1.0 } else { 0.0 },
+                        }),
+                    };
                 })?;
                 sent
             }
             LinkedHostCommand::Grid { deck, answer } => {
-                self.inner.with_deck(deck, &mut |deck, out, _pass| {
-                    deck.grid(answer.clone(), out);
-                })?;
-                Ok(None)
+                let mut delivered = Ok(None);
+                self.inner
+                    .with_deck(deck, &mut |deck, out, _pass| match deck {
+                        LinkedHostDeck::Linked(deck) => deck.grid(answer.clone(), out),
+                        LinkedHostDeck::Ordinary(_) => {
+                            delivered = Err(PlayError::InvalidParameter {
+                                name: "grid".into(),
+                                value: 0.0,
+                            });
+                        }
+                    })?;
+                delivered
             }
         }
     }
 
     fn register(&mut self, id: DeckId, deck: Box<Self::Deck>) -> Result<(), PlayError> {
+        let linked = matches!(&*deck, LinkedHostDeck::Linked(_));
         self.inner.register(id, deck)?;
+        if !linked {
+            return Ok(());
+        }
         let trajectory = &self.trajectory;
         self.inner.with_deck(id, &mut |deck, out, pass| {
-            deck.retime(trajectory, pass.now, out);
+            if let LinkedHostDeck::Linked(deck) = deck {
+                deck.retime(trajectory, pass.now, out);
+            }
         })
     }
 
@@ -378,7 +432,7 @@ impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> HostOwner<S> for Lin
     }
 }
 
-impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> HostSettingsExec<()>
+impl<S: 'static, H: HostOwner<S, Deck = LinkedHostDeck<S>>> HostSettingsExec<()>
     for LinkedHost<S, H>
 {
     type At = When<SessionFrame>;

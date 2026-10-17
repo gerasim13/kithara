@@ -14,7 +14,7 @@ mod queue;
 mod tests;
 
 pub use config::{LinkedConfig, LinkedHostConfig};
-pub use deck::LinkedDeck;
+pub use deck::{LinkedDeck, LinkedHostDeck, Unlinked};
 pub use error::LinkError;
 pub use factory::LinkedFactory;
 pub use grid::{GridAnswer, GridRefusal};

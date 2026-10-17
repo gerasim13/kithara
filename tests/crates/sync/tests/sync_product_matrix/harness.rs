@@ -830,15 +830,13 @@ impl ProductHarness {
             };
             let target = deck.id();
             self.host
-                .with(move |host| {
-                    host.send(LinkedHostCommand::Grid {
-                        deck: target,
-                        answer: GridAnswer {
-                            item,
-                            load,
-                            model: Ok((*model).clone()),
-                        },
-                    })
+                .send(LinkedHostCommand::Grid {
+                    deck: target,
+                    answer: GridAnswer {
+                        item,
+                        load,
+                        model: Ok((*model).clone()),
+                    },
                 })
                 .await
                 .unwrap_or_else(|error| panic!("{}: deliver grid {index}: {error}", case.id));
@@ -1444,7 +1442,7 @@ impl ProductHarness {
             let target = self.decks[index].id();
             let on = !matches!(intent, SyncRequest::Off);
             self.host
-                .with(move |host| host.send(LinkedHostCommand::Sync { deck: target, on }))
+                .send(LinkedHostCommand::Sync { deck: target, on })
                 .await
                 .unwrap_or_else(|error| panic!("{}: sync deck {index}: {error}", case.id));
             if matches!(case.order, OperationOrder::SequentialSync) {

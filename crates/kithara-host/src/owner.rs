@@ -107,6 +107,23 @@ pub trait HostOwner<S>:
     fn pass(&mut self) -> Vec<HostSettled>;
 }
 
+/// Converts a concrete control-bearing deck into the owning layer's held face.
+/// `Face` selects the source capability converted into [`HostOwner::Deck`].
+pub trait HostRegistration<S, D: DeckControl, Face: ?Sized>: HostOwner<S> {
+    /// Transfers the deck without duplicating its owner or control endpoint.
+    fn into_deck(deck: D) -> Box<Self::Deck>;
+}
+
+impl<S, D> HostRegistration<S, D, dyn HostedDeck<S>> for HostCore<S>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+    D: HostedDeck<S> + DeckControl,
+{
+    fn into_deck(deck: D) -> Box<Self::Deck> {
+        Box::new(deck)
+    }
+}
+
 /// One operation on the canonical owner, answered after checks and sending.
 pub enum HostCommand<S, D: ?Sized> {
     Register {

@@ -1,22 +1,29 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::{
-    num::{NonZeroU32, NonZeroUsize},
+    num::{NonZeroU16, NonZeroU32, NonZeroUsize},
     task::Waker,
 };
 
 use delegate::delegate;
 use kithara::{
-    host::{HostConfig, HostOwned, HostSettings},
+    host::{DeckId, HostConfig, HostCore, HostOwned, HostSettings, api::Tempo},
+    link::{
+        LinkedConfig, LinkedFactory, LinkedHost, LinkedHostCommand, LinkedHostConfig,
+        LinkedHostDeck, TempoStep, TempoTrajectory, Unlinked,
+    },
     platform::{
         sync::{Arc, Mutex},
         thread,
     },
     play::{
         BufferGeometryError, DeckControl, DeckMixerConfig, DeckPass, HostedDeck, Outbox, PlayError,
-        PlayWorker, PlayWorkerConfig, ResourcePrep, SessionError, SessionEvent, TrackReceipt,
+        PlayWorker, PlayWorkerConfig, PlayerFactory, ResourcePrep, SessionError, SessionEvent,
+        TrackReceipt,
     },
     queue::{Queue, QueueConfig},
+    signal::SessionFrame,
+    sync::SessionBeat,
     warp::WarpConfig,
     worker::DispatcherConfig,
 };
@@ -308,4 +315,117 @@ async fn removing_a_deck_closes_it_on_the_session_thread() {
         "the session thread closes the deck, once"
     );
     host.close().await;
+}
+
+#[kithara::test(tokio)]
+async fn a_decorated_host_answers_registration_and_holds_both_deck_domains() {
+    type LinkedOwner = LinkedHost<TestPools, HostCore<TestPools, LinkedHostDeck<TestPools>>>;
+    let region = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(region.clone()).build());
+    let trajectory = TempoTrajectory::new(
+        TempoStep {
+            frame: SessionFrame::new(0),
+            beat: SessionBeat::default(),
+            tempo: Tempo::DEFAULT,
+        },
+        NonZeroU16::new(4).expect("meter"),
+        sample_rate(),
+    );
+    let axis = trajectory.clone();
+    let config = HostConfig::offline(region)
+        .settings(HostSettings::builder().sample_rate(sample_rate()).build())
+        .max_block_frames(block_frames())
+        .build();
+    let host: OfflineHostHarness<TestPools, LinkedOwner> =
+        OfflineHostHarness::layered(config, None, move |core| {
+            LinkedHost::new(
+                LinkedHostConfig::builder()
+                    .inner(core)
+                    .trajectory(axis)
+                    .build(),
+            )
+        })
+        .await
+        .expect("decorated offline host");
+    let invalid = ResourcePrep::builder()
+        .worker(worker.clone())
+        .warp(
+            WarpConfig::builder()
+                .render_quantum_frames(NonZeroUsize::new(32).expect("quantum"))
+                .build(),
+        )
+        .response_budget_frames(NonZeroUsize::new(1).expect("invalid budget"))
+        .build();
+    let invalid = linked_queue(invalid, trajectory.clone());
+    assert!(matches!(
+        host.with(move |host| host.insert(invalid)).await,
+        Err(PlayError::Session(SessionError::BufferGeometry(
+            BufferGeometryError::BudgetExceeded { .. }
+        )))
+    ));
+    host.with(|host| {
+        assert!(host.is_empty(), "a refused insertion returns no membership");
+        assert!(host.output_sample_rate().measured.is_none());
+    })
+    .await;
+
+    let ordinary = Queue::new(
+        QueueConfig::builder()
+            .prep(ResourcePrep::builder().worker(worker.clone()).build())
+            .build(),
+    );
+    let linked = linked_queue(ResourcePrep::builder().worker(worker).build(), trajectory);
+    let (ordinary, linked) = host
+        .with(move |host| {
+            let ordinary = host.insert(Unlinked::new(ordinary))?;
+            let linked = host.insert(linked)?;
+            assert_ne!(ordinary.id(), linked.id());
+            assert!(
+                !host.is_empty(),
+                "both public insertions have been answered"
+            );
+            assert!(!ordinary.is_closed());
+            assert!(!linked.is_closed());
+            Ok::<_, PlayError>((ordinary, linked))
+        })
+        .await
+        .expect("ordinary and linked members share the public Host");
+    assert!(matches!(
+        host.send(LinkedHostCommand::Sync { deck: ordinary.id(), on: true }).await,
+        Err(PlayError::InvalidParameter { name, value }) if name == "sync" && value == 1.0
+    ));
+    let missing = DeckId::allocate().expect("missing deck id");
+    assert!(matches!(
+        host.send(LinkedHostCommand::Sync { deck: missing, on: true }).await,
+        Err(PlayError::Session(SessionError::DeckNotFound(id))) if id == missing
+    ));
+    let output = host.render(consts::BLOCK_FRAMES).await;
+    assert_eq!(output.len(), consts::BLOCK_FRAMES * 2);
+    assert!(output.iter().all(|sample| *sample == 0.0));
+    host.with(move |host| {
+        host.remove(&ordinary)
+            .expect("ordinary member releases through HostCore");
+        assert!(ordinary.is_closed());
+        assert!(!linked.is_closed());
+        assert!(!host.is_empty());
+        host.remove(&linked)
+            .expect("linked member releases through HostCore");
+        assert!(linked.is_closed());
+        assert!(host.is_empty());
+    })
+    .await;
+    host.close().await;
+}
+
+fn linked_queue(
+    prep: ResourcePrep<TestPools>,
+    trajectory: TempoTrajectory,
+) -> Queue<TestPools, LinkedFactory<PlayerFactory>> {
+    let factory = LinkedFactory::new(
+        LinkedConfig::builder()
+            .inner(PlayerFactory)
+            .trajectory(trajectory)
+            .build(),
+    );
+    Queue::new(QueueConfig::with_factory(factory).prep(prep).build())
 }

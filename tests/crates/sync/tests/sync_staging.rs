@@ -296,15 +296,13 @@ async fn release_incoming_grid(harness: &ProductHarness, operation: Operation) {
     let deck = harness.decks[0].id();
     harness
         .host
-        .with(move |host| {
-            host.send(LinkedHostCommand::Grid {
-                deck,
-                answer: GridAnswer {
-                    item,
-                    load: seq,
-                    model: Ok((*model).clone()),
-                },
-            })
+        .send(LinkedHostCommand::Grid {
+            deck,
+            answer: GridAnswer {
+                item,
+                load: seq,
+                model: Ok((*model).clone()),
+            },
         })
         .await
         .expect("incoming grid delivery");

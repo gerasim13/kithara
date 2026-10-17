@@ -261,7 +261,8 @@ fn a_receipt_reaches_the_nested_group_that_issued_it() {
         commands: Vec::new(),
     };
     host.with_deck(id, &mut |deck, out, pass| {
-        deck.settle(
+        kithara_play::HostedDeck::settle(
+            deck,
             TrackReceipt::Deck {
                 seq: prepared,
                 outcome: &outcome,
@@ -274,16 +275,20 @@ fn a_receipt_reaches_the_nested_group_that_issued_it() {
     .expect("prepared segment receipt");
     control.clear();
     clock.at(24_000);
-    host.with_deck(id, &mut |deck, out, pass| deck.tick(pass, out))
-        .expect("registration pass");
+    host.with_deck(id, &mut |deck, out, pass| {
+        kithara_play::HostedDeck::tick(deck, pass, out);
+    })
+    .expect("registration pass");
     let (sibling, sibling_control, _, _) = loaded(grid(24_000, 0, Some((4, 0)), 960_000));
     let (_, sibling_probe) = register(&mut host, sibling, &sibling_control);
     let sibling_before = sibling_probe.read(|observation| observation.snapshot.clone());
     probe.send(TrackCommand::Play {
         at: When::At(SessionFrame::new(96_000)),
     });
-    host.with_deck(id, &mut |deck, out, pass| deck.drain(pass, out))
-        .expect("issuing deck");
+    host.with_deck(id, &mut |deck, out, pass| {
+        kithara_play::HostedDeck::drain(deck, pass, out);
+    })
+    .expect("issuing deck");
     let commands = control.commands();
     assert_eq!(commands.len(), 1);
     let seq = commands[0].0;
@@ -300,7 +305,8 @@ fn a_receipt_reaches_the_nested_group_that_issued_it() {
         commands: Vec::new(),
     };
     host.with_deck(id, &mut |deck, out, pass| {
-        deck.settle(
+        kithara_play::HostedDeck::settle(
+            deck,
             TrackReceipt::Deck {
                 seq,
                 outcome: &outcome,

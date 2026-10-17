@@ -1,5 +1,5 @@
 use kithara_host::{DeckId, HostOwner};
-use kithara_play::{PlayError, TrackSnapshot, TrackStatus};
+use kithara_play::{HostedDeck, PlayError, SessionError, TrackSnapshot, TrackStatus};
 use kithara_signal::{FrameCount, SessionFrame};
 use kithara_test_utils::kithara;
 
@@ -182,19 +182,19 @@ fn enabling_sync_observes_tempo_changes_made_while_unlinked() {
     )));
 }
 
-// Ruling: spec 4.6 removes track-grid command targets; foreign DeckId routing returns NotReady without changing playback.
 #[kithara::test]
 fn a_sync_intent_addressed_to_a_track_grid_is_rejected() {
     let (mut host, _) = host();
     let (deck, control, _, _) = loaded(grid(24_000, 0, None, 480_000));
     let (_, probe) = register(&mut host, deck, &control);
     let before = probe.read(|observation| observation.snapshot.clone());
+    let foreign = DeckId::allocate().expect("foreign target");
     assert!(matches!(
         host.apply(LinkedHostCommand::Sync {
-            deck: DeckId::allocate().expect("foreign target"),
+            deck: foreign,
             on: true
         }),
-        Err(PlayError::NotReady)
+        Err(PlayError::Session(SessionError::DeckNotFound(id))) if id == foreign
     ));
     probe.read(|observation| {
         assert_eq!(observation.snapshot.sync, SyncStatus::Off);

@@ -1,5 +1,10 @@
+use std::task::Waker;
+
 use kithara_command::Seq;
-use kithara_play::{HostedDeck, Outbox, PlayError};
+use kithara_play::{
+    DeckControl, DeckPass, HostedDeck, Outbox, PlayError, PlayWorker, ResourcePrep, TrackReceipt,
+};
+use kithara_render::rt::DeckMixerConfig;
 use kithara_signal::{FrameCount, SessionFrame};
 
 use crate::{GridAnswer, LinkedPlayer, TempoTrajectory};
@@ -64,5 +69,67 @@ impl<S, D: HostedDeck<S> + LinkedPlayer<S>> LinkedDeck<S> for D {
 
     fn realign(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_, S>) {
         LinkedPlayer::realign(self, trajectory, at, out);
+    }
+}
+
+/// An ordinary deck registered in a Host decorated with synchronization.
+pub struct Unlinked<D>(pub(crate) D);
+
+impl<D> Unlinked<D> {
+    /// Marks this registration as an ordinary hosted deck.
+    #[must_use]
+    pub const fn new(deck: D) -> Self {
+        Self(deck)
+    }
+}
+
+impl<D: DeckControl> DeckControl for Unlinked<D> {
+    type Control = D::Control;
+
+    fn control(&self) -> Self::Control {
+        self.0.control()
+    }
+}
+
+/// The ordinary and synchronized members of one Host registry.
+#[non_exhaustive]
+pub enum LinkedHostDeck<S> {
+    /// A deck whose playback is independent of the Host tempo.
+    Ordinary(Box<dyn HostedDeck<S>>),
+    /// A deck that can receive synchronization commands and Host trajectories.
+    Linked(Box<dyn LinkedDeck<S>>),
+}
+
+impl<S: 'static> LinkedHostDeck<S> {
+    fn hosted(&self) -> &dyn HostedDeck<S> {
+        match self {
+            Self::Ordinary(deck) => &**deck,
+            Self::Linked(deck) => &**deck,
+        }
+    }
+
+    fn hosted_mut(&mut self) -> &mut dyn HostedDeck<S> {
+        match self {
+            Self::Ordinary(deck) => &mut **deck,
+            Self::Linked(deck) => &mut **deck,
+        }
+    }
+}
+
+impl<S: 'static> HostedDeck<S> for LinkedHostDeck<S> {
+    delegate::delegate! {
+        to self.hosted() {
+            fn worker(&self) -> Option<&PlayWorker<S>>;
+            fn resource_prep(&self) -> Option<&ResourcePrep<S>>;
+            fn mixer_config(&self) -> DeckMixerConfig;
+        }
+        to self.hosted_mut() {
+            fn drain(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, S>);
+            fn settle(&mut self, receipt: TrackReceipt<'_, S>, pass: DeckPass<'_>, out: &mut Outbox<'_, S>);
+            fn tick(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, S>);
+            fn close(&mut self, out: &mut Outbox<'_, S>) -> Result<(), PlayError>;
+            fn hold(&mut self, waker: Waker);
+            fn release(&mut self);
+        }
     }
 }

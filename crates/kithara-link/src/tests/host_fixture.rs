@@ -9,8 +9,8 @@ use kithara_host::{
     DeckId, HostCommand, HostOwner, HostSettingsChange, HostSettingsExec, HostSettled, api::Tempo,
 };
 use kithara_play::{
-    DeckPass, HostedDeck, Outbox, PlayError, PlayWorker, Player, SessionTransportSnapshot,
-    TrackCommand, TrackReceipt, TrackSnapshot,
+    DeckPass, HostedDeck, Outbox, PlayError, PlayWorker, Player, SessionError,
+    SessionTransportSnapshot, TrackCommand, TrackReceipt, TrackSnapshot,
 };
 use kithara_render::rt::DeckMixerConfig;
 use kithara_signal::{FrameCount, SessionEpoch, SessionFrame, TransportRevision};
@@ -20,8 +20,8 @@ use kithara_warp::{BeatGridRevision, BeatGridStamp};
 
 use super::fixtures::{Control, Deck, Rig, Sequence, rate, trajectory};
 use crate::{
-    GridAnswer, LinkedDeck, LinkedHost, LinkedHostConfig, LinkedPlayer, LinkedSnapshot,
-    TempoTrajectory,
+    GridAnswer, LinkedDeck, LinkedHost, LinkedHostConfig, LinkedHostDeck, LinkedPlayer,
+    LinkedSnapshot, TempoTrajectory,
 };
 
 pub(super) struct Observation {
@@ -224,7 +224,7 @@ impl HostControl {
 
 struct Registered {
     id: DeckId,
-    deck: Box<dyn LinkedDeck<TestPools>>,
+    deck: Box<LinkedHostDeck<TestPools>>,
     rig: Rig,
 }
 
@@ -266,8 +266,8 @@ impl HostSettingsExec<()> for ScriptedHost {
 }
 
 impl HostOwner<TestPools> for ScriptedHost {
-    type Command = HostCommand<TestPools, dyn LinkedDeck<TestPools>>;
-    type Deck = dyn LinkedDeck<TestPools>;
+    type Command = HostCommand<TestPools, LinkedHostDeck<TestPools>>;
+    type Deck = LinkedHostDeck<TestPools>;
     fn apply(&mut self, command: Self::Command) -> Result<Option<Seq>, PlayError> {
         match command {
             HostCommand::Register { id, deck } => self.register(id, deck).map(|()| None),
@@ -295,7 +295,7 @@ impl HostOwner<TestPools> for ScriptedHost {
             record.rig.delivery = delivery;
             record
                 .rig
-                .run_pass(|out, pass| visit(record.id, &mut *record.deck, out, pass));
+                .run_pass(|out, pass| visit(record.id, &mut record.deck, out, pass));
         }
     }
     fn with_deck(
@@ -310,12 +310,12 @@ impl HostOwner<TestPools> for ScriptedHost {
             .decks
             .iter_mut()
             .find(|record| record.id == id)
-            .ok_or(PlayError::NotReady)?;
+            .ok_or(SessionError::DeckNotFound(id))?;
         record.rig.now = now;
         record.rig.delivery = delivery;
         record
             .rig
-            .run_pass(|out, pass| visit(&mut *record.deck, out, pass));
+            .run_pass(|out, pass| visit(&mut record.deck, out, pass));
         Ok(())
     }
     fn clock(&self) -> Option<(SessionFrame, FrameCount)> {
@@ -388,10 +388,29 @@ pub(super) fn register(host: &mut Host, deck: Deck, control: &Control) -> (DeckI
         inner: deck,
         probe: probe.clone(),
     });
-    host.apply(HostCommand::Register { id, deck }.into())
-        .expect("deck registered");
+    host.apply(
+        HostCommand::Register {
+            id,
+            deck: Box::new(LinkedHostDeck::Linked(deck)),
+        }
+        .into(),
+    )
+    .expect("deck registered");
     control.clear();
     (id, probe)
+}
+
+pub(super) fn register_ordinary(host: &mut Host, deck: impl HostedDeck<TestPools>) -> DeckId {
+    let id = DeckId::allocate().expect("ordinary deck identity");
+    host.apply(
+        HostCommand::Register {
+            id,
+            deck: Box::new(LinkedHostDeck::Ordinary(Box::new(deck))),
+        }
+        .into(),
+    )
+    .expect("ordinary deck registered");
+    id
 }
 
 pub(super) fn tempo(host: &mut Host, bpm: f64, frame: i64) -> Result<Option<Seq>, PlayError> {

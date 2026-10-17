@@ -745,11 +745,9 @@ impl QueueMusic {
     async fn append_sources(&mut self) {
         let target = self.deck.id();
         self.host
-            .with(move |host| {
-                host.send(LinkedHostCommand::Sync {
-                    deck: target,
-                    on: true,
-                })
+            .send(LinkedHostCommand::Sync {
+                deck: target,
+                on: true,
             })
             .await
             .expect("SYNC through the actual Host owner");
@@ -1208,15 +1206,13 @@ impl QueueMusic {
                 .model
                 .clone();
             self.host
-                .with(move |host| {
-                    host.send(LinkedHostCommand::Grid {
-                        deck: target,
-                        answer: GridAnswer {
-                            item,
-                            load,
-                            model: Ok((*model).clone()),
-                        },
-                    })
+                .send(LinkedHostCommand::Grid {
+                    deck: target,
+                    answer: GridAnswer {
+                        item,
+                        load,
+                        model: Ok((*model).clone()),
+                    },
                 })
                 .await
                 .expect("item and actual Load scoped grid");

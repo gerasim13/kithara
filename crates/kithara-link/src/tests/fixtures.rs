@@ -611,7 +611,7 @@ impl Rig {
     }
 }
 
-pub(super) fn deck(host: TempoTrajectory) -> (Deck, Control) {
+pub(super) fn ordinary() -> (ScriptedTrack, Control) {
     let control = Control(Arc::new(Mutex::new(Script {
         snapshot: TrackSnapshot {
             item: TrackId::allocate(),
@@ -637,13 +637,21 @@ pub(super) fn deck(host: TempoTrajectory) -> (Deck, Control) {
         verdicts: Vec::new(),
     })));
     (
+        ScriptedTrack {
+            control: control.clone(),
+            sequence: Sequence::new(),
+            lane_commands: Vec::new(),
+        },
+        control,
+    )
+}
+
+pub(super) fn deck(host: TempoTrajectory) -> (Deck, Control) {
+    let (track, control) = ordinary();
+    (
         Linked::new(
             LinkedConfig::builder()
-                .inner(ScriptedTrack {
-                    control: control.clone(),
-                    sequence: Sequence::new(),
-                    lane_commands: Vec::new(),
-                })
+                .inner(track)
                 .settings(LinkConfig::default())
                 .trajectory(host)
                 .build(),

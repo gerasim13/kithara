@@ -18,13 +18,14 @@ use kithara::{
             Arc, Mutex,
             atomic::{AtomicU64, Ordering},
         },
-        time::Duration,
+        time::{Duration, Instant},
     },
     play::{DeckPass, HostedDeck, MixTapWriter, Outbox, PlayError, PlayWorker, TrackReceipt},
     queue::Queue,
     signal::AudioSpec,
     warp::{BeatGrid, BeatGridSnapshot},
 };
+use kithara_command::Refused;
 use kithara_render::{
     bridge::{DeckSnapshot, RtMetricsSnapshot},
     rt::DeckMixerConfig,
@@ -371,6 +372,32 @@ where
         R: MaybeSend + 'static,
     {
         self.call(move |state| f(&mut state.host)).await
+    }
+
+    /// Posts a command and observes the canonical owner's answer.
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
+    pub async fn send(&self, command: O::Command) -> Result<(), PlayError>
+    where
+        O::Command: 'static,
+    {
+        hang_tick!("Host send: awaiting owner admission".to_owned());
+        let remaining = __hang_detector.remaining();
+        let answer = self
+            .with(move |host| {
+                host.send(command)?
+                    .wait_until(Instant::now() + remaining)
+                    .ok()
+                    .expect("Host admission completes within its liveness budget")
+                    .map_err(|refused| match refused {
+                        Refused::Owner(error) => error,
+                        Refused::Unanswered => PlayError::SessionGone {
+                            reason: "the owner dropped a command unanswered",
+                        },
+                    })
+            })
+            .await;
+        hang_reset!();
+        answer
     }
 
     /// Runs a control call on the owner thread, the way product callers issue
