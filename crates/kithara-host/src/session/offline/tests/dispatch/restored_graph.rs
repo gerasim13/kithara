@@ -69,47 +69,38 @@ async fn a_running_player_changes_its_eq_layout_in_place() {
     );
 }
 
-#[kithara::test]
-fn host_mix_before_registration_becomes_the_start_level() {
-    let runtime = kithara_platform::tokio::runtime::Builder::new_current_thread()
-        .enable_time()
-        .build()
-        .expect("offline fixture runtime");
-    runtime.block_on(kithara_platform::flash::participate(
-        async {
-            let mut state = test_state(start_route_loss_stream);
-            let id = BeatGridId::allocate().expect("fixture deck id");
-            assert!(matches!(ask(&mut state, mix_registration(id, 0.4)), Ok(())));
-            let directory = constant_fixture();
-            let mut clock = 0;
-            play_fixture(
-                &mut state,
-                id,
-                &directory.path().join("constant.wav"),
-                &mut clock,
-                1,
-            )
-            .await;
+#[kithara::test(tokio)]
+async fn host_mix_before_registration_becomes_the_start_level() {
+    let mut state = test_state(start_route_loss_stream);
+    let id = BeatGridId::allocate().expect("fixture deck id");
+    assert!(matches!(ask(&mut state, mix_registration(id, 0.4)), Ok(())));
+    let directory = constant_fixture();
+    let mut clock = 0;
+    play_fixture(
+        &mut state,
+        id,
+        &directory.path().join("constant.wav"),
+        &mut clock,
+        1,
+    )
+    .await;
 
-            state
-                .owner
-                .with_deck(id, &mut |_, _, pass| {
-                    assert_eq!(pass.mix.level(), 0.4);
-                    assert_eq!(pass.mix.gain(), 0.4);
-                })
-                .expect("held deck");
-            let mut output = Vec::new();
-            for _ in 0..40 {
-                output = fixture_pass(&mut state, &mut clock);
-            }
-            assert_eq!(
-                output.last().copied().expect("rendered sample"),
-                0.5 * 0.4,
-                "the installed mixer sounds at the configured start gain",
-            );
-        },
-        std::panic::Location::caller(),
-    ));
+    state
+        .owner
+        .with_deck(id, &mut |_, _, pass| {
+            assert_eq!(pass.mix.level(), 0.4);
+            assert_eq!(pass.mix.gain(), 0.4);
+        })
+        .expect("held deck");
+    let mut output = Vec::new();
+    for _ in 0..40 {
+        output = fixture_pass(&mut state, &mut clock);
+    }
+    assert_eq!(
+        output.last().copied().expect("rendered sample"),
+        0.5 * 0.4,
+        "the installed mixer sounds at the configured start gain",
+    );
 }
 
 #[kithara::test(tokio)]

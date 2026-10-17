@@ -202,7 +202,7 @@ fn reader_view_blocks_until_writer_commits() {
     let raw_len = raw.len() as u64;
 
     let waiters = [writer.reader(), reopened].map(|reader| {
-        std::thread::spawn(move || {
+        thread::spawn(move || {
             let outcome = reader.wait_range(0..raw_len).unwrap();
             assert_eq!(outcome, WaitOutcome::Ready);
             let mut buf = vec![0u8; 32];
