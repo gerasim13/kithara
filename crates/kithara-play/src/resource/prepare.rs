@@ -171,6 +171,13 @@ mod tests {
         let config = prep(WarpConfig::builder().build());
 
         assert_eq!(config.response_budget_frames, None);
+        assert!(!config.block_on_underrun);
+        let mut source = resource_config("https://example.com/song.mp3");
+        source.block_on_underrun = true;
+        let prepared = config
+            .prepare(source, &mock::output(None).get())
+            .expect("default playback policy prepares the resource");
+        assert!(!prepared.block_on_underrun);
     }
 
     #[kithara::test]
@@ -207,6 +214,10 @@ mod tests {
             .expect("test output answers stream-shape queries");
 
         assert_eq!(config.decoder.gapless_mode(), GaplessMode::Disabled);
+
+        let error = serde_yaml_ng::from_str::<ResourcePrepPatch>("block_on_underrun: true\n")
+            .expect_err("a document cannot enable blocking audio reads");
+        assert!(error.to_string().contains("block_on_underrun"), "{error}");
     }
 
     #[kithara::test(native)]

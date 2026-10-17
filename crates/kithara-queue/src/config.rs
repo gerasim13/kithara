@@ -228,6 +228,10 @@ mod document_tests {
             .expect_err("a typo must not be silently ignored");
 
         assert!(error.to_string().contains("concurrent_load_cap"), "{error}");
+
+        let error = serde_yaml_ng::from_str::<QueueConfigPatch>("block_on_underrun: true\n")
+            .expect_err("a queue document cannot enable blocking audio reads");
+        assert!(error.to_string().contains("block_on_underrun"), "{error}");
     }
 
     #[kithara::test(native)]

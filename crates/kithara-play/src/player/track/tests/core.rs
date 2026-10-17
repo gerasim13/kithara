@@ -821,6 +821,101 @@ fn pause_from_idle_is_noop() {
 }
 
 #[kithara::test]
+#[case::loaded(TrackStatus::Loaded)]
+#[case::paused(TrackStatus::Paused { at: Position::ZERO })]
+#[case::ended(TrackStatus::Ended { at: frame(128) })]
+fn a_next_pause_of_an_attached_track_settles_only_its_native_stop(#[case] initial: TrackStatus) {
+    let mut rig = rig();
+    let (mut track, _lane) = loaded(&mut rig, A, "next-pause");
+    match initial {
+        TrackStatus::Loaded => {}
+        TrackStatus::Paused { .. } => {
+            command_at_zero(
+                &mut track,
+                &mut rig,
+                TrackCommand::Pause {
+                    at: When::At(frame(0)),
+                },
+            )
+            .expect("initial native Stop");
+            let mut stopped = rig.block(frame(0), 0.0);
+            settle(&mut track, &mut rig, &mut stopped);
+        }
+        TrackStatus::Ended { at } => {
+            command_at_zero(
+                &mut track,
+                &mut rig,
+                TrackCommand::Play {
+                    at: When::At(frame(0)),
+                },
+            )
+            .expect("initial native Start");
+            let mut started = rig.block(frame(0), 0.0);
+            settle(&mut track, &mut rig, &mut started);
+            rig.with_outbox(|out| {
+                track.settle(TrackReceipt::Event(DeckEvent::Ended { slot: A, at }), out)
+            })
+            .expect("live deck scope");
+        }
+        _ => panic!("the fixture starts loaded, paused, or ended"),
+    }
+    assert_eq!(track.snapshot().status, initial);
+    assert!(track.attached());
+    assert!(track.playback_commands.is_empty());
+    let position = track.snapshot().position;
+    let resume = track.resume;
+    let seq = in_pass(&mut rig, frame(128), |out| {
+        track.apply(TrackCommand::Pause { at: When::Next }, out)
+    })
+    .expect("native Stop admitted")
+    .expect("an attached pause submits a Stop sequence");
+    assert_eq!(track.snapshot().status, initial);
+    assert_eq!(track.snapshot().position, position);
+    assert_eq!(track.resume, resume);
+    assert!(matches!(
+        track.playback_commands.as_slice(),
+        [PlaybackOperation { seq: Some(sent), action: Some(PlaybackAction::Stop), .. }]
+            if *sent == seq
+    ));
+
+    let stopped_mark = SlotMark {
+        session: frame(128),
+        lane: LaneFrame {
+            segment: track.segment,
+            frame: 3 * u64::from(mock::SAMPLE_RATE.get()),
+        },
+        position: Position::from_secs(3),
+    };
+    let mut stopped = rig.block(frame(128), 3.0);
+    assert!(matches!(
+        stopped.as_slice(),
+        [answer] if answer.seq == seq
+            && matches!(answer.outcome, Outcome::Applied { at, .. } if at == frame(128))
+            && matches!(answer.batch.commands.as_slice(),
+                [DeckPart::Returned(Returned::Stopped { slot, resume: Some(mark) })]
+                    if *slot == A && *mark == stopped_mark)
+    ));
+    assert_eq!(track.snapshot().status, initial);
+    assert_eq!(track.resume, resume);
+
+    let settled = settle(&mut track, &mut rig, &mut stopped);
+    assert!(matches!(
+        settled.as_slice(),
+        [Settled::Applied { seq: answered, at }] if *answered == seq && *at == frame(128)
+    ));
+    assert_eq!(
+        track.snapshot().status,
+        TrackStatus::Paused {
+            at: stopped_mark.position
+        }
+    );
+    assert_eq!(track.snapshot().position, stopped_mark.position);
+    assert_eq!(track.resume, Some(stopped_mark));
+    assert!(track.playback_commands.is_empty());
+    assert_eq!(rig.deck.mixer.held(A), Some("next-pause"));
+}
+
+#[kithara::test]
 #[case::mapped(true)]
 #[case::without_mark(false)]
 fn processor_set_paused_updates_playback(#[case] mapped: bool) {

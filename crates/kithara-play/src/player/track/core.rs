@@ -404,16 +404,6 @@ impl<S> PlayerImpl<S> {
         if !self.attached() {
             return Ok(None);
         }
-        if matches!(at, When::Next)
-            && matches!(
-                self.status,
-                TrackStatus::Loaded | TrackStatus::Paused { .. } | TrackStatus::Ended { .. }
-            )
-            && self.playback_commands.is_empty()
-        {
-            self.status = TrackStatus::Paused { at: self.position };
-            return Ok(None);
-        }
         self.send_playback(
             at,
             vec![DeckPart::Stop {

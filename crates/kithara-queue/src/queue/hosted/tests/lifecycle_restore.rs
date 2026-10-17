@@ -366,6 +366,91 @@ async fn player_remove_at_scenarios(#[case] scenario: u8) {
 }
 
 #[kithara::test(tokio)]
+async fn cold_navigation_and_removal_preserve_item_identity() {
+    for count in [2, 3] {
+        let (mut queue, mut rig, dir) = empty_queue();
+        let ids = [
+            TrackId::allocate(),
+            TrackId::allocate(),
+            TrackId::allocate(),
+        ];
+        let path = dir.path().join("entry.wav");
+        for &id in &ids[..count] {
+            apply(
+                &mut queue,
+                &mut rig,
+                QueueCommand::Append {
+                    id,
+                    source: TrackSource::Uri(path.to_str().expect("path").to_owned()),
+                },
+            )
+            .expect("append cold item");
+        }
+        let before: Vec<_> = queue
+            .control()
+            .tracks()
+            .iter()
+            .map(|entry| entry.id)
+            .collect();
+        assert_eq!(before, ids[..count]);
+        assert_eq!(queue.control().current_index(), None);
+        let unknown = TrackId::allocate();
+        assert!(matches!(
+            apply(&mut queue, &mut rig, QueueCommand::Remove(unknown)),
+            Err(PlayError::ItemConsumed { item }) if item == unknown
+        ));
+        assert_eq!(
+            queue
+                .control()
+                .tracks()
+                .iter()
+                .map(|entry| entry.id)
+                .collect::<Vec<_>>(),
+            before
+        );
+        assert_eq!(queue.control().current_index(), None);
+        if count == 2 {
+            apply(&mut queue, &mut rig, QueueCommand::Remove(ids[0])).expect("remove cold first");
+            assert_eq!(queue.control().tracks().len(), 1);
+            assert_eq!(queue.control().tracks()[0].id, ids[1]);
+            assert_eq!(queue.control().current_index(), None);
+            continue;
+        }
+        answer_load(&mut queue, &mut rig, &dir).await;
+        crate::mock::finish(&mut queue, &mut rig);
+        assert_eq!(queue.control().current_index(), Some(0));
+        assert_eq!(queue.control().current().expect("initial item").id, ids[0]);
+        for (index, &id) in ids.iter().enumerate().skip(1) {
+            apply(&mut queue, &mut rig, QueueCommand::Next(Transition::None)).expect("next");
+            answer_load(&mut queue, &mut rig, &dir).await;
+            crate::mock::finish(&mut queue, &mut rig);
+            assert_eq!(queue.control().current_index(), Some(index));
+            assert_eq!(queue.control().current().expect("advanced item").id, id);
+        }
+        assert_eq!(queue.control().current_index(), Some(2));
+        apply(&mut queue, &mut rig, QueueCommand::Remove(ids[0])).expect("remove earlier");
+        assert_eq!(queue.control().current_index(), Some(1));
+        assert_eq!(
+            queue.control().current().expect("retained current").id,
+            ids[2]
+        );
+        assert_eq!(queue.control().tracks().len(), 2);
+        assert_eq!(
+            queue
+                .control()
+                .tracks()
+                .iter()
+                .map(|entry| entry.id)
+                .collect::<Vec<_>>(),
+            ids[1..]
+        );
+        apply(&mut queue, &mut rig, QueueCommand::Remove(ids[2])).expect("remove current");
+        assert_eq!(queue.control().tracks().len(), 1);
+        assert_eq!(queue.control().tracks()[0].id, ids[1]);
+    }
+}
+
+#[kithara::test(tokio)]
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn remove_at_shifts_current_and_reopens_announce() {
     hang_tick!();

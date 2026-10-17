@@ -172,7 +172,7 @@ where
 
     #[must_use]
     pub fn current_index(&self) -> Option<usize> {
-        let id = self.current_track()?.snapshot().as_ref().item;
+        let id = self.current?;
         self.tracks
             .records()
             .iter()
@@ -221,7 +221,7 @@ where
     #[must_use]
     pub fn current_index(&self) -> Option<usize> {
         let snapshot = self.view.read();
-        let id = snapshot.track.as_ref()?.item;
+        let id = snapshot.current?;
         snapshot.rows.iter().position(|row| row.entry.id == id)
     }
 

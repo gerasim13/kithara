@@ -128,6 +128,15 @@ impl NativePacketGeometry {
         let bytes = u64::try_from(packet.data.len())
             .map_err(|_| Error::DecodeError("native audio packet byte count overflows"))?;
         if bytes % self.block_bytes != 0 {
+            tracing::error!(
+                bytes,
+                block_bytes = self.block_bytes.get(),
+                frames_per_block = self.frames_per_block.get(),
+                track_id = packet.track_id,
+                pts = packet.pts.get(),
+                declared_frames = packet.dur.get(),
+                "native audio packet contains an incomplete encoded block"
+            );
             return Err(Error::DecodeError(
                 "native audio packet contains an incomplete encoded block",
             ));

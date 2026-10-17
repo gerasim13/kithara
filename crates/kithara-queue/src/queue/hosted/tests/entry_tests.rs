@@ -751,7 +751,65 @@ async fn a_pause_before_the_selected_item_enters_makes_it_current_paused() {
     .expect("pause pending selection");
     answer_load(&mut queue, &mut rig, &dir).await;
     assert_eq!(queue.current, None);
-    answer_deck(&mut queue, &mut rig, SessionFrame::new(0));
+    crate::mock::settle(&mut queue, &mut rig, SessionFrame::new(0));
+    assert_eq!(queue.current, None);
+    let Some(crate::queue::types::Continuation::Pause(pause)) =
+        queue.target.expect("selected paused target").continued
+    else {
+        panic!("the selected track waits for its native Stop");
+    };
+    let incoming = queue
+        .active
+        .get(queue.incoming_index(first).expect("incoming paused track"))
+        .expect("incoming slot");
+    assert_eq!(incoming.role, Role::Incoming);
+    assert_eq!(incoming.track.snapshot().status, PlayingStatus::Loaded);
+    let slot = incoming.slot;
+    let mut stopped = rig
+        .block(SessionFrame::new(128), 0.0)
+        .expect("native Stop block");
+    assert_eq!(stopped.len(), 1);
+    let receipt = stopped.pop().expect("native Stop receipt");
+    assert_eq!(receipt.seq(), pause);
+    let (outcome, mut batch) = receipt.into();
+    assert!(matches!(outcome, Outcome::Applied { at, .. } if at == SessionFrame::new(128)));
+    let stopped_mark = SlotMark {
+        session: SessionFrame::new(128),
+        lane: LaneFrame {
+            segment: kithara_signal::SegmentId::FIRST,
+            frame: 0,
+        },
+        position: Duration::ZERO,
+    };
+    assert!(matches!(
+        batch.commands.as_slice(),
+        [DeckPart::Returned(Returned::Stopped { slot: stopped_slot, resume: Some(mark) })]
+            if *stopped_slot == slot && *mark == stopped_mark
+    ));
+    assert_eq!(queue.current, None);
+    assert_eq!(
+        queue
+            .active
+            .get(
+                queue
+                    .incoming_index(first)
+                    .expect("unsettled incoming track")
+            )
+            .expect("unsettled slot")
+            .role,
+        Role::Incoming
+    );
+    with_outbox(&mut queue, &mut rig, |queue, out| {
+        Player::settle(
+            queue,
+            TrackReceipt::Deck {
+                seq: pause,
+                outcome: &outcome,
+                batch: &mut batch,
+            },
+            out,
+        )
+    });
     assert_eq!(queue.current, Some(first));
     let active = queue
         .active
@@ -776,7 +834,7 @@ async fn a_pause_before_the_selected_item_enters_makes_it_current_paused() {
         Player::apply(queue, QueueCommand::Play { at: When::Next }, out)
     })
     .expect("play the current paused track");
-    answer_deck(&mut queue, &mut rig, SessionFrame::new(128));
+    crate::mock::settle(&mut queue, &mut rig, SessionFrame::new(128));
     assert!(matches!(
         queue
             .current_track()

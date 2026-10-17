@@ -1,5 +1,7 @@
 use kithara_audio::{DecodeErrorKind, TrackFailureKind};
+use kithara_command::Port;
 use kithara_play::{DeckEvent, PlaybackFault, Slot};
+use kithara_signal::SegmentId;
 
 use super::*;
 use crate::{AdvanceReason, queue::state::tests::wait_for_queue_event};
@@ -32,6 +34,7 @@ async fn pause_and_none_suppress_natural_eof_progression() {
         assert_eq!(queue.current().map(|entry| entry.id), Some(first));
         assert!(queue.target.is_none());
         if action == ActionAtItemEnd::Pause {
+            settle_natural_end_pause(&mut queue, &mut rig, slot);
             assert!(queue.current_track().is_some_and(|track| matches!(
                 track.snapshot().status,
                 PlayingStatus::Paused { .. }
@@ -72,10 +75,88 @@ async fn a_tick_pauses_at_the_natural_end_it_drains() {
         })
         .expect("natural end");
     tick_fixture(&mut queue, &mut rig);
+    settle_natural_end_pause(&mut queue, &mut rig, slot);
     assert!(
         queue
             .current_track()
             .is_some_and(|track| matches!(track.snapshot().status, PlayingStatus::Paused { .. }))
+    );
+}
+
+fn settle_natural_end_pause(
+    queue: &mut Queue<TestPools>,
+    rig: &mut mock::DeckRig<TestPools>,
+    slot: Slot,
+) {
+    let current = queue.active_current_index().expect("ended current slot");
+    let ended = PlayingStatus::Ended {
+        at: SessionFrame::new(1024),
+    };
+    assert_eq!(
+        queue
+            .active
+            .get(current)
+            .expect("ended current track")
+            .track
+            .snapshot()
+            .status,
+        ended
+    );
+    let pause = rig
+        .ring
+        .scope(rig.scope)
+        .expect("deck scope")
+        .basis(slot, When::Next)
+        .expect("native Pause sequence");
+    let stopped_mark = SlotMark {
+        session: SessionFrame::new(2048),
+        lane: LaneFrame {
+            segment: SegmentId::FIRST,
+            frame: 0,
+        },
+        position: Duration::ZERO,
+    };
+    let mut stopped = rig
+        .block(SessionFrame::new(2048), 0.0)
+        .expect("native Stop block");
+    assert_eq!(stopped.len(), 1);
+    let receipt = stopped.pop().expect("native Stop receipt");
+    assert_eq!(receipt.seq(), pause);
+    let (outcome, mut batch) = receipt.into();
+    assert!(matches!(outcome, Outcome::Applied { at, .. } if at == SessionFrame::new(2048)));
+    assert!(matches!(
+        batch.commands.as_slice(),
+        [DeckPart::Returned(Returned::Stopped { slot: stopped_slot, resume: Some(mark) })]
+            if *stopped_slot == slot && *mark == stopped_mark
+    ));
+    assert_eq!(
+        queue
+            .active
+            .get(current)
+            .expect("unsettled current track")
+            .track
+            .snapshot()
+            .status,
+        ended
+    );
+    with_outbox(queue, rig, |queue, out| {
+        Player::settle(
+            queue,
+            TrackReceipt::Deck {
+                seq: pause,
+                outcome: &outcome,
+                batch: &mut batch,
+            },
+            out,
+        )
+    });
+    assert_eq!(
+        queue
+            .current_track()
+            .expect("stopped current track")
+            .snapshot()
+            .position,
+        stopped_mark.position
     );
 }
 

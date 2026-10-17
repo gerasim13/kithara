@@ -90,6 +90,43 @@ fn a_segment_entry_keeps_its_native_curve_and_waits_for_native_readiness(#[case]
     }
 }
 
+fn pause_prepared_track(track: &mut Track, rig: &mut Rig) {
+    let status = track.snapshot().status;
+    let position = track.snapshot().position;
+    let resume = track.resume;
+    let pause = command_at_zero(track, rig, TrackCommand::Pause { at: When::Next })
+        .expect("native Pause sequence");
+    assert_eq!(track.snapshot().status, status);
+    assert_eq!(track.snapshot().position, position);
+    assert_eq!(track.resume, resume);
+    let stopped_mark = SlotMark {
+        session: frame(0),
+        lane: LaneFrame {
+            segment: track.segment,
+            frame: 0,
+        },
+        position: Duration::ZERO,
+    };
+    let mut stopped = rig.block(frame(0), 0.0);
+    assert!(matches!(
+        stopped.as_slice(),
+        [answer] if answer.seq == pause
+            && matches!(answer.outcome, Outcome::Applied { at, .. } if at == frame(0))
+            && matches!(answer.batch.commands.as_slice(),
+                [DeckPart::Returned(Returned::Stopped { slot, resume: Some(mark) })]
+                    if *slot == A && *mark == stopped_mark)
+    ));
+    assert_eq!(track.snapshot().status, status);
+    assert_eq!(track.snapshot().position, position);
+    assert_eq!(track.resume, resume);
+    let settled = settle(track, rig, &mut stopped);
+    assert!(matches!(
+        settled.as_slice(),
+        [Settled::Applied { seq, at }] if *seq == pause && *at == frame(0)
+    ));
+    assert_eq!(track.resume, Some(stopped_mark));
+}
+
 fn assert_preparation_refusal(host_rate: bool, initial: TrackStatus, reserved: bool) {
     let mut rig = rig();
     let (mut track, mut inbox) = if reserved || initial == TrackStatus::Loading {
@@ -105,11 +142,13 @@ fn assert_preparation_refusal(host_rate: bool, initial: TrackStatus, reserved: b
         let (sender, inbox) = lane();
         track.lane = Some(sender);
         (track, inbox)
+    } else if matches!(initial, TrackStatus::Paused { .. }) {
+        loaded(&mut rig, A, "refused-paused-preparation")
     } else {
         prepared_track()
     };
     if matches!(initial, TrackStatus::Paused { .. }) {
-        command_at_zero(&mut track, &mut rig, TrackCommand::Pause { at: When::Next });
+        pause_prepared_track(&mut track, &mut rig);
     } else if initial == TrackStatus::Loaded && !reserved {
         command_at_zero(&mut track, &mut rig, TrackCommand::Play { at: When::Next });
     }
