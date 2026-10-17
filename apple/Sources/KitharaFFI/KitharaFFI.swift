@@ -770,9 +770,9 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      * `seek_with_tolerance` wiring without forcing callers to migrate
      * twice; `None` preserves legacy behaviour.
      *
-     * The callback is invoked synchronously with `true` if the seek
-     * command was accepted, `false` otherwise (matches `AVPlayer`
-     * semantics).
+     * The callback reports owner admission: `true` if the seek command was
+     * accepted, `false` otherwise. On the browser, callbacks for posted commands
+     * are delivered asynchronously.
      */
     func seek(toSeconds: Double, tolerance: Double?, callback: SeekCallback)
 
@@ -1291,9 +1291,9 @@ open func resetEq()throws   {try rustCallWithError(FfiConverterTypeFfiError_lift
      * `seek_with_tolerance` wiring without forcing callers to migrate
      * twice; `None` preserves legacy behaviour.
      *
-     * The callback is invoked synchronously with `true` if the seek
-     * command was accepted, `false` otherwise (matches `AVPlayer`
-     * semantics).
+     * The callback reports owner admission: `true` if the seek command was
+     * accepted, `false` otherwise. On the browser, callbacks for posted commands
+     * are delivered asynchronously.
      */
 open func seek(toSeconds: Double, tolerance: Double?, callback: SeekCallback)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_seek(
@@ -9500,7 +9500,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_reset_eq() != 64063) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_seek() != 27715) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_seek() != 7516) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_abr_mode() != 18523) {
