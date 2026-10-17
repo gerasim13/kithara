@@ -181,6 +181,7 @@ async fn test_audio_read(wav_1000: NamedTempFile) {
     let audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .unwrap();
+    let audio = kithara_integration_tests::mock::with_blocking_reads(audio);
 
     let (_audio, (total_read, saw_eof)) = blocking_audio(audio, |audio| {
         let mut buf = [0.0f32; 256];
