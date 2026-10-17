@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, marker::PhantomData};
+use std::{cell::RefCell, collections::VecDeque, marker::PhantomData};
 
 use kithara_abr::AbrHandle;
 use kithara_command::{Live, Sender, Seq, Target, When};
@@ -56,6 +56,7 @@ pub struct PlayerImpl<S> {
     pub(super) segment_origin: Option<Position>,
     pub(super) source_basis: Option<AudioChunkInfo>,
     pub(super) observed_source: Option<AudioChunkInfo>,
+    pub(super) projected_end: RefCell<Option<ProjectedEnd>>,
     pub(super) duration: Option<Duration>,
     pub(super) visible_origin: Option<Duration>,
     pub(super) media_origin: Option<Duration>,
@@ -103,6 +104,7 @@ impl<S> PlayerImpl<S> {
             segment_origin: None,
             source_basis: None,
             observed_source: None,
+            projected_end: RefCell::new(None),
             duration: None,
             visible_origin: None,
             media_origin: None,
