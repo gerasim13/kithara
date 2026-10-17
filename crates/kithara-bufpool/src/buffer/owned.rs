@@ -83,6 +83,11 @@ impl<const SHARDS: usize, T, const OBSERVE: bool> OwnedBuffer<SHARDS, Vec<T>, OB
         Ok(())
     }
 
+    pub(super) fn try_reserve(&mut self, additional: usize) -> Result<(), PoolError> {
+        let new_len = self.checked_extended_len(additional)?;
+        self.grow(new_len)
+    }
+
     pub(super) fn retain<F>(&mut self, keep: F)
     where
         F: FnMut(&T) -> bool,

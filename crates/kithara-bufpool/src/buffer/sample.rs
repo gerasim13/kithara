@@ -63,6 +63,14 @@ impl SampleBuffer {
             pub fn shrink_to_fit(&mut self);
             /// Shorten the buffer without changing its capacity.
             pub fn truncate(&mut self, len: usize);
+            /// Reserve capacity for `additional` more samples under both hard
+            /// budgets without writing any sample.
+            ///
+            /// # Errors
+            ///
+            /// Returns an error when the requested capacity overflows, exceeds either
+            /// hard budget, or cannot be allocated.
+            pub fn try_reserve(&mut self, additional: usize) -> Result<(), PoolError>;
             /// Append samples under both hard budgets.
             ///
             /// # Errors
