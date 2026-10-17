@@ -977,11 +977,21 @@ impl DecodedCapture {
         channel: usize,
     ) -> Result<f32, String> {
         let frame = u64::try_from(frame).map_err(|error| error.to_string())?;
-        let (_, (decoded, samples)) = self
+        Self::read(self.chunk(info, frame)?, frame, channel)
+    }
+
+    /// The accepted decoded chunk covering `frame` of the identified source.
+    fn chunk(
+        &self,
+        info: super::consumed::SourceIdentity,
+        frame: u64,
+    ) -> Result<&DecodedChunk, String> {
+        let (_, chunk) = self
             .chunks
             .range(..=(info.source_revision, frame))
             .next_back()
             .ok_or_else(|| format!("decoder observer has no PCM at frame {frame}"))?;
+        let (decoded, _) = chunk;
         if decoded.source_revision != info.source_revision
             || decoded.spec != info.spec
             || decoded.media_origin != info.media_origin
@@ -1016,6 +1026,10 @@ impl DecodedCapture {
                 self.samples,
             ));
         }
+        Ok(chunk)
+    }
+
+    fn read((decoded, samples): &DecodedChunk, frame: u64, channel: usize) -> Result<f32, String> {
         let offset =
             usize::try_from(frame - decoded.frame_offset).map_err(|error| error.to_string())?;
         samples
@@ -1257,11 +1271,26 @@ impl DecodedCapture {
         let last = i64::try_from(domain.end - 1).map_err(|error| error.to_string())?;
         let source =
             i64::try_from(position.0 / position.1.get()).map_err(|error| error.to_string())?;
+        // Every tap of one output sample reads the same few frames, so the
+        // covering chunk is looked up once and reused while it still covers.
+        let covering = std::cell::Cell::new(None::<&DecodedChunk>);
         mapped_sample((position.0, position.1.get()), speed, |offset| {
             let frame = source
                 .checked_add(offset)
                 .ok_or_else(|| "fixture sample coordinate overflows".to_owned())?;
-            self.sample(info, frame.clamp(first, last), channel)
+            let frame =
+                u64::try_from(frame.clamp(first, last)).map_err(|error| error.to_string())?;
+            let known = covering
+                .get()
+                .filter(|(decoded, _)| decoded.frame_range().contains(&frame));
+            let chunk = if let Some(chunk) = known {
+                chunk
+            } else {
+                let chunk = self.chunk(info, frame)?;
+                covering.set(Some(chunk));
+                chunk
+            };
+            Self::read(chunk, frame, channel)
         })
     }
 

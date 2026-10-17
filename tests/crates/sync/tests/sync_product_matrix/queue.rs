@@ -573,22 +573,28 @@ fn reference(
         }
         let decoded = voice.decoded.lock();
         let span = interval.source;
+        // A frame's endpoint is the next frame's start, so each coordinate is
+        // projected once and carried into the following frame.
+        let mut carried = None;
         for session in active {
             let offset = u64::try_from(session - interval.start).expect("source offset");
-            let raw = span
-                .source_ratio_at(offset)
-                .expect("physical source coordinate");
+            let physical = carried.take().unwrap_or_else(|| {
+                let raw = span
+                    .source_ratio_at(offset)
+                    .expect("physical source coordinate");
+                interval
+                    .physical_basis
+                    .output_ratio_at_source(interval.physical_origin, raw)
+                    .expect("actual decoded physical coordinate")
+            });
             let next = span
                 .source_ratio_at(offset + 1)
                 .expect("physical source endpoint");
-            let physical = interval
-                .physical_basis
-                .output_ratio_at_source(interval.physical_origin, raw)
-                .expect("actual decoded physical coordinate");
             let endpoint = interval
                 .physical_basis
                 .output_ratio_at_source(interval.physical_origin, next)
                 .expect("actual decoded physical endpoint");
+            carried = Some(endpoint);
             let speed = super::control::physical_source_speed(physical, endpoint)
                 .expect("actual source speed");
             let position = if shift == Some(interval.voice) {
