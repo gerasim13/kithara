@@ -158,16 +158,13 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
                 .pending_source
                 .as_mut()
                 .ok_or(ElasticError::PoolCapacity)?;
-            for channel in 0..channels {
-                pending[frame * channels + channel] = super::super::source_sample::source_sample(
-                    resident,
-                    (numerator, denominator),
-                    speed,
-                    self.terminal_source_end,
-                    channels,
-                    channel,
-                )?;
-            }
+            super::super::source_sample::source_frame(
+                resident,
+                (numerator, denominator),
+                speed,
+                self.terminal_source_end,
+                &mut pending[frame * channels..(frame + 1) * channels],
+            )?;
         }
         Ok(())
     }

@@ -293,7 +293,8 @@ where
         let radius = if f64::from(self.trajectory.speed_bounds()?.1) <= correction {
             0
         } else {
-            crate::consts::SOURCE_RADIUS
+            u64::try_from(crate::consts::SOURCE_RADIUS)
+                .map_err(|_| ElasticError::SampleCountOverflow)?
         };
         let end = u64::try_from(numerator.div_ceil(denominator.get()))
             .ok()

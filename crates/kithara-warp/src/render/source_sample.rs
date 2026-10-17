@@ -3,14 +3,14 @@ use num_traits::ToPrimitive;
 
 use super::renderer::residency::SourceResidency;
 
-pub(super) fn source_sample(
+pub(super) fn source_frame(
     resident: &SourceResidency,
     position: (u128, std::num::NonZeroU128),
     speed: f64,
     terminal: Option<u64>,
-    channels: usize,
-    channel: usize,
-) -> Result<f32, ElasticError> {
+    output: &mut [f32],
+) -> Result<(), ElasticError> {
+    let channels = output.len();
     let (numerator, denominator) = position;
     let denominator = denominator.get();
     let source =
@@ -27,7 +27,7 @@ pub(super) fn source_sample(
         .map(|end| i64::try_from(end.saturating_sub(1)))
         .transpose()
         .map_err(|_| ElasticError::SampleCountOverflow)?;
-    let sample = |offset: i64| {
+    let sample_offset = |offset: i64| {
         let frame = source
             .checked_add(offset)
             .ok_or(ElasticError::SampleCountOverflow)?;
@@ -36,26 +36,31 @@ pub(super) fn source_sample(
             .ok()
             .and_then(|frame| frame.checked_add(1))
             .ok_or(ElasticError::SampleCountOverflow)?;
-        let range = resident.range(frame, end, channels)?;
-        Ok::<_, ElasticError>(resident.samples[range.start + channel])
+        Ok::<_, ElasticError>(resident.range(frame, end, channels)?.start)
     };
     if speed <= 1.0 {
+        let current = sample_offset(0)?;
         if fraction == 0.0 {
-            return sample(0);
+            output.copy_from_slice(&resident.samples[current..current + channels]);
+            return Ok(());
         }
-        let current = f64::from(sample(0)?);
-        let next = f64::from(sample(1)?);
-        return (next - current)
-            .mul_add(fraction, current)
-            .to_f32()
-            .ok_or(ElasticError::SampleCountOverflow);
+        let next = sample_offset(1)?;
+        for (channel, sample) in output.iter_mut().enumerate() {
+            let current = f64::from(resident.samples[current + channel]);
+            let next = f64::from(resident.samples[next + channel]);
+            *sample = (next - current)
+                .mul_add(fraction, current)
+                .to_f32()
+                .ok_or(ElasticError::SampleCountOverflow)?;
+        }
+        return Ok(());
     }
     let radius = i64::try_from(crate::consts::SOURCE_RADIUS)
         .map_err(|_| ElasticError::SampleCountOverflow)?;
     let cutoff = speed.recip();
-    let mut total = 0.0;
+    let mut taps = [(0, 0.0); 2 * crate::consts::SOURCE_RADIUS + 1];
     let mut weights = 0.0;
-    for offset in -radius..=radius {
+    for (tap, offset) in taps.iter_mut().zip(-radius..=radius) {
         let distance = offset.to_f64().ok_or(ElasticError::SampleCountOverflow)? - fraction;
         let weight = kithara_dsp::interp::sinc_hann_weight(
             distance,
@@ -64,12 +69,19 @@ pub(super) fn source_sample(
                 .to_f64()
                 .ok_or(ElasticError::SampleCountOverflow)?,
         );
-        total += f64::from(sample(offset)?) * weight;
+        *tap = (sample_offset(offset)?, weight);
         weights += weight;
     }
-    (total / weights)
-        .to_f32()
-        .ok_or(ElasticError::SampleCountOverflow)
+    for (channel, sample) in output.iter_mut().enumerate() {
+        let mut total = 0.0;
+        for &(offset, weight) in &taps {
+            total += f64::from(resident.samples[offset + channel]) * weight;
+        }
+        *sample = (total / weights)
+            .to_f32()
+            .ok_or(ElasticError::SampleCountOverflow)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -98,9 +110,51 @@ mod tests {
                 &samples,
             )
             .expect("exact mapped source span");
-        let actual = source_sample(&resident, (16, NonZeroU128::MIN), 4.0, None, 1, 0)
+        let mut output = [0.0];
+        source_frame(&resident, (16, NonZeroU128::MIN), 4.0, None, &mut output)
             .expect("all filter taps are in the resident source window");
+        let actual = output[0];
         assert_eq!(actual, 0.25);
+        for channel_count in [2, 4] {
+            let channels = usize::from(channel_count);
+            let mut resident = SourceResidency::prepare(&pools, None, 32, 64, 0, channels)
+                .expect("independent channel history");
+            let samples: Vec<_> = (0..64_u16)
+                .flat_map(|frame| {
+                    let value = f32::from(frame) / 64.0;
+                    [value, -value, 0.5, -0.75].into_iter().take(channels)
+                })
+                .collect();
+            resident
+                .append(
+                    AudioChunkInfo {
+                        spec: AudioSpec::new(
+                            channel_count,
+                            NonZeroU32::new(44_100).expect("sample rate"),
+                        ),
+                        frames: 64,
+                        ..AudioChunkInfo::default()
+                    },
+                    &samples,
+                )
+                .expect("distinct interleaved channels");
+            for speed in [0.25, 1.0, 4.0] {
+                for position in [
+                    (16, NonZeroU128::MIN),
+                    (65, NonZeroU128::new(4).expect("phase")),
+                ] {
+                    let mut output = [0.0; 4];
+                    source_frame(&resident, position, speed, None, &mut output[..channels])
+                        .expect("one mapped frame across independent channels");
+                    assert!((0.25..=17.0 / 64.0).contains(&output[0]));
+                    assert_eq!(output[1].to_bits(), (-output[0]).to_bits());
+                    if channels == 4 {
+                        assert_eq!(output[2], 0.5);
+                        assert_eq!(output[3], -0.75);
+                    }
+                }
+            }
+        }
     }
 
     #[kithara::test]
@@ -125,15 +179,16 @@ mod tests {
         assert!(rounded_fraction < 1.0);
         assert_eq!(1.0 + rounded_fraction, 2.0);
 
-        let actual = source_sample(
+        let mut output = [0.0];
+        source_frame(
             &resident,
             (2 * denominator.get() - 1, denominator),
             1.0,
             None,
-            1,
-            0,
+            &mut output,
         )
         .expect("fractional sample below the next source frame");
+        let actual = output[0];
         let expected_quadratic = (1.0 - fraction - fraction * fraction)
             .to_f32()
             .expect("quadratic value");
@@ -170,7 +225,8 @@ mod tests {
                 .expect("actual bounded PCM");
             for speed in [0.25, 1.0] {
                 for (index, expected) in taps.iter().enumerate() {
-                    let actual = source_sample(
+                    let mut output = [0.0];
+                    source_frame(
                         &resident,
                         (
                             u128::try_from(index).expect("source frame"),
@@ -178,23 +234,24 @@ mod tests {
                         ),
                         speed,
                         None,
-                        1,
-                        0,
+                        &mut output,
                     )
                     .expect("integer PCM sample");
+                    let actual = output[0];
                     assert_eq!(actual.to_bits(), expected.to_bits());
                 }
                 for numerator in [1_u128, 2_500_000, 5_315_897, 9_999_999] {
                     let fraction = numerator.to_f64().expect("phase numerator") / 10_000_000.0;
-                    let actual = source_sample(
+                    let mut output = [0.0];
+                    source_frame(
                         &resident,
                         (phase_denominator.get() + numerator, phase_denominator),
                         speed,
                         None,
-                        1,
-                        0,
+                        &mut output,
                     )
                     .expect("fractional bounded PCM sample");
+                    let actual = output[0];
                     let expected = (f64::from(taps[2]) - f64::from(taps[1]))
                         .mul_add(fraction, f64::from(taps[1]))
                         .to_f32()

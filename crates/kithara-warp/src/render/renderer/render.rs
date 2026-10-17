@@ -38,16 +38,13 @@ where
                 span,
                 u64::try_from(frame).map_err(|_| ElasticError::SampleCountOverflow)?,
             )?;
-            for channel in 0..channels {
-                scratch[frame * channels + channel] = super::super::source_sample::source_sample(
-                    resident,
-                    (numerator, denominator),
-                    speed,
-                    self.terminal_source_end,
-                    channels,
-                    channel,
-                )?;
-            }
+            super::super::source_sample::source_frame(
+                resident,
+                (numerator, denominator),
+                speed,
+                self.terminal_source_end,
+                &mut scratch[frame * channels..(frame + 1) * channels],
+            )?;
         }
         Ok(())
     }

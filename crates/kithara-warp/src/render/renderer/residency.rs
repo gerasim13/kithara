@@ -39,9 +39,7 @@ impl SourceResidency {
             .and_then(|frames| frames.checked_add(source))
             .and_then(|frames| frames.to_f64())
             .and_then(|frames| (frames * expansion).ceil().to_usize())
-            .and_then(|frames| {
-                frames.checked_add(usize::try_from(crate::consts::SOURCE_RADIUS).ok()?)
-            })
+            .and_then(|frames| frames.checked_add(crate::consts::SOURCE_RADIUS))
             .ok_or(ElasticError::SampleCountOverflow)
     }
 
