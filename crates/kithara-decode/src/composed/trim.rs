@@ -165,7 +165,7 @@ where
                         detail: "trimmed PCM timestamp overflow",
                     })?;
                 self.frame_offset = position;
-                self.resync_frame_offset_to_pts = false;
+                self.timeline = Some((*chunk_pts, position));
             }
         }
 
