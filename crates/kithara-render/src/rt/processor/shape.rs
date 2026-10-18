@@ -31,7 +31,8 @@ impl StreamShape {
         }
     }
 
-    /// Compute decoder buffer depths, enforcing an application deadline when supplied.
+    /// Compute playback buffer depths, enforcing an application deadline when supplied.
+    /// Without a deadline, retain lane defaults above the callback minimum.
     ///
     /// # Errors
     /// Returns an error when the geometry overflows or exceeds the budget.
@@ -42,10 +43,16 @@ impl StreamShape {
     ) -> Result<(NonZeroUsize, NonZeroUsize), BufferGeometryError> {
         let output_frames = usize::try_from(self.max_block_frames.get())
             .map_err(|_| BufferGeometryError::Overflow)?;
-        let preload = output_frames.div_ceil(quantum.get());
-        let ring = preload
+        let mut preload = output_frames.div_ceil(quantum.get());
+        if budget.is_none() {
+            preload = preload.max(crate::consts::PRELOAD_CHUNKS.get());
+        }
+        let mut ring = preload
             .checked_add(1)
             .ok_or(BufferGeometryError::Overflow)?;
+        if budget.is_none() {
+            ring = ring.max(crate::consts::AUDIO_BUFFER_CHUNKS.get());
+        }
         let required_frames = ring
             .checked_add(1)
             .and_then(|chunks| chunks.checked_mul(quantum.get()))

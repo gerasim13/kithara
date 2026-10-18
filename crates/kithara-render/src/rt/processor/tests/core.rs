@@ -49,7 +49,8 @@ fn application_deadline_is_optional_but_explicit_geometry_is_enforced() {
     let (preload, ring) = shape
         .playback_buffers(quantum, None)
         .expect("unbounded deadline");
-    assert_eq!((preload.get(), ring.get()), (16, 17));
+    assert_eq!(preload.get(), 16);
+    assert_eq!(ring.get(), 17.max(crate::consts::AUDIO_BUFFER_CHUNKS.get()));
     assert!(matches!(
         shape.playback_buffers(quantum, NonZeroUsize::new(448)),
         Err(BufferGeometryError::BudgetExceeded {
@@ -59,6 +60,16 @@ fn application_deadline_is_optional_but_explicit_geometry_is_enforced() {
             budget_frames: 448,
         })
     ));
+    let quantum = NonZeroUsize::new(512).expect("one callback per quantum");
+    let (preload, ring) = shape
+        .playback_buffers(quantum, None)
+        .expect("unbounded deadline retains lane defaults");
+    assert_eq!(preload, crate::consts::PRELOAD_CHUNKS);
+    assert_eq!(ring, crate::consts::AUDIO_BUFFER_CHUNKS);
+    let (preload, ring) = shape
+        .playback_buffers(quantum, NonZeroUsize::new(1535))
+        .expect("explicit deadline retains its minimum playback geometry");
+    assert_eq!((preload.get(), ring.get()), (1, 2));
 }
 
 pub(super) use crate::mock::{TestEnds, TestMixer, mixer, shape};

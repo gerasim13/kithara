@@ -247,23 +247,46 @@ fn a_fade_advances_on_session_time_without_consumed_pcm(#[case] unavailable: u8)
         render_frames(&mut mixer, start, 63);
     }
     assert_applied_at(outcome_of(&receipts(&mut ends), fade), start);
-    assert!(
-        ends.events
-            .drain()
-            .all(|event| !matches!(event, DeckEvent::Faded { .. }))
-    );
+    let earlier = ends.events.drain().collect::<Vec<_>>();
+    let underrun_item = if unavailable == 0 {
+        let [
+            DeckEvent::UnderrunStarted {
+                slot,
+                item,
+                at,
+                position: None,
+            },
+        ] = earlier.as_slice()
+        else {
+            panic!("one original underrun window: {earlier:?}");
+        };
+        assert_eq!((*slot, *at), (A, frame_at(0)));
+        Some(*item)
+    } else {
+        assert!(earlier.is_empty());
+        None
+    };
     if unavailable == 2 {
         render_without_context(&mut mixer, start + 63, 1);
     } else {
         render_frames(&mut mixer, start + 63, 1);
     }
-    assert_eq!(
-        ends.events.drain().collect::<Vec<_>>(),
-        [DeckEvent::Faded {
+    let mut expected = Vec::new();
+    if let Some(item) = underrun_item {
+        expected.push(DeckEvent::UnderrunEnded {
             slot: A,
+            item,
             at: frame_at(start + 64),
-        }]
-    );
+            position: None,
+            frames: u32::try_from(start + 64).expect("missing-frame count"),
+            recovered: false,
+        });
+    }
+    expected.push(DeckEvent::Faded {
+        slot: A,
+        at: frame_at(start + 64),
+    });
+    assert_eq!(ends.events.drain().collect::<Vec<_>>(), expected);
     assert_eq!(mixer.track(A).expect("track").state(), SlotState::Stopped);
     render_frames(&mut mixer, start + 64, 1);
     assert!(ends.events.drain().next().is_none());

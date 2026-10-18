@@ -1255,15 +1255,15 @@ impl ProductHarness {
                     slot,
                 )
             });
-            let actual_speed = match law {
-                Ok((speed, law_failures, law_evidence)) => {
+            let (actual_speed, reference) = match law {
+                Ok((speed, law_failures, law_evidence, reference)) => {
                     failures.extend(
                         law_failures
                             .into_iter()
                             .map(|failure| format!("deck {index}: {failure}")),
                     );
                     evidence.push(law_evidence);
-                    speed
+                    (speed, reference)
                 }
                 Err(error) => {
                     failures.push(format!("deck {index}: {error}"));
@@ -1280,6 +1280,7 @@ impl ProductHarness {
                 slot,
                 actual_speed.as_(),
                 4,
+                reference,
             );
             match binding {
                 Ok(binding) => {

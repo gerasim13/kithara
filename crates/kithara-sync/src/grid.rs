@@ -143,10 +143,10 @@ pub fn boundary(grid: &TrackGrid, requested: Duration) -> Option<Duration> {
     } else {
         grid.beats()
     };
-    let beat = beats
+    beats
         .iter()
-        .find(|beat| beat.at >= requested.as_secs_f64())?;
-    Duration::try_from_secs_f64(beat.at).ok()
+        .filter_map(|beat| Duration::try_from_secs_f64(beat.at).ok())
+        .find(|at| *at >= requested)
 }
 
 #[cfg(test)]
@@ -231,5 +231,16 @@ mod tests {
             boundary(&unmetered, Duration::from_millis(750)),
             Some(Duration::from_secs(1))
         );
+        let fractional = TrackBeat {
+            at: 43.63635416666666,
+            ordinal: 96,
+        };
+        let requested = Duration::from_secs_f64(fractional.at);
+        for meter in [None, meter] {
+            let grid = TrackGrid::new(vec![fractional], vec![fractional], meter, 132.0, None)
+                .expect("fractional source boundary");
+            assert_eq!(boundary(&grid, requested), Some(requested));
+            assert_eq!(boundary(&grid, requested + Duration::from_nanos(1)), None);
+        }
     }
 }

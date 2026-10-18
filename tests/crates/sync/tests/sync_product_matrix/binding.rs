@@ -98,6 +98,7 @@ pub(super) fn check(
     consumed: SlotSnapshot,
     actual_speed: f32,
     host_beats_per_bar: u16,
+    reference: Option<SelectedBinding>,
 ) -> Result<GridBinding, String> {
     if consumed.state != SlotState::Playing {
         return Err(format!(
@@ -181,8 +182,11 @@ pub(super) fn check(
     let BeatGridQuery::Resolved(host_tempo) = host_grid.tempo_at(host_position) else {
         return Err("consumed Host grid has no local tempo".to_owned());
     };
-    let expected_speed: f32 =
+    let mut expected_speed: f32 =
         (f64::from(*host_tempo.value()) / f64::from(*source_tempo.value())).as_();
+    if let Some(reference) = reference {
+        expected_speed = binding_speed(&source_grid, host_grid, mark.session, reference)?;
+    }
     Ok(GridBinding {
         mark,
         media_origin,
@@ -192,6 +196,28 @@ pub(super) fn check(
         expected_speed,
         actual_speed,
     })
+}
+
+fn binding_speed(
+    source: &BeatGridSnapshot,
+    host: &BeatGridSnapshot,
+    at: SessionFrame,
+    reference: SelectedBinding,
+) -> Result<f32, String> {
+    let from = reference.source_beat
+        + (grid_beat_at(host, MapPosition::Session(at))? - reference.host_beat);
+    let next = frame_after(at, 1)?;
+    let to = reference.source_beat
+        + (grid_beat_at(host, MapPosition::Session(next))? - reference.host_beat);
+    let rate = source.axis().sample_rate();
+    let start = source_media_for_beat(source, from, rate)?;
+    if ordinary_span_is_local(source, from, to, rate, false)? {
+        return Ok((grid_tempo(host, MapPosition::Session(at))?
+            / grid_tempo(source, media_seconds_position(start, rate)?)?)
+        .as_());
+    }
+    let end = source_media_for_beat(source, to, rate)?;
+    Ok(((end - start) * f64::from(host.axis().sample_rate().get())).as_())
 }
 
 struct AppliedCurve<'a> {
@@ -211,7 +237,34 @@ struct PrefixPlan {
     previous_offset: f64,
 }
 
-type PrefixProof = (u64, Option<u64>, Vec<String>, Vec<serde_json::Value>);
+type PrefixProof = (
+    u64,
+    Option<u64>,
+    Vec<String>,
+    Vec<serde_json::Value>,
+    SelectedBinding,
+);
+
+type LawProof = (f64, Vec<String>, serde_json::Value, Option<SelectedBinding>);
+
+fn declared_binding_at(
+    source: &BeatGridSnapshot,
+    host: &TempoTrajectory,
+    beat: f64,
+    frame: SessionFrame,
+) -> Result<SelectedBinding, String> {
+    Ok(SelectedBinding {
+        media: Duration::try_from_secs_f64(source_media_for_beat(
+            source,
+            beat,
+            source.axis().sample_rate(),
+        )?)
+        .map_err(|error| error.to_string())?,
+        source_beat: beat,
+        host_beat: f64::from(host.beat_at(frame)),
+        frame,
+    })
+}
 
 fn applied_curves(
     observation: &LinkObservation,
@@ -909,7 +962,7 @@ fn cue_prefix(
     through: u64,
     rate: NonZeroU32,
     failures: &mut Vec<String>,
-) -> Result<(), String> {
+) -> Result<SelectedBinding, String> {
     let (first, media) = consumed_media(
         cue.consumed
             .ok_or_else(|| "ready cue has no actually consumed Segment".to_owned())?,
@@ -983,7 +1036,7 @@ fn cue_prefix(
         }
         position += advance;
     }
-    Ok(())
+    declared_binding_at(source, host, beat, frame_after(origin, through)?)
 }
 
 fn published_host_history(
@@ -1025,7 +1078,7 @@ fn consumed_cue_law(
     snapshot: &kithara::link::LinkedSnapshot<kithara::play::TrackSnapshot>,
     rate: NonZeroU32,
     failures: &mut Vec<String>,
-) -> Result<(), String> {
+) -> Result<Option<SelectedBinding>, String> {
     let item = snapshot.track.item;
     let mark = snapshot
         .track
@@ -1060,9 +1113,9 @@ fn consumed_cue_law(
             .ok_or_else(|| {
                 "cue replacement precedes its consumed lane/session origin".to_owned()
             })?;
-        cue_prefix(cue, host, &source, through, rate, failures)?;
+        return cue_prefix(cue, host, &source, through, rate, failures).map(Some);
     }
-    Ok(())
+    Ok(None)
 }
 
 impl AppliedCurve<'_> {
@@ -1606,7 +1659,8 @@ impl AppliedCurve<'_> {
             previous_offset = offset;
             position += advance;
         }
-        Ok((terminal, deadline, failures, diagnostics))
+        let reference = declared_binding_at(source, host, beat, frame_after(self.at, limit)?)?;
+        Ok((terminal, deadline, failures, diagnostics, reference))
     }
 
     fn verify_end(
@@ -1690,7 +1744,7 @@ impl AppliedCurve<'_> {
         index: usize,
         snapshot: &kithara::link::LinkedSnapshot<kithara::play::TrackSnapshot>,
         failures: &mut Vec<String>,
-    ) -> Result<serde_json::Value, String> {
+    ) -> Result<(serde_json::Value, SelectedBinding), String> {
         let command = self.command;
         let host = self.owner_host(observation)?;
         let rate = host.sample_rate();
@@ -1737,7 +1791,7 @@ impl AppliedCurve<'_> {
         } else {
             std::ops::Bound::Excluded(horizon)
         };
-        let (terminal, deadline, prefix_failures, prefix_diagnostics) =
+        let (terminal, deadline, prefix_failures, prefix_diagnostics, reference) =
             self.verify_prefix(model, &source, host, bound, predecessor, commanded)?;
         failures.extend(prefix_failures);
         if latest {
@@ -1750,9 +1804,10 @@ impl AppliedCurve<'_> {
                 deadline,
             )?);
         }
-        Ok(
+        Ok((
             serde_json::json!({"seq": command.seq.get(), "applied": i64::from(self.at), "verified_through": i64::from(horizon), "terminal_start": terminal, "terminal_end": deadline, "host_input": command.host_input, "prefix_diagnostics": prefix_diagnostics}),
-        )
+            reference,
+        ))
     }
 }
 
@@ -1936,7 +1991,7 @@ pub(super) fn executed_law(
     snapshot: &kithara::link::LinkedSnapshot<kithara::play::TrackSnapshot>,
     capture_start: SlotSnapshot,
     consumed: SlotSnapshot,
-) -> Result<(f64, Vec<String>, serde_json::Value), String> {
+) -> Result<LawProof, String> {
     let rate = observation
         .consumed_rate
         .ok_or_else(|| "law has no consumed evaluation clock".to_owned())?;
@@ -1980,7 +2035,8 @@ pub(super) fn executed_law(
         configured_speed,
     )?;
     let host_history_input = published_host_history(observation, host_grids, rate, &mut failures)?;
-    consumed_cue_law(model, observation, &curves, snapshot, rate, &mut failures)?;
+    let mut reference =
+        consumed_cue_law(model, observation, &curves, snapshot, rate, &mut failures)?;
     let source_grid = declared_source_grid(model, rate)?;
     let source_beat = grid_beat_at(&source_grid, media_position(media, rate)?)?;
     let projected_beat = grid_beat_at(&source_grid, media_position(projected, rate)?)?;
@@ -2005,14 +2061,10 @@ pub(super) fn executed_law(
         .enumerate()
         .filter(|(_, curve)| curve.at <= mark.session)
     {
-        verified.push(applied.verify(
-            model,
-            observation,
-            &curves,
-            index,
-            snapshot,
-            &mut failures,
-        )?);
+        let (evidence, anchor) =
+            applied.verify(model, observation, &curves, index, snapshot, &mut failures)?;
+        verified.push(evidence);
+        reference = Some(anchor);
     }
     let speed = if let Some(index) = latest {
         let applied = &curves[index];
@@ -2032,7 +2084,10 @@ pub(super) fn executed_law(
     Ok((
         speed,
         failures,
-        serde_json::json!({"host_history_input": host_history_input, "verified_applied": verified, "capture_start": format!("{start_mark:?}"), "capture_end": format!("{mark:?}"), "correction_end": claimed_end.map(i64::from), "projected_media_ns": projected.as_nanos().to_string()}),
+        serde_json::json!({"host_history_input": host_history_input, "verified_applied": verified, "capture_start": format!("{start_mark:?}"), "capture_end": format!("{mark:?}"), "correction_end": claimed_end.map(i64::from), "projected_media_ns": projected.as_nanos().to_string(), "supplemental_source_support": "supported"}),
+        Some(reference.ok_or_else(|| {
+            "consumed law has no independently declared source anchor".to_owned()
+        })?),
     ))
 }
 
@@ -2119,12 +2174,12 @@ pub(super) fn queue_observation(
     snapshot: &kithara::link::LinkedSnapshot<kithara::play::TrackSnapshot>,
     capture_start: SlotSnapshot,
     consumed: SlotSnapshot,
-) -> Result<(f64, Vec<String>, serde_json::Value), String> {
+) -> Result<LawProof, String> {
     let rate = observation
         .consumed_rate
         .ok_or_else(|| "Queue observation has no native clock".to_owned())?;
     if queue_source_supported(model, rate, consumed)? {
-        let (speed, failures, mut evidence) = executed_law(
+        return executed_law(
             model,
             host_grid,
             host_grids,
@@ -2132,9 +2187,7 @@ pub(super) fn queue_observation(
             snapshot,
             capture_start,
             consumed,
-        )?;
-        evidence["supplemental_source_support"] = serde_json::json!("supported");
-        return Ok((speed, failures, evidence));
+        );
     }
     let (mark, _) = consumed_media(consumed)?;
     if snapshot.track.mark != Some(mark) {
@@ -2194,6 +2247,7 @@ pub(super) fn queue_observation(
             "primary_forward_check": "required_after_capture",
             "capture_end": format!("{mark:?}"),
         }),
+        None,
     ))
 }
 
@@ -3270,7 +3324,7 @@ fn direct_grid_binding_rejects_a_frame_a_beat_and_a_missing_origin() {
         }),
         ..SlotSnapshot::default()
     };
-    let binding = check(&model, source_rate, &host_grid, consumed, 0.9, 4)
+    let binding = check(&model, source_rate, &host_grid, consumed, 0.9, 4, None)
         .expect("declared source and Host grids");
     assert!(binding.failures().is_empty(), "{binding:?}");
     assert_eq!(binding.source_beat, 8.0);
@@ -3284,8 +3338,8 @@ fn direct_grid_binding_rejects_a_frame_a_beat_and_a_missing_origin() {
         }),
         ..consumed
     };
-    let shifted =
-        check(&model, source_rate, &host_grid, shifted_mark, 0.9, 4).expect("shifted source mark");
+    let shifted = check(&model, source_rate, &host_grid, shifted_mark, 0.9, 4, None)
+        .expect("shifted source mark");
     assert_eq!(shifted.expected_frame, SessionFrame::new(171_500));
     assert_eq!(shifted.mark.session, SessionFrame::new(171_501));
     assert_eq!(shifted.failures().len(), 1);
@@ -3298,7 +3352,7 @@ fn direct_grid_binding_rejects_a_frame_a_beat_and_a_missing_origin() {
         downbeat.at += 0.5;
     }
     let wrong_grid = BeatGridModel::try_from(wrong_grid).expect("a valid misplaced source grid");
-    let misplaced = check(&wrong_grid, source_rate, &host_grid, consumed, 0.9, 4)
+    let misplaced = check(&wrong_grid, source_rate, &host_grid, consumed, 0.9, 4, None)
         .expect("one-beat misplaced grid");
     assert_eq!(misplaced.expected_frame, SessionFrame::new(147_000));
     assert_eq!(misplaced.failures().len(), 1);
@@ -3313,8 +3367,16 @@ fn direct_grid_binding_rejects_a_frame_a_beat_and_a_missing_origin() {
     }
     let one_frame_grid =
         BeatGridModel::try_from(one_frame_grid).expect("a one-frame displaced source grid");
-    let misplaced_frame = check(&one_frame_grid, source_rate, &host_grid, consumed, 0.9, 4)
-        .expect("one-frame displaced source grid");
+    let misplaced_frame = check(
+        &one_frame_grid,
+        source_rate,
+        &host_grid,
+        consumed,
+        0.9,
+        4,
+        None,
+    )
+    .expect("one-frame displaced source grid");
     assert_eq!(misplaced_frame.expected_frame, SessionFrame::new(171_499));
     assert_eq!(misplaced_frame.failures().len(), 1);
 
@@ -3331,7 +3393,8 @@ fn direct_grid_binding_rejects_a_frame_a_beat_and_a_missing_origin() {
                 ..consumed
             },
             0.9,
-            4
+            4,
+            None
         )
         .is_err()
     );
@@ -3348,6 +3411,7 @@ fn direct_grid_binding_rejects_a_frame_a_beat_and_a_missing_origin() {
         },
         0.9,
         4,
+        None,
     )
     .expect("incorrect raw/media translation");
     assert_eq!(ignored_origin.expected_frame, SessionFrame::new(172_088));
@@ -3433,15 +3497,31 @@ fn direct_grid_binding_rejects_a_frame_a_beat_and_a_missing_origin() {
             }),
             ..SlotSnapshot::default()
         };
-        let binding = check(&model, source_rate, &host_grid, consumed, speed.as_(), 4)
-            .expect("exact source coordinate survives reporting truncation");
+        let binding = check(
+            &model,
+            source_rate,
+            &host_grid,
+            consumed,
+            speed.as_(),
+            4,
+            None,
+        )
+        .expect("exact source coordinate survives reporting truncation");
         assert!(binding.failures().is_empty(), "{binding:?}");
         let wrong_speed = if at == 432_000 { 0.8 } else { 0.76666665 };
         assert_eq!(
-            check(&model, source_rate, &host_grid, consumed, wrong_speed, 4)
-                .expect("wrong local interval speed")
-                .failures()
-                .len(),
+            check(
+                &model,
+                source_rate,
+                &host_grid,
+                consumed,
+                wrong_speed,
+                4,
+                None
+            )
+            .expect("wrong local interval speed")
+            .failures()
+            .len(),
             1
         );
         let wrong_mark = SlotSnapshot {
@@ -3451,7 +3531,222 @@ fn direct_grid_binding_rejects_a_frame_a_beat_and_a_missing_origin() {
             }),
             ..consumed
         };
-        assert!(check(&model, source_rate, &host_grid, wrong_mark, speed.as_(), 4).is_err());
+        assert!(
+            check(
+                &model,
+                source_rate,
+                &host_grid,
+                wrong_mark,
+                speed.as_(),
+                4,
+                None
+            )
+            .is_err()
+        );
+    }
+}
+
+#[kithara::test(native)]
+fn direct_grid_binding_checks_the_declared_crossing_cell() {
+    let rate = NonZeroU32::new(48_000).expect("source and Host rate");
+    let model = analysed_grid("library_flac_newtechno");
+    let at = SessionFrame::new(2_127_986);
+    let host = SessionAnchor::new(
+        at,
+        SessionBeat::new(74.0 - 1.0 / 72_000.0).expect("declared Host phase"),
+        2.0,
+        rate,
+    )
+    .expect("declared Host law");
+    let host_grid = BeatGridSnapshot::session(
+        BeatGridId::allocate().expect("Host grid id"),
+        BeatGridRevision::first(),
+        SessionEpoch::new(0),
+        host,
+        None,
+    );
+    let span = SourceSpan::approaching(
+        5_780_681_237_936_773,
+        NonZeroU128::new(1_u128 << 32).expect("physical source phase"),
+        ExponentialApproach::new(0.8799999998245767, 0.8799999998245767, 0.0)
+            .expect("actually consumed crossing cell"),
+        0,
+        rate,
+        1,
+    )
+    .expect("recorded consumed source geometry");
+    let consumed = SlotSnapshot {
+        state: SlotState::Playing,
+        mark: Some(SlotMark {
+            session: at,
+            lane: LaneFrame {
+                segment: SegmentId::FIRST,
+                frame: 25_586,
+            },
+            position: span.position_at(0).expect("exact consumed position"),
+        }),
+        source: Some(AudioChunkInfo {
+            spec: AudioSpec::new(2, rate),
+            segment: SegmentId::FIRST,
+            media_origin: Some(Duration::ZERO),
+            source_span: Some(span),
+            lane_frame: 25_586,
+            frames: 1,
+            ..AudioChunkInfo::default()
+        }),
+        ..SlotSnapshot::default()
+    };
+    let reference = Some(SelectedBinding {
+        media: Duration::from_secs_f64(28.04 - 0.4 / 72_000.0),
+        source_beat: 65.0 - 1.0 / 72_000.0,
+        host_beat: 74.0 - 1.0 / 72_000.0,
+        frame: at,
+    });
+    let binding = check(&model, rate, &host_grid, consumed, 0.88, 4, reference)
+        .expect("the recorded source and Host grids cover the consumed frame");
+    assert_eq!(binding.expected_frame, at);
+    assert!(binding.failures().is_empty(), "{binding:?}");
+    for wrong_speed in [0.8, 0.92] {
+        assert!(
+            !check(
+                &model,
+                rate,
+                &host_grid,
+                consumed,
+                wrong_speed,
+                4,
+                reference
+            )
+            .expect("both instantaneous sides are covered")
+            .failures()
+            .is_empty(),
+            "the crossing sample must reject either instantaneous side"
+        );
+    }
+
+    let ArtifactSource::Value(model) = synthetic_grid() else {
+        panic!("declared source grid");
+    };
+    let mut raw = model.as_raw().clone();
+    raw.beats = [0.0, 0.5, 0.75]
+        .into_iter()
+        .enumerate()
+        .map(|(ordinal, at)| GridBeat {
+            at,
+            ordinal: ordinal.as_(),
+            confidence: None,
+        })
+        .collect();
+    raw.downbeats.clear();
+    raw.meter = None;
+    raw.bpm = 120.0;
+    let model = BeatGridModel::try_from(raw).expect("two different declared source slopes");
+    let host = SessionAnchor::new(
+        SessionFrame::new(0),
+        SessionBeat::default(),
+        100.0 / 60.0,
+        rate,
+    )
+    .expect("fractional entry Host law");
+    let start = SessionFrame::new(8641);
+    let reference = Some(SelectedBinding {
+        media: Duration::from_nanos(150_020_000),
+        source_beat: 0.30004,
+        host_beat: f64::from(host.beat_at(start).expect("declared Start Host beat")),
+        frame: start,
+    });
+    let host_grid = BeatGridSnapshot::session(
+        BeatGridId::allocate().expect("fractional entry Host id"),
+        BeatGridRevision::first(),
+        SessionEpoch::new(0),
+        host,
+        None,
+    );
+    for (at, numerator, denominator, speed, wrong) in [
+        (28_798, 1_199_923, 50, 5.0 / 6.0, [0.77, 5.0 / 12.0]),
+        (28_799, 1_799_947, 75, 0.77, [5.0 / 6.0, 5.0 / 12.0]),
+        (
+            28_800,
+            (24_000_u128 << 32) - 1,
+            1_u128 << 32,
+            5.0 / 12.0,
+            [0.77, 5.0 / 6.0],
+        ),
+    ] {
+        let reference = if at == 28_800 {
+            Some(SelectedBinding {
+                media: Duration::from_millis(500),
+                source_beat: 1.0,
+                host_beat: 1.0,
+                frame: SessionFrame::new(at),
+            })
+        } else {
+            reference
+        };
+        let phase = physical_phase((
+            numerator,
+            NonZeroU128::new(denominator).expect("declared physical phase divisor"),
+        ))
+        .expect("physical source phase");
+        let span = SourceSpan::approaching(
+            phase.0,
+            phase.1,
+            ExponentialApproach::new(speed, speed, 0.0).expect("declared cell speed"),
+            0,
+            rate,
+            1,
+        )
+        .expect("fractional entry consumed cell");
+        let mut consumed = consumed;
+        let lane_frame = u64::try_from(at - i64::from(start)).expect("source follows Start");
+        consumed.mark = Some(SlotMark {
+            session: SessionFrame::new(at),
+            lane: LaneFrame {
+                segment: SegmentId::FIRST,
+                frame: lane_frame,
+            },
+            position: span.position_at(0).expect("fractional cue source position"),
+        });
+        let source = consumed.source.as_mut().expect("source geometry");
+        source.lane_frame = lane_frame;
+        source.source_span = Some(span);
+        let binding = check(
+            &model,
+            rate,
+            &host_grid,
+            consumed,
+            speed.as_(),
+            4,
+            reference,
+        )
+        .expect("declared fractional cue/Start binding");
+        assert_eq!(binding.expected_frame, SessionFrame::new(at));
+        assert!(binding.failures().is_empty(), "{binding:?}");
+        for wrong_speed in wrong {
+            assert_eq!(
+                check(
+                    &model,
+                    rate,
+                    &host_grid,
+                    consumed,
+                    wrong_speed.as_(),
+                    4,
+                    reference
+                )
+                .expect("covered wrong cell slope")
+                .failures()
+                .len(),
+                1,
+            );
+        }
+        let mut shifted = consumed;
+        shifted.mark.as_mut().expect("consumed mark").session = SessionFrame::new(at + 1);
+        assert!(
+            !check(&model, rate, &host_grid, shifted, speed.as_(), 4, reference)
+                .expect("one-frame displacement remains covered")
+                .failures()
+                .is_empty(),
+        );
     }
 }
 
@@ -3587,7 +3882,7 @@ fn direct_grid_anchor_rejects_a_whole_bar_and_a_wrong_selected_cue() {
             ..consumed
         };
         assert!(
-            check(&model, evaluation_rate, &host_grid, wrong, 0.9, 4)
+            check(&model, evaluation_rate, &host_grid, wrong, 0.9, 4, None)
                 .expect("whole-bar phase-only binding")
                 .failures()
                 .is_empty()

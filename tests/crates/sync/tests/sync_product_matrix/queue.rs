@@ -1,8 +1,9 @@
 #![cfg(not(target_os = "android"))]
 
-use std::{collections::BTreeMap, ops::Range};
+use std::{collections::BTreeMap, num::NonZeroU16, ops::Range};
 
 use kithara::{
+    beat::GridDownbeat,
     events::TrackId,
     link::LinkedSnapshot,
     play::{
@@ -11,6 +12,7 @@ use kithara::{
     },
     queue::{QueueSettings, Transition},
     signal::{AudioChunkInfo, SegmentId, SourceSpan},
+    sync::Meter,
     warp::{Beat, BeatGrid, BeatGridQuery, BeatGridSnapshot, MapPoint, MapPosition},
 };
 use kithara_command::Seq;
@@ -85,6 +87,40 @@ impl MusicCase {
             Self::RealNext => "queue321-five-real-tracks-four-next-100-to-120",
         }
     }
+}
+
+fn ryabina_listening_grid(model: &BeatGridModel) -> BeatGridModel {
+    let mut score = model.as_raw().clone();
+    score.model_id = "manual-listening-score:ryabina:132bpm:4-4:origin0:v1".to_owned();
+    score.revision = 1;
+    score.state = BeatGridState::Provisional;
+    score.bpm = 132.0;
+    score.beats = (0..=512i64)
+        .map(|ordinal| {
+            let ordinal_seconds: f64 = ordinal.as_();
+            let frame = (ordinal_seconds * 60.0 / 132.0 * f64::from(RATE)).round();
+            GridBeat {
+                at: frame / f64::from(RATE),
+                ordinal,
+                confidence: None,
+            }
+        })
+        .collect();
+    score.downbeats = score
+        .beats
+        .iter()
+        .filter(|beat| beat.ordinal.rem_euclid(4) == 0)
+        .map(|beat| GridDownbeat {
+            at: beat.at,
+            beat_ordinal: beat.ordinal,
+            confidence: None,
+        })
+        .collect();
+    score.meter = Some(Meter {
+        beats_per_bar: NonZeroU16::new(4).expect("four beats per candidate bar"),
+        origin_beat_ordinal: 0,
+    });
+    BeatGridModel::try_from(score).expect("the manual listening score is coherent")
 }
 
 type NativeStart = (TrackId, Slot, SessionFrame, Fade);
@@ -202,17 +238,19 @@ fn intervals(
 
 fn entry_boundary(voice: &Voice) -> Duration {
     let raw = voice.model.as_raw();
-    let requested = voice.entry.as_secs_f64();
+    let at_or_after = |seconds| {
+        Duration::try_from_secs_f64(seconds).expect("finite declared beat time") >= voice.entry
+    };
     let seconds = if raw.meter.is_some() {
         raw.downbeats
             .iter()
-            .find(|beat| beat.at >= requested)
+            .find(|beat| at_or_after(beat.at))
             .expect("a declared downbeat covers the requested entry")
             .at
     } else {
         raw.beats
             .iter()
-            .find(|beat| beat.at >= requested)
+            .find(|beat| at_or_after(beat.at))
             .expect("a declared beat covers the requested entry")
             .at
     };
@@ -650,7 +688,7 @@ impl QueueMusic {
                 beat: SessionBeat::default(),
                 tempo: initial,
             },
-            std::num::NonZeroU16::new(4).expect("meter"),
+            NonZeroU16::new(4).expect("meter"),
             sample_rate,
         );
         let axis = trajectory.clone();
@@ -793,10 +831,17 @@ impl QueueMusic {
             let ArtifactSource::Value(model) = provider.beat_grid(index) else {
                 panic!("declared fixture analysis");
             };
+            let model = if !self.forward_oracle && *name == "library_flac_ryabina" {
+                Arc::new(ryabina_listening_grid(&model))
+            } else {
+                model
+            };
             let entry = Position::from_secs_f64(start.seconds(Some(&model)));
             let pinned_cue = match *name {
                 "library_flac_newtechno" => Some((64, 27.64)),
-                "library_flac_ryabina" => Some((128, 38.8)),
+                "library_flac_ryabina" if self.forward_oracle => Some((128, 38.8)),
+                "library_flac_ryabina" => Some((96, 43.63635416666666)),
+                "library_flac_song1" => Some((64, 31.24)),
                 _ => None,
             };
             if let Some((ordinal, seconds)) = pinned_cue {
@@ -805,8 +850,8 @@ impl QueueMusic {
                     .beats
                     .iter()
                     .find(|beat| beat.ordinal == ordinal)
-                    .expect("the original fixture grid contains the requested cue beat");
-                assert_eq!(beat.at, seconds, "the original fixture cue stays fixed");
+                    .expect("the supplied fixture grid contains the requested cue beat");
+                assert_eq!(beat.at, seconds, "the supplied fixture cue stays fixed");
                 if !self.forward_oracle {
                     assert_eq!(
                         *start,
@@ -1402,14 +1447,9 @@ impl QueueMusic {
                     )
                 } else {
                     super::binding::executed_law(&voice.model, grid, grids, o, linked, first, *slot)
-                        .map(|(speed, failures, mut evidence)| {
-                            evidence["supplemental_source_support"] =
-                                serde_json::json!("supported");
-                            (speed, failures, evidence)
-                        })
                 }
             });
-            let (speed, failures, mut evidence) = result.unwrap_or_else(|error| {
+            let (speed, failures, mut evidence, reference) = result.unwrap_or_else(|error| {
                 self.deck.observe(|o| {
                     let capture = o.capture.as_ref().expect("typed capture");
                     panic!(
@@ -1453,9 +1493,16 @@ impl QueueMusic {
             if evidence["supplemental_source_support"] == "supported"
                 && !matches!(linked.sync, kithara::link::SyncStatus::Correcting { .. })
             {
-                let binding =
-                    super::binding::check(&voice.model, sample_rate, grid, *slot, speed.as_(), 4)
-                        .unwrap_or_else(|error| panic!("item {:?}: {error}", voice.item));
+                let binding = super::binding::check(
+                    &voice.model,
+                    sample_rate,
+                    grid,
+                    *slot,
+                    speed.as_(),
+                    4,
+                    reference,
+                )
+                .unwrap_or_else(|error| panic!("item {:?}: {error}", voice.item));
                 let failures = binding.failures();
                 valid &= failures.is_empty();
                 evidence["binding"] = binding.evidence();
@@ -2911,8 +2958,8 @@ async fn one_queue_crossfades_five_music_tracks_and_retargets_host_during_overla
     ("library_flac_song2", Start::Seconds(0.0)),
     ("library_flac_slowtechno", Start::Seconds(0.0)),
     ("library_flac_newtechno", NEWTECHNO_PHRASE),
-    ("library_flac_ryabina", Start::Beat(128)),
-    ("library_flac_song1", Start::Seconds(0.0)),
+    ("library_flac_ryabina", Start::Beat(96)),
+    ("library_flac_song1", Start::Beat(64)),
 ])]
 async fn one_queue_crossfades_five_real_tracks_through_four_public_next_requests(
     #[case] key_lock: bool,

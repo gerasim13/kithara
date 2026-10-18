@@ -573,6 +573,8 @@ fn mpa_seek_retry_interrupted_in_side_info_keeps_pts_aligned_with_data(mpeg_eigh
     let bytes = mpeg_eight.to_vec();
     let (fault_source, fault_control) = InterruptingSource::new(bytes);
     let mut fault = mpa_reader(fault_source);
+    let delay = fault.tracks()[0].delay.expect("Layer III decoder priming");
+    assert_eq!(delay, 529);
 
     // Interrupt inside the stop frame's side info (`read_main_data_begin`).
     // A retried scan legitimately picks a shallower bit-reservoir reference
@@ -583,12 +585,19 @@ fn mpa_seek_retry_interrupted_in_side_info_keeps_pts_aligned_with_data(mpeg_eigh
     fault_control.arm_at(6 * consts::MPEG_FRAME_LEN + 5, 1);
 
     let target_ts = 6 * consts::MPEG_FRAME_DUR;
-    seek_after_interruption(&mut fault, target_ts);
+    let seeked = seek_after_interruption(&mut fault, target_ts);
+    assert_eq!(seeked.required_ts, Timestamp::new(target_ts));
 
-    let packet = packet_at(&mut fault, target_ts);
+    let expected_pts = target_ts - i64::from(delay);
+    let packet = packet_at(&mut fault, expected_pts);
+    let end = packet.pts.checked_add(packet.dur).expect("MPEG packet end");
+    assert!(
+        packet.pts.get() < target_ts && target_ts < end.get(),
+        "the seek target remains inside frame 6"
+    );
     assert!(
         packet.data[4..].iter().all(|&byte| byte == 0x77),
-        "packet at pts {target_ts} must carry frame 6's bytes, got fill {:#04x}",
+        "packet at pts {expected_pts} must carry frame 6's bytes, got fill {:#04x}",
         packet.data[4]
     );
 }
