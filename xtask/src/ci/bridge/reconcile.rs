@@ -247,12 +247,33 @@ impl Bridge {
         require_sha("GitHub pull request", &pull.head_sha)?;
         self.repo
             .fetch_pull_head(&self.github, pull.number, &pull.head_sha)?;
+        // A trusted author answers for the CI configuration the same way they
+        // answer for the code, so their pull request is never rejected for
+        // touching it. For everyone else the rule stands, and a contributor who
+        // cannot open a GitLab merge request is not the one it is aimed at —
+        // see the follow-up in `model`.
         let trusted = self
             .config
             .trusted_authors
             .iter()
             .any(|author| author == &pull.author);
+        let changed_controls = if trusted {
+            Vec::new()
+        } else {
+            self.repo
+                .weakening_control_paths(base_sha, &pull.head_sha)?
+        };
         let entry = ledger.reserve(&pull.head_sha, base_sha, pull.scope)?;
+        if reject_control_changes(
+            pull.number,
+            &pull.head_sha,
+            &entry,
+            &changed_controls,
+            |sha, state, detail, url| self.github.report_status(sha, state, detail, url),
+            |attempt, detail| ledger.reject(&pull.head_sha, base_sha, attempt, detail),
+        )? {
+            return Ok(());
+        }
         if entry.state != VerificationState::Testing {
             return Ok(());
         }
@@ -631,6 +652,36 @@ fn reject_unmergeable(
     );
     report(head_sha, "failure", &detail, None)?;
     reject(entry.attempt, detail)
+}
+
+fn reject_control_changes(
+    pull_number: u64,
+    head_sha: &str,
+    entry: &LedgerEntry,
+    paths: &[String],
+    report: impl FnOnce(&str, &str, &str, Option<&str>) -> Result<()>,
+    reject: impl FnOnce(u64, String) -> Result<()>,
+) -> Result<bool> {
+    if paths.is_empty() {
+        return Ok(false);
+    }
+    if entry.state == VerificationState::Rejected {
+        return Ok(true);
+    }
+
+    let detail = format!(
+        "GitHub PR #{pull_number} weakens the trusted CI judge in {}: an entry that already existed was changed or removed. Port these changes through a reviewed GitLab merge request",
+        paths.join(", ")
+    );
+    report(head_sha, "failure", &detail, None)?;
+    if entry.state == VerificationState::Verified {
+        bail!(
+            "verification {head_sha} attempt {} was already verified before its protected control-path change was rejected",
+            entry.attempt
+        );
+    }
+    reject(entry.attempt, detail)?;
+    Ok(true)
 }
 
 /// One tick of a verification that already owns a pipeline.
@@ -1725,6 +1776,65 @@ mod tests {
         assert_ne!(
             quarantine_ref(head, base, 1, Scope::Full),
             quarantine_ref(head, other_base, 1, Scope::Full)
+        );
+    }
+
+    #[test]
+    fn control_path_changes_post_failure_and_reject_without_a_pipeline() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = Ledger::new(directory.path()).unwrap();
+        let entry = ledger.reserve("head", "base", Scope::Full).unwrap();
+        let actions = RefCell::new(Vec::new());
+
+        let handled = reject_control_changes(
+            427,
+            "head",
+            &entry,
+            &[".gitlab-ci.yml".into()],
+            |sha, state, _, _| {
+                actions
+                    .borrow_mut()
+                    .push(VerificationAction::Report(sha.into(), state.into()));
+                Ok(())
+            },
+            |attempt, detail| {
+                actions
+                    .borrow_mut()
+                    .push(VerificationAction::Reject(attempt));
+                ledger.reject("head", "base", attempt, detail)
+            },
+        )
+        .unwrap();
+
+        assert!(handled);
+        assert_eq!(
+            *actions.borrow(),
+            [
+                VerificationAction::Report("head".into(), "failure".into()),
+                VerificationAction::Reject(1),
+            ]
+        );
+        let rejected = ledger.get("head", "base").unwrap().unwrap();
+        assert_eq!(rejected.state, VerificationState::Rejected);
+        assert_eq!(rejected.pipeline_id, None);
+    }
+
+    #[test]
+    fn product_only_changes_continue_to_quarantine() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = Ledger::new(directory.path()).unwrap();
+        let entry = ledger.reserve("head", "base", Scope::Full).unwrap();
+
+        assert!(
+            !reject_control_changes(
+                427,
+                "head",
+                &entry,
+                &[],
+                |_, _, _, _| panic!("product-only changes must not report a policy failure"),
+                |_, _| panic!("product-only changes must not be rejected"),
+            )
+            .unwrap()
         );
     }
 
