@@ -84,6 +84,42 @@ fn native_start_at(
     })
 }
 
+fn stable_capture_at(
+    observation: &LinkObservation,
+    item: TrackId,
+    start: i64,
+    declick: i64,
+) -> Option<i64> {
+    let stable = start.checked_add(declick)?;
+    let Some(speed) = observation
+        .speeds
+        .iter()
+        .rev()
+        .find(|speed| speed.item == item)
+    else {
+        return Some(stable);
+    };
+    let applied = observation
+        .placement_receipts
+        .iter()
+        .find_map(|(owner, origin, receipt)| match receipt {
+            Settled::Applied { seq, at }
+                if *owner == item && *origin == LinkReceiptOrigin::Lane && *seq == speed.seq =>
+            {
+                Some(i64::from(*at))
+            }
+            _ => None,
+        })?;
+    let completed = if let Some((_, landing)) = speed.landing {
+        let landing = i64::from(landing);
+        let fade = landing.checked_sub(applied).filter(|frames| *frames >= 0)?;
+        landing.checked_add(fade)?
+    } else {
+        applied
+    };
+    Some(stable.max(completed))
+}
+
 fn segment_custody(
     observation: &LinkObservation,
     item: TrackId,
@@ -1543,7 +1579,7 @@ impl ProductHarness {
                     let &(_, seq) = observation.starts.iter().rev().find(|(owner, _)| *owner == item)?;
                     let slot_id = snapshot.track.slot?;
                     let at = native_start_at(observation, item, seq, slot_id)?;
-                    let stable_at = at.checked_add(declick)?;
+                    let stable_at = stable_capture_at(observation, item, at, declick)?;
                     if i64::from(mark.session) < stable_at {
                         return None;
                     }
@@ -1642,7 +1678,8 @@ impl ProductHarness {
             let slot_id = track.and_then(|track| track.slot);
             let at = item.zip(seq).zip(slot_id)
                 .and_then(|((item, seq), slot)| native_start_at(observation, item, seq, slot));
-            let stable_at = at.and_then(|at| at.checked_add(declick));
+            let stable_at = item.zip(at)
+                .and_then(|(item, at)| stable_capture_at(observation, item, at, declick));
             let custody = item.zip(info).zip(slot_id)
                 .and_then(|((item, info), slot)| segment_custody(observation, item, slot, info.segment));
             let owns_segment = mark.zip(custody.as_ref()).is_some_and(|(mark, (at, _))| {

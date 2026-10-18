@@ -10,6 +10,7 @@ use kithara_integration_tests::{
     cochlea::{
         CochleaReport, continuity_failures, synchronization_failures, time_stretch_failures,
     },
+    grid::Start,
     kithara,
     pcm_oracle::{Audio, decode},
 };
@@ -46,12 +47,9 @@ async fn tempo_retarget_run(
     prepared: &PreparedSources,
     wrong_source: Option<&Audio>,
 ) -> CommandRun {
-    let case = if wrong_source.is_some() {
-        ONE_DECK
-            .response_budget(NonZeroUsize::new(TWENTY_MS_FRAMES).expect("20 ms response budget"))
-    } else {
-        ONE_DECK
-    };
+    let response_budget =
+        wrong_source.map(|_| NonZeroUsize::new(TWENTY_MS_FRAMES).expect("20 ms response budget"));
+    let case = response_budget.map_or(ONE_DECK, |budget| ONE_DECK.response_budget(budget));
     let callback_frames = if wrong_source.is_some() {
         driver_frames.min(LATENCY_CALLBACK_FRAMES)
     } else {
@@ -86,7 +84,7 @@ async fn tempo_retarget_run(
         harness.failures.extend(failures);
     }
     let command_index = samples.len() / usize::from(CHANNELS);
-    let command_lead = record_command_lead(&harness, "tempo", callback_frames);
+    let command_lead = record_command_lead(&harness, "tempo", callback_frames, response_budget);
     let issued = SessionFrame::new(i64::try_from(harness.host.position()).expect("session frame"));
     let admitted = issued + FrameCount::new(command_lead);
     let first_speed = harness.decks[0].observe(|observation| observation.speeds.len());
@@ -133,8 +131,8 @@ async fn running_sync_run(
     prepared: &PreparedSources,
     wrong_source: &Audio,
 ) -> CommandRun {
-    let case = ONE_DECK
-        .response_budget(NonZeroUsize::new(TWENTY_MS_FRAMES).expect("20 ms response budget"));
+    let response_budget = NonZeroUsize::new(TWENTY_MS_FRAMES).expect("20 ms response budget");
+    let case = ONE_DECK.response_budget(response_budget);
     let callback_frames = driver_frames.min(LATENCY_CALLBACK_FRAMES);
     let mut harness =
         ProductHarness::new_for_block(case, prepared, CUE, Audible::Deck(0), callback_frames).await;
@@ -163,7 +161,8 @@ async fn running_sync_run(
         .await;
     harness.failures.extend(failures);
     let command_index = samples.len() / usize::from(CHANNELS);
-    let command_lead = record_command_lead(&harness, "SYNC", callback_frames);
+    let command_lead =
+        record_command_lead(&harness, "SYNC", callback_frames, Some(response_budget));
     let issued = SessionFrame::new(i64::try_from(harness.host.position()).expect("session frame"));
     let admitted = issued + FrameCount::new(command_lead);
     let landing = admitted + FrameCount::new(240);
@@ -197,14 +196,28 @@ async fn running_sync_run(
     }
 }
 
-fn record_command_lead(harness: &ProductHarness, label: &str, block_frames: usize) -> usize {
+fn record_command_lead(
+    harness: &ProductHarness,
+    label: &str,
+    block_frames: usize,
+    response_budget: Option<NonZeroUsize>,
+) -> usize {
+    const DEFAULT_PRELOAD_CHUNKS: usize = 3;
+    const DEFAULT_RING_CHUNKS: usize = 10;
+
     let item = harness.decks[0].current().expect("selected PCM control").id;
     let snapshot = harness.decks[0]
         .track_snapshot(item)
         .expect("published PCM control");
     assert_eq!(harness.host.max_block_frames().get() as usize, block_frames);
     let quantum = block_frames.min(LATENCY_CALLBACK_FRAMES);
-    let ring = (block_frames.div_ceil(quantum) + 2) * quantum - 1;
+    let callback_chunks = block_frames.div_ceil(quantum);
+    let ring_chunks = if response_budget.is_some() {
+        callback_chunks + 1
+    } else {
+        (callback_chunks.max(DEFAULT_PRELOAD_CHUNKS) + 1).max(DEFAULT_RING_CHUNKS)
+    };
+    let ring = (ring_chunks + 1) * quantum - 1;
     assert_eq!(snapshot.track.ring_depth.get(), ring);
     assert_eq!(snapshot.track.engine_latency.get(), 0);
     assert_eq!(snapshot.track.declick.get(), 240);
@@ -645,8 +658,14 @@ async fn bound_sync_render_is_rtsan_clean(#[future(awt)] sweep_sources: Prepared
 }
 
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
-async fn shared_worker_capture(case: SyncCase, prepared: &PreparedSources) -> CommandRun {
-    let mut harness = ProductHarness::new(case, prepared, CUE, Audible::Deck(0)).await;
+async fn shared_worker_capture(
+    case: SyncCase,
+    prepared: &PreparedSources,
+    wrong_source: &Audio,
+) -> CommandRun {
+    // Keep all four short sources playing through the complete six-beat capture.
+    let start = Start::Seconds(1.25);
+    let mut harness = ProductHarness::new(case, prepared, start, Audible::Deck(0)).await;
     let operations_frame = u64::from(case.sample_rate) * 2;
     while harness.host.position() < operations_frame {
         hang_tick!(format!(
@@ -674,6 +693,21 @@ async fn shared_worker_capture(case: SyncCase, prepared: &PreparedSources) -> Co
         .round()
         .as_();
     let samples = harness.capture_paced(case, frames).await;
+    assert!(
+        harness
+            .decks
+            .iter()
+            .all(|deck| deck.engine_load().is_active()),
+        "shared worker decode load must remain active through the final captured frame"
+    );
+    let failures = harness
+        .physical_failures(case, 0, &samples, wrong_source, None)
+        .await;
+    harness.failures.extend(failures);
+    let failures = harness.grid_binding_failures(case).await;
+    harness.failures.extend(failures);
+    let failures = harness.grid_anchor_failures(case, None).await;
+    harness.failures.extend(failures);
     CommandRun {
         command_index: 0,
         command_lead: 0,
@@ -687,8 +721,9 @@ async fn shared_worker_capture(case: SyncCase, prepared: &PreparedSources) -> Co
 async fn bound_sync_pcm_stays_clean_under_shared_worker_deadline_load(
     #[future(awt)] mixed_sources: PreparedSources,
 ) {
-    let control = shared_worker_capture(SHARED_DEADLINE_CONTROL, &mixed_sources).await;
-    let candidate = shared_worker_capture(SHARED_DEADLINE, &mixed_sources).await;
+    let wrong = wrong_source(&mixed_sources).await;
+    let control = shared_worker_capture(SHARED_DEADLINE_CONTROL, &mixed_sources, &wrong).await;
+    let candidate = shared_worker_capture(SHARED_DEADLINE, &mixed_sources, &wrong).await;
     let control_report = CochleaReport::measure(&control.samples, CHANNELS, 48_000);
     let candidate_report = CochleaReport::measure(&candidate.samples, CHANNELS, 48_000);
     let mut failures = time_stretch_failures(
@@ -696,13 +731,14 @@ async fn bound_sync_pcm_stays_clean_under_shared_worker_deadline_load(
         &candidate_report,
         &control_report,
     );
-    failures.extend(synchronization_failures(
+    let supplemental = synchronization_failures(
         "bound shared-worker load",
         &[candidate.samples.as_slice()],
         CHANNELS,
         48_000,
         SHARED_DEADLINE.final_bpm(),
-    ));
+    );
+    eprintln!("ORACLE_SUPPLEMENTAL_PEAKS bound shared-worker load: {supplemental:?}");
     append_run_failures("control", &control, &mut failures);
     append_run_failures("candidate", &candidate, &mut failures);
     assert!(
