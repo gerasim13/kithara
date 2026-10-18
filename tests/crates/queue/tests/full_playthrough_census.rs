@@ -480,7 +480,6 @@ struct QueueLog {
 }
 
 #[kithara::flash(true)]
-#[kithara::flash(io)]
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn play_to_the_end(census: &Census) -> (Vec<f32>, QueueLog) {
     let mut receiver = census.queue.subscribe();

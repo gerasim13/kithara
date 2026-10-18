@@ -34,6 +34,19 @@ pub enum InputReadOutcome {
     Eof,
 }
 
+/// Whether the output clock a landed seek resumes on is the one an earlier
+/// pass produced at the same output frame.
+///
+/// `Restarted` means PCM after the landing is not a pure function of the
+/// landing frame: a resampler restarted at an integer source frame emits
+/// output at a phase no linear pass shares, so output coordinates from
+/// before the seek no longer name the same PCM.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LandingClock {
+    Kept,
+    Restarted,
+}
+
 /// Outcome of a [`Decoder::seek`] call.
 ///
 /// `Landed.landed_at` is the position the decoder actually parked at
@@ -62,6 +75,7 @@ pub enum DecoderSeekOutcome {
         /// to warm MDCT overlap-add state before emitting user-visible
         /// chunks.
         preroll: PrerollHint,
+        clock: LandingClock,
     },
     /// Seek target was past the decoder's known duration. The decoder
     /// is parked at the end; the next `next_chunk` returns

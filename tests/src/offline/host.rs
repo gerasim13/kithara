@@ -357,7 +357,6 @@ where
         R: MaybeSend + 'static,
     {
         hang_tick!("Host call: awaiting owner-thread operation answer".to_owned());
-        let _real_io = kithara::platform::flash::real_io();
         let answer =
             kithara::platform::time::timeout(__hang_detector.remaining(), self.off.call(job)).await;
         hang_tick!("Host call: checking owner-thread operation answer".to_owned());
