@@ -32,30 +32,19 @@ async fn provider_tempo_controls_measure_without_sync(
         };
         let native_bpm = grid.as_raw().bpm;
         #[cfg(not(target_os = "android"))]
-        let mut reference = match prepared.0.control_reference(deck) {
-            Some(asset) => Some(
-                kithara_integration_tests::pcm_oracle::decode_native(asset.bytes())
-                    .await
-                    .expect("independent native control reference"),
-            ),
-            None => None,
-        };
+        let mut reference = prepared.0.control_reference(deck).map(|asset| {
+            kithara_integration_tests::pcm_oracle::prepared_native(&asset)
+                .expect("independent native control reference")
+        });
         #[cfg(target_os = "android")]
         let mut reference: Option<kithara_integration_tests::pcm_oracle::Audio> = None;
         let wrong_asset = prepared.0.wrong_control_reference(deck);
         #[cfg(not(target_os = "android"))]
-        let mut wrong_source =
-            kithara_integration_tests::pcm_oracle::decode_native(wrong_asset.bytes())
-                .await
-                .expect("independent wrong-source control reference");
+        let mut wrong_source = kithara_integration_tests::pcm_oracle::prepared_native(&wrong_asset)
+            .expect("independent wrong-source control reference");
         #[cfg(target_os = "android")]
-        let mut wrong_source = kithara_integration_tests::pcm_oracle::Audio {
-            samples: kithara_integration_tests::pcm_oracle::decode(wrong_asset.bytes())
-                .await
-                .expect("independent 48 kHz stereo wrong-source fixture"),
-            channels: CHANNELS,
-            sample_rate: 48_000,
-        };
+        let mut wrong_source = kithara_integration_tests::pcm_oracle::prepared(&wrong_asset)
+            .expect("independent 48 kHz stereo wrong-source fixture");
         for target in [native_bpm, 108.0, 120.0, 127.0, 132.0] {
             hang_tick!(format!(
                 "{:?}: deck {deck}, native {native_bpm}, target {target}",
@@ -174,16 +163,10 @@ async fn run_with_decoder(
     let mut tracks = Vec::with_capacity(case.decks);
     let mut request_failures = Vec::new();
     for audible_deck in 0..case.decks {
-        let wrong_source = kithara_integration_tests::pcm_oracle::decode(
-            provider.wrong_control_reference(audible_deck).bytes(),
+        let wrong_source = kithara_integration_tests::pcm_oracle::prepared(
+            &provider.wrong_control_reference(audible_deck),
         )
-        .await
         .expect("independent wrong-source payload");
-        let wrong_source = kithara_integration_tests::pcm_oracle::Audio {
-            samples: wrong_source,
-            channels: CHANNELS,
-            sample_rate: 48_000,
-        };
         hang_tick!(format!(
             "{} {provider:?}: capturing deck {audible_deck}",
             case.id

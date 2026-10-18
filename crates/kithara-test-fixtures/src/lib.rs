@@ -20,6 +20,8 @@ pub mod fixtures;
 #[cfg(all(feature = "native-fixtures", not(target_arch = "wasm32")))]
 pub mod hls;
 #[cfg(all(feature = "native-fixtures", not(target_arch = "wasm32")))]
+pub mod reference;
+#[cfg(all(feature = "native-fixtures", not(target_arch = "wasm32")))]
 use kithara_fixture_media::hls_manifest;
 /// The two shapes an MP3 fixture takes: as encoded, and with its Xing/Info
 /// frame dropped so the byte length is the only record of duration.

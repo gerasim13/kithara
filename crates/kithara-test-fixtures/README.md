@@ -16,6 +16,13 @@ Audio test assets produced at build time and served from a persistent store
 on disk. A test asks for bytes and gets them; nothing is synthesized or
 encoded inside a test's wall-clock deadline.
 
+Every whole audio asset also has a `reference_<accessor>` record produced by
+independent FFprobe and FFmpeg during the build. `reference::audio(&asset)` reads
+its native rate, channel count, full decoded PCM and optional exact declared
+presentation extent. Reading a reference never launches media tools; a missing
+or invalid record fails. Product output recorded during a test still requires
+independent decoding of those actual output bytes.
+
 Source edits, dependency updates and commits do not invalidate prepared assets.
 The explicit `cache-version` file of `kithara-fixture-media` selects the shared
 cache revision. Change it

@@ -3,7 +3,6 @@
 use std::{collections::BTreeMap, num::NonZeroU16, ops::Range};
 
 use kithara::{
-    beat::GridDownbeat,
     events::TrackId,
     link::LinkedSnapshot,
     play::{
@@ -12,7 +11,6 @@ use kithara::{
     },
     queue::{QueueSettings, Transition},
     signal::{AudioChunkInfo, SegmentId, SourceSpan},
-    sync::Meter,
     warp::{Beat, BeatGrid, BeatGridQuery, BeatGridSnapshot, MapPoint, MapPosition},
 };
 use kithara_command::Seq;
@@ -90,37 +88,58 @@ impl MusicCase {
 }
 
 fn ryabina_listening_grid(model: &BeatGridModel) -> BeatGridModel {
-    let mut score = model.as_raw().clone();
-    score.model_id = "manual-listening-score:ryabina:132bpm:4-4:origin0:v1".to_owned();
-    score.revision = 1;
-    score.state = BeatGridState::Provisional;
-    score.bpm = 132.0;
-    score.beats = (0..=512i64)
-        .map(|ordinal| {
-            let ordinal_seconds: f64 = ordinal.as_();
-            let frame = (ordinal_seconds * 60.0 / 132.0 * f64::from(RATE)).round();
-            GridBeat {
-                at: frame / f64::from(RATE),
-                ordinal,
-                confidence: None,
-            }
-        })
-        .collect();
-    score.downbeats = score
-        .beats
-        .iter()
-        .filter(|beat| beat.ordinal.rem_euclid(4) == 0)
-        .map(|beat| GridDownbeat {
-            at: beat.at,
-            beat_ordinal: beat.ordinal,
-            confidence: None,
-        })
-        .collect();
-    score.meter = Some(Meter {
-        beats_per_bar: NonZeroU16::new(4).expect("four beats per candidate bar"),
-        origin_beat_ordinal: 0,
-    });
+    let shape: RawBeatGrid = serde_json::from_slice(
+        kithara_test_fixtures::assets::ryabina_listening_grid_default().bytes(),
+    )
+    .expect("prepared Ryabina listening shape");
+    let score = RawBeatGrid {
+        model_id: shape.model_id,
+        revision: shape.revision,
+        state: shape.state,
+        bpm: shape.bpm,
+        beats: shape.beats,
+        downbeats: shape.downbeats,
+        meter: shape.meter,
+        ..model.as_raw().clone()
+    };
     BeatGridModel::try_from(score).expect("the manual listening score is coherent")
+}
+
+#[kithara::test(native)]
+fn prepared_ryabina_shape_preserves_coordinates_and_inherited_fields() {
+    let mut supplied: RawBeatGrid =
+        serde_json::from_slice(kithara_test_fixtures::assets::synthetic_grid_default().bytes())
+            .expect("prepared input grid");
+    supplied.duration = Some(900.125);
+    let supplied = BeatGridModel::try_from(supplied).expect("grid with a known duration");
+    let model = ryabina_listening_grid(&supplied);
+    let raw = model.as_raw();
+    assert_eq!(raw.duration, supplied.as_raw().duration);
+    assert_eq!(raw.schema_version, supplied.as_raw().schema_version);
+    assert_eq!(
+        raw.model_id,
+        "manual-listening-score:ryabina:132bpm:4-4:origin0:v1"
+    );
+    assert_eq!(raw.revision, 1);
+    assert_eq!(raw.state, BeatGridState::Provisional);
+    assert_eq!(raw.bpm, 132.0);
+    assert_eq!(raw.beats.len(), 513);
+    for (beat, ordinal) in raw.beats.iter().zip(0..=512_i64) {
+        let seconds: f64 = ordinal.as_();
+        let frame = (seconds * 60.0 / 132.0 * f64::from(RATE)).round();
+        assert_eq!(beat.at.to_bits(), (frame / f64::from(RATE)).to_bits());
+        assert_eq!(beat.ordinal, ordinal);
+        assert_eq!(beat.confidence, None);
+    }
+    let meter = raw.meter.expect("manual meter");
+    assert_eq!(meter.beats_per_bar.get(), 4);
+    assert_eq!(meter.origin_beat_ordinal, 0);
+    assert_eq!(raw.downbeats.len(), 129);
+    for (downbeat, beat) in raw.downbeats.iter().zip(raw.beats.iter().step_by(4)) {
+        assert_eq!(downbeat.at.to_bits(), beat.at.to_bits());
+        assert_eq!(downbeat.beat_ordinal, beat.ordinal);
+        assert_eq!(downbeat.confidence, None);
+    }
 }
 
 type NativeStart = (TrackId, Slot, SessionFrame, Fade);
@@ -813,8 +832,7 @@ impl QueueMusic {
             let asset =
                 kithara_test_fixtures::assets::by_name(name).expect("existing musical fixture");
             let path = asset.path().expect("musical fixture materialized on disk");
-            let fixture = kithara_integration_tests::pcm_oracle::decode_native(asset.bytes())
-                .await
+            let fixture = kithara_integration_tests::pcm_oracle::prepared_native(&asset)
                 .expect("independent native PCM of this named musical fixture");
             assert_eq!(
                 (fixture.sample_rate, fixture.channels),

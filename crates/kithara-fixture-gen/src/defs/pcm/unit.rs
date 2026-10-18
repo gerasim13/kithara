@@ -31,7 +31,7 @@ mod consts {
 #[case::glide_alias(vec![1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0])]
 #[case::rubato_stereo([vec![0.1; 256], vec![0.2; 256]].concat())]
 #[case::rubato_nine((0u16..9).flat_map(|channel| vec![f32::from(channel) / 10.0; 256]).collect())]
-#[case::trim_ramp((0u16..4096).map(f32::from).collect())]
+#[case::trim_ramp(kithara_core_test_fixtures::trim_ramp())]
 #[case::trim_silence(vec![0.0; 4096])]
 #[case::trim_codec_priming_drops_leading_frames_and_fades_in(vec![1.0_f32; 276])]
 #[case::trim_codec_priming_metadata_takes_precedence_when_combined(vec![0.5_f32; 200])]
@@ -200,7 +200,7 @@ fn poisoned_float_wav() -> Vec<u8> {
     wav
 }
 
-fn wav_header(format: u16, bits_per_sample: u16, data_size: usize) -> Vec<u8> {
+pub(super) fn wav_header(format: u16, bits_per_sample: u16, data_size: usize) -> Vec<u8> {
     let bytes_per_sample = bits_per_sample / 8;
     let data_size_u32 = u32::try_from(data_size).expect("test WAV data size fits u32");
     let mut wav = Vec::with_capacity(consts::WAV_HEADER_SIZE + data_size);

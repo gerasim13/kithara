@@ -61,13 +61,14 @@ kithara-stream = { workspace = true, default-features = false, optional = true }
 
 kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
 
-serde_json = { workspace = true, optional = true }
+serde_json = { workspace = true, features = ["float_roundtrip"], optional = true }
 
 [build-dependencies]
 kithara-fixture-gen = { workspace = true, optional = true }
 
 [dev-dependencies]
 kithara-analysis = { workspace = true, default-features = false, features = ["client-reqwest", "tls-rustls"] }
+kithara-core-test-fixtures = { workspace = true }
 kithara-drm = { workspace = true }
 kithara-platform = { workspace = true }
 # The backend features are what lets `cargo test -p kithara-test-fixtures` stand on
@@ -94,6 +95,10 @@ workspace = true
 [[test]]
 name = "rhythm_contract"
 required-features = ["rhythm"]
+
+[[test]]
+name = "reference_contract"
+required-features = ["rhythm", "wav"]
 
 [[test]]
 name = "library_contract"

@@ -21,7 +21,6 @@ bytemuck = { version = "1", default-features = false, features = ["extern_crate_
 crossbeam-utils = { version = "0.8" }
 dashmap = { version = "6", default-features = false, features = ["serde"] }
 either = { version = "1", default-features = false, features = ["use_std"] }
-fastrand = { version = "2" }
 firewheel = { version = "0.14", default-features = false, features = ["cpal", "scheduled_events", "tracing"] }
 firewheel-core = { version = "0.14", default-features = false, features = ["scheduled_events", "serde", "std"] }
 foldhash = { version = "0.2", default-features = false, features = ["std"] }
@@ -68,7 +67,6 @@ bytemuck = { version = "1", default-features = false, features = ["extern_crate_
 crossbeam-utils = { version = "0.8" }
 dashmap = { version = "6", default-features = false, features = ["serde"] }
 either = { version = "1", default-features = false, features = ["use_std"] }
-fastrand = { version = "2" }
 firewheel = { version = "0.14", default-features = false, features = ["cpal", "scheduled_events", "tracing"] }
 firewheel-core = { version = "0.14", default-features = false, features = ["scheduled_events", "serde", "std"] }
 foldhash = { version = "0.2", default-features = false, features = ["std"] }
@@ -144,11 +142,11 @@ percent-encoding = { version = "2" }
 rustc-hash = { version = "1" }
 rustix = { version = "1", features = ["event", "mm", "net", "pipe", "process", "shm", "system", "time"] }
 serde_core = { version = "1" }
-serde_json = { version = "1", default-features = false, features = ["raw_value"] }
+serde_json = { version = "1", default-features = false, features = ["float_roundtrip", "raw_value"] }
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
-tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }
@@ -190,11 +188,11 @@ percent-encoding = { version = "2" }
 rustc-hash = { version = "1" }
 rustix = { version = "1", features = ["event", "mm", "net", "pipe", "process", "shm", "system", "time"] }
 serde_core = { version = "1" }
-serde_json = { version = "1", default-features = false, features = ["raw_value"] }
+serde_json = { version = "1", default-features = false, features = ["float_roundtrip", "raw_value"] }
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
-tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }
@@ -236,12 +234,12 @@ percent-encoding = { version = "2" }
 rustc-hash = { version = "1" }
 rustls-pki-types = { version = "1", features = ["std"] }
 serde_core = { version = "1" }
-serde_json = { version = "1", default-features = false, features = ["raw_value"] }
+serde_json = { version = "1", default-features = false, features = ["float_roundtrip", "raw_value"] }
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "macros", "parsing"] }
-tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tower-http = { version = "0.6", default-features = false, features = ["decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "follow-redirect"] }
@@ -285,12 +283,12 @@ percent-encoding = { version = "2" }
 rustc-hash = { version = "1" }
 rustls-pki-types = { version = "1", features = ["std"] }
 serde_core = { version = "1" }
-serde_json = { version = "1", default-features = false, features = ["raw_value"] }
+serde_json = { version = "1", default-features = false, features = ["float_roundtrip", "raw_value"] }
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "macros", "parsing"] }
-tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tower-http = { version = "0.6", default-features = false, features = ["decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "follow-redirect"] }
@@ -332,12 +330,12 @@ percent-encoding = { version = "2" }
 rustc-hash = { version = "1" }
 rustls-pki-types = { version = "1", features = ["std"] }
 serde_core = { version = "1" }
-serde_json = { version = "1", default-features = false, features = ["raw_value"] }
+serde_json = { version = "1", default-features = false, features = ["float_roundtrip", "raw_value"] }
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "macros", "parsing"] }
-tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tower-http = { version = "0.6", default-features = false, features = ["decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "follow-redirect"] }
@@ -381,12 +379,12 @@ percent-encoding = { version = "2" }
 rustc-hash = { version = "1" }
 rustls-pki-types = { version = "1", features = ["std"] }
 serde_core = { version = "1" }
-serde_json = { version = "1", default-features = false, features = ["raw_value"] }
+serde_json = { version = "1", default-features = false, features = ["float_roundtrip", "raw_value"] }
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "macros", "parsing"] }
-tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tower-http = { version = "0.6", default-features = false, features = ["decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "follow-redirect"] }
@@ -413,11 +411,11 @@ objc2-foundation = { version = "0.3" }
 parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
 serde_core = { version = "1" }
-serde_json = { version = "1", default-features = false, features = ["raw_value"] }
+serde_json = { version = "1", default-features = false, features = ["float_roundtrip", "raw_value"] }
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
-tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }
@@ -445,11 +443,11 @@ objc2-foundation = { version = "0.3" }
 parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
 serde_core = { version = "1" }
-serde_json = { version = "1", default-features = false, features = ["raw_value"] }
+serde_json = { version = "1", default-features = false, features = ["float_roundtrip", "raw_value"] }
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
-tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }
@@ -486,11 +484,11 @@ percent-encoding = { version = "2" }
 raw-window-handle = { version = "0.6", default-features = false, features = ["std"] }
 rustc-hash = { version = "1" }
 serde_core = { version = "1" }
-serde_json = { version = "1", default-features = false, features = ["raw_value"] }
+serde_json = { version = "1", default-features = false, features = ["float_roundtrip", "raw_value"] }
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
-tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }
@@ -529,11 +527,11 @@ percent-encoding = { version = "2" }
 raw-window-handle = { version = "0.6", default-features = false, features = ["std"] }
 rustc-hash = { version = "1" }
 serde_core = { version = "1" }
-serde_json = { version = "1", default-features = false, features = ["raw_value"] }
+serde_json = { version = "1", default-features = false, features = ["float_roundtrip", "raw_value"] }
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
-tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }
@@ -570,11 +568,11 @@ percent-encoding = { version = "2" }
 raw-window-handle = { version = "0.6", default-features = false, features = ["std"] }
 rustc-hash = { version = "1" }
 serde_core = { version = "1" }
-serde_json = { version = "1", default-features = false, features = ["raw_value"] }
+serde_json = { version = "1", default-features = false, features = ["float_roundtrip", "raw_value"] }
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
-tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }
@@ -613,11 +611,11 @@ percent-encoding = { version = "2" }
 raw-window-handle = { version = "0.6", default-features = false, features = ["std"] }
 rustc-hash = { version = "1" }
 serde_core = { version = "1" }
-serde_json = { version = "1", default-features = false, features = ["raw_value"] }
+serde_json = { version = "1", default-features = false, features = ["float_roundtrip", "raw_value"] }
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
-tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }

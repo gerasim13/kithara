@@ -2,12 +2,10 @@
 //! lands on the Host beat the plan projects it to, at steady, ramped and
 //! retargeted Host tempos.
 
-use std::{io::Cursor, num::NonZero};
+use std::num::{NonZero, NonZeroU32};
 
 use kithara::{
-    decode::{DecoderChunkOutcome, DecoderConfig, DecoderFactory},
     platform::time::Duration,
-    resampler::NoResamplerBackend,
     signal::{AudioSpec, FrameCount, InterleavedView, SessionEpoch, SessionFrame},
     stretch::StretchKind,
     sync::{SessionAnchor, SessionBeat},
@@ -20,13 +18,10 @@ use kithara_integration_tests::{
     audio_artifact::AudioArtifactTap,
     grid::{Start, analysed_grid},
 };
-use kithara_test_fixtures::assets::by_name;
+use kithara_test_fixtures::{assets::by_name, reference};
 use num_traits::ToPrimitive;
 
-use crate::{
-    region::{CH, Presented, Projection, Timeline, render_configured_grid_with_updates},
-    test_pools::pools,
-};
+use crate::region::{CH, Presented, Projection, Timeline, render_configured_grid_with_updates};
 
 mod consts {
     /// A presented chunk may publish a source frame this many output frames
@@ -80,11 +75,10 @@ const TRAJECTORIES: &[Trajectory] = &[
     },
 ];
 
-/// A downloaded library track: its fixture name and decode hint.
+/// A downloaded library track by its fixture name.
 #[derive(Clone, Copy, Debug)]
 struct Library {
     name: &'static str,
-    extension: &'static str,
 }
 
 /// A library track decoded at its native shape from its start beat through
@@ -101,23 +95,18 @@ struct Track {
 }
 
 impl Track {
-    #[kithara_test_utils::kithara::hang_watchdog]
     fn load(library: Library, start: Start, trajectories: &[Trajectory]) -> Self {
-        let Library { name, extension } = library;
+        let Library { name } = library;
         let analysed = analysed_grid(name);
         let raw = analysed.as_raw();
         let first = start.beat(&analysed);
-        let config = DecoderConfig::<NoResamplerBackend, crate::test_pools::TestPools>::builder()
-            .pools(pools())
-            .build();
         let asset = by_name(name).unwrap_or_else(|| panic!("`{name}` is not registered"));
-        let mut decoder = DecoderFactory::create_with_probe(
-            Cursor::new(asset.bytes().to_vec()),
-            Some(extension),
-            config,
-        )
-        .unwrap_or_else(|error| panic!("open `{name}`: {error:?}"));
-        let spec = decoder.spec();
+        let prepared = reference::source(&asset)
+            .unwrap_or_else(|error| panic!("prepared `{name}` native input: {error}"));
+        let spec = AudioSpec::new(
+            prepared.channels,
+            NonZeroU32::new(prepared.sample_rate).expect("validated source sample rate"),
+        );
         assert_eq!(usize::from(spec.channels), CH, "`{name}` is stereo");
         let rate = f64::from(spec.sample_rate.get());
         let first_frame = (first.at * rate)
@@ -151,19 +140,11 @@ impl Track {
             })
             .max()
             .expect("a trajectory");
-        let mut pcm = Vec::new();
-        while pcm.len() < (first_frame + needed) * CH {
-            hang_tick!();
-            match decoder
-                .next_chunk()
-                .unwrap_or_else(|error| panic!("decode `{name}`: {error:?}"))
-            {
-                DecoderChunkOutcome::Chunk(chunk) => pcm.extend_from_slice(&chunk.samples),
-                DecoderChunkOutcome::Pending(reason) => panic!("`{name}` pending: {reason:?}"),
-                DecoderChunkOutcome::Eof => panic!("`{name}` ends before frame {needed}"),
-            }
-            hang_reset!();
-        }
+        let mut pcm = prepared.samples;
+        assert!(
+            pcm.len() >= (first_frame + needed) * CH,
+            "`{name}` ends before frame {needed}",
+        );
         pcm.truncate((first_frame + needed) * CH);
         pcm.drain(..first_frame * CH);
         let decoded = needed.to_f64().expect("frames fit f64");
@@ -464,13 +445,11 @@ fn record(track: &Track, backend: StretchKind, trajectory: &Trajectory, output: 
 /// Tunnel opens on its kick; its grid states bars.
 const TUNNEL: Library = Library {
     name: "library_mp3_zvuk_27390231",
-    extension: "mp3",
 };
 /// Newtechno's grid states no bars: its detected downbeats disagree on the
 /// bar phase. Its first phrase change lands on analysed beat 64.
 const NEWTECHNO: Library = Library {
     name: "library_flac_newtechno",
-    extension: "flac",
 };
 /// Newtechno's second phrase, where the full groove enters.
 const NEWTECHNO_PHRASE: Start = Start::Beat(64);

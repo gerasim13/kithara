@@ -11,6 +11,7 @@ mod generate;
 mod graph;
 #[cfg(feature = "remote")]
 mod hls_hydrate;
+mod reference;
 mod registry;
 #[cfg(feature = "library")]
 mod remote_file;

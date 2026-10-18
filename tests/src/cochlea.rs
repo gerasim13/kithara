@@ -771,28 +771,12 @@ pub fn assert_oracle_load_bearing(
 
 #[cfg(test)]
 mod tests {
-    use kithara_test_fixtures::integration_fixtures::{cochlea_control, cochlea_loudness};
+    use kithara_test_fixtures::integration_fixtures::{
+        cochlea_control, cochlea_loudness, cochlea_pulses as pulse_train, cochlea_silence,
+    };
     use kithara_test_utils::kithara;
 
     use super::*;
-
-    fn pulse_train(sample_rate: u32, bpm: f64) -> Vec<f32> {
-        let beat_frames = f64::from(sample_rate) * SECONDS_PER_MINUTE / bpm;
-        let leading_frames = sample_rate as usize / 4;
-        let pulse_frames = sample_rate as usize / 50;
-        let frame_count = leading_frames + (beat_frames * 6.0).ceil() as usize;
-        let mut samples = vec![0.0; frame_count];
-        for beat in 0..6 {
-            let start = leading_frames + (beat as f64 * beat_frames).round() as usize;
-            let amplitude = if beat % BEATS_PER_BAR == 0 { 0.9 } else { 0.7 };
-            for offset in 0..pulse_frames {
-                let phase = std::f32::consts::TAU * 1_000.0 * offset as f32 / sample_rate as f32;
-                samples[start + offset] =
-                    amplitude * phase.cos() * (1.0 - offset as f32 / pulse_frames as f32);
-            }
-        }
-        samples
-    }
 
     #[kithara::test(native)]
     #[case::cd_rate(44_100)]
@@ -953,7 +937,7 @@ mod tests {
 
     #[kithara::test(native)]
     fn tempo_oracle_rejects_silence() {
-        let samples = vec![0.0; 48_000 * 3];
+        let samples = cochlea_silence();
         assert_eq!(
             synchronization_failures("silence", &[&samples], 1, 48_000, 127.0),
             ["silence: track 0 has no exact beat markers"],

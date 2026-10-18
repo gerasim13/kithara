@@ -12,7 +12,7 @@ use kithara_integration_tests::{
     },
     grid::Start,
     kithara,
-    pcm_oracle::{Audio, decode},
+    pcm_oracle::Audio,
 };
 use num_traits::AsPrimitive;
 
@@ -255,14 +255,9 @@ fn capture_source_anchor(harness: &ProductHarness) -> (u128, NonZeroU128) {
     })
 }
 
-async fn wrong_source(prepared: &PreparedSources) -> Audio {
-    Audio {
-        samples: decode(prepared.0.wrong_control_reference(0).bytes())
-            .await
-            .expect("independent wrong-source PCM"),
-        channels: CHANNELS,
-        sample_rate: ONE_DECK.sample_rate,
-    }
+fn wrong_source(prepared: &PreparedSources) -> Audio {
+    kithara_integration_tests::pcm_oracle::prepared(&prepared.0.wrong_control_reference(0))
+        .expect("independent wrong-source PCM")
 }
 
 fn align_source_runs(candidate: &CommandRun, control: &CommandRun) -> AlignedRun {
@@ -475,7 +470,7 @@ async fn bound_tempo_retarget_reaches_pcm_within_twenty_ms(
     #[case] warm_blocks: usize,
     #[case] driver_frames: usize,
 ) {
-    let wrong = wrong_source(&sweep_sources).await;
+    let wrong = wrong_source(&sweep_sources);
     hang_tick!(format!(
         "tempo retarget: {phase} phase, {driver_frames}-frame capture group"
     ));
@@ -523,7 +518,7 @@ async fn bound_tempo_retarget_reaches_pcm_within_twenty_ms(
 async fn running_sync_command_changes_audible_pcm_within_one_block(
     #[future(awt)] synthetic_sources: PreparedSources,
 ) {
-    let wrong = wrong_source(&synthetic_sources).await;
+    let wrong = wrong_source(&synthetic_sources);
     for driver_frames in [128, 256, 512] {
         hang_tick!(format!(
             "running SYNC: {driver_frames}-frame capture group and candidate"
@@ -721,7 +716,7 @@ async fn shared_worker_capture(
 async fn bound_sync_pcm_stays_clean_under_shared_worker_deadline_load(
     #[future(awt)] mixed_sources: PreparedSources,
 ) {
-    let wrong = wrong_source(&mixed_sources).await;
+    let wrong = wrong_source(&mixed_sources);
     let control = shared_worker_capture(SHARED_DEADLINE_CONTROL, &mixed_sources, &wrong).await;
     let candidate = shared_worker_capture(SHARED_DEADLINE, &mixed_sources, &wrong).await;
     let control_report = CochleaReport::measure(&control.samples, CHANNELS, 48_000);
