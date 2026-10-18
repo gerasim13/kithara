@@ -8,13 +8,10 @@ repository.workspace = true
 description = "Build-time fixture generation: asset definitions, their dependency graph, and the accessors written for them."
 publish = false
 
-[package.metadata.cargo-machete]
-ignored = ["kithara-workspace-hack"]
-
 [features]
 # Families. Each one registers the assets declared in its own `src/defs` file;
 # a build that enables none registers only the synthetic PCM they all build on.
-encoded = ["wav"]
+encoded = ["wav", "dep:opus"]
 # Packages its own segments from synthetic PCM; it fetches nothing.
 hls = ["dep:aes", "dep:cbc", "dep:hex", "dep:rayon", "packaged"]
 hls-inputs = ["hls"]
@@ -48,6 +45,7 @@ kithara-bufpool = { workspace = true, optional = true }
 kithara-core-test-fixtures = { workspace = true }
 kithara-decode = { workspace = true, default-features = false, features = ["client-reqwest", "fdk-aac", "opus", "ape", "tls-rustls"], optional = true }
 kithara-drm = { workspace = true, optional = true }
+kithara-effects = { workspace = true }
 kithara-encode = { workspace = true, features = ["client-reqwest", "fdk-aac", "ffmpeg", "tls-rustls"] }
 kithara-events = { workspace = true, optional = true }
 kithara-fixture-media = { workspace = true, features = ["native"] }
@@ -70,6 +68,7 @@ hex = { workspace = true, optional = true }
 hls_m3u8 = { workspace = true, optional = true }
 inventory = { workspace = true }
 num-traits = { workspace = true }
+opus = { workspace = true, optional = true }
 rayon = { workspace = true, optional = true }
 reqwest = { workspace = true, features = ["blocking", "rustls"], optional = true }
 serde_json = { workspace = true }
@@ -78,9 +77,6 @@ tempfile = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
 url = { workspace = true, optional = true }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
 
 [dev-dependencies]
 # The playlist hydrator's tests serve a local playlist; `library` is the one

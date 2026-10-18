@@ -583,29 +583,11 @@ mod tests {
         // content up to 16 kHz. Under a full duck a mix held at the ceiling
         // reconstructs about a ten-thousandth of a decibel over it.
         const DOCUMENTED_OVER_DB: f32 = 0.001;
-        const RISE_FRAMES: f32 = 512.0;
         const ONSET: usize = 1_024;
-        const FRAMES: u16 = 8_192;
+        let held = kithara_test_fixtures::unit_fixtures::host_metronome_held();
         // WHY: A moving mix under a full-depth duck, far enough under Nyquist
         // that the duck's modulation folds nothing back over the ceiling.
-        const TONE_HZ: f64 = 10_000.0;
-        const TONE_PHASE: f64 = 2.1;
-
-        let held: Vec<f32> = (0..FRAMES)
-            .map(|frame| {
-                let rise = (f32::from(frame) / RISE_FRAMES).min(1.0);
-                ceiling() * 0.5 * (1.0 - (PI * rise).cos())
-            })
-            .collect();
-        let tone: Vec<f32> = held
-            .iter()
-            .zip(0..FRAMES)
-            .map(|(level, frame)| {
-                let cycles = (f64::from(frame) * TONE_HZ / f64::from(rate().get())).fract();
-                let tone = f64::from(*level) * TAU.mul_add(cycles, TONE_PHASE).cos();
-                tone.to_f32().expect("a tone sample fits f32")
-            })
-            .collect();
+        let tone = kithara_test_fixtures::unit_fixtures::host_metronome_tone();
         let sharpest = MetronomeConfig::builder()
             .decay(Duration::from_millis(8))
             .hold(Duration::ZERO)

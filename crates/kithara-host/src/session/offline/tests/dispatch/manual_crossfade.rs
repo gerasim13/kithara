@@ -174,7 +174,6 @@ const RATE: u32 = 44_100;
 const BLOCK: u64 = 512;
 const PERIOD: u64 = 22_050;
 const FADE_FRAMES: u64 = 4 * RATE as u64;
-const SOURCE_FRAMES: usize = 12 * RATE as usize;
 
 struct ManualSources {
     spec: AudioSpec,
@@ -251,28 +250,23 @@ impl ManualSources {
         let spec = AudioSpec::new(2, NonZeroU32::new(RATE).expect("fixture rate"));
         let outgoing_path = directory.path().join("manual-outgoing.wav");
         let incoming_path = directory.path().join("manual-incoming.wav");
-        let outgoing: Vec<_> = (0..SOURCE_FRAMES)
-            .flat_map(|frame| {
-                let phase = frame.to_f64().expect("fixture frame") * 220.0 * std::f64::consts::TAU
-                    / f64::from(RATE);
-                [
-                    (0.2 * phase.sin()).to_f32().expect("fixture amplitude"),
-                    0.0,
-                ]
-            })
-            .collect();
-        let incoming: Vec<_> = (0..SOURCE_FRAMES)
-            .flat_map(|frame| {
-                let phase = frame.to_f64().expect("fixture frame") * 330.0 * std::f64::consts::TAU
-                    / f64::from(RATE);
-                [
-                    0.0,
-                    (0.125 * phase.sin()).to_f32().expect("fixture amplitude"),
-                ]
-            })
-            .collect();
-        kithara_play::mock::write_pcm_wav(&outgoing_path, &outgoing, spec).expect("outgoing WAV");
-        kithara_play::mock::write_pcm_wav(&incoming_path, &incoming, spec).expect("incoming WAV");
+        let outgoing = kithara_test_fixtures::unit_fixtures::host_manual_outgoing();
+        let incoming = kithara_test_fixtures::unit_fixtures::host_manual_incoming();
+        let outgoing_wav = kithara_test_fixtures::assets::host_manual_wav_outgoing();
+        let incoming_wav = kithara_test_fixtures::assets::host_manual_wav_incoming();
+        {
+            let _io = kithara_platform::flash::real_io();
+            std::fs::copy(
+                outgoing_wav.path().expect("prepared outgoing WAV"),
+                &outgoing_path,
+            )
+            .expect("outgoing WAV");
+            std::fs::copy(
+                incoming_wav.path().expect("prepared incoming WAV"),
+                &incoming_path,
+            )
+            .expect("incoming WAV");
+        }
         Self {
             spec,
             outgoing_path,

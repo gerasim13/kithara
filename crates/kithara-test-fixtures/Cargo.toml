@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 description = "Build-time generated audio test assets: content-addressed store and generated accessors."
 publish = false
+build = "build/main.rs"
 
 [[bin]]
 name = "kithara-fixture-export"
@@ -59,12 +60,11 @@ kithara-stream = { workspace = true, features = ["client-reqwest", "tls-rustls"]
 # `AudioCodec` for the fMP4 sample entries.
 kithara-stream = { workspace = true, default-features = false, optional = true }
 
-kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
-
 serde_json = { workspace = true, features = ["float_roundtrip"], optional = true }
 
 [build-dependencies]
 kithara-fixture-gen = { workspace = true, optional = true }
+kithara-fixture-media = { workspace = true }
 
 [dev-dependencies]
 kithara-analysis = { workspace = true, default-features = false, features = ["client-reqwest", "tls-rustls"] }

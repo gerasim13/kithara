@@ -2,8 +2,6 @@
 //! kick at the output frame its source advance names, so two engines fed one
 //! plan place every beat alike.
 
-use std::f64::consts::TAU;
-
 use kithara_test_utils::{bufpool::pools as default_pools, kithara};
 use num_traits::ToPrimitive;
 
@@ -20,7 +18,6 @@ mod consts {
     /// Source frames between kicks, wider than any engine's window.
     pub(super) const KICK_SPACING: usize = 24_000;
     pub(super) const KICKS: usize = 8;
-    pub(super) const KICK_FRAMES: usize = 2_400;
     /// Frames of the mean-magnitude envelope an onset is read from.
     pub(super) const ENVELOPE_FRAMES: usize = 32;
     /// An onset crosses this fraction of its kick's envelope peak.
@@ -37,41 +34,13 @@ mod consts {
     /// The ride profile's rates, stepped like a Host tempo retarget.
     pub(super) const RIDE: [f64; 6] = [0.8, 1.25, 0.7, 1.5, 1.0, 1.6];
     pub(super) const MAX_FRAMES: usize = 65_536;
-    pub(super) const PITCH_DROP_HZ: f64 = 100.0;
-    pub(super) const BODY_HZ: f64 = 50.0;
-    pub(super) const PITCH_SECONDS: f64 = 0.02;
-    pub(super) const DECAY_SECONDS: f64 = 0.05;
-    pub(super) const PEAK: f64 = 0.9;
 }
 
-/// A pitched-down kick: the transient every beat grid is heard by.
-fn kick() -> Vec<f64> {
-    let rate = f64::from(SAMPLE_RATE);
-    let mut phase = 0.0;
-    (0..consts::KICK_FRAMES)
-        .map(|frame| {
-            let seconds = frame.to_f64().expect("frame fits f64") / rate;
-            let hz =
-                consts::BODY_HZ + consts::PITCH_DROP_HZ * (-seconds / consts::PITCH_SECONDS).exp();
-            phase += TAU * hz / rate;
-            consts::PEAK * (-seconds / consts::DECAY_SECONDS).exp() * phase.sin()
-        })
-        .collect()
-}
-
-/// `history` silent frames, then kicks every [`consts::KICK_SPACING`]
-/// frames from [`consts::LEAD_FRAMES`] past the cue, interleaved.
+/// Engine-dependent silent history followed by the prepared stereo kick body.
 fn kick_train(history: usize) -> Vec<f32> {
-    let kick = kick();
-    let frames = history + consts::LEAD_FRAMES + (consts::KICKS + 4) * consts::KICK_SPACING;
-    let mut pcm = vec![0.0; frames * CHANNELS];
-    for index in 0..consts::KICKS {
-        let start = history + consts::LEAD_FRAMES + index * consts::KICK_SPACING;
-        for (frame, sample) in kick.iter().enumerate() {
-            let sample = sample.to_f32().expect("kick sample fits f32");
-            pcm[(start + frame) * CHANNELS..(start + frame + 1) * CHANNELS].fill(sample);
-        }
-    }
+    let body = kithara_test_fixtures::unit_fixtures::stretch_kick_body();
+    let mut pcm = vec![0.0; history * CHANNELS];
+    pcm.extend_from_slice(&body);
     pcm
 }
 

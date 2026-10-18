@@ -9,8 +9,8 @@
 
 /// Native fixture generation is opt-in through `native-fixtures`: every native
 /// accessor reads its prepared entry from the host store, which the browser
-/// cannot reach. Without the feature only the portable signal naming compiles,
-/// and the wasm lane reaches fixtures through `SignalAsset` over HTTP.
+/// cannot reach. Portable signals and prepared inputs compile without it;
+/// the wasm lane reaches encoded fixtures through `SignalAsset` over HTTP.
 #[cfg(all(feature = "native-fixtures", not(target_arch = "wasm32")))]
 pub mod asset;
 #[cfg(all(feature = "native-fixtures", not(target_arch = "wasm32")))]
@@ -26,6 +26,7 @@ use kithara_fixture_media::hls_manifest;
 /// The two shapes an MP3 fixture takes: as encoded, and with its Xing/Info
 /// frame dropped so the byte length is the only record of duration.
 pub mod mp3;
+pub mod portable;
 pub mod signal_asset;
 #[cfg(all(feature = "native-fixtures", not(target_arch = "wasm32")))]
 pub mod store;

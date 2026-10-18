@@ -111,6 +111,7 @@ iced = { workspace = true, optional = true, features = ["tiny-skia"] }
 
 [dev-dependencies]
 kithara-platform = { path = "../kithara-platform" }
+kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-utils = { path = "../kithara-test-utils", features = [
     "usdt",
     "client-reqwest",

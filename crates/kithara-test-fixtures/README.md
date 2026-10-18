@@ -95,7 +95,7 @@ fn decode_prepared_audio(tone_mp3: &'static [u8]) {
 ```
 
 Fixture providers read already-built assets. Signal generation, including tiny
-PCM inputs, belongs in `kithara-fixture-gen` and runs through `build.rs`. Async providers
+PCM inputs, belongs in `kithara-fixture-gen` and runs through the build script. Async providers
 may own local servers and return them with the prepared input; test parameters
 use `#[future(awt)]` to receive those resources after preparation.
 
@@ -119,7 +119,7 @@ use `#[future(awt)]` to receive those resources after preparation.
 - `kithara-fixture-media` — waveforms, PCM buffers, the RIFF writer, the fMP4
   mux and the store, shared by the generator and the library and re-exported
   here as `signal`, `fmp4` and `store`.
-- `build.rs` — calls the generator when `native-fixtures` is on.
+- `build/main.rs` - prepares portable inputs and calls the native generator when `native-fixtures` is on.
 - `src/store/` — the optional HTTP origin that ART uses as the one record
   source, over the shared store.
 

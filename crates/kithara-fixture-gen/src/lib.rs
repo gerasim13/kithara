@@ -5,6 +5,7 @@
 //! are built from, materializes each into the shared store, and writes the
 //! accessors the fixture crate compiles. Nothing here reaches a target build.
 
+mod consts;
 mod context;
 mod defs;
 mod generate;

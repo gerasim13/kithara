@@ -5239,6 +5239,7 @@ dependencies = [
  "kithara-derive",
  "kithara-dsp",
  "kithara-effects",
+ "kithara-fixture-media",
  "kithara-resampler",
  "kithara-signal",
  "kithara-test-fixtures",
@@ -5463,6 +5464,7 @@ dependencies = [
  "kithara-core-test-fixtures",
  "kithara-decode",
  "kithara-drm",
+ "kithara-effects",
  "kithara-encode",
  "kithara-events",
  "kithara-fixture-gen",
@@ -5473,8 +5475,8 @@ dependencies = [
  "kithara-stream",
  "kithara-test-macros",
  "kithara-test-utils",
- "kithara-workspace-hack",
  "num-traits",
+ "opus",
  "rayon",
  "reqwest",
  "serde_json",
@@ -5498,12 +5500,12 @@ dependencies = [
  "kithara-platform",
  "kithara-stream",
  "kithara-test-utils",
- "kithara-workspace-hack",
  "num-traits",
  "serde",
  "sha2 0.11.1",
  "tempfile",
  "thiserror 2.0.21",
+ "wasm-bindgen-test",
 ]
 
 [[package]]
@@ -6281,7 +6283,6 @@ dependencies = [
  "kithara-test-dylib",
  "kithara-test-macros",
  "kithara-test-utils",
- "kithara-workspace-hack",
  "num-traits",
  "reqwest",
  "serde",
@@ -6296,7 +6297,6 @@ dependencies = [
 name = "kithara-test-macros"
 version = "0.0.1-alpha5"
 dependencies = [
- "kithara-workspace-hack",
  "proc-macro2",
  "quote",
  "syn 3.0.6",
@@ -6348,6 +6348,7 @@ dependencies = [
  "kithara-apple",
  "kithara-derive",
  "kithara-platform",
+ "kithara-test-fixtures",
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-ui",
@@ -6582,7 +6583,6 @@ dependencies = [
 name = "kithara-workspace-hack"
 version = "0.0.1-alpha5"
 dependencies = [
- "ahash",
  "aho-corasick",
  "arrayvec",
  "audioadapter-buffers",
@@ -6612,13 +6612,12 @@ dependencies = [
  "form_urlencoded",
  "futures-channel",
  "futures-core",
- "futures-io",
  "futures-sink",
+ "futures-task",
  "futures-util",
  "getrandom 0.3.4",
  "getrandom 0.4.3",
  "half",
- "hashbrown 0.14.5",
  "hashbrown 0.16.1",
  "hashbrown 0.17.1",
  "hyper",
@@ -6670,8 +6669,6 @@ dependencies = [
  "time",
  "tokio",
  "tokio-util",
- "toml_datetime 1.1.2+spec-1.1.0",
- "toml_parser",
  "tower",
  "tower-http 0.6.11",
  "tracing",
@@ -6684,7 +6681,6 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "winnow 1.0.4",
  "zerocopy",
  "zeroize",
  "zstd-sys",

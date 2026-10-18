@@ -17,7 +17,7 @@ ignored = ["serde", "unimock"]
 
 [features]
 default = []
-mock = ["dep:unimock"]
+mock = ["dep:kithara-fixture-media", "dep:unimock"]
 usdt = ["kithara-test-utils/usdt"]
 
 [dependencies]
@@ -25,6 +25,7 @@ kithara-bufpool = { workspace = true }
 kithara-config = { workspace = true }
 kithara-derive = { workspace = true, features = ["built-default", "ranged"] }
 kithara-dsp = { workspace = true }
+kithara-fixture-media = { workspace = true, default-features = false, optional = true }
 kithara-signal = { workspace = true }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true }
@@ -45,6 +46,7 @@ kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspac
 
 [dev-dependencies]
 kithara-effects = { path = ".", default-features = false, features = ["mock"] }
+kithara-fixture-media = { workspace = true, default-features = false }
 kithara-resampler = { workspace = true, default-features = false, features = ["resample-rubato"] }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock"] }
