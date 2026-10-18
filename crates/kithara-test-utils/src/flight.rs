@@ -1,7 +1,7 @@
 use std::{
     collections::VecDeque,
     fmt::{self, Write as _},
-    hash::{BuildHasher as _, BuildHasherDefault, DefaultHasher, Hash as _, Hasher as _},
+    hash::{DefaultHasher, Hash as _, Hasher as _},
     sync::{Mutex, MutexGuard, OnceLock, PoisonError},
 };
 
@@ -184,42 +184,95 @@ where
         };
         let at_ns = self.started.elapsed().as_nanos();
         let thread = std::thread::current();
-        let prefix = format!(
+        let mut text = EventText::default();
+        let _ = write!(
+            text,
             "{level} {target}: thread={id:?} thread_name={name:?}",
             level = meta.level(),
             target = meta.target(),
             id = thread.id(),
             name = thread.name(),
         );
-        let mut line = prefix.clone();
-        let mut key = prefix;
         if let Some(scope) = ctx.event_scope(event) {
             for span in scope.from_root() {
                 let extensions = span.extensions();
                 if let Some(fields) = extensions.get::<SpanFields>() {
                     let _ = write!(
-                        line,
+                        LineOnly(&mut text),
                         " {name}{{{fields}}}",
                         name = span.name(),
                         fields = fields.fields,
                     );
-                    let _ = write!(key, " {}#{:x}", span.name(), fields.key.finish());
+                    text.key.write(span.name().as_bytes());
+                    text.key.write_u64(fields.key.finish());
                 }
             }
         }
-        event.record(&mut LineVisitor {
-            line: &mut line,
-            key: &mut key,
-        });
+        event.record(&mut FieldVisitor(&mut text));
         let ring = match lane {
             Lane::Event => &EVENTS,
             Lane::Probe => &PROBES,
         };
+        let (line, key) = text.finish();
         record(ring, line, key, at_ns);
     }
 }
 
-fn record(ring: &Mutex<VecDeque<Entry>>, line: String, key: String, at_ns: u128) {
+/// One event written once: the line keeps the first
+/// [`consts::MAX_EVENT_BYTES`] and the fold key hashes every byte, so a field's
+/// `Debug` runs a single time however long its output is.
+#[derive(Default)]
+struct EventText {
+    key: DefaultHasher,
+    line: String,
+    truncated: bool,
+}
+
+impl EventText {
+    fn push_line(&mut self, text: &str) {
+        if self.truncated {
+            return;
+        }
+        let room = consts::MAX_EVENT_BYTES - self.line.len();
+        if text.len() <= room {
+            self.line.push_str(text);
+            return;
+        }
+        let mut end = room;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        self.line.push_str(&text[..end]);
+        self.truncated = true;
+    }
+
+    fn finish(mut self) -> (String, u64) {
+        if self.truncated {
+            self.line.push('\u{2026}');
+        }
+        (self.line, self.key.finish())
+    }
+}
+
+impl fmt::Write for EventText {
+    fn write_str(&mut self, text: &str) -> fmt::Result {
+        self.push_line(text);
+        self.key.write(text.as_bytes());
+        Ok(())
+    }
+}
+
+/// Text that belongs to the line but not to the fold key.
+struct LineOnly<'a>(&'a mut EventText);
+
+impl fmt::Write for LineOnly<'_> {
+    fn write_str(&mut self, text: &str) -> fmt::Result {
+        self.0.push_line(text);
+        Ok(())
+    }
+}
+
+fn record(ring: &Mutex<VecDeque<Entry>>, line: String, key: u64, at_ns: u128) {
     /// How far back a repeat folds into the entry already in the ring.
     ///
     /// Steady-state volume arrives as a short cycle of a few distinct lines — a
@@ -228,8 +281,6 @@ fn record(ring: &Mutex<VecDeque<Entry>>, line: String, key: String, at_ns: u128)
     /// test's dump keeps the rare transitions that led to the failure.
     const DEDUP_WINDOW: usize = 16;
 
-    let key = BuildHasherDefault::<DefaultHasher>::default().hash_one(key);
-    let line = clamp(line);
     let mut ring = lock(ring);
     let window = ring.len().saturating_sub(DEDUP_WINDOW);
     if let Some(entry) = ring.iter_mut().skip(window).find(|entry| entry.key == key) {
@@ -259,25 +310,22 @@ fn clamp(mut text: String) -> String {
         end -= 1;
     }
     text.truncate(end);
-    text.push('…');
+    text.push('\u{2026}');
     text.into_boxed_str().into_string()
 }
 
-struct LineVisitor<'a> {
-    key: &'a mut String,
-    line: &'a mut String,
-}
+struct FieldVisitor<'a>(&'a mut EventText);
 
-impl Visit for LineVisitor<'_> {
+impl Visit for FieldVisitor<'_> {
     fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
         if field.name() == "message" {
-            let _ = write!(self.line, " {value:?}");
-            let _ = write!(self.key, " {value:?}");
+            let _ = write!(self.0, " {value:?}");
             return;
         }
-        let _ = write!(self.line, " {name}={value:?}", name = field.name());
-        if !consts::FOLD_COUNTERS.contains(&field.name()) {
-            let _ = write!(self.key, " {name}={value:?}", name = field.name());
+        if consts::FOLD_COUNTERS.contains(&field.name()) {
+            let _ = write!(LineOnly(self.0), " {name}={value:?}", name = field.name());
+        } else {
+            let _ = write!(self.0, " {name}={value:?}", name = field.name());
         }
     }
 }
@@ -285,7 +333,9 @@ impl Visit for LineVisitor<'_> {
 #[cfg(test)]
 mod tests {
     use std::{
+        cell::Cell,
         collections::VecDeque,
+        fmt,
         sync::{Mutex, MutexGuard, PoisonError},
         thread,
     };
@@ -322,9 +372,9 @@ mod tests {
     #[kithara::test]
     fn repeated_events_keep_their_monotonic_interval() {
         let ring = Mutex::new(VecDeque::new());
-        record(&ring, "same event".into(), "same key".into(), 17);
-        record(&ring, "same event".into(), "same key".into(), 31);
-        record(&ring, "same event".into(), "same key".into(), 23);
+        record(&ring, "same event".into(), 7, 17);
+        record(&ring, "same event".into(), 7, 31);
+        record(&ring, "same event".into(), 7, 23);
 
         assert_eq!(
             snapshot(&ring),
@@ -528,7 +578,7 @@ mod tests {
 
         assert_eq!(entries.len(), 2, "{entries:?}");
         assert!(entries.iter().all(|line| {
-            line.len() <= MAX_EVENT_BYTES + '…'.len_utf8() && line.ends_with('…')
+            line.len() <= MAX_EVENT_BYTES + '\u{2026}'.len_utf8() && line.ends_with('\u{2026}')
         }));
         assert_eq!(
             without_timestamps(&entries[0]),
@@ -814,6 +864,56 @@ mod tests {
     }
 
     #[kithara::test]
+    fn an_event_field_is_formatted_once() {
+        struct Counted<'a>(&'a Cell<usize>);
+
+        impl fmt::Debug for Counted<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                self.0.set(self.0.get() + 1);
+                f.write_str("counted")
+            }
+        }
+
+        let calls = Cell::new(0);
+        let _guard = FLIGHT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let subscriber = tracing_subscriber::registry().with(layer());
+        tracing::subscriber::with_default(subscriber, || {
+            debug!(target: "kithara_flight_test", value = ?Counted(&calls), "format once probe");
+        });
+
+        assert_eq!(calls.get(), 1);
+        let line = tail()
+            .into_iter()
+            .rev()
+            .find(|line| line.contains("format once probe"))
+            .expect("the event must be in the tail");
+        assert!(line.contains("value=counted"), "{line}");
+    }
+
+    #[kithara::test]
+    fn fields_differing_after_the_retained_line_do_not_fold() {
+        let prefix = "x".repeat(MAX_EVENT_BYTES * 2);
+        let _guard = with_recorder(|| {
+            for ending in ["left", "right"] {
+                let payload = format!("{prefix}{ending}");
+                debug!(target: "kithara_flight_test", payload = payload.as_str(), "full field identity");
+            }
+        });
+
+        let events: Vec<_> = tail()
+            .into_iter()
+            .filter(|line| line.contains("full field identity"))
+            .collect();
+        assert_eq!(events.len(), 2, "{events:?}");
+        assert!(
+            events.iter().all(|line| !line.contains("(x2)")),
+            "{events:?}"
+        );
+    }
+
+    #[kithara::test]
     fn oversized_event_is_truncated_at_a_char_boundary() {
         let payload = "\u{1f980}".repeat(MAX_EVENT_BYTES);
         let _guard = with_recorder(|| {
@@ -825,7 +925,7 @@ mod tests {
             .rev()
             .find(|line| line.contains("boundary probe"))
             .expect("truncated event must still be recorded");
-        assert!(line.len() <= MAX_EVENT_BYTES + '…'.len_utf8());
-        assert!(line.ends_with('…'), "{line}");
+        assert!(line.len() <= MAX_EVENT_BYTES + '\u{2026}'.len_utf8());
+        assert!(line.ends_with('\u{2026}'), "{line}");
     }
 }

@@ -593,3 +593,48 @@ fn idle_capacity_on_other_shards_does_not_refuse_a_live_request() {
     }
     assert!(pools.stats().allocated_bytes <= 4 * MIB);
 }
+
+#[kithara::test]
+fn sample_reservation_grows_capacity_without_writing_samples() {
+    let pools = pools(4096);
+    let mut samples = pools.get::<f32>();
+
+    samples
+        .try_reserve(64)
+        .unwrap_or_else(|error| panic!("reserve samples: {error}"));
+
+    assert!(samples.is_empty());
+    assert!(samples.capacity() >= 64);
+}
+
+#[kithara::test]
+fn sample_reservation_stays_under_the_region_budget() {
+    let pools = pools(64);
+    let mut samples = pools.get::<f32>();
+
+    assert!(samples.try_reserve(64).is_err());
+    assert!(samples.is_empty());
+}
+
+#[kithara::test]
+fn sample_reservation_is_additional_and_preserves_existing_samples_on_refusal() {
+    let pools = pools(64);
+    let mut samples = pools.get::<f32>();
+    samples
+        .try_extend_from_slice(&[0.25, -0.5])
+        .expect("initial samples");
+    samples.try_reserve(3).expect("room for five samples");
+    assert!(samples.capacity() >= 5);
+    assert_eq!(&*samples, &[0.25, -0.5]);
+
+    assert!(matches!(
+        samples.try_reserve(64),
+        Err(PoolError::OverallBudgetExceeded { .. })
+    ));
+    assert_eq!(&*samples, &[0.25, -0.5]);
+    assert!(matches!(
+        samples.try_reserve(usize::MAX),
+        Err(PoolError::CapacityOverflow { .. })
+    ));
+    assert_eq!(&*samples, &[0.25, -0.5]);
+}

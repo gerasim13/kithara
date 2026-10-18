@@ -303,11 +303,11 @@ where
             .deferred_scratch
             .take()
             .unwrap_or_else(|| self.pools.get::<f32>());
-        if scratch.ensure_len(required.get()).is_err() {
+        scratch.clear();
+        if scratch.try_reserve(required.get()).is_err() {
             warn!("pool capacity exhausted while preparing time-stretch output scratch");
             return;
         }
-        scratch.clear();
         self.scratch = Some(scratch);
     }
 

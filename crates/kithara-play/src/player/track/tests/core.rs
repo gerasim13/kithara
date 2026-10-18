@@ -3930,6 +3930,231 @@ fn planned_end_uses_the_visible_length_in_the_raw_source_clock(#[case] origin: O
     }
 }
 
+fn projecting_track() -> (Track, NonZeroU32) {
+    let rate = NonZeroU32::new(1_000).expect("fixture native rate");
+    let spec = AudioSpec::new(2, rate);
+    let source = AudioChunkInfo {
+        spec,
+        frames: 32,
+        end_timestamp: Duration::from_millis(32),
+        media_origin: Some(Duration::ZERO),
+        media_end: Some(Duration::from_millis(10)),
+        ..AudioChunkInfo::default()
+    };
+    let mut track = track(A);
+    track.duration = source.media_end;
+    track.source_basis = Some(source);
+    track.observed_source = Some(source);
+    track.status = TrackStatus::Playing { since: frame(0) };
+    track.mark = Some(SlotMark {
+        session: frame(0),
+        lane: LaneFrame {
+            segment: track.segment,
+            frame: 0,
+        },
+        position: Duration::ZERO,
+    });
+    (track, rate)
+}
+
+#[kithara::test]
+fn planned_end_rechecks_marks_and_changes_with_the_accepted_plan() {
+    let (mut track, rate) = projecting_track();
+    assert_eq!(
+        track.planned_end(rate).expect("initial plan"),
+        Some(frame(10))
+    );
+    track.mark = Some(SlotMark {
+        session: frame(103),
+        lane: LaneFrame {
+            segment: track.segment,
+            frame: 3,
+        },
+        position: Duration::from_millis(3),
+    });
+    assert_eq!(
+        track.planned_end(rate).expect("advanced mark"),
+        Some(frame(110))
+    );
+
+    track.mark.as_mut().expect("observed mark").position = Duration::from_millis(4);
+    assert!(matches!(track.planned_end(rate), Err(PlayError::Untimed)));
+    track.mark.as_mut().expect("observed mark").position = Duration::from_millis(3);
+    track.segment_speed = 2.0;
+    track.observed_source = Some(AudioChunkInfo {
+        frames: 16,
+        source_span: Some(
+            kithara_signal::SourceSpan::try_from((0, 2, std::num::NonZeroU128::MIN, rate, 16))
+                .expect("doubled source law"),
+        ),
+        ..track.observed_source.expect("native source basis")
+    });
+    track.mark.as_mut().expect("observed mark").position = Duration::from_millis(6);
+    assert_eq!(
+        track.planned_end(rate).expect("new scalar"),
+        Some(frame(105))
+    );
+    track.duration = Some(Duration::from_millis(14));
+    assert_eq!(
+        track.planned_end(rate).expect("new endpoint"),
+        Some(frame(107))
+    );
+
+    let (sender, _inbox) = lane();
+    track.lane = Some(sender);
+    let seq = track
+        .send_lane(
+            LaneCommand::SetSpeed(SpeedCurve::Constant(0.5)),
+            When::At(LaneFrame {
+                segment: track.segment,
+                frame: 5,
+            }),
+        )
+        .expect("scheduled speed");
+    assert_eq!(
+        track.planned_end(rate).expect("new curve"),
+        Some(frame(113))
+    );
+    track
+        .lane_commands
+        .iter_mut()
+        .find(|operation| operation.seq == seq)
+        .expect("accepted speed")
+        .verdict = Some(Err(Rejection::Stale));
+    assert_eq!(
+        track.planned_end(rate).expect("withdrawn curve"),
+        Some(frame(107))
+    );
+}
+
+#[kithara::test]
+#[case::source_revision(0)]
+#[case::render_revision(1)]
+#[case::mapping_revision(2)]
+#[case::native_basis(3)]
+fn planned_end_follows_the_new_source_law(#[case] owner: u8) {
+    let (mut track, rate) = projecting_track();
+    assert_eq!(
+        track.planned_end(rate).expect("original law"),
+        Some(frame(10))
+    );
+    let span = kithara_signal::SourceSpan::try_from((2, 1, std::num::NonZeroU128::MIN, rate, 32))
+        .expect("new source law")
+        .with_render_revision(u64::from(owner == 1))
+        .with_mapping_revision((owner == 2).then_some(std::num::NonZeroU64::MIN));
+    let source = AudioChunkInfo {
+        frame_offset: 2,
+        timestamp: Duration::from_millis(2),
+        end_timestamp: Duration::from_millis(34),
+        source_revision: u64::from(owner == 0),
+        render_revision: span.render_revision(),
+        mapping_revision: span.mapping_revision(),
+        source_span: Some(span),
+        ..track.observed_source.expect("original source")
+    };
+    if owner == 3 {
+        track.source_basis = Some(source);
+    }
+    track.observed_source = Some(source);
+    track.mark.as_mut().expect("observed mark").position = Duration::from_millis(2);
+    assert_eq!(
+        track.planned_end(rate).expect("adopted law"),
+        Some(frame(8))
+    );
+
+    track.observed_source = Some(AudioChunkInfo {
+        lane_frame: 3,
+        frame_offset: 5,
+        frames: 29,
+        timestamp: Duration::from_millis(5),
+        source_span: span.for_output_range(3..32),
+        ..source
+    });
+    track.mark = Some(SlotMark {
+        session: frame(3),
+        lane: LaneFrame {
+            segment: track.segment,
+            frame: 3,
+        },
+        position: Duration::from_millis(5),
+    });
+    assert_eq!(
+        track.planned_end(rate).expect("advancing new law"),
+        Some(frame(8))
+    );
+}
+
+#[kithara::test]
+#[case::primed_before_end(false)]
+#[case::first_query_after_end(true)]
+fn planned_end_uses_the_current_mark_after_the_source_endpoint(#[case] initially_past: bool) {
+    let (mut track, rate) = projecting_track();
+    if !initially_past {
+        assert_eq!(
+            track.planned_end(rate).expect("original end"),
+            Some(frame(10))
+        );
+    }
+    for at in [13_u64, 15] {
+        track.mark = Some(SlotMark {
+            session: frame(100 + i64::try_from(at).expect("session frame")),
+            lane: LaneFrame {
+                segment: track.segment,
+                frame: at,
+            },
+            position: Duration::from_millis(at),
+        });
+        assert_eq!(
+            track.planned_end(rate).expect("endpoint already passed"),
+            Some(frame(100 + i64::try_from(at).expect("session frame")))
+        );
+    }
+}
+
+#[kithara::test]
+fn planned_end_projects_again_after_a_backward_jump_past_the_first_endpoint() {
+    let (mut track, rate) = projecting_track();
+    let (sender, _inbox) = lane();
+    track.lane = Some(sender);
+    track
+        .send_lane(
+            LaneCommand::Jump {
+                to: Duration::from_millis(2),
+            },
+            When::At(LaneFrame {
+                segment: track.segment,
+                frame: 12,
+            }),
+        )
+        .expect("accepted backward Jump");
+    assert_eq!(
+        track.planned_end(rate).expect("first endpoint"),
+        Some(frame(10))
+    );
+    track.observed_source = Some(AudioChunkInfo {
+        lane_frame: 12,
+        frame_offset: 2,
+        frames: 20,
+        timestamp: Duration::from_millis(2),
+        end_timestamp: Duration::from_millis(22),
+        ..track.observed_source.expect("source before Jump")
+    });
+    for at in [13_u64, 15] {
+        track.mark = Some(SlotMark {
+            session: frame(100 + i64::try_from(at).expect("session frame")),
+            lane: LaneFrame {
+                segment: track.segment,
+                frame: at,
+            },
+            position: Duration::from_millis(at - 10),
+        });
+        assert_eq!(
+            track.planned_end(rate).expect("next endpoint after Jump"),
+            Some(frame(120))
+        );
+    }
+}
+
 #[kithara::test]
 fn planned_end_projects_a_raw_jump_through_the_same_original_origin() {
     let mut track = track(A);
