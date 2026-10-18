@@ -108,6 +108,23 @@ impl AppleCodec {
         Ok(u32::try_from(remaining.min(u128::from(capacity)))?)
     }
 
+    fn input_frame_count(
+        &self,
+        packet_bytes: usize,
+        desc: AudioStreamPacketDescription,
+    ) -> DecodeResult<u32> {
+        Ok(if self.input_bytes_per_packet > 0 {
+            let packets = packet_bytes / usize::try_from(self.input_bytes_per_packet)?;
+            let frames =
+                u64::try_from(packets)?.saturating_mul(u64::from(self.frames_per_packet.max(1)));
+            u32::try_from(frames)?
+        } else if desc.variable_frames_in_packet > 0 {
+            desc.variable_frames_in_packet
+        } else {
+            self.frames_per_packet.max(1)
+        })
+    }
+
     fn fill_converter(&mut self, out: &mut SampleBuffer, target_frames: u32) -> DecodeResult<u32> {
         if target_frames == 0 {
             out.clear();
@@ -299,6 +316,28 @@ impl AppleCodec {
         );
     }
 
+    fn calibrate_output_origin(
+        &mut self,
+        pts: Duration,
+        packet_duration: Duration,
+        frames: u32,
+    ) -> DecodeResult<()> {
+        if self.output_origin.is_none()
+            && self.spec.sample_rate.get() != self.source_sample_rate
+            && frames > 0
+        {
+            let supplied = self.spec.frame_at(packet_duration)?;
+            let stripped = supplied.saturating_sub(u64::from(frames));
+            // The first output keeps packet timing so its caller records the leading strip.
+            self.output_origin = Some(pts.checked_add(self.spec.duration_for(stripped)?).ok_or(
+                DecodeError::InvalidData {
+                    detail: "Apple PCM output origin overflows",
+                },
+            )?);
+        }
+        Ok(())
+    }
+
     /// Whether the Apple `AudioConverter` accepts this codec at the
     /// codec layer alone (i.e. without an external container parser).
     ///
@@ -343,6 +382,7 @@ impl FrameCodec for AppleCodec {
             data: frame_data,
             pts,
             packet_desc,
+            duration,
             ..
         } = frame;
         if frame_data.is_empty() {
@@ -376,16 +416,7 @@ impl FrameCodec for AppleCodec {
             self.output_origin = Some(pts);
             self.decoded_pts = Some(pts);
         }
-        let input_frames = if self.input_bytes_per_packet > 0 {
-            let packets = frame_data.len() / usize::try_from(self.input_bytes_per_packet)?;
-            let frames =
-                u64::try_from(packets)?.saturating_mul(u64::from(self.frames_per_packet.max(1)));
-            u32::try_from(frames)?
-        } else if desc.variable_frames_in_packet > 0 {
-            desc.variable_frames_in_packet
-        } else {
-            self.frames_per_packet.max(1)
-        };
+        let input_frames = self.input_frame_count(frame_data.len(), desc)?;
         self.source_frames_seen = self
             .source_frames_seen
             .saturating_add(u64::from(input_frames));
@@ -396,6 +427,7 @@ impl FrameCodec for AppleCodec {
             self.spec.sample_rate.get(),
         )?;
         let frames = self.fill_converter(out, target_frames)?;
+        self.calibrate_output_origin(pts, duration, frames)?;
         self.refresh_gapless_after_first_chunk();
         Ok(crate::codec::DecodedPacket::new(frames, metadata))
     }
@@ -763,18 +795,28 @@ mod aac_lc_decode_tests {
     fn decode_frames(
         codec: &mut AppleCodec,
         pools: &PoolRegion<TestPools>,
+        init: &Fmp4InitInfo,
         seg: &[u8],
         frames: &[Fmp4Frame],
+        input_origin: Duration,
     ) -> u64 {
         let mut total = 0_u64;
+        let mut first_pcm = None;
         for frame in frames {
+            let pts = input_origin
+                + Duration::from_nanos(
+                    frame.decode_time * 1_000_000_000 / u64::from(init.timescale),
+                );
+            let duration = Duration::from_nanos(
+                u64::from(frame.duration) * 1_000_000_000 / u64::from(init.timescale),
+            );
             let mut buf = pools.get::<f32>();
             let decoded = codec
                 .decode_frame(
                     crate::demuxer::Frame {
                         data: &seg[frame.offset..frame.offset + frame.size],
-                        pts: Duration::ZERO,
-                        duration: Duration::ZERO,
+                        pts,
+                        duration,
                         packet_desc: &[],
                     },
                     crate::demuxer::PacketMetadata::default(),
@@ -782,6 +824,29 @@ mod aac_lc_decode_tests {
                 )
                 .expect("BUG: decode Apple AAC-LC frame")
                 .frames;
+            if decoded > 0 && codec.spec().sample_rate.get() != init.sample_rate {
+                let spec = codec.spec();
+                let supplied = spec
+                    .frame_at(duration)
+                    .expect("encoded packet output extent");
+                let calibrated = pts
+                    + spec
+                        .duration_for(supplied.saturating_sub(u64::from(decoded)))
+                        .expect("observed first PCM strip");
+                let origin = *first_pcm.get_or_insert(calibrated);
+                let start = spec.frame_at(origin).expect("first physical PCM frame");
+                let elapsed = spec.duration_for(start + total).expect("emitted PCM end")
+                    - spec.duration_for(start).expect("first PCM clock");
+                let actual =
+                    codec
+                        .decoded_pts()
+                        .unwrap_or(if total == 0 { calibrated } else { pts });
+                assert_eq!(
+                    actual,
+                    origin + elapsed,
+                    "fused AAC PCM must follow emitted frames: before={total}, packet={frame:?}, decoded={decoded}"
+                );
+            }
             total += u64::from(decoded);
         }
         total
@@ -965,7 +1030,14 @@ mod aac_lc_decode_tests {
         let pools = pools();
         let mut source_codec =
             AppleCodec::open_with_config(&track, false, None).expect("BUG: open source-rate codec");
-        let source_frames = decode_frames(&mut source_codec, &pools, &seg, &frames);
+        let source_frames = decode_frames(
+            &mut source_codec,
+            &pools,
+            &init,
+            &seg,
+            &frames,
+            Duration::ZERO,
+        );
         let source_drain = drain_eof(&mut source_codec, &pools);
         assert_eq!(
             source_drain, 0,
@@ -974,7 +1046,8 @@ mod aac_lc_decode_tests {
 
         let mut src_codec = AppleCodec::open_with_config(&track, false, Some(target_rate))
             .expect("BUG: open SRC codec");
-        let before_drain = decode_frames(&mut src_codec, &pools, &seg, &frames);
+        let before_drain =
+            decode_frames(&mut src_codec, &pools, &init, &seg, &frames, Duration::ZERO);
         let drained = drain_eof(&mut src_codec, &pools);
         let total_output = before_drain + drained;
         let source_frames_u32 =
@@ -993,6 +1066,19 @@ mod aac_lc_decode_tests {
             "SRC total output length off: total={total_output}, ideal={ideal}, \
              before_drain={before_drain}, drained={drained}, source={source_frames}"
         );
+        src_codec
+            .flush()
+            .expect("reset native AAC before a sought suffix");
+        let replayed = decode_frames(
+            &mut src_codec,
+            &pools,
+            &init,
+            &seg,
+            &frames,
+            Duration::from_millis(30_001),
+        );
+        assert_eq!(replayed, before_drain);
+        assert_eq!(drain_eof(&mut src_codec, &pools), drained);
     }
 
     #[kithara::test]
@@ -1012,7 +1098,7 @@ mod aac_lc_decode_tests {
         let pools = pools();
         let mut codec = AppleCodec::open_with_config(&track, false, None)
             .expect("BUG: open Apple AAC-LC codec");
-        let before_drain = decode_frames(&mut codec, &pools, &seg, &frames);
+        let before_drain = decode_frames(&mut codec, &pools, &init, &seg, &frames, Duration::ZERO);
         let drained = drain_eof(&mut codec, &pools);
 
         assert!(before_drain > 0, "passthrough decode produced no frames");
