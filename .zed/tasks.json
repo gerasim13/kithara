@@ -32,12 +32,12 @@
   },
   {
     "label": "ios: run on simulator",
-    "command": "cargo run -p xtask -- apple run",
+    "command": "just platform apple demo",
     "use_new_terminal": true,
   },
   {
     "label": "android: run on emulator",
-    "command": "cargo run -p xtask -- android run",
+    "command": "just platform android run",
     "use_new_terminal": true,
   },
 ]
