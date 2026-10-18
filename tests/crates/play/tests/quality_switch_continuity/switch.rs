@@ -113,13 +113,14 @@ impl Consumer {
     }
 }
 
-/// Playback clock of one consumer: when its first block was taken and how
-/// much audio it has taken since, so every block is due at a fixed audio time
-/// however long rendering it took.
+/// Playback clock of one consumer: when its next block is due. A block taken
+/// on time is due one period after the previous one however long rendering it
+/// took; a block taken late is due one period after it was taken, because a
+/// device callback that missed its deadline is not followed by a burst of
+/// callbacks making up for it.
 #[derive(Debug, Default)]
 pub(super) struct Pacer {
-    started: Option<Instant>,
-    frames: usize,
+    due: Option<Instant>,
 }
 
 pub(super) struct PreparedPlayer {
@@ -488,17 +489,13 @@ pub(super) async fn render_paced(
     pacer: &mut Pacer,
     frames: usize,
 ) -> Vec<f32> {
-    let started = *pacer.started.get_or_insert_with(Instant::now);
+    let taken = Instant::now();
     let block = player.render(frames).await;
-    pacer.frames = pacer.frames.saturating_add(frames);
-    let due = started
-        + Duration::from_secs_f64(
-            pacer
-                .frames
-                .to_f64()
-                .expect("rendered frame count fits f64")
-                / f64::from(SAMPLE_RATE),
-        );
+    let period = Duration::from_secs_f64(
+        frames.to_f64().expect("block frame count fits f64") / f64::from(SAMPLE_RATE),
+    );
+    let due = pacer.due.map_or(taken, |due| due.max(taken)) + period;
+    pacer.due = Some(due);
     sleep(due.saturating_duration_since(Instant::now())).await;
     block
 }
