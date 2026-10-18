@@ -16,7 +16,7 @@ use smallvec::SmallVec;
 use crate::{
     BlenderProfile, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome,
     DecoderResamplerConfig, DecoderSeekOutcome, DecoderTrackInfo, GaplessTailCompensation,
-    InputState, PcmOrigin, PrepareWait, TrackMetadata,
+    InputState, LandingClock, PcmOrigin, PrepareWait, TrackMetadata,
 };
 
 pub(crate) fn wrap<B, S>(
@@ -146,6 +146,7 @@ where
                     landed_byte,
                     preroll,
                     landed_frame: self.output_frame_offset,
+                    clock: LandingClock::Restarted,
                 }
             }
             DecoderSeekOutcome::PastEof { duration } => DecoderSeekOutcome::PastEof { duration },
@@ -824,6 +825,7 @@ mod origin_tests {
                 landed_frame: frame,
                 landed_byte: None,
                 preroll: PrerollHint::NotNeeded,
+                clock: LandingClock::Kept,
             })
         }
     }
@@ -1528,6 +1530,7 @@ mod tests {
                 landed_frame: source_spec().frame_at(pos).expect("source frame"),
                 landed_byte: Some(0),
                 preroll: PrerollHint::NotNeeded,
+                clock: LandingClock::Kept,
             });
             Ok(self.seek_outcome(outcome))
         }
@@ -1757,6 +1760,7 @@ mod tests {
                     landed_frame: 44_100,
                     landed_byte: Some(1_234),
                     preroll: PrerollHint::Required(1_000),
+                    clock: LandingClock::Kept,
                 },
             ]
             .into();
@@ -1795,6 +1799,7 @@ mod tests {
                     landed_frame: 48_000,
                     landed_byte: Some(1_234),
                     preroll: PrerollHint::Required(1_000),
+                    clock: LandingClock::Restarted,
                 })
             );
             assert!(decoder.reanchor_output_on_next_chunk);

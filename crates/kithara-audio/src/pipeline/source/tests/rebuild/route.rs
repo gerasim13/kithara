@@ -405,6 +405,7 @@ async fn rebuilding_decoder_seek_epoch_supersedes_completion() {
         landed_frame: 1,
         landed_byte: Some(17),
         preroll: kithara_stream::PrerollHint::NotNeeded,
+        clock: kithara_decode::LandingClock::Kept,
     }));
     assert!(
         matches!(source.seek(target), Ok(crate::SeekOutcome::Pending { target: actual, .. }) if actual == target)
@@ -429,6 +430,7 @@ async fn rebuilding_decoder_seek_epoch_supersedes_completion() {
         landed_frame: 2,
         landed_byte: Some(29),
         preroll: kithara_stream::PrerollHint::NotNeeded,
+        clock: kithara_decode::LandingClock::Kept,
     }));
     source.prepare_deferred();
     assert_eq!(source.shared_stream.position(), 29);
@@ -535,6 +537,7 @@ async fn deferred_preparation_does_not_read_before_seek_is_applied(route_pcm: Ro
                 landed_frame: 3,
                 landed_byte: Some(29),
                 preroll: kithara_stream::PrerollHint::NotNeeded,
+                clock: kithara_decode::LandingClock::Kept,
             }));
             *fixture.phase.lock() = SourcePhase::Cancelled;
         } else {
