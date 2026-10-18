@@ -223,18 +223,21 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(
     hang_reset!();
     loop {
         hang_tick!();
-        if let Ok(envelope) = events.try_recv()
-            && matches!(
-                envelope.event,
-                TestEvent::Decoder(DecoderEvent::DecoderChanged {
-                    cause: DecoderChangeCause::HostRateChange,
-                    ..
-                })
-            )
-        {
-            break;
+        match events.try_recv() {
+            Ok(envelope)
+                if matches!(
+                    envelope.event,
+                    TestEvent::Decoder(DecoderEvent::DecoderChanged {
+                        cause: DecoderChangeCause::HostRateChange,
+                        ..
+                    })
+                ) =>
+            {
+                break;
+            }
+            Ok(_) => {}
+            Err(_) => time::sleep(Duration::from_millis(5)).await,
         }
-        time::sleep(Duration::from_millis(5)).await;
     }
     assert!(
         rebuilt.meta.timestamp >= committed_at_route.saturating_add(resume_margin),
