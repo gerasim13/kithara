@@ -1,3 +1,5 @@
+use std::ops::Div;
+
 use fearless_simd::{Level, dispatch, prelude::*};
 
 /// Replaces `NaN`, ±infinity, subnormals and −0.0 with `+0.0` in place; every
@@ -21,6 +23,54 @@ pub(super) fn sanitize_kernel<S: Simd>(simd: S, samples: &mut [f32]) {
     for (slot, sample) in tail.iter_mut().zip(cleaned.as_slice()) {
         *slot = *sample;
     }
+}
+
+/// `samples[i] /= divisor`, correctly rounded, over the whole slice; returns
+/// its length.
+pub(crate) fn div(samples: &mut [f32], divisor: f32) -> usize {
+    dispatch!(Level::new(), simd => div_kernel(simd, samples, divisor))
+}
+
+#[inline(always)]
+pub(super) fn div_kernel<S: Simd>(simd: S, samples: &mut [f32], divisor: f32) -> usize {
+    let divisor = S::f32s::splat(simd, divisor);
+    update(simd, samples, [], |x, []| x.div(divisor))
+}
+
+/// `target[i] = f(target[i], [inputs[0][i], …])` over the common prefix of
+/// the target and the inputs, a vector at a time; returns the prefix length.
+#[inline(always)]
+pub(super) fn update<S: Simd, const N: usize>(
+    simd: S,
+    target: &mut [f32],
+    inputs: [&[f32]; N],
+    mut f: impl FnMut(S::f32s, [S::f32s; N]) -> S::f32s,
+) -> usize {
+    let len = inputs
+        .iter()
+        .fold(target.len(), |len, input| len.min(input.len()));
+    let (mut target, _) = target.split_at_mut(len);
+    let mut inputs = inputs.map(|input| input.split_at(len).0);
+    let lanes = S::f32s::LEN;
+    while target.len() >= lanes {
+        let (block, rest) = core::mem::take(&mut target).split_at_mut(lanes);
+        let split = inputs.map(|input| input.split_at(lanes));
+        f(
+            S::f32s::from_slice(simd, block),
+            split.map(|(head, _)| S::f32s::from_slice(simd, head)),
+        )
+        .store_slice(block);
+        target = rest;
+        inputs = split.map(|(_, tail)| tail);
+    }
+    let tail = f(
+        padded(simd, target),
+        inputs.map(|input| padded(simd, input)),
+    );
+    for (slot, value) in target.iter_mut().zip(tail.as_slice()) {
+        *slot = *value;
+    }
+    len
 }
 
 /// `x` where `MIN_POSITIVE <= |x| <= MAX`, `+0.0` elsewhere; `NaN` fails both tests.
