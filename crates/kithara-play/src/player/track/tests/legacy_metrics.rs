@@ -16,9 +16,9 @@ fn release(track: &mut Track, rig: &mut Rig) -> Vec<Answer> {
 }
 
 #[kithara::test]
-fn the_slot_begins_seeks_for_the_tracks_it_shipped() {
+async fn the_slot_begins_seeks_for_the_tracks_it_shipped() {
     let mut rig = rig();
-    let (mut track, mut inbox) = loaded(&mut rig, A, "split.mp3");
+    let (mut track, mut inbox) = loaded(&mut rig, A, "split.mp3").await;
     command_at_zero(
         &mut track,
         &mut rig,
@@ -65,10 +65,10 @@ fn the_slot_begins_seeks_for_the_tracks_it_shipped() {
 }
 
 #[kithara::test]
-fn unloading_one_seek_binding_preserves_other_identity() {
+async fn unloading_one_seek_binding_preserves_other_identity() {
     let mut rig = rig();
-    let (mut first, mut first_inbox) = loaded(&mut rig, A, "same.mp3");
-    let (mut second, mut second_inbox) = loaded(&mut rig, B, "same.mp3");
+    let (mut first, mut first_inbox) = loaded(&mut rig, A, "same.mp3").await;
+    let (mut second, mut second_inbox) = loaded(&mut rig, B, "same.mp3").await;
     release(&mut first, &mut rig);
     command_at_zero(
         &mut second,
@@ -91,7 +91,7 @@ fn unloading_one_seek_binding_preserves_other_identity() {
     let mut receipts = rig.block(frame(0), 0.0);
     settle(&mut second, &mut rig, &mut receipts);
     let mut retired = release(&mut second, &mut rig);
-    let (mut replacement, mut replacement_inbox) = loaded(&mut rig, B, "same.mp3");
+    let (mut replacement, mut replacement_inbox) = loaded(&mut rig, B, "same.mp3").await;
     settle(&mut replacement, &mut rig, &mut retired);
     command_at_zero(
         &mut replacement,

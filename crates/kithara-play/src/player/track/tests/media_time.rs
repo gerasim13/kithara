@@ -611,7 +611,7 @@ fn planned_media_position_is_untimed_until_its_source_basis_is_known() {
 #[kithara::test]
 #[case::media_position(2_000, 2_576)]
 #[case::untrimmed_prefix(0, 250)]
-fn host_rate_change_keeps_raw_resume_custody_without_a_media_seek(
+async fn host_rate_change_keeps_raw_resume_custody_without_a_media_seek(
     #[case] media_ms: u64,
     #[case] raw_ms: u64,
 ) {
@@ -753,7 +753,7 @@ fn host_rate_change_keeps_raw_resume_custody_without_a_media_seek(
         )
     ))]
     if media_ms == 2_000 {
-        assert_source_end_resume_endpoint();
+        assert_source_end_resume_endpoint().await;
     }
 }
 
@@ -768,7 +768,7 @@ fn host_rate_change_keeps_raw_resume_custody_without_a_media_seek(
     )
 ))]
 #[kithara::hang_watchdog]
-fn assert_source_end_resume_endpoint() {
+async fn assert_source_end_resume_endpoint() {
     use kithara_audio::{Audio, AudioConfig, AudioSource, Fetch, SourceEnd, TrackStep};
     use kithara_file::{File, FileConfig, FileSrc};
 
@@ -795,17 +795,13 @@ fn assert_source_end_resume_endpoint() {
                 .build(),
         )
         .build();
-    let runtime = kithara_platform::tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("offline source runtime");
-    let mut audio = runtime
-        .block_on(Audio::prepare(
-            config,
-            Arc::new(kithara_stream::mock::NoopWorkerWake),
-            pools.clone(),
-        ))
-        .expect("real WAV source");
+    let mut audio = Audio::prepare(
+        config,
+        Arc::new(kithara_stream::mock::NoopWorkerWake),
+        pools.clone(),
+    )
+    .await
+    .expect("real WAV source");
     let old = loop {
         hang_tick!();
         let _ = audio.prepare_deferred();
@@ -1025,11 +1021,11 @@ fn assert_source_end_resume_endpoint() {
 #[kithara::test]
 #[case::resume_without_pending_lane(false)]
 #[case::resume_with_pending_lane(true)]
-fn stopped_raw_mark_stays_raw_while_pause_and_resume_publish_media_position(
+async fn stopped_raw_mark_stays_raw_while_pause_and_resume_publish_media_position(
     #[case] pending_lane: bool,
 ) {
     let mut rig = rig();
-    let (mut track, mut inbox) = loaded(&mut rig, A, "media-stop-resume");
+    let (mut track, mut inbox) = loaded(&mut rig, A, "media-stop-resume").await;
     command_at_zero(
         &mut track,
         &mut rig,
@@ -1230,13 +1226,13 @@ fn stopped_raw_mark_stays_raw_while_pause_and_resume_publish_media_position(
 #[case::known_raw_mark(Some(2_576), 2_000, 2_576)]
 #[case::commanded_media_without_a_raw_mark(None, 2_000, 2_576)]
 #[case::untrimmed_prefix(Some(250), 0, 250)]
-fn cancelled_parked_repeat_restores_the_raw_coordinate_without_reapplying_media_origin(
+async fn cancelled_parked_repeat_restores_the_raw_coordinate_without_reapplying_media_origin(
     #[case] mark_ms: Option<u64>,
     #[case] media_ms: u64,
     #[case] expected_raw_ms: u64,
 ) {
     let mut rig = rig();
-    let (mut track, mut inbox) = loaded(&mut rig, A, "media-parked-repeat");
+    let (mut track, mut inbox) = loaded(&mut rig, A, "media-parked-repeat").await;
     rig.with_outbox(|out| track.apply(TrackCommand::Play { at: When::Next }, out))
         .expect("live scope")
         .expect("initial Start");

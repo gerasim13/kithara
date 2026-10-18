@@ -7,7 +7,7 @@ use super::{
     parse::TestArgs,
     shared::{
         finalize_body, make_ambient_stmt, make_serial_attr, make_test_setup,
-        make_wasm_serial_guard, wrap_with_model, wrap_with_timeout,
+        make_wasm_serial_guard, wrap_with_model, wrap_with_sync_participation, wrap_with_timeout,
     },
 };
 
@@ -28,7 +28,13 @@ pub(crate) fn emit_one_test(
     // Async-native emissions install mode per poll; wasm and sync emissions
     // hold both ambient and active scopes in the body.
     let full_plain = quote! { #preamble #(#body_stmts)* };
-    let full_held = quote! { #test_setup #preamble #ambient #(#body_stmts)* };
+    let body = quote! { #(#body_stmts)* };
+    let held_body = if is_async {
+        body
+    } else {
+        wrap_with_sync_participation(&body, args)
+    };
+    let full_held = quote! { #test_setup #preamble #ambient #held_body };
     let serial_attr = make_serial_attr(args);
     let wasm_serial_guard = make_wasm_serial_guard(args);
 

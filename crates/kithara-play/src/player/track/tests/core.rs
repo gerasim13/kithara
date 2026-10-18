@@ -98,7 +98,6 @@ pub(super) struct Rig {
     deck: DeckRig<TestPools>,
     sources: Vec<TestTempDir>,
     worker: std::cell::OnceCell<crate::PlayWorker<TestPools>>,
-    runtime: kithara_platform::tokio::runtime::Runtime,
 }
 
 impl std::ops::Deref for Rig {
@@ -139,7 +138,6 @@ impl From<Receipt<DeckProtocol>> for Answer {
 impl Rig {
     fn worker(&self) -> &crate::PlayWorker<TestPools> {
         self.worker.get_or_init(|| {
-            let _runtime = self.runtime.enter();
             crate::PlayWorker::new(crate::PlayWorkerConfig::builder(pools()).build())
         })
     }
@@ -165,15 +163,10 @@ impl Rig {
 pub(super) type Track = PlayerImpl<TestPools>;
 
 pub(super) fn rig() -> Rig {
-    let runtime = kithara_platform::tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("fixture runtime starts");
     Rig {
         deck: DeckRig::new(DeckMixerConfig::default()).expect("deck scope opens"),
         sources: Vec::new(),
         worker: std::cell::OnceCell::new(),
-        runtime,
     }
 }
 
@@ -448,7 +441,7 @@ fn entering_arms_the_member_that_reached_presentation() {
 
 #[kithara::test]
 #[kithara::hang_watchdog(ctx = String)]
-fn a_rejected_launch_leaves_the_member_silent() {
+async fn a_rejected_launch_leaves_the_member_silent() {
     let _io = kithara_platform::flash::real_io();
     let mut rig = rig();
     let (mut track, _inbox) = prepared_track();
@@ -480,8 +473,9 @@ fn a_rejected_launch_leaves_the_member_silent() {
     let load = ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay()));
     hang_tick!("rejected launch: opening audible fixture".to_owned());
     let opened = rig
-        .runtime
-        .block_on(rig.deck.load_fixture(&worker, load, Position::ZERO))
+        .deck
+        .load_fixture(&worker, load, Position::ZERO)
+        .await
         .expect("dispatcher prepares the audible source")
         .opened;
     hang_reset!();
@@ -597,11 +591,11 @@ fn a_rejected_launch_leaves_the_member_silent() {
 }
 
 #[kithara::test]
-fn an_installed_lane_the_owner_refuses_is_dropped_and_reported_cancelled() {
+async fn an_installed_lane_the_owner_refuses_is_dropped_and_reported_cancelled() {
     let mut rig = rig();
     let mut track = track(A);
     let load = load(&mut track, &mut rig, Position::ZERO);
-    let opened = opened_fixture(&mut rig, "track");
+    let opened = opened_fixture(&mut rig, "track").await;
     let lane = opened.lane;
     let receipt = rig.open(Ok(opened)).expect("one opened source");
     rig.with_outbox(|out| track.settle(TrackReceipt::Loaded(receipt), out))
@@ -672,7 +666,7 @@ fn an_installed_lane_the_owner_refuses_is_dropped_and_reported_cancelled() {
 #[case::basis(2)]
 #[case::segment(3)]
 #[case::load(4)]
-fn installed_free_receipt_is_consumed_once(#[case] foreign: u8) {
+async fn installed_free_receipt_is_consumed_once(#[case] foreign: u8) {
     let mut rig = rig();
     let (mut track, _inbox) = prepared_track();
     let seq = command_at_zero(
@@ -743,7 +737,7 @@ fn installed_free_receipt_is_consumed_once(#[case] foreign: u8) {
         let _ = rig
             .open(Err(LoadRefusal::Cancelled))
             .expect("first dispatcher reply");
-        let opened = opened_fixture(&mut rig, "foreign");
+        let opened = opened_fixture(&mut rig, "foreign").await;
         let receipt = rig
             .open(Ok(opened))
             .expect("independent foreign load reply");
@@ -824,9 +818,11 @@ fn pause_from_idle_is_noop() {
 #[case::loaded(TrackStatus::Loaded)]
 #[case::paused(TrackStatus::Paused { at: Position::ZERO })]
 #[case::ended(TrackStatus::Ended { at: frame(128) })]
-fn a_next_pause_of_an_attached_track_settles_only_its_native_stop(#[case] initial: TrackStatus) {
+async fn a_next_pause_of_an_attached_track_settles_only_its_native_stop(
+    #[case] initial: TrackStatus,
+) {
     let mut rig = rig();
-    let (mut track, _lane) = loaded(&mut rig, A, "next-pause");
+    let (mut track, _lane) = loaded(&mut rig, A, "next-pause").await;
     match initial {
         TrackStatus::Loaded => {}
         TrackStatus::Paused { .. } => {
@@ -918,9 +914,9 @@ fn a_next_pause_of_an_attached_track_settles_only_its_native_stop(#[case] initia
 #[kithara::test]
 #[case::mapped(true)]
 #[case::without_mark(false)]
-fn processor_set_paused_updates_playback(#[case] mapped: bool) {
+async fn processor_set_paused_updates_playback(#[case] mapped: bool) {
     let mut rig = rig();
-    let (mut track, _inbox) = loaded(&mut rig, A, "pause observation");
+    let (mut track, _inbox) = loaded(&mut rig, A, "pause observation").await;
     command_at_zero(
         &mut track,
         &mut rig,
@@ -1056,7 +1052,7 @@ fn processor_set_paused_updates_playback(#[case] mapped: bool) {
 }
 
 #[kithara::test]
-fn player_phase_kind_exhaustive() {
+async fn player_phase_kind_exhaustive() {
     use kithara_audio::TrackFailureKind;
 
     let mut rig = rig();
@@ -1064,7 +1060,7 @@ fn player_phase_kind_exhaustive() {
     assert_eq!(track.snapshot().status, TrackStatus::Idle);
     load(&mut track, &mut rig, Position::ZERO);
     assert_eq!(track.snapshot().status, TrackStatus::Loading);
-    let opened = opened_fixture(&mut rig, "track");
+    let opened = opened_fixture(&mut rig, "track").await;
     let receipt = rig.open(Ok(opened)).expect("one opened source");
     rig.with_outbox(|out| track.settle(TrackReceipt::Loaded(receipt), out))
         .expect("live scope");
@@ -1379,9 +1375,9 @@ fn a_staged_preparation_needs_an_owner_and_a_stageable_load(#[case] refusal: u8)
 #[kithara::test]
 #[case::restart(0)]
 #[case::offset(20_000)]
-fn play_after_an_ended_seek_preserves_its_segment_and_receipt(#[case] offset_ms: u64) {
+async fn play_after_an_ended_seek_preserves_its_segment_and_receipt(#[case] offset_ms: u64) {
     let mut rig = rig();
-    let (mut track, mut inbox) = loaded(&mut rig, A, "ended-seek-play");
+    let (mut track, mut inbox) = loaded(&mut rig, A, "ended-seek-play").await;
     command_at_zero(&mut track, &mut rig, TrackCommand::Play { at: When::Next })
         .expect("initial Start");
     let mut started = rig.block(frame(0), 0.0);
@@ -1752,7 +1748,7 @@ fn an_epoch_adopted_before_it_is_published_reports_the_audio_thread() {
 }
 
 /// What the dispatcher opens for a track of `src`.
-pub(super) fn opened_fixture(rig: &mut Rig, src: &str) -> Loaded<OpenedTrack> {
+pub(super) async fn opened_fixture(rig: &mut Rig, src: &str) -> Loaded<OpenedTrack> {
     let dir = TestTempDir::new();
     let path = dir.path().join("track.wav");
     let spec = AudioSpec::new(2, mock::SAMPLE_RATE);
@@ -1781,8 +1777,9 @@ pub(super) fn opened_fixture(rig: &mut Rig, src: &str) -> Loaded<OpenedTrack> {
         },
     );
     let opened = rig
-        .runtime
-        .block_on(rig.deck.load_fixture(&worker, load, Position::ZERO))
+        .deck
+        .load_fixture(&worker, load, Position::ZERO)
+        .await
         .expect("real dispatcher opens the WAV once");
     rig.sources.push(dir);
     opened
@@ -1864,11 +1861,11 @@ pub(super) fn load(track: &mut Track, rig: &mut Rig, position: Position) -> Seq 
 }
 
 /// A track of `src` in `slot`, its consumer attached on frame 0.
-pub(super) fn loaded(rig: &mut Rig, slot: Slot, src: &str) -> (Track, Inbox<LaneProtocol>) {
+pub(super) async fn loaded(rig: &mut Rig, slot: Slot, src: &str) -> (Track, Inbox<LaneProtocol>) {
     let (sender, inbox) = lane();
     let mut track = track(slot);
     load(&mut track, rig, Position::ZERO);
-    let opened = opened_fixture(rig, src);
+    let opened = opened_fixture(rig, src).await;
     let receipt = rig
         .open(Ok(opened))
         .expect("the load reached the dispatcher");
@@ -1884,17 +1881,17 @@ pub(super) fn loaded(rig: &mut Rig, slot: Slot, src: &str) -> (Track, Inbox<Lane
 }
 
 #[kithara::test]
-fn a_load_opens_its_source_once_and_attaches_on_the_next_block() {
+async fn a_load_opens_its_source_once_and_attaches_on_the_next_block() {
     let mut rig = rig();
     let mut track = track(A);
 
     let seq = load(&mut track, &mut rig, Position::ZERO);
     assert_eq!(track.snapshot().status, TrackStatus::Loading);
-    let opened = opened_fixture(&mut rig, "track");
+    let opened = opened_fixture(&mut rig, "track").await;
     let receipt = rig
         .open(Ok(opened))
         .expect("the load reached the dispatcher");
-    let unopened = opened_fixture(&mut rig, "track");
+    let unopened = opened_fixture(&mut rig, "track").await;
     assert!(rig.open(Ok(unopened)).is_none(), "one open per load");
     assert!(matches!(
         rig.with_outbox(|out| track.settle(TrackReceipt::Loaded(receipt), out))
@@ -1919,7 +1916,7 @@ fn a_load_opens_its_source_once_and_attaches_on_the_next_block() {
 }
 
 #[kithara::test]
-fn an_unrelated_load_receipt_does_not_make_a_reserved_track_ready() {
+async fn an_unrelated_load_receipt_does_not_make_a_reserved_track_ready() {
     let mut rig = rig();
     let mut other = unseated_track();
     let foreign = load(&mut other, &mut rig, Position::ZERO);
@@ -1927,7 +1924,7 @@ fn an_unrelated_load_receipt_does_not_make_a_reserved_track_ready() {
     let wanted = load(&mut pending, &mut rig, Position::ZERO);
     assert_ne!(foreign, wanted);
 
-    let opened = opened_fixture(&mut rig, "foreign");
+    let opened = opened_fixture(&mut rig, "foreign").await;
     let receipt = rig.open(Ok(opened)).expect("foreign load");
     assert_eq!(receipt.seq(), foreign);
     let settled = rig
@@ -1936,7 +1933,7 @@ fn an_unrelated_load_receipt_does_not_make_a_reserved_track_ready() {
     assert!(matches!(settled, Settled::Pending));
     assert_eq!(pending.snapshot().status, TrackStatus::Loading);
 
-    let opened = opened_fixture(&mut rig, "wanted");
+    let opened = opened_fixture(&mut rig, "wanted").await;
     let receipt = rig.open(Ok(opened)).expect("matching load");
     assert_eq!(receipt.seq(), wanted);
     rig.with_outbox(|out| pending.settle(TrackReceipt::Loaded(receipt), out))
@@ -2009,11 +2006,11 @@ fn a_speed_curve_clamps_every_finite_subfloor_point(#[case] speed: SpeedCurve) {
 }
 
 #[kithara::test]
-fn a_track_loaded_at_a_position_stands_there_once_attached() {
+async fn a_track_loaded_at_a_position_stands_there_once_attached() {
     let mut rig = rig();
     let mut track = track(A);
     let seq = load(&mut track, &mut rig, Position::from_secs(3));
-    let opened = opened_fixture(&mut rig, "track");
+    let opened = opened_fixture(&mut rig, "track").await;
     let (receipt, position) = open_at_position(&mut rig, opened);
     assert_eq!(position, Position::from_secs(3));
     rig.with_outbox(|out| track.settle(TrackReceipt::Loaded(receipt), out))
@@ -2070,9 +2067,9 @@ fn a_refused_open_leaves_the_track_idle() {
 }
 
 #[kithara::test]
-fn play_sounds_from_its_frame_and_pause_reports_where_it_stopped() {
+async fn play_sounds_from_its_frame_and_pause_reports_where_it_stopped() {
     let mut rig = rig();
-    let (mut track, _lane) = loaded(&mut rig, A, "track");
+    let (mut track, _lane) = loaded(&mut rig, A, "track").await;
 
     let play = in_pass(&mut rig, frame(0), |out| {
         track.apply(
@@ -2124,10 +2121,10 @@ fn play_sounds_from_its_frame_and_pause_reports_where_it_stopped() {
 }
 
 #[kithara::test]
-fn a_track_played_after_another_chains_from_its_slot() {
+async fn a_track_played_after_another_chains_from_its_slot() {
     let mut rig = rig();
-    let (mut leading, _) = loaded(&mut rig, A, "leading");
-    let (mut following, _) = loaded(&mut rig, B, "following");
+    let (mut leading, _) = loaded(&mut rig, A, "leading").await;
+    let (mut following, _) = loaded(&mut rig, B, "following").await;
 
     command_at_zero(
         &mut leading,
@@ -2185,9 +2182,9 @@ fn a_track_played_after_another_chains_from_its_slot() {
 }
 
 #[kithara::test]
-fn every_part_a_track_sends_names_its_slot() {
+async fn every_part_a_track_sends_names_its_slot() {
     let mut rig = rig();
-    let (mut track, _lane) = loaded(&mut rig, B, "track");
+    let (mut track, _lane) = loaded(&mut rig, B, "track").await;
     for command in [
         TrackCommand::Fade {
             at: When::Next,
@@ -2231,9 +2228,9 @@ fn every_part_a_track_sends_names_its_slot() {
 }
 
 #[kithara::test]
-fn a_release_frees_the_track_once_the_mixer_let_its_consumer_go() {
+async fn a_release_frees_the_track_once_the_mixer_let_its_consumer_go() {
     let mut rig = rig();
-    let (mut track, _lane) = loaded(&mut rig, A, "track");
+    let (mut track, _lane) = loaded(&mut rig, A, "track").await;
 
     rig.with_outbox(|out| track.apply(TrackCommand::Release, out))
         .expect("live deck scope")
@@ -2253,9 +2250,9 @@ fn a_release_frees_the_track_once_the_mixer_let_its_consumer_go() {
 #[kithara::test]
 #[case::standalone(false)]
 #[case::admitted_group(true)]
-fn a_repeated_release_answers_with_the_detach_already_in_flight(#[case] grouped: bool) {
+async fn a_repeated_release_answers_with_the_detach_already_in_flight(#[case] grouped: bool) {
     let mut rig = rig();
-    let (mut track, _lane) = loaded(&mut rig, A, "track");
+    let (mut track, _lane) = loaded(&mut rig, A, "track").await;
 
     let first = rig
         .with_outbox(|out| {
@@ -2324,9 +2321,9 @@ fn a_repeated_release_answers_with_the_detach_already_in_flight(#[case] grouped:
 #[kithara::test]
 #[case::refused(false)]
 #[case::stale(true)]
-fn a_rejected_release_can_send_a_new_detach(#[case] stale: bool) {
+async fn a_rejected_release_can_send_a_new_detach(#[case] stale: bool) {
     let mut rig = rig();
-    let (mut track, _lane) = loaded(&mut rig, A, "track");
+    let (mut track, _lane) = loaded(&mut rig, A, "track").await;
     let first = rig
         .with_outbox(|out| track.apply(TrackCommand::Release, out))
         .expect("live deck scope")
@@ -2413,12 +2410,12 @@ fn a_rejected_release_can_send_a_new_detach(#[case] stale: bool) {
 #[case::same_segment(false, false)]
 #[case::new_segment(true, false)]
 #[case::settled_then_new_segment(true, true)]
-fn a_native_stop_answers_without_overwriting_a_new_segments_position(
+async fn a_native_stop_answers_without_overwriting_a_new_segments_position(
     #[case] moved: bool,
     #[case] settled_first: bool,
 ) {
     let mut rig = rig();
-    let (mut track, _lane) = loaded(&mut rig, A, "stop-segment");
+    let (mut track, _lane) = loaded(&mut rig, A, "stop-segment").await;
     command_at_zero(
         &mut track,
         &mut rig,
@@ -2543,9 +2540,9 @@ fn a_native_stop_answers_without_overwriting_a_new_segments_position(
 }
 
 #[kithara::test]
-fn detaching_a_member_withdraws_its_preparation() {
+async fn detaching_a_member_withdraws_its_preparation() {
     let mut rig = rig();
-    let (mut track, _inbox) = loaded(&mut rig, A, "track");
+    let (mut track, _inbox) = loaded(&mut rig, A, "track").await;
     track.ready = None;
     assert_eq!(
         command_at_zero(
@@ -2581,9 +2578,9 @@ fn detaching_a_member_withdraws_its_preparation() {
 }
 
 #[kithara::test]
-fn an_evicting_track_takes_the_slot_over_on_its_frame() {
+async fn an_evicting_track_takes_the_slot_over_on_its_frame() {
     let mut rig = rig();
-    let (mut old, _) = loaded(&mut rig, A, "old");
+    let (mut old, _) = loaded(&mut rig, A, "old").await;
     rig.with_outbox(|out| old.apply(TrackCommand::Play { at: When::Next }, out))
         .expect("live deck scope")
         .expect("the deck has room");
@@ -2593,7 +2590,7 @@ fn an_evicting_track_takes_the_slot_over_on_its_frame() {
     let mut new = unseated_track();
     let wanted = load(&mut new, &mut rig, Position::ZERO);
 
-    let opened = opened_fixture(&mut rig, "new");
+    let opened = opened_fixture(&mut rig, "new").await;
     let receipt = rig.open(Ok(opened)).expect("one open");
     assert_eq!(
         receipt.seq(),
@@ -2694,12 +2691,12 @@ fn an_evicting_track_takes_the_slot_over_on_its_frame() {
 #[case::released_replacement_before_its_frame(false, false)]
 #[case::released_replacement_the_deck_already_applied(true, false)]
 #[case::parked_repeat(false, true)]
-fn superseding_a_scheduled_batch_leaves_the_slot_sounding_as_it_was(
+async fn superseding_a_scheduled_batch_leaves_the_slot_sounding_as_it_was(
     #[case] applied: bool,
     #[case] repeat: bool,
 ) {
     let mut rig = rig();
-    let (mut old, mut lane) = loaded(&mut rig, A, "old");
+    let (mut old, mut lane) = loaded(&mut rig, A, "old").await;
     rig.with_outbox(|out| old.apply(TrackCommand::Play { at: When::Next }, out))
         .expect("deck scope")
         .expect("start");
@@ -2786,16 +2783,12 @@ fn superseding_a_scheduled_batch_leaves_the_slot_sounding_as_it_was(
         })
         .expect("deck scope")
         .expect("configuration after cancellation is ready and timely");
-        rig.runtime.block_on(async {
-            a_cancelled_repeat_reaches_its_original_end(441).await;
-            a_cancelled_repeat_reaches_its_original_end(66_150).await;
-        });
         return;
     }
     let mut new = unseated_track();
     let wanted = load(&mut new, &mut rig, Position::ZERO);
 
-    let opened = opened_fixture(&mut rig, "new");
+    let opened = opened_fixture(&mut rig, "new").await;
     let receipt = rig.open(Ok(opened)).expect("replacement load");
     assert_eq!(
         receipt.seq(),
@@ -2935,8 +2928,11 @@ fn repeat_wav_load(
     (worker, item)
 }
 
+#[kithara::test(tokio)]
+#[case::short(441)]
+#[case::long(66_150)]
 #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
-pub(super) async fn a_cancelled_repeat_reaches_its_original_end(frames: usize) {
+async fn a_cancelled_repeat_reaches_its_original_end(#[case] frames: usize) {
     use kithara_render::rt::StreamShape;
 
     let dir = TestTempDir::new();
@@ -3110,9 +3106,9 @@ pub(super) fn settle_mixer(
 }
 
 #[kithara::test]
-fn a_track_whose_slot_faded_out_reports_it() {
+async fn a_track_whose_slot_faded_out_reports_it() {
     let mut rig = rig();
-    let (mut track, _lane) = loaded(&mut rig, A, "track");
+    let (mut track, _lane) = loaded(&mut rig, A, "track").await;
 
     rig.with_outbox(|out| {
         track.settle(
@@ -3133,7 +3129,7 @@ fn a_track_whose_slot_faded_out_reports_it() {
 
 #[kithara::test]
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-fn a_load_the_deck_has_no_room_for_leaves_the_lane_untouched() {
+async fn a_load_the_deck_has_no_room_for_leaves_the_lane_untouched() {
     let mut rig = rig();
     {
         let deck = &mut rig.deck;
@@ -3157,7 +3153,7 @@ fn a_load_the_deck_has_no_room_for_leaves_the_lane_untouched() {
     let mut track = track(A);
     let seq = load(&mut track, &mut rig, Position::ZERO);
     track.lane = Some(sender);
-    let opened = opened_fixture(&mut rig, "track");
+    let opened = opened_fixture(&mut rig, "track").await;
     let receipt = rig.open(Ok(opened)).expect("one open");
 
     let settled = rig
@@ -3220,9 +3216,9 @@ fn a_load_the_deck_has_no_room_for_leaves_the_lane_untouched() {
 }
 
 #[kithara::test]
-fn a_loaded_track_sends_each_change_to_its_lane() {
+async fn a_loaded_track_sends_each_change_to_its_lane() {
     let mut rig = rig();
-    let (mut track, mut inbox) = loaded(&mut rig, A, "track");
+    let (mut track, mut inbox) = loaded(&mut rig, A, "track").await;
 
     let sent = rig
         .with_outbox(|out| {
@@ -3392,10 +3388,10 @@ fn full_notification_ring_retries_latest_effective_rate_once() {
 }
 
 #[kithara::test]
-fn an_unchanged_speed_target_still_cancels_a_ramp() {
+async fn an_unchanged_speed_target_still_cancels_a_ramp() {
     for sounding in [false, true] {
         let mut rig = rig();
-        let (mut track, mut inbox) = loaded(&mut rig, A, "ramp-cancellation");
+        let (mut track, mut inbox) = loaded(&mut rig, A, "ramp-cancellation").await;
         if sounding {
             command_at_zero(&mut track, &mut rig, TrackCommand::Play { at: When::Next });
             let mut receipts = rig.block(frame(0), 0.0);
@@ -3594,7 +3590,7 @@ fn a_change_at_a_frame_is_refused_as_untimed(#[case] attached: bool) {
 }
 
 #[kithara::test]
-fn a_change_before_the_load_applies_at_once_and_starts_the_lane_there() {
+async fn a_change_before_the_load_applies_at_once_and_starts_the_lane_there() {
     let mut rig = rig();
     let mut track = track(A);
 
@@ -3634,7 +3630,7 @@ fn a_change_before_the_load_applies_at_once_and_starts_the_lane_there() {
     assert_eq!(track.projected().speed(), 2.0);
     assert!(track.snapshot().pending_lane);
     assert!(lane_commands(&mut inbox).is_empty());
-    let opened = opened_fixture(&mut rig, "pending-speed");
+    let opened = opened_fixture(&mut rig, "pending-speed").await;
     let native = opened
         .opened
         .pcm
@@ -3741,11 +3737,11 @@ fn a_change_before_the_load_applies_at_once_and_starts_the_lane_there() {
 }
 
 #[kithara::test]
-fn failed_deck_event_preserves_item_identity_and_the_first_terminal_cause() {
+async fn failed_deck_event_preserves_item_identity_and_the_first_terminal_cause() {
     use kithara_audio::TrackFailureKind;
     use kithara_render::bridge::PlaybackFault;
     let mut rig = rig();
-    let (mut player, _lane) = loaded(&mut rig, A, "failed-deck-event");
+    let (mut player, _lane) = loaded(&mut rig, A, "failed-deck-event").await;
     assert!(player.attached());
     let item = player.snapshot().item;
     player.status = TrackStatus::Playing { since: frame(0) };
@@ -3798,11 +3794,11 @@ fn failed_deck_event_preserves_item_identity_and_the_first_terminal_cause() {
 #[kithara::test]
 #[case::stale(false)]
 #[case::paused(true)]
-fn stale_or_paused_failure_does_not_change_the_scoped_player(#[case] paused: bool) {
+async fn stale_or_paused_failure_does_not_change_the_scoped_player(#[case] paused: bool) {
     use kithara_audio::{DecodeErrorKind, TrackFailureKind};
     use kithara_render::bridge::PlaybackFault;
     let mut rig = rig();
-    let (mut player, _lane) = loaded(&mut rig, A, "stale-or-paused-failure");
+    let (mut player, _lane) = loaded(&mut rig, A, "stale-or-paused-failure").await;
     assert!(player.attached());
     player.status = if paused {
         TrackStatus::Paused { at: Position::ZERO }
@@ -4067,9 +4063,9 @@ fn planned_end_projects_a_raw_jump_through_the_same_original_origin() {
 #[kithara::test]
 #[case::playing(false)]
 #[case::before_a_future_stop(true)]
-fn a_playing_fade_in_preserves_its_native_transport(#[case] future_stop: bool) {
+async fn a_playing_fade_in_preserves_its_native_transport(#[case] future_stop: bool) {
     let mut rig = rig();
-    let (mut track, _lane) = loaded(&mut rig, A, "playing-fade");
+    let (mut track, _lane) = loaded(&mut rig, A, "playing-fade").await;
     command_at_zero(
         &mut track,
         &mut rig,
@@ -4124,9 +4120,9 @@ fn a_playing_fade_in_preserves_its_native_transport(#[case] future_stop: bool) {
 }
 
 #[kithara::test]
-fn a_fade_in_after_an_outstanding_native_stop_sends_a_real_start() {
+async fn a_fade_in_after_an_outstanding_native_stop_sends_a_real_start() {
     let mut rig = rig();
-    let (mut track, _lane) = loaded(&mut rig, A, "stop-then-fade");
+    let (mut track, _lane) = loaded(&mut rig, A, "stop-then-fade").await;
     command_at_zero(
         &mut track,
         &mut rig,
@@ -4178,9 +4174,9 @@ fn a_fade_in_after_an_outstanding_native_stop_sends_a_real_start() {
 }
 
 #[kithara::test]
-fn a_hard_rejected_native_stop_leaves_the_next_playing_fade_ordinary() {
+async fn a_hard_rejected_native_stop_leaves_the_next_playing_fade_ordinary() {
     let mut rig = rig();
-    let (mut track, _lane) = loaded(&mut rig, A, "refused-stop-fade");
+    let (mut track, _lane) = loaded(&mut rig, A, "refused-stop-fade").await;
     command_at_zero(
         &mut track,
         &mut rig,
@@ -4239,10 +4235,10 @@ fn a_hard_rejected_native_stop_leaves_the_next_playing_fade_ordinary() {
 #[kithara::test]
 #[case::same_slot(true)]
 #[case::other_slot(false)]
-fn a_grouped_fade_in_uses_only_its_own_slots_actual_last_transport(#[case] own_stop: bool) {
+async fn a_grouped_fade_in_uses_only_its_own_slots_actual_last_transport(#[case] own_stop: bool) {
     let mut rig = rig();
-    let (mut a, _a_lane) = loaded(&mut rig, A, "group-a");
-    let (mut b, _b_lane) = loaded(&mut rig, B, "group-b");
+    let (mut a, _a_lane) = loaded(&mut rig, A, "group-a").await;
+    let (mut b, _b_lane) = loaded(&mut rig, B, "group-b").await;
     command_at_zero(
         &mut a,
         &mut rig,
@@ -4351,9 +4347,9 @@ fn a_grouped_fade_in_uses_only_its_own_slots_actual_last_transport(#[case] own_s
 #[kithara::test]
 #[case::queued(false)]
 #[case::held_native_answers(true)]
-fn a_fade_in_after_a_stop_and_transparent_envelope_still_starts(#[case] held: bool) {
+async fn a_fade_in_after_a_stop_and_transparent_envelope_still_starts(#[case] held: bool) {
     let mut rig = rig();
-    let (mut track, _lane) = loaded(&mut rig, A, "stop-envelope-start");
+    let (mut track, _lane) = loaded(&mut rig, A, "stop-envelope-start").await;
     command_at_zero(
         &mut track,
         &mut rig,
@@ -4444,9 +4440,9 @@ fn a_fade_in_after_a_stop_and_transparent_envelope_still_starts(#[case] held: bo
 #[kithara::test]
 #[case::same_frame(0)]
 #[case::later_frame(256)]
-fn a_delayed_start_answer_cannot_overwrite_its_applied_stop(#[case] stop_at: i64) {
+async fn a_delayed_start_answer_cannot_overwrite_its_applied_stop(#[case] stop_at: i64) {
     let mut rig = rig();
-    let (mut track, _lane) = loaded(&mut rig, A, "held-start-stop");
+    let (mut track, _lane) = loaded(&mut rig, A, "held-start-stop").await;
     let started = command_at_zero(
         &mut track,
         &mut rig,
@@ -4507,11 +4503,11 @@ fn a_delayed_start_answer_cannot_overwrite_its_applied_stop(#[case] stop_at: i64
 #[kithara::test]
 #[case::stop_before_start(false)]
 #[case::start_before_stop(true)]
-fn an_applied_resume_keeps_its_status_when_both_older_transport_answers_are_delivered(
+async fn an_applied_resume_keeps_its_status_when_both_older_transport_answers_are_delivered(
     #[case] start_first: bool,
 ) {
     let mut rig = rig();
-    let (mut track, _lane) = loaded(&mut rig, A, "held-start-stop-resume");
+    let (mut track, _lane) = loaded(&mut rig, A, "held-start-stop-resume").await;
     let started = command_at_zero(
         &mut track,
         &mut rig,
@@ -4602,11 +4598,11 @@ fn an_applied_resume_keeps_its_status_when_both_older_transport_answers_are_deli
 }
 
 #[kithara::test]
-fn a_delayed_attach_answer_keeps_its_applied_dependent_start() {
+async fn a_delayed_attach_answer_keeps_its_applied_dependent_start() {
     let mut rig = rig();
     let mut track = track(A);
     let loaded = load(&mut track, &mut rig, Position::ZERO);
-    let opened = opened_fixture(&mut rig, "held-attach-start");
+    let opened = opened_fixture(&mut rig, "held-attach-start").await;
     let receipt = rig.open(Ok(opened)).expect("native load");
     rig.with_outbox(|out| track.settle(TrackReceipt::Loaded(receipt), out))
         .expect("live deck scope");
@@ -4669,9 +4665,9 @@ fn a_delayed_attach_answer_keeps_its_applied_dependent_start() {
 }
 
 #[kithara::test]
-fn a_refused_stop_cannot_hide_the_earlier_applied_start_answer() {
+async fn a_refused_stop_cannot_hide_the_earlier_applied_start_answer() {
     let mut rig = rig();
-    let (mut track, _lane) = loaded(&mut rig, A, "held-start-refused-stop");
+    let (mut track, _lane) = loaded(&mut rig, A, "held-start-refused-stop").await;
     let started = command_at_zero(
         &mut track,
         &mut rig,

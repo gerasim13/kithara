@@ -5,7 +5,7 @@ use crate::common::thread_id::thread_id_hash;
 
 pub type Thread = std::thread::Thread;
 pub type ThreadId = std::thread::ThreadId;
-pub type JoinHandle<T> = std::thread::JoinHandle<T>;
+pub(crate) type JoinHandle<T> = std::thread::JoinHandle<T>;
 
 #[inline]
 pub(crate) fn yield_now() {

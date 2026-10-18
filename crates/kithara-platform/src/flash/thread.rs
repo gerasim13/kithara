@@ -2,7 +2,7 @@ use std::panic::Location;
 
 pub use crate::{
     backend::thread::{
-        Duration, JoinHandle, Thread, ThreadId, assert_main_thread, assert_not_main_thread,
+        Duration, Thread, ThreadId, assert_main_thread, assert_not_main_thread,
         available_parallelism, current, current_thread_id, is_main_thread, is_worker_thread, park,
     },
     common::{
@@ -11,9 +11,80 @@ pub use crate::{
     },
 };
 use crate::{
-    flash::{ids::ThreadKey, join::Join},
+    flash::{
+        ids::ThreadKey,
+        join::Join,
+        sync::{Condvar, Mutex},
+    },
     sync::Arc,
 };
+
+/// Handle of a platform-spawned thread. Joining waits for the thread's exit on
+/// a flash condvar, so under flash the joiner parks on the quiescence engine
+/// and the virtual clock keeps serving the thread it waits for.
+#[derive(derive_more::Debug)]
+pub struct JoinHandle<T> {
+    native: crate::backend::thread::JoinHandle<T>,
+    #[debug(skip)]
+    exit: Arc<Exit>,
+}
+
+#[derive(Default)]
+struct Exit {
+    done: Mutex<bool>,
+    finished: Condvar,
+}
+
+/// Owned by the spawned closure; publishes the exit on drop, unwinding included,
+/// while the thread still holds its participant credit.
+struct ExitSignal(Arc<Exit>);
+
+impl Drop for ExitSignal {
+    fn drop(&mut self) {
+        *self.0.done.lock() = true;
+        self.0.finished.notify_all();
+    }
+}
+
+impl<T> JoinHandle<T> {
+    /// Wait for the thread to finish and take its result.
+    ///
+    /// # Errors
+    ///
+    /// Returns the panic payload if the thread panicked.
+    pub fn join(self) -> std::thread::Result<T> {
+        let mut done = self.exit.done.lock();
+        while !*done {
+            done = self.exit.finished.wait(done);
+        }
+        drop(done);
+        self.native.join()
+    }
+
+    delegate::delegate! {
+        to self.native {
+            #[must_use]
+            pub fn is_finished(&self) -> bool;
+            #[must_use]
+            pub fn thread(&self) -> &Thread;
+        }
+    }
+}
+
+/// Wrap `f` to publish its exit to the [`Exit`] its [`JoinHandle`] waits on.
+fn signalling<F, T>(f: F) -> (impl FnOnce() -> T + Send + 'static, Arc<Exit>)
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    let exit = Arc::new(Exit::default());
+    let signal = ExitSignal(Arc::clone(&exit));
+    let work = move || {
+        let _signal = signal;
+        f()
+    };
+    (work, exit)
+}
 
 pub(crate) enum GateBackend {
     Engine,
@@ -142,7 +213,9 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    crate::backend::thread::spawn(propagated(f, Location::caller()))
+    let (work, exit) = signalling(f);
+    let native = crate::backend::thread::spawn(propagated(work, Location::caller()));
+    JoinHandle { native, exit }
 }
 
 /// Cooperatively yields by engine-parking flash or dedicated participants until
@@ -223,7 +296,10 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    crate::backend::thread::spawn_named_uncounted(name, counted(f, Location::caller()))
+    let (work, exit) = signalling(f);
+    let native =
+        crate::backend::thread::spawn_named_uncounted(name, counted(work, Location::caller()));
+    JoinHandle { native, exit }
 }
 
 /// Under `flash`, a sleep registers a pure timed waiter on the quiescence
