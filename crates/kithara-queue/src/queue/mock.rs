@@ -1,6 +1,6 @@
 use std::num::NonZeroUsize;
 
-use kithara_assets::{AssetStore, StorageBackend};
+use kithara_assets::{AcquisitionResult, AssetResource, AssetStore, StorageBackend, WriteSide};
 use kithara_audio::AudioObserverSlot;
 use kithara_command::{ScopedReceipt, Seq};
 use kithara_events::TrackId;
@@ -10,11 +10,49 @@ use kithara_play::{
     PlayWorkerConfig, Player, ResourceConfig, ResourceLoad, ResourcePrep, ResourceSrc,
     TrackReceipt, mock, mock::DeckRig,
 };
-use kithara_signal::{AudioSpec, FrameCount, SessionFrame};
+use kithara_signal::{FrameCount, SessionFrame};
 pub use kithara_test_utils::bufpool::{TestPools, pools};
 use kithara_test_utils::{TestTempDir, kithara};
 
 use crate::{Queue, QueueCommand, QueueConfig, TrackSource};
+
+pub(crate) fn fixture_uri(directory: &std::path::Path, name: &str) -> String {
+    let namespace = directory.file_name().expect("fixture namespace");
+    format!(
+        "https://queue.invalid/{}/{name}",
+        namespace.to_str().expect("UTF-8 fixture namespace")
+    )
+}
+
+pub(crate) fn fixture_key(store: &AssetStore<TestPools>, uri: &str) -> kithara_assets::ResourceKey {
+    let config: ResourceConfig<TestPools> =
+        ResourceConfig::for_src(ResourceSrc::parse(uri).expect("fixture URI"))
+            .store(store.clone())
+            .build();
+    let extension = uri.rsplit_once('.').expect("fixture extension").1;
+    config
+        .asset_key(&AssetResource::Source {
+            extension: extension.to_owned(),
+        })
+        .expect("fixture source key")
+}
+
+pub(crate) fn seed_fixture(store: &AssetStore<TestPools>, uri: &str, bytes: &[u8]) {
+    let key = fixture_key(store, uri);
+    let AcquisitionResult::Pending(writer) =
+        store.acquire_resource(&key, None).expect("new fixture")
+    else {
+        panic!("fixture URI is already seeded");
+    };
+    writer
+        .write_at(0, bytes)
+        .expect("seed prepared fixture bytes");
+    writer
+        .commit(Some(
+            u64::try_from(bytes.len()).expect("fixture length fits u64"),
+        ))
+        .expect("commit prepared fixture");
+}
 
 /// Runs a queue operation with the fixture's deck scope and dispatcher.
 ///
@@ -56,7 +94,7 @@ pub fn pending_selection() -> (
     TestTempDir,
 ) {
     let (mut queue, mut rig, dir) = empty_queue();
-    let path = dir.path().join("entry.wav");
+    let source = fixture_uri(dir.path(), "entry.wav");
     let first = TrackId::allocate();
     let second = TrackId::allocate();
     with_outbox(&mut queue, &mut rig, |queue, out| {
@@ -66,7 +104,7 @@ pub fn pending_selection() -> (
                 QueueCommand::Append {
                     position: kithara_play::Position::ZERO,
                     id,
-                    source: TrackSource::Uri(path.to_str().expect("fixture path").to_owned()),
+                    source: TrackSource::Uri(source.clone()),
                 },
                 out,
             )
@@ -97,12 +135,17 @@ pub async fn loaded_fixture(
     dir: &TestTempDir,
 ) -> kithara_render::Loaded<kithara_play::OpenedTrack> {
     let prep = ResourcePrep::builder().worker(worker.clone()).build();
-    let config = ResourceConfig::for_src(ResourceSrc::Path(dir.path().join("entry.wav")))
-        .store(
-            AssetStore::builder(pools())
-                .backend(StorageBackend::Memory)
-                .build(),
-        )
+    let store = AssetStore::builder(pools())
+        .backend(StorageBackend::Memory)
+        .build();
+    let source = fixture_uri(dir.path(), "entry.wav");
+    seed_fixture(
+        &store,
+        &source,
+        kithara_test_fixtures::assets::fixed_constant_wav_cd_half_1024().bytes(),
+    );
+    let config = ResourceConfig::for_src(ResourceSrc::parse(&source).expect("fixture URI"))
+        .store(store)
         .build();
     let prepared = prep
         .prepare(config, &mock::output(None).get())
@@ -335,15 +378,17 @@ pub fn queue_with_load_settings(
     should_autoplay: bool,
 ) -> (Queue<TestPools>, DeckRig<TestPools>, TestTempDir) {
     let dir = TestTempDir::new();
-    let path = dir.path().join("entry.wav");
-    mock::write_pcm_wav(&path, &[0.5; 2_048], AudioSpec::new(2, mock::SAMPLE_RATE))
-        .expect("float WAV fixture");
     let prep = ResourcePrep::builder()
         .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
         .build();
     let store = AssetStore::builder(pools())
         .backend(StorageBackend::Memory)
         .build();
+    seed_fixture(
+        &store,
+        &fixture_uri(dir.path(), "entry.wav"),
+        kithara_test_fixtures::assets::fixed_constant_wav_cd_half_1024().bytes(),
+    );
     let mut queue = Queue::new(
         QueueConfig::builder()
             .prep(prep)

@@ -176,6 +176,8 @@ fn resampled_wav(frames: usize) -> Vec<u8> {
     let mut wav = wav_header(
         consts::WAV_PCM_FORMAT,
         consts::WAV_BITS_PER_SAMPLE,
+        consts::SOURCE_RATE,
+        consts::CHANNELS,
         data_size,
     );
     wav.resize(consts::WAV_HEADER_SIZE + data_size, 0);
@@ -191,7 +193,13 @@ fn poisoned_float_wav() -> Vec<u8> {
     let data_size = consts::FRAMES
         .saturating_mul(usize::from(consts::CHANNELS))
         .saturating_mul(usize::from(BYTES_PER_SAMPLE));
-    let mut wav = wav_header(consts::WAV_FLOAT_FORMAT, BITS_PER_SAMPLE, data_size);
+    let mut wav = wav_header(
+        consts::WAV_FLOAT_FORMAT,
+        BITS_PER_SAMPLE,
+        consts::SOURCE_RATE,
+        consts::CHANNELS,
+        data_size,
+    );
     for frame in 0..consts::FRAMES {
         for channel in consts::POISON {
             wav.extend_from_slice(&channel[frame].to_le_bytes());
@@ -200,7 +208,13 @@ fn poisoned_float_wav() -> Vec<u8> {
     wav
 }
 
-pub(super) fn wav_header(format: u16, bits_per_sample: u16, data_size: usize) -> Vec<u8> {
+pub(super) fn wav_header(
+    format: u16,
+    bits_per_sample: u16,
+    sample_rate: u32,
+    channels: u16,
+    data_size: usize,
+) -> Vec<u8> {
     let bytes_per_sample = bits_per_sample / 8;
     let data_size_u32 = u32::try_from(data_size).expect("test WAV data size fits u32");
     let mut wav = Vec::with_capacity(consts::WAV_HEADER_SIZE + data_size);
@@ -210,13 +224,12 @@ pub(super) fn wav_header(format: u16, bits_per_sample: u16, data_size: usize) ->
     wav.extend_from_slice(b"fmt ");
     wav.extend_from_slice(&consts::WAV_FMT_CHUNK_SIZE.to_le_bytes());
     wav.extend_from_slice(&format.to_le_bytes());
-    wav.extend_from_slice(&consts::CHANNELS.to_le_bytes());
-    wav.extend_from_slice(&consts::SOURCE_RATE.to_le_bytes());
+    wav.extend_from_slice(&channels.to_le_bytes());
+    wav.extend_from_slice(&sample_rate.to_le_bytes());
     wav.extend_from_slice(
-        &(consts::SOURCE_RATE * u32::from(consts::CHANNELS) * u32::from(bytes_per_sample))
-            .to_le_bytes(),
+        &(sample_rate * u32::from(channels) * u32::from(bytes_per_sample)).to_le_bytes(),
     );
-    wav.extend_from_slice(&(consts::CHANNELS * bytes_per_sample).to_le_bytes());
+    wav.extend_from_slice(&(channels * bytes_per_sample).to_le_bytes());
     wav.extend_from_slice(&bits_per_sample.to_le_bytes());
     wav.extend_from_slice(b"data");
     wav.extend_from_slice(&data_size_u32.to_le_bytes());

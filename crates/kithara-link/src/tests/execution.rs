@@ -17,6 +17,7 @@ use kithara_render::{
 };
 use kithara_signal::{AudioChunkInfo, AudioSpec, FrameCount, SegmentId, SessionFrame};
 use kithara_sync::SpeedCurve;
+use kithara_test_fixtures::assets;
 use kithara_test_utils::{
     TestTempDir,
     bufpool::{TestPools, pools},
@@ -56,8 +57,8 @@ fn settle(
 async fn a_lane_dropped_before_its_turn_is_reported_only_by_its_cancellation() {
     let directory = TestTempDir::new();
     let path = directory.path().join("track.wav");
-    let samples = vec![0.25; usize::try_from(mock::SAMPLE_RATE.get()).expect("sample rate") * 2];
-    mock::write_pcm_wav(&path, &samples, AudioSpec::new(2, mock::SAMPLE_RATE)).expect("local WAV");
+    std::fs::write(&path, assets::fixed_constant_wav_cd_quarter_44100().bytes())
+        .expect("local WAV");
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
     let config: ResourceConfig<TestPools> = ResourceConfig::for_src(ResourceSrc::Path(path))
         .store(AssetStore::builder(pools()).build())
@@ -353,8 +354,7 @@ async fn native_linked(
     Seq,
 ) {
     let path = directory.path().join("paused.wav");
-    let samples = vec![0.25; usize::try_from(mock::SAMPLE_RATE.get()).expect("rate") * 2];
-    mock::write_pcm_wav(&path, &samples, AudioSpec::new(2, mock::SAMPLE_RATE)).expect("WAV");
+    std::fs::write(&path, assets::fixed_constant_wav_cd_quarter_44100().bytes()).expect("WAV");
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
     let config: ResourceConfig<TestPools> = ResourceConfig::for_src(ResourceSrc::Path(path))
         .store(AssetStore::builder(pools()).build())

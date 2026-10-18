@@ -332,11 +332,9 @@ mod fixture {
 
     pub(crate) fn constant_fixture() -> kithara_test_utils::TestTempDir {
         let directory = kithara_test_utils::TestTempDir::new();
-        let rate = NonZeroU32::new(44_100).expect("fixture rate");
-        kithara_play::mock::write_pcm_wav(
-            &directory.path().join("constant.wav"),
-            &vec![0.5; 60 * 44_100 * 2],
-            kithara_signal::AudioSpec::new(2, rate),
+        std::fs::write(
+            directory.path().join("constant.wav"),
+            kithara_test_fixtures::assets::fixed_constant_wav_cd_half_2646000().bytes(),
         )
         .expect("constant PCM fixture");
         directory

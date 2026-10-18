@@ -9,16 +9,17 @@ use kithara::{
         flash::real_io,
         time::{self, Duration},
     },
-    play::{PlayerEvent, Resource, ResourceConfig, ResourceSrc},
+    play::{PlayerEvent, ResourceConfig, ResourceSrc},
+    queue::TrackSource,
     warp::{StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
     disk_asset_store,
-    offline::{OfflinePlayer, OfflinePlayerOptions, resource_from_reader},
+    offline::{OfflinePlayer, OfflinePlayerOptions},
     test_defaults::consts,
     waits::wait_for_loader_done_event,
 };
-use kithara_test_fixtures::integration_fixtures::{constant_half, drain_tone};
+use kithara_test_fixtures::{assets, integration_fixtures::drain_tone};
 use kithara_test_utils::{TestTempDir, temp_dir};
 
 const BLOCK_FRAMES: usize = 512;
@@ -38,14 +39,6 @@ const MIN_SHARE_NUM: usize = 7;
 const MAX_SHARE_NUM: usize = 9;
 const SHARE_DEN: usize = 10;
 const DRAIN_BLOCK_BUDGET: usize = 2_000;
-
-fn make_resource(constant_half: &'static [u8], duration_secs: f64) -> Resource {
-    resource_from_reader(kithara::audio::mock::TestPcmReader::with_pcm(
-        consts::AUDIO_SPEC,
-        duration_secs,
-        constant_half,
-    ))
-}
 
 fn file_resource(
     path: &Path,
@@ -81,7 +74,7 @@ async fn render_target(harness: &OfflinePlayer) -> Vec<f32> {
 }
 
 #[kithara::test(tokio)]
-async fn offline_harness_smoke(constant_half: &'static [u8]) {
+async fn offline_harness_smoke() {
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder().build(),
         consts::SAMPLE_RATE,
@@ -91,7 +84,13 @@ async fn offline_harness_smoke(constant_half: &'static [u8]) {
         let _real_io = real_io();
         harness.render(BLOCK_FRAMES).await;
     }
-    let deck_source = harness.pcm_deck((make_resource(constant_half, 0.1)).into());
+    let deck_source = TrackSource::Uri(
+        assets::fixed_constant_wav_cd_half_4410()
+            .path()
+            .expect("prepared smoke WAV")
+            .to_string_lossy()
+            .into_owned(),
+    );
     let mut events = harness.player().subscribe();
     let deck_id = harness
         .with_queue(move |player| {

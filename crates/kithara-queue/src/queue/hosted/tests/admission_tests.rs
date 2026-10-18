@@ -3,25 +3,23 @@ use kithara_platform::{CancelToken, sync::Arc};
 use kithara_test_utils::cancel_token;
 
 use super::*;
-use crate::Transition;
+use crate::{Transition, mock::fixture_uri};
 
 #[kithara::test(tokio)]
 async fn admission_fills_unset_metadata_from_the_decoder(cancel_token: CancelToken) {
     let (mut queue, mut rig, dir) = empty_queue();
     let mut append = |title: Option<&str>| {
         let id = TrackId::allocate();
-        let config = ResourceConfig::for_src(ResourceSrc::Path(dir.path().join("entry.wav")))
-            .store(
-                AssetStore::builder(pools())
-                    .backend(StorageBackend::Memory)
-                    .build(),
-            )
-            .metadata(TrackMetadata {
-                title: title.map(Into::into),
-                album: Some("Catalogue album".into()),
-                ..TrackMetadata::default()
-            })
-            .build();
+        let config = ResourceConfig::for_src(
+            ResourceSrc::parse(fixture_uri(dir.path(), "entry.wav")).expect("fixture URI"),
+        )
+        .store(queue.config.store.as_ref().expect("fixture store").clone())
+        .metadata(TrackMetadata {
+            title: title.map(Into::into),
+            album: Some("Catalogue album".into()),
+            ..TrackMetadata::default()
+        })
+        .build();
         with_outbox(&mut queue, &mut rig, |queue, out| {
             Player::apply(
                 queue,

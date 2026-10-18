@@ -448,10 +448,9 @@ async fn a_rejected_launch_leaves_the_member_silent() {
     let pools = pools();
     let dir = TestTempDir::new();
     let path = dir.path().join("rejected.wav");
-    mock::write_pcm_wav(
+    std::fs::write(
         &path,
-        &vec![0.5; 8_192],
-        AudioSpec::new(2, mock::SAMPLE_RATE),
+        kithara_test_fixtures::assets::fixed_constant_wav_cd_half_4096().bytes(),
     )
     .expect("audible source fixture");
     let worker = rig.worker().clone();
@@ -1751,12 +1750,11 @@ fn an_epoch_adopted_before_it_is_published_reports_the_audio_thread() {
 pub(super) async fn opened_fixture(rig: &mut Rig, src: &str) -> Loaded<OpenedTrack> {
     let dir = TestTempDir::new();
     let path = dir.path().join("track.wav");
-    let spec = AudioSpec::new(2, mock::SAMPLE_RATE);
-    let samples = vec![
-        kithara_audio::mock::TEST_PCM_DEFAULT_VALUE;
-        usize::try_from(mock::SAMPLE_RATE.get()).expect("sample rate") / 100 * 2
-    ];
-    mock::write_pcm_wav(&path, &samples, spec).expect("generated float WAV");
+    std::fs::write(
+        &path,
+        kithara_test_fixtures::assets::fixed_constant_wav_cd_half_441().bytes(),
+    )
+    .expect("prepared float WAV");
     let worker = rig.worker().clone();
     let config: ResourceConfig<TestPools> = ResourceConfig::for_src(ResourceSrc::Path(path))
         .store(AssetStore::builder(pools()).build())
@@ -2900,12 +2898,13 @@ fn repeat_wav_load(
     frames: usize,
 ) -> (crate::PlayWorker<TestPools>, ResourceLoad<TestPools>) {
     let path = dir.path().join("repeat.wav");
-    mock::write_pcm_wav(
-        &path,
-        &vec![0.5; frames * 2],
-        AudioSpec::new(2, mock::SAMPLE_RATE),
-    )
-    .expect("float WAV at the deck rate");
+    let fixture = match frames {
+        441 => kithara_test_fixtures::assets::fixed_constant_wav_cd_half_441(),
+        66_150 => kithara_test_fixtures::assets::fixed_constant_wav_cd_half_66150(),
+        44_100 => kithara_test_fixtures::assets::fixed_constant_wav_cd_half_44100(),
+        _ => panic!("repeat case has no prepared {frames}-frame source"),
+    };
+    std::fs::write(&path, fixture.bytes()).expect("float WAV at the deck rate");
     let worker = crate::PlayWorker::new(crate::PlayWorkerConfig::builder(pools()).build());
     let config = ResourceConfig::for_src(ResourceSrc::Path(path))
         .store(AssetStore::builder(pools()).build())

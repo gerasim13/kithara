@@ -33,7 +33,7 @@ fn default_pcm() -> Vec<u8> {
 #[case::default()]
 fn constant_half_wav() -> Vec<u8> {
     const SAMPLES: usize = 44_100 * 2;
-    let mut wav = super::unit::wav_header(3, 32, SAMPLES * size_of::<f32>());
+    let mut wav = super::unit::wav_header(3, 32, 44_100, 2, SAMPLES * size_of::<f32>());
     wav.extend(std::iter::repeat_n(0.5_f32, SAMPLES).flat_map(f32::to_le_bytes));
     wav
 }

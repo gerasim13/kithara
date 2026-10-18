@@ -4,7 +4,7 @@ use kithara_play::{PlayerEvent, PlayerStatus, TrackSettingsChange, mock};
 use super::*;
 use crate::{
     QueueError, Transition,
-    mock::{finish, selected},
+    mock::{finish, fixture_uri, selected},
 };
 
 fn apply(
@@ -148,6 +148,8 @@ async fn replay_same_item_does_not_re_emit_current_item_changed() {
 
 #[kithara::test(tokio)]
 async fn a_selected_resource_adopts_the_session_wake_mode() {
+    use kithara_render::{LoadRequest, ServiceClass};
+
     let pools = pools();
     let dir = TestTempDir::new();
     let prep = ResourcePrep::builder()
@@ -155,11 +157,38 @@ async fn a_selected_resource_adopts_the_session_wake_mode() {
             PlayWorkerConfig::builder(pools.clone()).build(),
         ))
         .build();
-    mock::assert_prepared_render_off_bus(
-        &prep,
-        &mock::output(None).get(),
+    let output = mock::output(None).get();
+    assert_eq!(output.sample_rate.output(), 44_100);
+    let source = fixture_uri(dir.path(), "selected.wav");
+    let store = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Memory)
+        .build();
+    crate::mock::seed_fixture(
+        &store,
+        &source,
+        kithara_test_fixtures::assets::fixed_constant_wav_cd_half_4096().bytes(),
+    );
+    let config = ResourceConfig::for_src(ResourceSrc::parse(&source).expect("fixture URI"))
+        .store(store)
+        .build();
+    let prepared = prep.prepare(config, &output).expect("prepared source");
+    let bus = prepared.bus().expect("prepared event bus").clone();
+    let item = kithara_play::ResourceLoad::new(
+        prepared,
+        Box::new(kithara_audio::AudioObserverSlot::default().relay()),
+    );
+    let (_control, inbox) = prep.worker.lane_channel();
+    mock::assert_requested_render_off_bus(
+        LoadRequest {
+            item,
+            class: ServiceClass::Warm,
+            inbox,
+            position: Duration::ZERO,
+            start: kithara_play::TrackSettings::default().lane_start(),
+        },
+        &bus,
+        &output,
         &pools,
-        &dir.path().join("selected.wav"),
     )
     .await
     .expect("selected lane renders off the bus");
@@ -256,13 +285,7 @@ async fn arm_next_replaces_a_previously_armed_item() {
         QueueCommand::Append {
             position: kithara_play::Position::ZERO,
             id: third,
-            source: TrackSource::Uri(
-                dir.path()
-                    .join("entry.wav")
-                    .to_str()
-                    .expect("path")
-                    .to_owned(),
-            ),
+            source: TrackSource::Uri(fixture_uri(dir.path(), "entry.wav")),
         },
     )
     .expect("append third");
@@ -369,13 +392,7 @@ async fn selecting_another_item_unarms_the_successor() {
         QueueCommand::Append {
             position: kithara_play::Position::ZERO,
             id: third,
-            source: TrackSource::Uri(
-                dir.path()
-                    .join("entry.wav")
-                    .to_str()
-                    .expect("path")
-                    .to_owned(),
-            ),
+            source: TrackSource::Uri(fixture_uri(dir.path(), "entry.wav")),
         },
     )
     .expect("append third");

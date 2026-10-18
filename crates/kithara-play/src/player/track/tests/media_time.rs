@@ -779,7 +779,11 @@ async fn assert_source_end_resume_endpoint() {
     let pools = pools();
     let directory = TestTempDir::new();
     let path = directory.path().join("source-end-resume.wav");
-    mock::write_pcm_wav(&path, &[0.25; 1_764], native_spec).expect("twenty milliseconds of PCM");
+    std::fs::write(
+        &path,
+        kithara_test_fixtures::assets::fixed_constant_wav_cd_quarter_882().bytes(),
+    )
+    .expect("twenty milliseconds of PCM");
     let file = FileConfig::for_src(FileSrc::Local(path))
         .store(AssetStore::builder(pools.clone()).build())
         .extension("wav")

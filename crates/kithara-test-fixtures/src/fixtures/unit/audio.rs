@@ -3,7 +3,7 @@ use std::sync::OnceLock;
 use kithara_platform::sync::Arc;
 use kithara_test_macros as kithara;
 
-use crate::{assets, fixtures::samples};
+use crate::{asset::Asset, assets, fixtures::samples};
 
 /// Prepared build-time PCM input for blend identity.
 #[kithara::fixture]
@@ -89,4 +89,35 @@ pub fn route_pcm() -> RoutePcm {
         .map(|asset| samples(&asset).into())
     })
     .clone()
+}
+
+/// The six-second mono broadcast tone repeated into stereo float32 WAV.
+#[must_use]
+pub fn broadcast_tone_wav() -> Asset {
+    assets::broadcast_tone_wav_default()
+}
+
+/// Twenty seconds of stereo 440 Hz sine, at full or half fixture amplitude.
+#[must_use]
+pub fn metronome_sine_wav(half: bool) -> Asset {
+    if half {
+        assets::metronome_sine_wav_half()
+    } else {
+        assets::metronome_sine_wav_full()
+    }
+}
+
+/// A complete 24-second plain or decorated control at 44.1 or 48 kHz.
+///
+/// # Panics
+/// Panics if the rate is outside the control case matrix.
+#[must_use]
+pub fn cochlea_control_wav(sample_rate: u32, decorated: bool) -> Asset {
+    match (sample_rate, decorated) {
+        (44_100, false) => assets::cochlea_control_wav_cd_plain(),
+        (44_100, true) => assets::cochlea_control_wav_cd_decorated(),
+        (48_000, false) => assets::cochlea_control_wav_render_plain(),
+        (48_000, true) => assets::cochlea_control_wav_render_decorated(),
+        _ => panic!("unsupported Cochlea control rate {sample_rate}"),
+    }
 }

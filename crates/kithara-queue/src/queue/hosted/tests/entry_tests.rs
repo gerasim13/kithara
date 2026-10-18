@@ -18,6 +18,7 @@ pub(super) use kithara_signal::{AudioChunkInfo, FrameCount, SessionFrame};
 pub(super) use kithara_test_utils::{TestTempDir, kithara};
 
 use super::*;
+use crate::mock::fixture_uri;
 pub(super) use crate::{
     QueueConfig, TrackSource,
     queue::types::SeekPosition,
@@ -588,13 +589,7 @@ async fn an_applied_seek_keeps_its_target_until_the_matching_render_mark() {
 async fn atomic_track_id_cas_arm_then_disarm() {
     let (mut queue, mut rig, dir) = empty_queue();
     queue.config.action_at_item_end = ActionAtItemEnd::None;
-    let source = TrackSource::Uri(
-        dir.path()
-            .join("entry.wav")
-            .to_str()
-            .expect("fixture path")
-            .to_owned(),
-    );
+    let source = TrackSource::Uri(fixture_uri(dir.path(), "entry.wav"));
     with_outbox(&mut queue, &mut rig, |queue, out| {
         for id in [TrackId(2), TrackId(3), TrackId(4)] {
             Player::apply(
