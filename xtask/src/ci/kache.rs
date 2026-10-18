@@ -43,6 +43,10 @@ impl KacheJob {
             .with_context(|| format!("creating kache's directory {}", runtime.display()))?;
         let mut cache = toml::Table::new();
         cache.insert("runtime_dir".into(), path_value(&runtime)?);
+        cache.insert(
+            "daemon_idle_timeout_secs".into(),
+            consts::KACHE_DAEMON_IDLE_SECS.into(),
+        );
         if let Some(store) = store {
             cache.insert("local_store".into(), path_value(store.directory)?);
             cache.insert("local_max_size".into(), store.max_size.into());
@@ -207,6 +211,19 @@ mod tests {
             cache["runtime_dir"].as_str().map(PathBuf::from),
             Some(directory.path().join("job/runtime"))
         );
+    }
+
+    /// A cancelled job is killed before it can stop its daemon, which kache
+    /// detaches from the job; only the daemon itself can end it then.
+    #[test]
+    fn a_daemon_whose_job_never_stops_it_exits_once_idle() {
+        let directory = tempfile::tempdir().unwrap();
+
+        let job = KacheJob::prepare(directory.path().join("job"), None, &lookup(&[])).unwrap();
+
+        let config = written(&job);
+        let timeout = config["cache"]["daemon_idle_timeout_secs"].as_integer();
+        assert!(timeout.is_some_and(|seconds| seconds > 0), "{timeout:?}");
     }
 
     /// A `CMake` build reaches kache as its compiler launcher, never as its

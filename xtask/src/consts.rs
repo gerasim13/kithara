@@ -208,6 +208,10 @@ pub(crate) const SCCACHE_PREFIX: &str = "sccache";
 /// Where kache keeps its objects inside a scope's bucket, beside sccache's.
 pub(crate) const KACHE_PREFIX: &str = "kache";
 
+/// How long a job's kache daemon waits without a compile before it exits. A
+/// live job that compiles again starts a new one.
+pub(crate) const KACHE_DAEMON_IDLE_SECS: i64 = 600;
+
 /// Directory every Unix executor reads the installed host profile from.
 pub(crate) const LANE_CONFIG_DIR: &str = "/etc/kithara-ci";
 
