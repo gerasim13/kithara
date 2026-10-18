@@ -36,9 +36,22 @@ fn musical_origin_follows_consumed_pcm_instead_of_the_next_producer_packet(
         prepared.visible_origin,
         Some(Duration::from_millis(old_origin + 10))
     );
-    assert_eq!(resource.media_origin(), None);
-    assert_eq!(resource.visible_origin(), None);
-    assert!(resource.mark(SessionFrame::new(0)).is_none());
+    assert_eq!(
+        resource.media_origin(),
+        Some(Duration::from_millis(old_origin))
+    );
+    assert_eq!(
+        resource.visible_origin(),
+        Some(Duration::from_millis(old_origin + 10))
+    );
+    assert_eq!(
+        resource.position().and_then(|span| span.position_at(0)),
+        Some(Duration::from_millis(old_origin + 500))
+    );
+    assert!(
+        resource.mark(SessionFrame::new(0)).is_none(),
+        "prepared geometry does not claim an output presentation"
+    );
     let mut budget = 8;
     resource.refresh_mark(&mut budget);
     assert_eq!(
@@ -90,5 +103,17 @@ fn musical_origin_follows_consumed_pcm_instead_of_the_next_producer_packet(
             .expect("new mark")
             .position,
         Duration::from_millis(next_origin + 505),
+    );
+    resource.select_segment(SegmentId::FIRST.next());
+    assert_eq!(
+        resource.media_origin(),
+        Some(Duration::from_millis(next_origin)),
+        "media zero remains a same-track fact while replacement PCM is pending"
+    );
+    assert_eq!(resource.source_info(), None);
+    assert_eq!(resource.visible_origin(), None);
+    assert!(
+        resource.mark(SessionFrame::new(5)).is_none(),
+        "the previous source span cannot be presented as the new segment"
     );
 }

@@ -576,18 +576,39 @@ where
         output: Option<&OutputSnapshot>,
         out: &mut Outbox<'_, S>,
     ) {
-        // The RT reports a gap only after data resumes, so report the stall and
-        // its recovery together, in order, only for the current track.
-        if let DeckEvent::Underrun { slot, .. } = event {
-            if self
-                .active
-                .iter()
-                .any(|active| active.slot == slot && active.role == Role::Current)
-            {
-                self.bus.publish(ItemEvent::PlaybackStalled);
-                self.bus.publish(ItemEvent::PlaybackLikelyToKeepUp);
+        match event {
+            DeckEvent::UnderrunStarted {
+                slot,
+                item,
+                position,
+                ..
+            } => {
+                if let Some(position) = position
+                    && self.active.iter().any(|active| {
+                        active.slot == slot && active.item == item && active.role == Role::Current
+                    })
+                {
+                    self.bus
+                        .publish(ItemEvent::PlaybackStalled { id: item, position });
+                }
+                return;
             }
-            return;
+            DeckEvent::UnderrunEnded {
+                item,
+                position,
+                frames,
+                ..
+            } => {
+                if let Some(position) = position {
+                    self.bus.publish(ItemEvent::PlaybackLikelyToKeepUp {
+                        id: item,
+                        position,
+                        frames,
+                    });
+                }
+                return;
+            }
+            _ => {}
         }
         if let DeckEvent::Failed { slot, at, fault } = event {
             let Some(active) = self
@@ -610,35 +631,43 @@ where
             return;
         }
         if let DeckEvent::Ended { slot, at } = event {
-            let Some(active) = self.active.iter().find(|active| active.slot == slot) else {
-                return;
-            };
-            if !matches!(active.track.snapshot().as_ref().status, PlayingStatus::Ended { at: ended_at } if ended_at == at)
-            {
-                return;
-            }
-            if let Some(item) = self.item_role(slot) {
-                self.bus.publish(PlayerEvent::ItemDidPlayToEnd { item });
-            }
-            let current = self.active.iter().any(|active| {
-                active.slot == slot
-                    && active.role == Role::Current
-                    && self.current == Some(active.item)
-            });
-            if current
-                && self.config.action_at_item_end == ActionAtItemEnd::Pause
-                && let Err(error) = self.transport(
-                    TrackCommand::Pause {
-                        at: kithara_command::When::Next,
-                    },
-                    out,
-                )
-            {
-                warn!(%error, "queue could not pause its ended track");
-            }
-            if current && let Err(error) = self.tick_deadlines(at, output, out) {
-                warn!(%error, "queue could not settle its ended track");
-            }
+            self.item_ended(slot, at, output, out);
+        }
+    }
+
+    fn item_ended(
+        &mut self,
+        slot: kithara_play::Slot,
+        at: SessionFrame,
+        output: Option<&OutputSnapshot>,
+        out: &mut Outbox<'_, S>,
+    ) {
+        let Some(active) = self.active.iter().find(|active| active.slot == slot) else {
+            return;
+        };
+        if !matches!(active.track.snapshot().as_ref().status, PlayingStatus::Ended { at: ended_at } if ended_at == at)
+        {
+            return;
+        }
+        if let Some(item) = self.item_role(slot) {
+            self.bus.publish(PlayerEvent::ItemDidPlayToEnd { item });
+        }
+        let current = self.active.iter().any(|active| {
+            active.slot == slot && active.role == Role::Current && self.current == Some(active.item)
+        });
+        if current
+            && self.config.action_at_item_end == ActionAtItemEnd::Pause
+            && let Err(error) = self.transport(
+                TrackCommand::Pause {
+                    at: kithara_command::When::Next,
+                },
+                out,
+            )
+        {
+            warn!(%error, "queue could not pause its ended track");
+        }
+        if current && let Err(error) = self.tick_deadlines(at, output, out) {
+            warn!(%error, "queue could not settle its ended track");
         }
     }
 

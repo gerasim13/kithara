@@ -1,5 +1,6 @@
 use std::ops::Range;
 
+use kithara_platform::time::Duration;
 use kithara_test_macros as kithara;
 use kithara_warp::RenderContext;
 use num_traits::ToPrimitive;
@@ -63,7 +64,7 @@ impl PlayerTrack {
             }
             ReadOutcome::Full { .. } | ReadOutcome::Partial { .. } => return false,
         };
-        self.gap = 0;
+        self.finish_underrun(offset, sink);
         if self.stopping() {
             self.finish_stop(sink.at(offset));
             self.fade.stop();
@@ -127,6 +128,7 @@ impl PlayerTrack {
             range.len()
         };
         let requested = range.start..range.start.saturating_add(limit);
+        let recovery_position = self.media_position();
         let outcome = self
             .resource
             .read(context, scratch, requested.clone(), budget);
@@ -138,19 +140,14 @@ impl PlayerTrack {
             }
         };
         if frames > 0 {
-            if self.gap > 0 {
-                let missing = std::mem::take(&mut self.gap);
-                sink.report(DeckEvent::Underrun {
-                    slot: sink.slot,
-                    at: sink.at(range.start),
-                    frames: missing,
-                });
-            }
+            self.end_underrun(range.start, recovery_position, true, sink);
             let written = range.start..range.start.saturating_add(frames);
             self.gate.apply(scratch, written.clone());
             self.fade.mix_range(scratch, bus, written);
         }
-        self.record_missing_frames(frames, limit, sink);
+        if matches!(outcome, ReadOutcome::Full { .. }) {
+            self.record_missing_frames(range.start, frames, limit, sink);
+        }
         match outcome {
             ReadOutcome::Partial { .. } => TrackReadOutcome::Partial {
                 frames,
@@ -166,16 +163,58 @@ impl PlayerTrack {
         }
     }
 
-    fn record_missing_frames(&mut self, frames: usize, limit: usize, sink: &mut RtSink<'_>) {
-        if frames < limit && self.state == SlotState::Playing {
-            if self.gap == 0 && !self.stopping() {
+    fn media_position(&self) -> Option<Duration> {
+        Some(
+            self.resource
+                .position()?
+                .position_at(0)?
+                .saturating_sub(self.media_origin()?),
+        )
+    }
+
+    pub(in crate::rt) fn finish_underrun(&mut self, offset: usize, sink: &mut RtSink<'_>) {
+        self.end_underrun(offset, self.media_position(), false, sink);
+    }
+
+    fn end_underrun(
+        &mut self,
+        offset: usize,
+        position: Option<Duration>,
+        recovered: bool,
+        sink: &mut RtSink<'_>,
+    ) {
+        if self.gap > 0 {
+            sink.report(DeckEvent::UnderrunEnded {
+                slot: sink.slot,
+                item: self.item_id,
+                at: sink.at(offset),
+                position,
+                frames: std::mem::take(&mut self.gap),
+                recovered,
+            });
+        }
+    }
+
+    fn record_missing_frames(
+        &mut self,
+        offset: usize,
+        frames: usize,
+        limit: usize,
+        sink: &mut RtSink<'_>,
+    ) {
+        if frames < limit && self.state == SlotState::Playing && !self.stopping() {
+            if self.gap == 0 {
                 sink.metrics.record_underrun();
+                sink.report(DeckEvent::UnderrunStarted {
+                    slot: sink.slot,
+                    item: self.item_id,
+                    at: sink.at(offset.saturating_add(frames)),
+                    position: self.media_position(),
+                });
             }
-            if !self.stopping() {
-                self.gap = self
-                    .gap
-                    .saturating_add(u32::try_from(limit - frames).unwrap_or(u32::MAX));
-            }
+            self.gap = self
+                .gap
+                .saturating_add(u32::try_from(limit - frames).unwrap_or(u32::MAX));
         }
     }
 

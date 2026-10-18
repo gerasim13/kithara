@@ -242,8 +242,8 @@ impl PlayerTrack {
                 self.state = SlotState::Stopped;
             }
             self.shut();
-            self.gap = 0;
             let offset = usize::try_from(remaining).unwrap_or(usize::MAX);
+            self.finish_underrun(range.start.saturating_add(offset), sink);
             sink.report(DeckEvent::Faded {
                 slot: sink.slot,
                 at: sink.at(range.start.saturating_add(offset)),

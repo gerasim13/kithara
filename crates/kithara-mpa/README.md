@@ -23,8 +23,9 @@ crate through Symphonia's codec registry, unchanged.
 
 Only the demuxer is forked: to add rollback on a transient read, and to
 publish no duration for a headerless stream whose leading frames differ in
-bitrate instead of extrapolating one. Everything else tracks upstream verbatim
-so the delta stays reviewable.
+bitrate instead of extrapolating one. Layer III streams without encoder delay
+metadata retain the decoder's intrinsic 529-frame priming in their timestamps
+and trim. Everything else tracks upstream verbatim so the delta stays reviewable.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-mpa) for the rollback and duration contracts, the fork's exact
 delta, and how to rebase it onto a new upstream release.

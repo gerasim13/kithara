@@ -77,6 +77,121 @@ async fn eof_after_queue_end_does_not_restart_from_first_track() {
 }
 
 #[kithara::test(tokio)]
+#[case(false)]
+#[case(true)]
+async fn replay_after_queue_end_restores_current_and_reports_the_next_end(
+    #[case] seek_first: bool,
+) {
+    let (mut queue, first, second, mut rig, _dir) = crate::mock::selected().await;
+    with_outbox(&mut queue, &mut rig, |queue, out| {
+        Player::apply(queue, QueueCommand::Remove(second), out)
+    })
+    .expect("retain only the sounding track");
+    let slot = queue
+        .active
+        .iter()
+        .find(|active| active.item == first && active.role == Role::Current)
+        .expect("sounding track")
+        .slot;
+    let mut events = queue.subscribe::<QueueEvent>();
+    rig.mixer
+        .report(DeckEvent::Ended {
+            slot,
+            at: SessionFrame::new(512),
+        })
+        .expect("first playback end");
+    tick_fixture(&mut queue, &mut rig);
+    assert_eq!(queue.current, None);
+    assert_eq!(
+        std::iter::from_fn(|| events.try_recv().ok())
+            .filter(|envelope| matches!(envelope.event, QueueEvent::QueueEnded))
+            .count(),
+        1
+    );
+
+    if seek_first {
+        with_outbox(&mut queue, &mut rig, |queue, out| {
+            Player::apply(
+                queue,
+                QueueCommand::Seek {
+                    to: kithara_play::Position::ZERO,
+                },
+                out,
+            )
+        })
+        .expect("accept explicit rewind");
+        assert_eq!(queue.current, None);
+    }
+    with_outbox(&mut queue, &mut rig, |queue, out| {
+        Player::apply(queue, QueueCommand::Play { at: When::Next }, out)
+    })
+    .expect("accept replay");
+    assert_eq!(
+        queue.current, None,
+        "replay must wait for its applied receipt"
+    );
+    for receipt in rig
+        .block(SessionFrame::new(768), 0.0)
+        .expect("replay adoption")
+    {
+        let seq = receipt.seq();
+        let (outcome, mut batch) = receipt.into();
+        with_outbox(&mut queue, &mut rig, |queue, out| {
+            Player::settle(
+                queue,
+                TrackReceipt::Deck {
+                    seq,
+                    outcome: &outcome,
+                    batch: &mut batch,
+                },
+                out,
+            )
+        });
+    }
+    assert_eq!(queue.current, Some(first));
+    let replay = std::iter::from_fn(|| events.try_recv().ok())
+        .map(|envelope| envelope.event)
+        .collect::<Vec<_>>();
+    assert!(
+        matches!(replay.iter().filter(|event| matches!(event,
+        QueueEvent::CurrentTrackChanged { .. })).collect::<Vec<_>>().as_slice(),
+        [QueueEvent::CurrentTrackChanged { id: Some(id) }] if *id == first),
+        "replay must restore the retained identity once: {replay:?}"
+    );
+    assert!(replay.iter().all(|event| !matches!(
+        event,
+        QueueEvent::CurrentTrackAdvance { .. } | QueueEvent::QueueEnded
+    )));
+
+    rig.mixer
+        .report(DeckEvent::Ended {
+            slot,
+            at: SessionFrame::new(1024),
+        })
+        .expect("second playback end");
+    tick_fixture(&mut queue, &mut rig);
+    assert_eq!(queue.current, None);
+    assert_eq!(
+        std::iter::from_fn(|| events.try_recv().ok())
+            .filter(|envelope| matches!(envelope.event, QueueEvent::QueueEnded))
+            .count(),
+        1
+    );
+    rig.mixer
+        .report(DeckEvent::Ended {
+            slot,
+            at: SessionFrame::new(1024),
+        })
+        .expect("stale second end");
+    tick_fixture(&mut queue, &mut rig);
+    assert_eq!(queue.current, None);
+    assert!(
+        std::iter::from_fn(|| events.try_recv().ok())
+            .all(|envelope| !matches!(envelope.event, QueueEvent::QueueEnded))
+    );
+}
+
+#[kithara::test(tokio)]
 #[kithara::flash(io)]
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn play_retries_the_current_track_after_its_prefetch_failed() {

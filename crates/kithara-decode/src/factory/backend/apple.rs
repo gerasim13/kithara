@@ -513,13 +513,13 @@ mod apple_factory_tests {
 mod apple_headerless_cbr_mp3_tests {
     use std::{io::Cursor, sync::atomic::AtomicU64};
 
-    use kithara_platform::sync::Arc;
+    use kithara_platform::{sync::Arc, time::Duration};
     use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
     use kithara_test_fixtures::{assets::signal_mp3_track_sine440_187s, without_xing_frame};
     use kithara_test_utils::kithara;
 
     use crate::{
-        DecoderBackend, DecoderConfig, DecoderFactory,
+        DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory,
         test_pools::{TestPools, pools},
     };
 
@@ -538,7 +538,7 @@ mod apple_headerless_cbr_mp3_tests {
                 .pools(pools())
                 .build();
 
-        let decoder =
+        let mut decoder =
             DecoderFactory::create_from_media_info(Cursor::new(bytes), &media_info, config)
                 .expect("headerless CBR MP3 must open on the streaming Apple path");
 
@@ -548,6 +548,40 @@ mod apple_headerless_cbr_mp3_tests {
              without forwarding it the open reports no duration and every seek \
              lands nowhere"
         );
+        assert_eq!(decoder.media_origin(), Some(Duration::ZERO));
+        let DecoderChunkOutcome::Chunk(first) = decoder.next_chunk().expect("first headerless PCM")
+        else {
+            panic!("in-memory headerless source produces PCM");
+        };
+        assert_eq!(first.meta.timestamp, Duration::ZERO);
+        assert_eq!(first.meta.frame_offset, 0);
+        assert_eq!(first.meta.media_origin, Some(Duration::ZERO));
+        assert!(!first.samples.is_empty());
+        assert!(first.samples.iter().all(|sample| sample.is_finite()));
+        let first_pcm = first.samples.to_vec();
+        let target = Duration::from_millis(1_500);
+        decoder.seek(target).expect("headerless content seek");
+        let DecoderChunkOutcome::Chunk(sought) =
+            decoder.next_chunk().expect("sought headerless PCM")
+        else {
+            panic!("in-memory headerless seek produces PCM");
+        };
+        let frame = sought
+            .spec()
+            .duration_for(1)
+            .expect("source frame duration");
+        assert!(sought.meta.timestamp.abs_diff(target) <= frame);
+        assert_eq!(sought.meta.media_origin, Some(Duration::ZERO));
+        decoder.seek(Duration::ZERO).expect("headerless rewind");
+        let DecoderChunkOutcome::Chunk(replayed) =
+            decoder.next_chunk().expect("replayed headerless PCM")
+        else {
+            panic!("in-memory headerless rewind produces PCM");
+        };
+        assert_eq!(replayed.meta.timestamp, first.meta.timestamp);
+        assert_eq!(replayed.meta.frame_offset, first.meta.frame_offset);
+        assert_eq!(replayed.meta.media_origin, first.meta.media_origin);
+        assert_eq!(replayed.samples.as_ref(), first_pcm.as_slice());
     }
 }
 

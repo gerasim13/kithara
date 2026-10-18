@@ -359,7 +359,8 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
         let underrun = track.attached
             && matches!(track.status, TrackStatus::Playing { .. })
             && matches!(&receipt,
-                TrackReceipt::Event(DeckEvent::Underrun { slot: named, .. }) if Some(*named) == slot
+                TrackReceipt::Event(DeckEvent::UnderrunEnded { slot: named, item, recovered: true, .. })
+                    if Some(*named) == slot && *item == track.item
             );
         let mut settled = self.inner.settle(receipt, out);
         if let Settled::Rejected {

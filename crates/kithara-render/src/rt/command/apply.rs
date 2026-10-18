@@ -22,6 +22,7 @@ impl Deck {
         seq: Seq,
         context_valid: bool,
     ) -> Option<DeckPart> {
+        self.interrupt_underrun(&part, at);
         match part {
             DeckPart::Attach {
                 slot,
@@ -75,6 +76,18 @@ impl Deck {
                 .take_eq_layout(layout)
                 .map(|layout| DeckPart::Returned(Returned::Eq(layout))),
             DeckPart::Returned(returned) => Some(DeckPart::Returned(returned)),
+        }
+    }
+
+    fn interrupt_underrun(&mut self, part: &DeckPart, at: SessionFrame) {
+        match part {
+            DeckPart::Start { slot, .. }
+            | DeckPart::Stop { slot, .. }
+            | DeckPart::Adopt { slot, .. }
+            | DeckPart::Detach { slot }
+            | DeckPart::Replace { slot, .. } => self.finish_underrun(*slot, at),
+            DeckPart::Chain { to, .. } => self.finish_underrun(*to, at),
+            _ => {}
         }
     }
 

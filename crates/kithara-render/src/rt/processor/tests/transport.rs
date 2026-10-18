@@ -989,3 +989,98 @@ async fn a_full_event_ring_counts_its_overflows(constant_half: &'static [u8]) {
     assert_eq!(snapshot.metrics.event_overflows(), 1);
     assert_eq!(ends.events.drain().count(), capacity);
 }
+
+#[kithara::test(native, tokio)]
+#[case::pause(DeckPart::Stop { slot: A, fade: Fade::Declick })]
+#[case::seek(DeckPart::Adopt { slot: A, segment: SegmentId::FIRST.next() })]
+#[case::detach(DeckPart::Detach { slot: A })]
+async fn a_transport_reset_finishes_the_active_underrun_once(#[case] reset: DeckPart) {
+    let mut fixture = crate::mock::pcm_fixture::PcmFixture::new(8, false).await;
+    let mut prepared = crate::mock::pcm_fixture::chunk(SegmentId::FIRST, &[0.25; BLOCK]);
+    prepared.meta.media_origin = Some(Duration::ZERO);
+    fixture
+        .push(PcmPacket::Chunk(Box::new(prepared)))
+        .expect("prepared PCM");
+    let resource = Box::new(
+        PlayerResource::new(
+            PcmConsumer::new(fixture.receiver.take().expect("receiver")),
+            Arc::from("stalled transport"),
+            &pools(),
+        )
+        .expect("resource"),
+    );
+    let item = kithara_events::TrackId::allocate();
+    let (mut mixer, mut ends) = mixer();
+    send(
+        &mut ends,
+        When::Next,
+        vec![
+            DeckPart::Attach {
+                slot: A,
+                item_id: item,
+                pcm: resource,
+                segment: SegmentId::FIRST,
+            },
+            DeckPart::Start {
+                slot: A,
+                fade: Fade::Declick,
+            },
+        ],
+    );
+    render(&mut mixer, 0);
+    assert!(ends.events.drain().next().is_none());
+    render(&mut mixer, BLOCK);
+    let position = AudioSpec::new(1, NonZeroU32::new(48_000).expect("rate"))
+        .duration_for(u64::try_from(BLOCK).expect("block frames"))
+        .expect("block duration");
+    assert!(matches!(
+        ends.events.drain().collect::<Vec<_>>().as_slice(),
+        [DeckEvent::UnderrunStarted { slot, item: actual, at, position: Some(actual_position) }]
+            if *slot == A && *actual == item && *at == frame_at(BLOCK) && *actual_position == position
+    ));
+    drop(receipts(&mut ends));
+    let seeking = matches!(reset, DeckPart::Adopt { .. });
+    send(&mut ends, When::Next, vec![reset]);
+    render(&mut mixer, 2 * BLOCK);
+    let events = ends.events.drain().collect::<Vec<_>>();
+    assert!(
+        matches!(
+            events.first(),
+            Some(DeckEvent::UnderrunEnded { slot, item: actual, at, frames, position: Some(actual_position), recovered: false })
+                if *slot == A && *actual == item && *at == frame_at(2 * BLOCK)
+                    && usize::try_from(*frames).expect("frame count") == BLOCK && *actual_position == position
+        ),
+        "the original window finishes with its complete missing-frame count: {events:?}"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, DeckEvent::UnderrunEnded { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, DeckEvent::UnderrunStarted { .. }))
+            .count(),
+        usize::from(seeking)
+    );
+    if seeking {
+        let pending = mixer.deck.tracks.at(A).expect("adopted track");
+        assert_eq!(
+            pending.source_info(),
+            None,
+            "old geometry is not published for the adopted segment"
+        );
+        assert!(pending.mark(frame_at(2 * BLOCK)).is_none());
+        assert!(matches!(events.last(),
+            Some(DeckEvent::UnderrunStarted { item: actual, position: Some(actual_position), .. })
+                if *actual == item && *actual_position == position));
+        send(&mut ends, When::Next, vec![DeckPart::Detach { slot: A }]);
+        render(&mut mixer, 3 * BLOCK);
+        assert!(matches!(ends.events.drain().collect::<Vec<_>>().as_slice(),
+            [DeckEvent::UnderrunEnded { item: actual, position: Some(actual_position), frames, recovered: false, .. }]
+                if *actual == item && *actual_position == position && usize::try_from(*frames).expect("frame count") == BLOCK));
+    }
+}

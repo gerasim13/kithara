@@ -164,7 +164,10 @@ fn process_fetch_must_distinguish_failure_from_natural_eof() {
         );
         assert!(producer(PcmPacket::Chunk(Box::new(terminal))).is_ok());
         let mut reader = resource(receiver);
-        assert_eq!(reader.source_info(), None);
+        let prepared = reader.source_info().expect("admitted initial source");
+        assert_eq!(prepared.source_span, observed.source_span);
+        assert_eq!(prepared.media_origin, observed.media_origin);
+        assert_eq!(prepared.source_revision, observed.source_revision);
         assert_eq!(
             reader.read(None, &mut [&mut left, &mut right], 0..1, &mut 8),
             ReadOutcome::Full { frames: 1 }

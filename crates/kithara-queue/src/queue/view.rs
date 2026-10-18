@@ -125,11 +125,14 @@ where
             .and_then(|index| self.active.get(index))
             .map(|active| &active.track)
             .map(|track| track.snapshot().as_ref().clone());
-        if let Some(SeekPosition::Pending { item, to, .. }) = self.held_position
-            && let Some(track) = &mut track
-            && track.item == item
-        {
-            track.position = to;
+        if let Some(track) = &mut track {
+            match self.held_position {
+                Some(SeekPosition::Held(to)) => track.position = to,
+                Some(SeekPosition::Pending { item, to, .. }) if track.item == item => {
+                    track.position = to;
+                }
+                _ => {}
+            }
         }
         let slot = track
             .as_ref()

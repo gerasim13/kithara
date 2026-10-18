@@ -4,6 +4,7 @@ use kithara_audio::TrackFailureKind;
 use kithara_command::{Protocol, Target};
 use kithara_effects::{GainDb, eq::EqLayout};
 use kithara_events::TrackId;
+use kithara_platform::time::Duration;
 use kithara_signal::{SegmentId, SessionFrame};
 
 use super::{DeckMixSettingsChange, SlotMark};
@@ -146,10 +147,19 @@ pub enum DeckEvent {
         slot: Slot,
         at: SessionFrame,
     },
-    Underrun {
+    UnderrunStarted {
         slot: Slot,
+        item: TrackId,
         at: SessionFrame,
+        position: Option<Duration>,
+    },
+    UnderrunEnded {
+        slot: Slot,
+        item: TrackId,
+        at: SessionFrame,
+        position: Option<Duration>,
         frames: u32,
+        recovered: bool,
     },
 }
 

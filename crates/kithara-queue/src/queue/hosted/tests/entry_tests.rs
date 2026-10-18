@@ -20,6 +20,7 @@ pub(super) use kithara_test_utils::{TestTempDir, kithara};
 use super::*;
 pub(super) use crate::{
     QueueConfig, TrackSource,
+    queue::types::SeekPosition,
     test_pools::{TestPools, pools},
 };
 
@@ -296,6 +297,54 @@ async fn finish_disarms_and_ignores_stale_ticket() {
             .expect("following guard")
             .token()
             .is_cancelled()
+    );
+}
+
+#[kithara::test(tokio)]
+async fn a_seek_accepted_while_opening_is_adopted_before_the_first_start() {
+    let (mut queue, first, _, mut rig, dir) = pending_selection();
+    let to = Position::from_millis(10);
+    let sent = with_outbox(&mut queue, &mut rig, |queue, out| {
+        Player::apply(queue, QueueCommand::Seek { to }, out)
+    })
+    .expect("accept seek while the selected source opens");
+    assert_eq!(sent, None);
+    assert_eq!(queue.control().position_seconds(), Some(to.as_secs_f64()));
+
+    answer_load(&mut queue, &mut rig, &dir).await;
+    let Some(SeekPosition::Pending {
+        item,
+        seq,
+        to: saved,
+        ..
+    }) = queue.held_position
+    else {
+        panic!("the opened source must receive the saved seek");
+    };
+    assert_eq!((item, saved), (first, to));
+    assert_eq!(queue.control().position_seconds(), Some(to.as_secs_f64()));
+    assert!(queue.pending_handover.is_none());
+    let receipts = rig.block(SessionFrame::new(128), 0.0).expect("entry block");
+    assert!(
+        receipts.iter().any(|receipt| {
+            receipt.seq() == seq
+                && receipt
+                    .batch()
+                    .commands
+                    .iter()
+                    .any(|part| matches!(part, DeckPart::Adopt { .. }))
+        }),
+        "the deferred seek must reach the deck as an adoption"
+    );
+    assert!(
+        receipts.iter().all(|receipt| {
+            receipt
+                .batch()
+                .commands
+                .iter()
+                .all(|part| !matches!(part, DeckPart::Start { .. }))
+        }),
+        "the first Start must wait for PCM from the requested segment"
     );
 }
 

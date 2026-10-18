@@ -12,7 +12,7 @@ use super::super::{
     Queue, Transition,
     command::play_error,
     slots::{LoadState, Role},
-    types::{Continuation, Target},
+    types::{Continuation, SeekPosition, Target},
 };
 use crate::{AdvanceReason, QueueError, QueueEvent, RepeatMode, TrackStatus};
 
@@ -364,6 +364,9 @@ where
             if let Some(target) = &mut self.target {
                 target.continued = Some(Continuation::Load(load.seq()));
             }
+        }
+        if let Some(SeekPosition::Held(to)) = self.held_position {
+            self.seek_to(to, out).map_err(play_error)?;
         }
         Ok(true)
     }

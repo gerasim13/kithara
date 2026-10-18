@@ -150,8 +150,9 @@ mod tests {
                 .backend(DecoderBackend::Symphonia)
                 .pools(pools())
                 .build();
-        let decoder = DecoderFactory::create_with_probe(Cursor::new(bytes), Some("mp3"), config)
-            .expect("headerless MP3 opens through the software factory");
+        let mut decoder =
+            DecoderFactory::create_with_probe(Cursor::new(bytes), Some("mp3"), config)
+                .expect("headerless MP3 opens through the software factory");
         let crate::DecoderDuration::RawLength(duration) = decoder
             .duration()
             .expect("headerless MP3 needs bitrate estimation during reader construction")
@@ -159,5 +160,15 @@ mod tests {
             panic!("standalone MP3 duration must describe a raw span");
         };
         assert!((180.0..190.0).contains(&duration.as_secs_f64()));
+        let origin = decoder.spec().duration_for(529).expect("MP3 decoder delay");
+        assert_eq!(decoder.media_origin(), Some(origin));
+        let crate::DecoderChunkOutcome::Chunk(first) =
+            decoder.next_chunk().expect("headerless PCM")
+        else {
+            panic!("in-memory headerless source produces PCM");
+        };
+        assert_eq!(first.meta.timestamp, kithara_platform::time::Duration::ZERO);
+        assert_eq!(first.meta.frame_offset, 0);
+        assert_eq!(first.meta.media_origin, Some(origin));
     }
 }

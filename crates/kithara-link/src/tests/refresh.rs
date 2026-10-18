@@ -1,12 +1,17 @@
 use kithara_command::{Seq, When};
 use kithara_host::{HostOwner, api::Tempo};
-use kithara_play::{Bound, HostedDeck, PlayError, Player, Settled, TrackCommand, TrackStatus};
+use kithara_play::{
+    Bound, HostedDeck, PlayError, Player, Settled, TrackCommand, TrackReceipt, TrackStatus,
+};
+use kithara_render::bridge::{DeckEvent, Slot};
 use kithara_signal::{FrameCount, SessionFrame};
 use kithara_sync::SpeedCurve;
 use kithara_test_utils::kithara;
 
 use super::{
-    fixtures::{Command, Control, Deck, Rig, answer, deck, grid, load, position, trajectory},
+    fixtures::{
+        Command, Control, Deck, Rig, answer, deck, grid, load, position, sounding, trajectory,
+    },
     host_fixture::{host, register, tempo},
 };
 use crate::{LinkedPlayer, SyncStatus};
@@ -301,4 +306,44 @@ fn a_child_refusing_the_segment_keeps_every_preparation() {
             );
         });
     }
+}
+
+#[kithara::test]
+#[case::recovery(true, true, true, true)]
+#[case::closed_by_transport(false, true, true, false)]
+#[case::stale_item(true, false, true, false)]
+#[case::foreign_slot(true, true, false, false)]
+fn only_the_resident_tracks_pcm_recovery_realigns_sync(
+    #[case] recovered: bool,
+    #[case] same_item: bool,
+    #[case] same_slot: bool,
+    #[case] realigns: bool,
+) {
+    let (mut deck, control, mut rig, _) = sounding();
+    let track = deck.snapshot().track;
+    let event = DeckEvent::UnderrunEnded {
+        slot: if same_slot {
+            track.slot.expect("resident slot")
+        } else {
+            Slot::new(1)
+        },
+        item: if same_item {
+            track.item
+        } else {
+            kithara_events::TrackId::allocate()
+        },
+        at: SessionFrame::new(128),
+        position: Some(track.position),
+        frames: 128,
+        recovered,
+    };
+    rig.now = SessionFrame::new(128);
+    rig.run(|out| Player::settle(&mut deck, TrackReceipt::Event(event), out));
+    assert_eq!(
+        control
+            .commands()
+            .iter()
+            .any(|(_, command)| matches!(command, Command::Speed(..))),
+        realigns
+    );
 }

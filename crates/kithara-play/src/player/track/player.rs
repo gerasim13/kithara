@@ -385,8 +385,9 @@ impl<S> PlayerImpl<S> {
             {
                 self.status = TrackStatus::Faded { at }
             }
-            DeckEvent::Underrun { slot, .. }
-                if Some(slot) == self.slot && self.loading.is_none() =>
+            DeckEvent::UnderrunStarted { slot, item, .. }
+            | DeckEvent::UnderrunEnded { slot, item, .. }
+                if Some(slot) == self.slot && item == self.item && self.loading.is_none() =>
             {
                 self.mark = out
                     .pass()

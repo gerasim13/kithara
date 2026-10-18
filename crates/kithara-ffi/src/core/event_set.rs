@@ -3,7 +3,7 @@ use kithara::{
     assets::AssetEvent,
     download::DownloaderEvent,
     play::{DjEvent, EngineEvent, PlayerEvent, SessionEvent},
-    queue::QueueEvent,
+    queue::{ItemEvent, QueueEvent},
 };
 use kithara_audio::{AudioEvent, DecoderEvent};
 use kithara_events::EventSet;
@@ -14,6 +14,7 @@ use kithara_hls::{DrmEvent, HlsEvent};
 #[non_exhaustive]
 pub(crate) enum QueueBusEvent {
     Player(PlayerEvent),
+    Item(ItemEvent),
     Queue(QueueEvent),
     Engine(EngineEvent),
     Session(SessionEvent),

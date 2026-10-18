@@ -11,7 +11,7 @@ use kithara_signal::{FaderValue, SessionFrame};
 
 use super::{
     Queue, Transition,
-    slots::Role,
+    slots::{LoadState, Role},
     transition::TransitionRequest,
     types::{Placement, SeekPosition},
 };
@@ -597,7 +597,7 @@ where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
     F: TrackFactory<S>,
 {
-    fn seek_to(
+    pub(super) fn seek_to(
         &mut self,
         to: Position,
         out: &mut Outbox<'_, S>,
@@ -611,6 +611,10 @@ where
             return Ok(None);
         };
         let active = self.active.get_mut(index).ok_or(PlayError::NoActiveSlot)?;
+        if matches!(active.load, Some(LoadState::Opening(_))) {
+            self.held_position = Some(SeekPosition::Held(to));
+            return Ok(None);
+        }
         let item = active.item;
         let sent = active.track.apply(TrackCommand::Seek { to }, out)?;
         self.withdraw_auto(out)?;

@@ -1,7 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 use std::num::NonZeroU32;
 
-use kithara_platform::sync::Arc;
+use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{OutputContext, SegmentId, SessionEpoch, SessionFrame};
 use kithara_test_utils::kithara;
 use kithara_warp::RenderContext;
@@ -129,12 +129,22 @@ async fn underrun_edges_emit_once_per_starvation_window() {
         ));
     }
     assert_eq!(metrics.snapshot().underruns(), 1);
-    assert!(receiver.try_pop().is_none());
+    assert!(matches!(
+        receiver.try_pop(),
+        Some(DeckEvent::UnderrunStarted { slot, item, at, position: None })
+            if slot == Slot::new(0) && item == track.item_id && at == start
+    ));
+    assert!(
+        receiver.try_pop().is_none(),
+        "the active gap starts only once"
+    );
+    let mut recovery = chunk(SegmentId::FIRST, &[0.1, 0.2]);
+    recovery.meta.timestamp = Duration::from_secs(2);
+    recovery.meta.frame_offset = 96_000;
+    recovery.meta.media_origin = Some(Duration::from_secs(1));
+    recovery.meta.source_span = kithara_signal::SourceSpan::new(96_000, 96_002, rate, 2);
     fixture
-        .push(PcmPacket::Chunk(Box::new(chunk(
-            SegmentId::FIRST,
-            &[0.1, 0.2],
-        ))))
+        .push(PcmPacket::Chunk(Box::new(recovery)))
         .expect("recovery PCM");
     let mut sink = RtSink::new(&mut events, &metrics, Slot::new(0), start);
     assert!(matches!(
@@ -149,8 +159,44 @@ async fn underrun_edges_emit_once_per_starvation_window() {
         TrackReadOutcome::Full { frames: 2, .. }
     ));
     assert!(
-        matches!(receiver.try_pop(), Some(DeckEvent::Underrun { slot, at, frames: 4 }) if slot == Slot::new(0) && at == start)
+        matches!(receiver.try_pop(), Some(DeckEvent::UnderrunEnded { slot, item, at, frames: 4, position: None, recovered: true }) if slot == Slot::new(0) && item == track.item_id && at == start)
     );
     assert!(receiver.try_pop().is_none());
     assert_eq!(metrics.snapshot().underruns(), 1);
+
+    assert!(matches!(
+        track.render(
+            Some(&context),
+            &mut [&mut left, &mut right],
+            &mut [&mut bus_left, &mut bus_right],
+            0..2,
+            &mut 16,
+            &mut sink,
+        ),
+        TrackReadOutcome::Full { frames: 0, .. }
+    ));
+    assert!(matches!(
+        receiver.try_pop(),
+        Some(DeckEvent::UnderrunStarted { position: Some(position), .. })
+            if position == Duration::from_secs(1) + Duration::from_nanos(41_666)
+    ));
+    let mut end = chunk(SegmentId::FIRST, &[]);
+    end.meta.lane_frame = 2;
+    end.meta.frame_offset = 96_002;
+    end.meta.timestamp = Duration::from_secs(2) + Duration::from_nanos(41_666);
+    end.meta.media_origin = Some(Duration::from_secs(1));
+    end.meta.source_span = kithara_signal::SourceSpan::new(96_002, 96_002, rate, 0);
+    end.meta.end_of_track = true;
+    fixture
+        .push(PcmPacket::Chunk(Box::new(end)))
+        .expect("terminal PCM");
+    assert!(track.poll_end(0, &mut 16, &mut sink));
+    assert!(matches!(
+        receiver.try_pop(),
+        Some(DeckEvent::UnderrunEnded { frames: 2, position: Some(position), recovered: false, .. })
+            if position == Duration::from_secs(1) + Duration::from_nanos(41_666)
+    ));
+    assert!(matches!(receiver.try_pop(), Some(DeckEvent::Ended { .. })));
+    assert!(receiver.try_pop().is_none());
+    assert_eq!(metrics.snapshot().underruns(), 2);
 }

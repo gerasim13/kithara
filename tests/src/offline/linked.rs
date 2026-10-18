@@ -614,14 +614,36 @@ where
     }
 
     fn settle(&mut self, receipt: TrackReceipt<'_, S>, out: &mut Outbox<'_, S>) -> Settled {
-        if let TrackReceipt::Event(DeckEvent::Underrun { slot, at, frames }) = &receipt {
-            self.trace(
-                "deck event",
-                &serde_json::json!({
-                    "Underrun": {"slot": slot.get(), "at": i64::from(*at), "frames": frames},
-                }),
-                out,
-            );
+        if let TrackReceipt::Event(event) = &receipt {
+            let diagnostic = match event {
+                DeckEvent::UnderrunStarted { slot, item, at, .. } => Some(serde_json::json!({
+                    "UnderrunStarted": {"slot": slot.get(), "item": item.as_u64(), "at": i64::from(*at)},
+                })),
+                DeckEvent::UnderrunEnded {
+                    slot,
+                    item,
+                    at,
+                    frames,
+                    recovered: true,
+                    ..
+                } => Some(serde_json::json!({
+                    "Underrun": {"slot": slot.get(), "item": item.as_u64(), "at": i64::from(*at), "frames": frames},
+                })),
+                DeckEvent::UnderrunEnded {
+                    slot,
+                    item,
+                    at,
+                    frames,
+                    recovered: false,
+                    ..
+                } => Some(serde_json::json!({
+                    "UnderrunEnded": {"slot": slot.get(), "item": item.as_u64(), "at": i64::from(*at), "frames": frames},
+                })),
+                _ => None,
+            };
+            if let Some(diagnostic) = diagnostic {
+                self.trace("deck event", &diagnostic, out);
+            }
         }
         if let TrackReceipt::Loaded(receipt) = &receipt {
             self.trace(
@@ -1051,8 +1073,12 @@ where
                         entries.push(entry);
                     }
                 }
-            } else if matches!(event, DeckEvent::Failed { .. } | DeckEvent::Underrun { .. })
-                && let Some(capture) = self.observation.lock().capture.as_mut()
+            } else if matches!(
+                event,
+                DeckEvent::Failed { .. }
+                    | DeckEvent::UnderrunStarted { .. }
+                    | DeckEvent::UnderrunEnded { .. }
+            ) && let Some(capture) = self.observation.lock().capture.as_mut()
             {
                 assert!(capture.faults.len() < 16, "bounded queue fault evidence");
                 capture.faults.push(*event);

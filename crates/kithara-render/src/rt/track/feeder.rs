@@ -21,7 +21,7 @@ pub struct PlayerResource {
     pub(super) lane: LaneFrame,
     #[field(get, vis = "pub(super)", copy)]
     position: Option<SourceSpan>,
-    /// Immutable source timing from the current segment's observed packet.
+    /// Last observed source timing; media zero survives a same-track seek.
     observed: Option<AudioChunkInfo>,
     mapped: bool,
     awaiting_segment: bool,
@@ -50,6 +50,11 @@ impl PlayerResource {
     where
         S: HasPool<f32>,
     {
+        let observed = consumer
+            .receiver
+            .next_chunk_info()
+            .filter(|info| info.segment == SegmentId::FIRST);
+        let position = observed.and_then(|info| info.source_span?.for_output_range(0..0));
         Ok(Self {
             src,
             consumer: WasmSend::new(consumer),
@@ -59,8 +64,8 @@ impl PlayerResource {
                 segment: SegmentId::FIRST,
                 frame: 0,
             },
-            position: None,
-            observed: None,
+            position,
+            observed,
             mapped: false,
             awaiting_segment: false,
             eof: false,
@@ -85,13 +90,17 @@ impl PlayerResource {
     /// Source origin from the same immutable PCM metadata as the current raw mark.
     #[must_use]
     pub fn visible_origin(&self) -> Option<Duration> {
-        self.observed.and_then(|info| info.visible_origin)
+        self.observed
+            .filter(|info| info.segment == self.lane.segment)
+            .and_then(|info| info.visible_origin)
     }
 
-    /// Consumed geometry with any admitted endpoint from the same source revision.
+    /// Observed geometry with any admitted endpoint from the same source revision.
     #[must_use]
     pub(crate) fn source_info(&self) -> Option<AudioChunkInfo> {
-        let mut observed = self.observed?;
+        let mut observed = self
+            .observed
+            .filter(|info| info.segment == self.lane.segment)?;
         if let Some(terminal) = self.consumer.get().receiver.terminal_info()
             && terminal.segment == observed.segment
             && terminal.source_revision == observed.source_revision
@@ -119,7 +128,6 @@ impl PlayerResource {
                 publisher.clear();
             }
             self.lane = LaneFrame { segment, frame: 0 };
-            self.observed = None;
             self.mapped = false;
             self.eof = false;
             self.awaiting_segment = true;

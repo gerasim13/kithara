@@ -482,7 +482,9 @@ impl<'s> MpaReader<'s> {
             actual_ts: self.next_packet_ts,
         })
     }
+}
 
+impl<'s> MpaReader<'s> {
     /// Reads the first MPEG frame to identify the layer and build the track.
     ///
     /// # Errors
@@ -541,6 +543,18 @@ impl<'s> MpaReader<'s> {
                 if let Some(n_mpeg_frames) = estimate_num_mpeg_frames(&mut mss) {
                     track.with_num_frames(n_mpeg_frames * u64::from(header.num_frames()));
                 }
+            }
+        }
+
+        // Layer III decoder priming exists even without an encoder trim tag.
+        if matches!(header.layer, MpegLayer::Layer3) && track.delay.unwrap_or(0) == 0 {
+            let delay = consts::LAME_LAYOUT_DECODER_DELAY;
+            track.with_delay(delay);
+            if let Some(frames) = track.num_frames {
+                let Some(frames) = frames.checked_sub(u64::from(delay)) else {
+                    return decode_error("mpa: declared frame extent precedes decoder delay");
+                };
+                track.with_num_frames(frames);
             }
         }
 

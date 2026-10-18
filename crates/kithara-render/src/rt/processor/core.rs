@@ -260,6 +260,13 @@ fn slot_snapshot(track: &PlayerTrack, at: SessionFrame) -> SlotSnapshot {
 }
 
 impl Deck {
+    pub(in crate::rt) fn finish_underrun(&mut self, slot: Slot, at: SessionFrame) {
+        if let Some(track) = self.tracks.at_mut(slot) {
+            let mut sink = RtSink::new(&mut self.events, &self.metrics, slot, at);
+            track.finish_underrun(0, &mut sink);
+        }
+    }
+
     fn advance(
         &mut self,
         range: Range<usize>,

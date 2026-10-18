@@ -115,8 +115,15 @@ pub enum QueueEvent {
 
 #[derive(Clone, Debug, Event)]
 pub enum ItemEvent {
-    PlaybackLikelyToKeepUp,
-    PlaybackStalled,
+    PlaybackLikelyToKeepUp {
+        id: TrackId,
+        position: kithara_platform::time::Duration,
+        frames: u32,
+    },
+    PlaybackStalled {
+        id: TrackId,
+        position: kithara_platform::time::Duration,
+    },
 }
 
 #[cfg(test)]

@@ -9,7 +9,7 @@ use kithara::{
         tokio::sync::broadcast,
     },
     play::{PlayerEvent, TimeControlStatus},
-    queue::QueueEvent,
+    queue::{ItemEvent, QueueEvent},
 };
 
 use crate::{
@@ -63,9 +63,28 @@ impl Router {
             self.dispatch_queue_event(qe);
             return;
         }
+        if let QueueBusEvent::Item(event) = event {
+            self.dispatch_item_event(event);
+            return;
+        }
         if let Ok(ffi_event) = FfiPlayerEvent::try_from(event) {
             self.observer.on_event(ffi_event);
         }
+    }
+
+    fn dispatch_item_event(&self, event: &ItemEvent) {
+        let (id, position) = match event {
+            ItemEvent::PlaybackStalled { id, position }
+            | ItemEvent::PlaybackLikelyToKeepUp { id, position, .. } => (*id, *position),
+        };
+        let Some(item) = self.items.lock().get(&id).cloned() else {
+            return;
+        };
+        let position_ms = u64::try_from(position.as_millis()).unwrap_or(u64::MAX);
+        item.deliver(match event {
+            ItemEvent::PlaybackStalled { .. } => FfiItemEvent::UnderrunStarted { position_ms },
+            ItemEvent::PlaybackLikelyToKeepUp { .. } => FfiItemEvent::UnderrunEnded { position_ms },
+        });
     }
 
     /// Forward a queue event to the player observer. A status change is
@@ -394,6 +413,33 @@ mod tests {
         item.add_observer(item_observer);
         items.lock().insert(item.track_id(), item.clone());
         (item, observer)
+    }
+
+    #[kithara::test]
+    fn underrun_edges_reach_the_named_item_after_the_current_item_changes() {
+        let items = Arc::new(Mutex::new(ItemRegistry::default()));
+        let (stalled, stalled_observer) = register_observed_item(&items);
+        let (successor, successor_observer) = register_observed_item(&items);
+        let router = routed_to(&items, Some(successor.track_id()));
+        router.dispatch(&QueueBusEvent::Item(ItemEvent::PlaybackStalled {
+            id: stalled.track_id(),
+            position: Duration::from_millis(730),
+        }));
+        assert!(matches!(
+            stalled_observer.take_events().as_slice(),
+            [FfiItemEvent::UnderrunStarted { position_ms: 730 }]
+        ));
+        assert!(successor_observer.take_events().is_empty());
+        router.dispatch(&QueueBusEvent::Item(ItemEvent::PlaybackLikelyToKeepUp {
+            id: stalled.track_id(),
+            position: Duration::from_millis(740),
+            frames: 480,
+        }));
+        assert!(matches!(
+            stalled_observer.take_events().as_slice(),
+            [FfiItemEvent::UnderrunEnded { position_ms: 740 }]
+        ));
+        assert!(successor_observer.take_events().is_empty());
     }
 
     #[kithara::test]

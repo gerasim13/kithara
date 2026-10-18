@@ -512,7 +512,8 @@ impl<S> TrackReceipt<'_, S> {
                 DeckEvent::Ended { slot: named, .. }
                 | DeckEvent::Failed { slot: named, .. }
                 | DeckEvent::Faded { slot: named, .. }
-                | DeckEvent::Underrun { slot: named, .. },
+                | DeckEvent::UnderrunStarted { slot: named, .. }
+                | DeckEvent::UnderrunEnded { slot: named, .. },
             ) => *named == slot,
             Self::Loaded(_) => false,
         }

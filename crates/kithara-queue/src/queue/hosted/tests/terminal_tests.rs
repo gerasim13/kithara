@@ -1,7 +1,7 @@
 use std::num::NonZeroU32;
 
 use kithara_audio::{DecodeErrorKind, TrackFailureKind};
-use kithara_command::{Batch, ChannelConfig, Seq, When, channel};
+use kithara_command::{Batch, ChannelConfig, Outcome, Seq, When, channel};
 use kithara_decode::TrackMetadata;
 use kithara_events::TrackId;
 use kithara_platform::time::Duration;
@@ -84,9 +84,23 @@ impl Player<TestPools> for SnapshotTrack {
     }
     fn settle(
         &mut self,
-        _receipt: TrackReceipt<'_, TestPools>,
+        receipt: TrackReceipt<'_, TestPools>,
         _out: &mut Outbox<'_, TestPools>,
     ) -> Settled {
+        if let TrackReceipt::Deck {
+            seq,
+            outcome: Outcome::Applied { at, .. },
+            batch,
+        } = receipt
+            && batch
+                .commands
+                .iter()
+                .any(|part| matches!(part, DeckPart::Detach { slot } if Some(*slot) == self.0.slot))
+        {
+            self.0.status = PlayerTrackStatus::Released;
+            self.0.attached = false;
+            return Settled::Applied { seq, at: *at };
+        }
         Settled::Pending
     }
     fn tick(&mut self, _now: SessionFrame, _out: &mut Outbox<'_, TestPools>) {}
@@ -546,53 +560,203 @@ fn natural_end_names_the_track_that_accepted_the_receipt(#[case] role: Role) {
 }
 
 #[kithara::test]
-fn an_underrun_on_the_current_track_reports_a_stall_and_its_recovery() {
-    let (mut queue, _, _) = selected_second();
-    let slot = queue
+fn an_underrun_on_the_current_track_reports_a_stall_before_its_recovery() {
+    let (mut queue, _, item) = selected_second();
+    let current = queue.active_current_index().expect("current track");
+    let slot = queue.active.get(current).expect("current track").slot;
+    let position = Duration::from_millis(730);
+    queue
         .active
-        .iter()
-        .find(|active| active.role == Role::Current)
+        .get_mut(current)
         .expect("current track")
-        .slot;
+        .track
+        .0
+        .position = position;
     let mut events = queue.subscribe::<ItemEvent>();
     report(
         &mut queue,
-        DeckEvent::Underrun {
+        DeckEvent::UnderrunStarted {
             slot,
+            item,
             at: SessionFrame::new(128),
-            frames: 64,
+            position: Some(position),
         },
     );
-    let published = std::iter::from_fn(|| events.try_recv().ok())
-        .map(|envelope| envelope.event)
-        .collect::<Vec<_>>();
     assert!(matches!(
-        published.as_slice(),
-        [
-            ItemEvent::PlaybackStalled,
-            ItemEvent::PlaybackLikelyToKeepUp
-        ]
+        events.try_recv().expect("stall starts while PCM is missing").event,
+        ItemEvent::PlaybackStalled { id, position: actual }
+            if id == item && actual == position
     ));
+    assert!(events.try_recv().is_err(), "recovery needs a later RT edge");
+    report(
+        &mut queue,
+        DeckEvent::UnderrunEnded {
+            slot,
+            item,
+            at: SessionFrame::new(192),
+            position: Some(position),
+            frames: 64,
+            recovered: true,
+        },
+    );
+    assert!(matches!(
+        events.try_recv().expect("PCM recovery").event,
+        ItemEvent::PlaybackLikelyToKeepUp { id, position: actual, frames: 64 }
+            if id == item && actual == position
+    ));
+    assert!(events.try_recv().is_err());
 }
 
 #[kithara::test]
 #[case::outgoing(Slot::new(1))]
 #[case::unknown(Slot::new(2))]
-fn an_underrun_on_a_track_that_is_not_current_reports_nothing(#[case] slot: Slot) {
-    let (mut queue, _, _) = selected_second();
+#[case::reused_slot(Slot::new(0))]
+fn an_underrun_start_on_a_track_that_is_not_current_reports_nothing(#[case] slot: Slot) {
+    let (mut queue, first, _) = selected_second();
     let mut events = queue.subscribe::<ItemEvent>();
     report(
         &mut queue,
-        DeckEvent::Underrun {
+        DeckEvent::UnderrunStarted {
             slot,
+            item: first,
             at: SessionFrame::new(128),
-            frames: 64,
+            position: Some(Duration::from_millis(730)),
         },
     );
-    assert!(matches!(
-        events.try_recv(),
-        Err(kithara_platform::tokio::sync::broadcast::error::TryRecvError::Empty)
-    ));
+    assert!(events.try_recv().is_err());
+}
+
+#[kithara::test]
+#[case::outgoing(Role::Outgoing)]
+#[case::leaving(Role::Leaving)]
+fn an_underrun_recovery_survives_a_current_track_handover(#[case] role: Role) {
+    let (mut queue, successor, item) = selected_second();
+    let current = queue.active_current_index().expect("current track");
+    let slot = queue.active.get(current).expect("current track").slot;
+    let mut events = queue.subscribe::<ItemEvent>();
+    report(
+        &mut queue,
+        DeckEvent::UnderrunStarted {
+            slot,
+            item,
+            at: SessionFrame::new(128),
+            position: Some(Duration::from_millis(730)),
+        },
+    );
+    assert!(matches!(events.try_recv().expect("active stall").event,
+        ItemEvent::PlaybackStalled { id, .. } if id == item));
+    let previous = queue.active.get_mut(current).expect("previous current");
+    previous.role = role;
+    previous.track.0.position = Duration::from_secs(9);
+    queue.active.get_mut(0).expect("successor").role = Role::Current;
+    queue.current = Some(successor);
+    report(
+        &mut queue,
+        DeckEvent::UnderrunEnded {
+            slot,
+            item,
+            at: SessionFrame::new(192),
+            position: Some(Duration::from_millis(740)),
+            frames: 64,
+            recovered: true,
+        },
+    );
+    assert!(
+        matches!(events.try_recv().expect("original item recovery").event,
+        ItemEvent::PlaybackLikelyToKeepUp { id, position, frames: 64 }
+            if id == item && position == Duration::from_millis(740))
+    );
+    assert!(events.try_recv().is_err());
+}
+
+#[kithara::test]
+fn an_underrun_recovery_survives_a_detach_receipt_and_slot_reuse() {
+    let (mut queue, successor, item) = selected_second();
+    let slot = queue.active.get(1).expect("current").slot;
+    let mut events = queue.subscribe::<ItemEvent>();
+    report(
+        &mut queue,
+        DeckEvent::UnderrunStarted {
+            slot,
+            item,
+            at: SessionFrame::new(128),
+            position: Some(Duration::from_millis(730)),
+        },
+    );
+    assert!(matches!(events.try_recv().expect("active stall").event,
+        ItemEvent::PlaybackStalled { id, .. } if id == item));
+    queue.active.get_mut(1).expect("current").role = Role::Leaving;
+    let seq = fixture_seq();
+    let outcome = Outcome::Applied {
+        at: SessionFrame::new(192),
+        data: (),
+    };
+    let mut batch = Batch {
+        basis: vec![(slot, None)],
+        commands: vec![DeckPart::Detach { slot }],
+    };
+    let (mut deck, _inbox) = channel(ChannelConfig::builder().build());
+    let (mut dispatcher, _dispatcher_inbox) = channel(ChannelConfig::builder().build());
+    queue.settle_with_output(
+        TrackReceipt::Deck {
+            seq,
+            outcome: &outcome,
+            batch: &mut batch,
+        },
+        None,
+        &mut Outbox::new(&mut deck, &mut dispatcher),
+    );
+    assert!(queue.active.iter().all(|active| active.item != item));
+    let replacement = queue.active.get_mut(0).expect("successor retains custody");
+    replacement.slot = slot;
+    replacement.track.0.slot = Some(slot);
+    replacement.track.0.position = Duration::from_secs(9);
+    replacement.role = Role::Current;
+    queue.current = Some(successor);
+    report(
+        &mut queue,
+        DeckEvent::UnderrunEnded {
+            slot,
+            item,
+            at: SessionFrame::new(192),
+            position: Some(Duration::from_millis(740)),
+            frames: 64,
+            recovered: false,
+        },
+    );
+    assert!(
+        matches!(events.try_recv().expect("retired item recovery").event,
+        ItemEvent::PlaybackLikelyToKeepUp { id, position, frames: 64 }
+            if id == item && position == Duration::from_millis(740))
+    );
+    assert!(events.try_recv().is_err());
+    assert_eq!(queue.current, Some(successor));
+}
+
+#[kithara::test]
+fn an_untimed_underrun_does_not_invent_a_media_position() {
+    let (mut queue, _, item) = selected_second();
+    let slot = queue.active.get(1).expect("current").slot;
+    let mut events = queue.subscribe::<ItemEvent>();
+    for event in [
+        DeckEvent::UnderrunStarted {
+            slot,
+            item,
+            at: SessionFrame::new(128),
+            position: None,
+        },
+        DeckEvent::UnderrunEnded {
+            slot,
+            item,
+            at: SessionFrame::new(192),
+            position: None,
+            frames: 64,
+            recovered: false,
+        },
+    ] {
+        report(&mut queue, event);
+        assert!(events.try_recv().is_err());
+    }
 }
 
 fn accepted_failure(queue: &mut TestQueue, id: TrackId, fault: PlaybackFault) -> DeckEvent {

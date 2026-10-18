@@ -310,6 +310,17 @@ where
         if active.load.is_some_and(|load| load.seq() == seq) {
             return self.load_settled(index, settled, out);
         }
+        if applied
+            && self.current.is_none()
+            && active.role == Role::Current
+            && matches!(
+                active.track.snapshot().as_ref().status,
+                PlayingStatus::Loaded | PlayingStatus::Playing { .. }
+            )
+        {
+            self.current = Some(active.item);
+            self.announce(QueueEvent::CurrentTrackChanged { id: self.current });
+        }
         self.pause_settled(index, seq, applied, settled, out)
     }
     fn repeat_settled(

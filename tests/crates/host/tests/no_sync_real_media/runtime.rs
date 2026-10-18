@@ -182,7 +182,7 @@ fn observe_event(
                 deck.observation.label,
             ));
         }
-        TestEvent::Item(ItemEvent::PlaybackStalled) => failures.push(format!(
+        TestEvent::Item(ItemEvent::PlaybackStalled { .. }) => failures.push(format!(
             "deck {deck_index} ({}) playback stalled during {phase}",
             deck.observation.label,
         )),
