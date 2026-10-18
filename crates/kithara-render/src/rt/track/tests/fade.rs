@@ -96,6 +96,9 @@ fn rendered_linear_fade_reaches_both_exact_endpoints() {
 #[kithara::test]
 fn a_fade_sounds_its_crossfade_gains_frame_by_frame() {
     const LAW_FRAMES: usize = 16;
+    /// How far a sounded gain may sit from the scalar law: the vector curves
+    /// round differently from firewheel's, within 2 ulp.
+    const GAIN_ULPS: u32 = 2;
 
     fn sounded(fade: &mut TrackFade) -> [f32; LAW_FRAMES] {
         let mut input_l = [1.0; LAW_FRAMES];
@@ -126,9 +129,18 @@ fn a_fade_sounds_its_crossfade_gains_frame_by_frame() {
     fade.fade_out(settings, sample_rate);
     let falling = sounded(&mut fade);
 
+    let within = |sounded: f32, gain: f32| sounded.to_bits().abs_diff(gain.to_bits()) <= GAIN_ULPS;
     for frame in 0..LAW_FRAMES {
         let (out, into) = law(frame);
-        assert_eq!(rising[frame], into, "fade-in frame {frame}");
-        assert_eq!(falling[frame], out, "fade-out frame {frame}");
+        assert!(
+            within(rising[frame], into),
+            "fade-in frame {frame}: {} against {into}",
+            rising[frame]
+        );
+        assert!(
+            within(falling[frame], out),
+            "fade-out frame {frame}: {} against {out}",
+            falling[frame]
+        );
     }
 }
