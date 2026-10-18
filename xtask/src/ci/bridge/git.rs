@@ -9,7 +9,6 @@ use anyhow::{Context, Result, bail};
 use super::{
     api::{Github, Gitlab},
     command::BridgeConfig,
-    control::{ControlChange, classify},
 };
 use crate::consts;
 
@@ -129,66 +128,6 @@ impl GitRepo {
             );
         }
         Ok(())
-    }
-
-    /// What the pull request itself changed, measured from where it forked.
-    ///
-    /// `--merge-base` and not a plain two-dot diff: a branch that has not
-    /// caught up with the default branch differs from it by everything merged
-    /// since, so a two-dot diff reads those merges as the branch deleting them.
-    /// Every open pull request would be accused of rewriting the judge the
-    /// moment anything lands, and the accusation would name files its author
-    /// never opened.
-    pub(super) fn changed_control_paths(&self, base: &str, head: &str) -> Result<Vec<String>> {
-        let output = Command::new("git")
-            .current_dir(&self.root)
-            .args([
-                "diff",
-                "--name-only",
-                "--no-renames",
-                "-z",
-                "--merge-base",
-                base,
-                head,
-                "--",
-            ])
-            .args(consts::CONTROL_PATHS)
-            .output()
-            .context("running git diff for CI control paths")?;
-        let paths = String::from_utf8(checked(output, "git diff for CI control paths")?)
-            .context("git diff returned a non-UTF-8 control path")?;
-        Ok(paths
-            .split('\0')
-            .filter(|path| !path.is_empty())
-            .map(str::to_owned)
-            .collect())
-    }
-
-    /// The subset of [`Self::changed_control_paths`] that does not survive the
-    /// additive test: an entry the judge already had was edited or removed.
-    /// Adding a lane beside the existing ones is not one of those, so it no
-    /// longer costs the author a separate merge request.
-    pub(super) fn weakening_control_paths(&self, base: &str, head: &str) -> Result<Vec<String>> {
-        let mut weakening = Vec::new();
-        for path in self.changed_control_paths(base, head)? {
-            let before = self.file_at(base, &path)?;
-            let after = self.file_at(head, &path)?;
-            if classify(&path, before.as_deref(), after.as_deref()) == ControlChange::Weakening {
-                weakening.push(path);
-            }
-        }
-        Ok(weakening)
-    }
-
-    /// Content of `path` at `reference`, or `None` when it is absent there.
-    /// Non-UTF-8 content reads as absent on purpose: the classifier cannot
-    /// judge bytes it cannot compare, and the caller treats that as weakening.
-    fn file_at(&self, reference: &str, path: &str) -> Result<Option<String>> {
-        if !self.exists_at(reference, path)? {
-            return Ok(None);
-        }
-        let bytes = self.run(&["show", &format!("{reference}:{path}")], None)?;
-        Ok(String::from_utf8(bytes).ok())
     }
 
     /// The commit a verification runs: the pull request with the synchronized
@@ -656,14 +595,9 @@ mod tests {
     }
 
     #[test]
-    fn product_only_head_has_no_control_changes_and_needs_no_overlay_commit() {
+    fn product_only_head_needs_no_overlay_commit() {
         let (_state, repo, base, product, _head, _additive) = repository();
 
-        assert!(
-            repo.changed_control_paths(&base, &product)
-                .unwrap()
-                .is_empty()
-        );
         assert_eq!(judged(&repo, &base, &product, true), product);
     }
 
@@ -761,62 +695,6 @@ mod tests {
         let judged = judged(&repo, &trusted, &edited, true);
 
         assert_eq!(blob(&repo, &judged, path), "trusted\n");
-    }
-
-    #[test]
-    fn control_path_changes_are_detected_before_judging() {
-        let (_state, repo, base, _product, head, _additive) = repository();
-        let paths = repo.changed_control_paths(&base, &head).unwrap();
-
-        assert_eq!(paths, [".gitlab-ci.yml", "xtask/src/main.rs"]);
-    }
-
-    /// The shape a pull request has when it adds a lane: the control file
-    /// changed, but every lane that already judged is still there, unedited.
-    /// Such a change no longer costs its author a separate merge request.
-    #[test]
-    fn a_lane_added_beside_the_others_does_not_weaken_the_judge() {
-        let (_state, repo, base, _product, _head, additive) = repository();
-
-        assert_eq!(
-            repo.changed_control_paths(&base, &additive).unwrap(),
-            [".config/xtask.toml"]
-        );
-        assert!(
-            repo.weakening_control_paths(&base, &additive)
-                .unwrap()
-                .is_empty()
-        );
-    }
-
-    /// `additive` forked before the control rewrite that later landed on the
-    /// default branch, so it differs from that branch by the rewrite as well as
-    /// by its own lane. Only the lane is its doing, and only the lane may be
-    /// held against it — otherwise every open pull request is accused of
-    /// rewriting the judge the moment anything merges.
-    #[test]
-    fn a_branch_behind_the_default_is_judged_by_what_it_changed() {
-        let (_state, repo, _base, _product, head, additive) = repository();
-
-        assert_eq!(
-            repo.changed_control_paths(&head, &additive).unwrap(),
-            [".config/xtask.toml"]
-        );
-        assert!(
-            repo.weakening_control_paths(&head, &additive)
-                .unwrap()
-                .is_empty()
-        );
-    }
-
-    #[test]
-    fn rewriting_a_control_file_weakens_the_judge() {
-        let (_state, repo, base, _product, head, _additive) = repository();
-
-        assert_eq!(
-            repo.weakening_control_paths(&base, &head).unwrap(),
-            [".gitlab-ci.yml", "xtask/src/main.rs"]
-        );
     }
 
     #[test]
