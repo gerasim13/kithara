@@ -4811,7 +4811,7 @@ dependencies = [
  "rkyv",
  "same-file",
  "serde",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "tempfile",
  "thiserror 2.0.21",
  "tracing",
@@ -4900,7 +4900,7 @@ dependencies = [
  "rten-tensor",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "smallvec",
  "thiserror 2.0.21",
  "unimock",
@@ -5125,7 +5125,7 @@ dependencies = [
  "same-file",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "syn 3.0.6",
  "tempfile",
  "toml 1.1.7+spec-1.1.0",
@@ -5476,7 +5476,7 @@ dependencies = [
  "num-traits",
  "rayon",
  "reqwest",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "tempfile",
  "thiserror 2.0.21",
  "tiny_http",
@@ -5499,7 +5499,7 @@ dependencies = [
  "kithara-workspace-hack",
  "num-traits",
  "serde",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "tempfile",
  "thiserror 2.0.21",
 ]
@@ -5698,7 +5698,7 @@ dependencies = [
  "ringbuf",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
@@ -5734,6 +5734,7 @@ dependencies = [
  "kithara-render",
  "kithara-signal",
  "kithara-sync",
+ "kithara-test-fixtures",
  "kithara-test-utils",
  "kithara-warp",
  "kithara-workspace-hack",
@@ -5903,7 +5904,7 @@ dependencies = [
  "num-traits",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "thiserror 2.0.21",
  "tracing",
  "unimock",
@@ -9895,9 +9896,9 @@ dependencies = [
 
 [[package]]
 name = "sha2"
-version = "0.11.0"
+version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "446ba717509524cb3f22f17ecc096f10f4822d76ab5c0b9822c5f9c284e825f4"
+checksum = "47d7069beb7d6ac7b9acd1039986e73443f24234f41074da099d6f994ac9ad19"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.3.1",
@@ -13091,7 +13092,7 @@ dependencies = [
  "rustdoc-types",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "signal-hook",
  "syn 3.0.6",
  "tempfile",

@@ -148,11 +148,10 @@ impl ReaderControl {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use kithara_platform::{
-        sync::mpsc,
         thread,
         time::{Duration, Instant},
     };
-    use kithara_test_utils::kithara;
+    use kithara_test_utils::{kithara, wait_until_blocking};
 
     use super::*;
 
@@ -162,10 +161,6 @@ mod tests {
             let parent = CancelScope::new(None);
             let control = ReaderControl::new(Some(parent.token()));
             let revision = control.revision();
-            let (cancelled_tx, cancelled_rx) = mpsc::channel();
-            let _observed_cancel = control.cancel_token().on_cancel(move || {
-                cancelled_tx.send(()).expect("report reader cancellation");
-            });
             let mut readiness = control.state.readiness.lock();
             assert_eq!(readiness.revision, revision);
             assert!(!control.is_cancelled());
@@ -183,9 +178,10 @@ mod tests {
                     cancelling_control.cancel();
                 }
             });
-            cancelled_rx
-                .recv_timeout(Instant::now() + Duration::from_secs(1))
-                .expect("cancellation lands after the live predicate, before parking");
+            wait_until_blocking(Duration::from_secs(1), "reader cancellation", || {
+                control.is_cancelled()
+            })
+            .expect("cancellation lands after the live predicate, before parking");
             assert!(control.is_cancelled());
 
             let deadline = Instant::now() + Duration::from_secs(1);

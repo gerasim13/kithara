@@ -24,7 +24,7 @@ use kithara_integration_tests::{
     mixed_codec_ladder,
     mock::LaneAudio,
 };
-use kithara_test_utils::{TestTempDir, pace};
+use kithara_test_utils::{TestTempDir, pace, wait_until};
 use url::Url;
 
 /// Stream must continue producing chunks after seek sequence.
@@ -675,30 +675,46 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) 
     }
     seek_segment.release();
 
+    let landing = next_chunk(&mut audio)
+        .await
+        .expect("playback must resume after the seek");
+    assert_eq!(
+        landing.meta.segment_index,
+        Some(u32::try_from(SEEK_SEGMENT).expect("the seek segment fits u32")),
+        "the seek must land on its target segment"
+    );
+    assert_eq!(
+        landing.meta.variant_index,
+        Some(TOP_VARIANT),
+        "the seek must land on the variant that played before it, although the \
+         estimate fell below it while the seek was pending"
+    );
+    let mut decisions = Vec::new();
+    {
+        let _real_io = kithara::platform::flash::real_io();
+        wait_until(
+            Duration::from_secs(1),
+            "ABR resuming after the seek",
+            || {
+                let _ = audio.preload();
+                drain_abr_decisions(&mut events, &mut decisions);
+                decisions.iter().any(|event| {
+                    matches!(event, AbrEvent::VariantApplied { from, to, .. }
+                    if from.get() == TOP_VARIANT && to.get() < TOP_VARIANT)
+                })
+            },
+        )
+        .await
+        .expect("ABR resumes while the consumer holds its post-seek position");
+    }
+
     #[kithara_test_utils::kithara::flash(io)]
     #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     fn read_after_seek(
         audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>,
         mut events: EventReceiver<TestEvent>,
+        mut decisions: Vec<AbrEvent>,
     ) -> Vec<AbrEvent> {
-        let landing = match AudioRead::next_chunk(audio).expect("read the seek landing") {
-            ChunkOutcome::Chunk(chunk) => Some(*chunk),
-            ChunkOutcome::Eof { .. } => None,
-            ChunkOutcome::Pending { .. } => panic!("blocking seek landing remained pending"),
-        }
-        .expect("playback must resume after the seek");
-        assert_eq!(
-            landing.meta.segment_index,
-            Some(u32::try_from(SEEK_SEGMENT).expect("the seek segment fits u32")),
-            "the seek must land on its target segment"
-        );
-        assert_eq!(
-            landing.meta.variant_index,
-            Some(TOP_VARIANT),
-            "the seek must land on the variant that played before it, although the \
-         estimate fell below it while the seek was pending"
-        );
-        let mut decisions = Vec::new();
         loop {
             hang_tick!();
             let chunk = match AudioRead::next_chunk(audio).expect("read after the seek landing") {
@@ -724,7 +740,7 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) 
     }
     let (_audio, decisions) = kithara_integration_tests::reads::blocking_audio(
         kithara_integration_tests::mock::with_blocking_reads(audio),
-        move |audio| read_after_seek(audio, events),
+        move |audio| read_after_seek(audio, events, decisions),
     )
     .await;
     let unlocked = decisions

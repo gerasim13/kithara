@@ -318,9 +318,9 @@ where
 
 /// Wait until `track_id`'s loader finishes, driven by
 /// `QueueEvent::TrackStatusChanged`. Loading can include real file I/O, so the
-/// virtual deadline advances at real pace while the load is in flight. A
-/// fast-path and `Lagged` re-read guard against an already-terminal status or
-/// a dropped event.
+/// virtual deadline advances at real pace while the load is in flight.
+/// The published status is checked on every poll so a missing notification
+/// cannot hide a load that has already completed.
 ///
 /// Runs under the hang watchdog: a load whose status stops changing fails
 /// with its last status once the watchdog budget passes, instead of waiting
@@ -353,9 +353,14 @@ where
     };
     timeout(deadline, async {
         loop {
+            if let Some(entry) = queue.track(track_id)
+                && let Some(res) = loader_outcome(&entry.status)
+            {
+                return res;
+            }
             hang_tick!(stalled(queue));
-            let Ok(received) = timeout(__hang_detector.remaining(), rx.recv()).await else {
-                hang_tick!(stalled(queue));
+            let Ok(received) = timeout(POLL_TICK.min(__hang_detector.remaining()), rx.recv()).await
+            else {
                 continue;
             };
             match received.map(|env| env.event) {
@@ -367,17 +372,7 @@ where
                     }
                     hang_reset!();
                 }
-                Ok(_) => {
-                    hang_tick!(stalled(queue));
-                }
-                Err(RecvError::Lagged(_)) => {
-                    if let Some(entry) = queue.track(track_id)
-                        && let Some(res) = loader_outcome(&entry.status)
-                    {
-                        return res;
-                    }
-                    hang_tick!(stalled(queue));
-                }
+                Ok(_) | Err(RecvError::Lagged(_)) => {}
                 Err(RecvError::Closed) => return Err("event stream closed".to_string()),
             }
         }
@@ -489,5 +484,65 @@ pub async fn render_until_position(
             );
         }
         sleep(Duration::from_millis(TICK_MS)).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara::events::EventBus;
+
+    use super::*;
+    use crate::{HlsFixtureBuilder, TestServerHelper, offline::OfflinePlayerOptions};
+
+    #[kithara::test(tokio)]
+    async fn loader_completion_wins_when_its_notification_is_missing() {
+        let helper = TestServerHelper::new().await;
+        let fixture = helper
+            .create_hls(
+                HlsFixtureBuilder::new()
+                    .variant_count(1)
+                    .segments_per_variant(4)
+                    .segment_duration_secs(1.0)
+                    .packaged_audio_aac_lc(44_100, 2),
+            )
+            .await
+            .expect("HLS fixture");
+        let init = helper.register_init_gate(fixture.token(), 0);
+        let harness =
+            OfflinePlayer::with_sample_rate(OfflinePlayerOptions::builder().build(), 44_100).await;
+        let url = fixture.master_url().to_string();
+        let id = harness
+            .with_queue(move |queue| {
+                let id = queue.append(url).expect("append gated track");
+                queue
+                    .select(id, kithara::queue::Transition::None)
+                    .expect("select gated track");
+                id
+            })
+            .await;
+        assert!(matches!(
+            harness.player().track(id).expect("queued track").status,
+            TrackStatus::Pending | TrackStatus::Loading | TrackStatus::Slow
+        ));
+
+        {
+            let unrelated_bus = EventBus::new(4);
+            let mut receiver = unrelated_bus.subscribe();
+            let mut waiting = std::pin::pin!(wait_for_loader_done_event(
+                &mut receiver,
+                harness.player(),
+                id,
+                Duration::from_secs(2),
+            ));
+            assert!(futures::poll!(waiting.as_mut()).is_pending());
+            init.release();
+            wait_for_loader_done(harness.player(), id, Duration::from_secs(1))
+                .await
+                .expect("the authoritative loader state completes");
+            waiting
+                .await
+                .expect("a completed load needs no notification");
+        }
+        harness.close().await;
     }
 }

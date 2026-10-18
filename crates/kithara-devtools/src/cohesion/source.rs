@@ -26,6 +26,7 @@ pub(super) struct Source {
     pub(super) notes: BTreeSet<String>,
     pub(super) implementations: Vec<Implementation>,
     imports: BTreeMap<String, BTreeMap<String, BTreeSet<String>>>,
+    modules: BTreeSet<String>,
     root: PathBuf,
     include_tests: bool,
 }
@@ -120,6 +121,7 @@ impl Source {
                 }
                 Item::Mod(value) => {
                     let child = join(module, &value.ident.to_string());
+                    self.modules.insert(child.clone());
                     if let Some((_, items)) = &value.content {
                         self.items(
                             file,
@@ -200,12 +202,15 @@ impl Source {
             }
             return self.resolve_absolute(&join(&parents.join("::"), &parts.join("::")), visited);
         }
+        if self.modules.contains(&join(module, first)) {
+            return self.resolve_absolute(&join(module, path), visited);
+        }
         if let Some(paths) = self
             .imports
             .get(module)
             .and_then(|imports| imports.get(first))
         {
-            if paths.len() != 1 {
+            if paths.len() != 1 || !visited.insert(format!("binding:{module}|{first}")) {
                 return None;
             }
             let imported = paths.first()?;

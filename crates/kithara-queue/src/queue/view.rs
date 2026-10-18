@@ -55,6 +55,21 @@ where
     engine_load: EngineLoadSnapshot,
 }
 
+impl<S> QueueSnapshot<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    pub(super) fn rate(&self) -> f32 {
+        if self.deck.suspended {
+            return 0.0;
+        }
+        self.track
+            .as_ref()
+            .filter(|track| matches!(track.status, PlayingStatus::Playing { .. }))
+            .map_or(0.0, |track| track.speed)
+    }
+}
+
 /// Handles only read this snapshot; the queue is its sole publisher.
 #[derive_where::derive_where(Clone)]
 pub(crate) struct QueueView<S>(Arc<ArcSwap<QueueSnapshot<S>>>)
@@ -347,15 +362,7 @@ where
 
     #[must_use]
     pub fn rate(&self) -> f32 {
-        let snapshot = self.view.read();
-        if snapshot.deck.suspended {
-            return 0.0;
-        }
-        snapshot
-            .track
-            .as_ref()
-            .filter(|track| matches!(track.status, PlayingStatus::Playing { .. }))
-            .map_or(0.0, |track| track.speed)
+        self.view.read().rate()
     }
 
     #[must_use]

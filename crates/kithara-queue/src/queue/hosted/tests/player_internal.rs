@@ -1,5 +1,5 @@
 use kithara_events::EventReceiver;
-use kithara_play::{PlayerStatus, mock};
+use kithara_play::{PlayerEvent, PlayerStatus, TrackSettingsChange, mock};
 
 use super::*;
 use crate::{
@@ -37,6 +37,67 @@ async fn pending_successor() -> (
 
 fn drain(rx: &mut EventReceiver<QueueEvent>) -> Vec<QueueEvent> {
     std::iter::from_fn(|| rx.try_recv().ok().map(|envelope| envelope.event)).collect()
+}
+
+#[kithara::test(tokio)]
+async fn rate_events_follow_applied_playback_without_duplicates() {
+    let (mut queue, _, _, mut rig, dir) = pending_selection();
+    let control = queue.control();
+    let mut events = queue.subscribe::<PlayerEvent>();
+    let rates = |events: &mut EventReceiver<PlayerEvent>| {
+        std::iter::from_fn(|| events.try_recv().ok().map(|event| event.event))
+            .filter_map(|event| match event {
+                PlayerEvent::RateChanged { rate } => Some(rate),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(control.rate(), 0.0);
+    answer_load(&mut queue, &mut rig, &dir).await;
+    assert!(rates(&mut events).is_empty());
+    finish(&mut queue, &mut rig);
+    assert_eq!(control.rate(), 1.0);
+    assert_eq!(rates(&mut events), [1.0]);
+
+    apply(&mut queue, &mut rig, QueueCommand::Pause { at: When::Next }).expect("pause accepted");
+    assert_eq!(control.rate(), 1.0);
+    assert!(rates(&mut events).is_empty());
+    crate::mock::settle(&mut queue, &mut rig, SessionFrame::new(384));
+    assert_eq!(control.rate(), 0.0);
+    assert_eq!(rates(&mut events), [0.0]);
+    tick_fixture(&mut queue, &mut rig);
+    assert!(rates(&mut events).is_empty());
+
+    apply(
+        &mut queue,
+        &mut rig,
+        QueueCommand::ConfigureTrack(TrackSettingsChange::Speed(2.0), When::Next),
+    )
+    .expect("paused speed accepted");
+    assert_eq!(control.rate(), 0.0);
+    assert!(rates(&mut events).is_empty());
+    crate::mock::settle(&mut queue, &mut rig, SessionFrame::new(512));
+    assert_eq!(control.rate(), 0.0);
+    assert!(rates(&mut events).is_empty());
+
+    apply(&mut queue, &mut rig, QueueCommand::Play { at: When::Next }).expect("resume accepted");
+    assert_eq!(control.rate(), 0.0);
+    assert!(rates(&mut events).is_empty());
+    let mut frame = 640;
+    kithara_test_utils::wait_until(Duration::from_secs(1), "resumed rate receipt", || {
+        tick_fixture(&mut queue, &mut rig);
+        crate::mock::settle(&mut queue, &mut rig, SessionFrame::new(frame));
+        frame += 128;
+        tick_fixture(&mut queue, &mut rig);
+        control.rate() == 2.0
+    })
+    .await
+    .expect("the resumed segment becomes ready and its Start receipt applies");
+    assert_eq!(control.rate(), 2.0);
+    assert_eq!(rates(&mut events), [2.0]);
+    tick_fixture(&mut queue, &mut rig);
+    assert!(rates(&mut events).is_empty());
 }
 
 #[kithara::test(tokio)]

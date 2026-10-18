@@ -852,9 +852,15 @@ async fn exact_primed_generation_promotes_once_at_outgoing_frontier(route_pcm: R
     assert_eq!(produced_data(outgoing).meta.frame_offset, 0);
     assert_eq!(fixture.control.promote_calls(), 0);
 
+    let frontier = fixture.source.resume.decode_head();
     wait_for_promotion_attempt(&mut fixture, &preparation_wake, transition, 1).await;
 
     assert_eq!(fixture.control.promote_calls(), 1);
+    assert_eq!(
+        fixture.source.resume.decode_head(),
+        frontier,
+        "deferred promotion must not require the consumer to advance the outgoing frontier"
+    );
     assert_eq!(
         fixture
             .source

@@ -214,7 +214,7 @@ impl RawSnapshot {
     }
 }
 
-/// Callback-side writer for one resident [`crate::Warp`] render context.
+/// Callback-side writer for one resident Warp render context.
 ///
 /// Publication is allocation-free and lock-free. A Warp has exactly one
 /// publisher; the type is deliberately not cloneable to preserve that invariant.
@@ -245,7 +245,7 @@ impl RenderPublisher {
     }
 }
 
-/// Worker-side reader for one resident [`crate::Warp`] render context.
+/// Worker-side reader for one resident Warp render context.
 #[derive(Clone, Debug)]
 pub struct RenderReader(Arc<RenderCell>);
 

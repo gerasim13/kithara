@@ -14,7 +14,7 @@ pub(super) use kithara_render::{
     LaneFrame,
     bridge::{Returned, SlotMark},
 };
-pub(super) use kithara_signal::{AudioChunkInfo, AudioSpec, FrameCount, SessionFrame};
+pub(super) use kithara_signal::{AudioChunkInfo, FrameCount, SessionFrame};
 pub(super) use kithara_test_utils::{TestTempDir, kithara};
 
 use super::*;

@@ -185,7 +185,11 @@ mod tests {
     use kithara_abr::{Abr, AbrController, AbrMock, AbrMode, AbrSettings, AbrState, VariantIndex};
     use kithara_assets::{AssetResource, AssetSource, AssetStore, StorageBackend};
     use kithara_events::EventBus;
-    use kithara_platform::{CancelToken, sync::ThreadGate, time::Duration as PlatformDuration};
+    use kithara_platform::{
+        CancelToken,
+        sync::{Mutex, ThreadGate},
+        time::Duration as PlatformDuration,
+    };
     #[cfg(not(target_arch = "wasm32"))]
     use kithara_platform::{
         sync::{
@@ -490,6 +494,7 @@ mod tests {
         // until the reader drains the first one.
         let look_ahead = Fixture::SEGMENT_BYTES + Fixture::SEGMENT_BYTES / 2;
         let fixture = Fixture::with_look_ahead(look_ahead);
+        let lookahead = Mutex::default();
 
         fixture.variant.rebuild(&fixture.ctx, 0);
         let opening = fixture.variant.dispatch_from(
@@ -501,7 +506,7 @@ mod tests {
             DispatchTokens {
                 metadata: fixture.cancel.clone(),
                 fetch: fixture.cancel.clone(),
-                lookahead: fixture.cancel.clone(),
+                lookahead: &lookahead,
             },
         );
         assert_eq!(
@@ -529,7 +534,7 @@ mod tests {
             DispatchTokens {
                 metadata: fixture.cancel.clone(),
                 fetch: fixture.cancel.clone(),
-                lookahead: fixture.cancel.clone(),
+                lookahead: &lookahead,
             },
         );
         assert_eq!(

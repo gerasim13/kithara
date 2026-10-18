@@ -18,9 +18,9 @@ ignored = ["serde"]
 default = []
 # Beat-grid and warp-plan fixtures for tests outside this crate.
 mock = []
-perf = ["kithara-stretch/perf"]
+perf = ["kithara-stretch?/perf"]
 usdt = ["dep:kithara-test-utils", "kithara-test-utils/usdt"]
-render = ["dep:kithara-bufpool", "dep:kithara-dsp", "dep:kithara-test-utils"]
+render = ["dep:kithara-bufpool", "dep:kithara-dsp", "dep:kithara-stretch", "dep:kithara-test-utils"]
 stretch-signalsmith = ["kithara-stretch/stretch-signalsmith", "render"]
 stretch-bungee = ["kithara-stretch/stretch-bungee", "render"]
 stretch-glide = ["kithara-stretch/stretch-glide", "render"]
@@ -34,7 +34,7 @@ kithara-derive = { workspace = true, features = ["patch", "ranged"] }
 kithara-dsp = { workspace = true, optional = true }
 kithara-platform = { workspace = true }
 kithara-signal = { workspace = true }
-kithara-stretch = { workspace = true, default-features = false }
+kithara-stretch = { workspace = true, optional = true, default-features = false }
 kithara-sync = { workspace = true }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["client-reqwest", "tls-rustls"], optional = true }

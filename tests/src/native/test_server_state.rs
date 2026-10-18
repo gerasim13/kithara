@@ -48,6 +48,10 @@ pub enum Delivery {
         chunk: usize,
         delay_ms: u64,
     },
+    /// Deliver a prefix, then withhold the remaining body until the test releases it.
+    Gated {
+        after_bytes: usize,
+    },
 }
 
 /// How every data route answers while the server-wide outage switch is thrown.
@@ -80,6 +84,7 @@ pub struct FixtureBehavior {
 struct BehaviorEntry {
     behavior: FixtureBehavior,
     hits: AtomicU64,
+    body_gate: Option<Arc<Gate>>,
 }
 
 pub(crate) struct Gate {
@@ -111,6 +116,10 @@ impl Gate {
 
     pub(crate) fn requested(&self) -> u64 {
         self.requested.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn pending(&self) -> usize {
+        self.released.receiver_count()
     }
 }
 
@@ -279,11 +288,14 @@ impl TestServerState {
     pub(crate) fn insert_behavior(&self, behavior: FixtureBehavior) -> String {
         let token = Uuid::new_v4().to_string();
         let mut map = self.behaviors.write().expect("behaviors poisoned");
+        let body_gate =
+            matches!(behavior.delivery, Delivery::Gated { .. }).then(|| Arc::new(Gate::new()));
         map.insert(
             token.clone(),
             Arc::new(BehaviorEntry {
                 behavior,
                 hits: AtomicU64::new(0),
+                body_gate,
             }),
         );
         token
@@ -292,6 +304,15 @@ impl TestServerState {
     pub(crate) fn get_behavior(&self, token: &str) -> Option<FixtureBehavior> {
         let map = self.behaviors.read().expect("behaviors poisoned");
         map.get(token).map(|e| e.behavior.clone())
+    }
+
+    pub(crate) fn behavior_body_gate(&self, token: &str) -> Option<Arc<Gate>> {
+        self.behaviors
+            .read()
+            .expect("behaviors poisoned")
+            .get(token)?
+            .body_gate
+            .clone()
     }
 
     pub(crate) fn bump_behavior(&self, token: &str) -> u64 {

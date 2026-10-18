@@ -79,35 +79,28 @@ impl SegmentSlotState {
     /// was in flight: those bytes are gone, so the slot lands `Missing`.
     /// Returns whether it landed `Loaded`.
     pub(crate) fn mark_loaded(&self) -> bool {
-        let (Ok(prior) | Err(prior)) =
-            self.flags
-                .try_update(Ordering::AcqRel, Ordering::Acquire, |bits| {
-                    let next = if SlotFlags::from_bits_truncate(bits).contains(SlotFlags::EVICTED) {
-                        SlotFlags::empty()
-                    } else {
-                        SlotFlags::LOADED
-                    };
-                    Some(next.bits())
-                });
+        let prior = self.transition(|flags| {
+            if flags.contains(SlotFlags::EVICTED) {
+                SlotFlags::empty()
+            } else {
+                SlotFlags::LOADED
+            }
+        });
         self.reader_demand.store(false, Ordering::Release);
-        !SlotFlags::from_bits_truncate(prior).contains(SlotFlags::EVICTED)
+        !prior.contains(SlotFlags::EVICTED)
     }
 
     /// The store dropped this slot's bytes. A settled slot returns to `Missing`;
     /// an in-flight one stays with its claim, marked so the claim's `Loaded`
     /// settle cannot publish bytes the eviction already took.
     pub(crate) fn mark_evicted(&self) {
-        let _ = self
-            .flags
-            .try_update(Ordering::AcqRel, Ordering::Acquire, |bits| {
-                let flags = SlotFlags::from_bits_truncate(bits);
-                let next = if flags.contains(SlotFlags::DOWNLOADING) {
-                    flags | SlotFlags::EVICTED
-                } else {
-                    SlotFlags::empty()
-                };
-                Some(next.bits())
-            });
+        self.transition(|flags| {
+            if flags.contains(SlotFlags::DOWNLOADING) {
+                flags | SlotFlags::EVICTED
+            } else {
+                SlotFlags::empty()
+            }
+        });
     }
 
     pub(crate) fn mark_missing(&self) {
@@ -151,6 +144,22 @@ impl SegmentSlotState {
     fn settle(&self, state: SlotFlags) {
         self.flags.store(state.bits(), Ordering::Release);
         self.reader_demand.store(false, Ordering::Release);
+    }
+
+    fn transition(&self, next: impl Fn(SlotFlags) -> SlotFlags) -> SlotFlags {
+        let mut prior = self.flags.load(Ordering::Acquire);
+        loop {
+            let flags = SlotFlags::from_bits_truncate(prior);
+            match self.flags.compare_exchange_weak(
+                prior,
+                next(flags).bits(),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return flags,
+                Err(current) => prior = current,
+            }
+        }
     }
 
     /// Atomic `Missing -> Downloading` claim. Returns the owned

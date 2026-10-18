@@ -34,9 +34,11 @@ pub use segment::{
 };
 pub use temporal::{
     ActiveRegion, GridSegment, PresentationFrontier, RegionPlan, RegionPlanError, RenderContext,
-    RenderPublisher, RenderReader, RenderSnapshot, StretchKind, WarpCapabilities,
+    RenderPublisher, RenderReader, RenderSnapshot,
 };
-pub use warp::{
-    Warp, WarpConfig, WarpConfigPatch, WarpConfigPatchError, WarpCursor, WarpMap, WarpMapRevision,
-};
+#[cfg(feature = "render")]
+pub use temporal::{StretchKind, WarpCapabilities};
+#[cfg(feature = "render")]
+pub use warp::{Warp, WarpConfig, WarpConfigPatch, WarpConfigPatchError};
+pub use warp::{WarpCursor, WarpMap, WarpMapRevision};
 mod consts;

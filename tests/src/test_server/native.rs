@@ -313,6 +313,20 @@ pub struct BehaviorHandle {
 }
 
 impl BehaviorHandle {
+    delegate::delegate! {
+        to self.state
+            .behavior_body_gate(&self.token)
+            .expect("the behavior uses gated delivery") {
+            /// Number of response bodies currently withheld after their prefixes.
+            #[must_use]
+            #[call(pending)]
+            pub fn body_pending(&self) -> usize;
+            /// Finish gated bodies; an offline server truncates responses already in flight.
+            #[call(release)]
+            pub fn release_body(&self);
+        }
+    }
+
     /// URL that dispatches to this behavior.
     #[must_use]
     pub fn url(&self) -> Url {
