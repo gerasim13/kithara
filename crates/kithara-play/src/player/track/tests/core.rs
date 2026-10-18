@@ -1377,6 +1377,108 @@ fn a_staged_preparation_needs_an_owner_and_a_stageable_load(#[case] refusal: u8)
 }
 
 #[kithara::test]
+#[case::restart(0)]
+#[case::offset(20_000)]
+fn play_after_an_ended_seek_preserves_its_segment_and_receipt(#[case] offset_ms: u64) {
+    let mut rig = rig();
+    let (mut track, mut inbox) = loaded(&mut rig, A, "ended-seek-play");
+    command_at_zero(&mut track, &mut rig, TrackCommand::Play { at: When::Next })
+        .expect("initial Start");
+    let mut started = rig.block(frame(0), 0.0);
+    settle(&mut track, &mut rig, &mut started);
+    rig.mixer
+        .report(DeckEvent::Ended {
+            slot: A,
+            at: frame(1_024),
+        })
+        .expect("natural EOF event");
+    let event = rig.events.drain().next().expect("Ended event");
+    rig.with_outbox(|out| track.settle(TrackReceipt::Event(event), out))
+        .expect("live scope");
+    assert_eq!(track.status(), TrackStatus::Ended { at: frame(1_024) });
+
+    let to = Position::from_millis(offset_ms);
+    let seek = in_pass(&mut rig, frame(1_024), |out| {
+        track.apply(TrackCommand::Seek { to }, out)
+    })
+    .expect("ended Seek admitted")
+    .expect("Seek adoption receipt");
+    let segment = track.segment;
+    assert_eq!(
+        in_pass(&mut rig, frame(1_024), |out| {
+            track.apply(TrackCommand::Play { at: When::Next }, out)
+        })
+        .expect("Play waits for the requested segment"),
+        None
+    );
+    assert_eq!(track.segment, segment, "Play preserves the explicit Seek");
+
+    inbox.drain();
+    let lane_at = LaneFrame { segment, frame: 0 };
+    let due = inbox.next_due(lane_at, 1).expect("one Seek segment");
+    assert!(matches!(due.commands(),
+        [LaneCommand::Segment { id, from, .. }] if *id == segment && *from == to
+    ));
+    due.apply(kithara_render::LaneApplied {
+        source_basis: None,
+        engine_latency: FrameCount::new(0),
+        ready: Some(segment),
+    });
+    assert!(inbox.next_due(lane_at, 1).is_none());
+    in_pass(&mut rig, frame(1_024), |out| track.tick(frame(1_024), out));
+    assert_eq!(track.segment, segment, "lane readiness preserves the Seek");
+    let mut receipts = rig.block(frame(1_024), to.as_secs_f64());
+    let settled = settle(&mut track, &mut rig, &mut receipts);
+    assert!(
+        settled
+            .iter()
+            .any(|settled| { matches!(settled, Settled::Applied { seq, .. } if *seq == seek) })
+    );
+    in_pass(&mut rig, frame(1_088), |out| track.tick(frame(1_088), out));
+    let mut started = rig.block(frame(1_088), to.as_secs_f64());
+    settle(&mut track, &mut rig, &mut started);
+    assert_eq!(
+        track.status(),
+        TrackStatus::Playing {
+            since: frame(1_088)
+        }
+    );
+    assert_eq!(track.segment, segment);
+    assert_eq!(track.snapshot().position, to);
+
+    let advanced = to + Duration::from_millis(250);
+    let output = mock::output(None).get();
+    let deck = crate::DeckSnapshot {
+        slots: vec![SlotSnapshot {
+            state: SlotState::Playing,
+            position: advanced.as_secs_f64(),
+            mark: Some(SlotMark {
+                session: frame(12_113),
+                lane: LaneFrame {
+                    segment,
+                    frame: 11_025,
+                },
+                position: advanced,
+            }),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let fixture = &mut *rig;
+    let mut scope = fixture.ring.scope(fixture.scope).expect("live scope");
+    let out = Outbox::new(&mut scope, &mut fixture.dispatcher).in_pass(crate::DeckPass {
+        mix: DeckMixSettings::default(),
+        suspended: false,
+        now: frame(12_113),
+        delivery: FrameCount::new(0),
+        output: &output,
+        deck: &deck,
+    });
+    track.observe(&out);
+    assert_eq!(track.snapshot().position, advanced);
+}
+
+#[kithara::test]
 fn playback_shared_seek_epoch_increments() {
     let mut rig = rig();
     let mut track = track(A);

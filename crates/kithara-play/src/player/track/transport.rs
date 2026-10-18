@@ -105,7 +105,13 @@ impl<S> PlayerImpl<S> {
     ) -> Result<Option<Seq>, PlayError> {
         self.check_when(at, out)?;
         if matches!(self.status, TrackStatus::Ended { .. }) {
-            self.segment(Position::ZERO, None, out)?;
+            if !self
+                .adopting
+                .iter()
+                .any(|adoption| adoption.segment == self.segment)
+            {
+                self.segment(Position::ZERO, None, out)?;
+            }
             self.resume = None;
             self.play = Some(at);
             return Ok(None);

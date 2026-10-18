@@ -390,6 +390,8 @@ where
             return false;
         };
         if pending.chunk.spec() != self.spec {
+            tracing::error!(expected = ?self.spec, incoming = ?pending.chunk.meta,
+                "staged decoded PCM has a different format");
             self.quantum_failed = true;
             return false;
         }
@@ -409,6 +411,8 @@ where
                         || meta.source_revision != pending.chunk.meta.source_revision
                 }))
         {
+            tracing::error!(?expected_frame, ?pending_frame, staged = ?self.staged_meta,
+                incoming = ?pending.chunk.meta, "staged decoded PCM is not contiguous");
             self.quantum_failed = true;
             return false;
         }
@@ -436,6 +440,8 @@ where
             };
             if let Some(span) = meta.source_span {
                 let Some(span) = next.source_span.and_then(|next| span.followed_by(next)) else {
+                    tracing::error!(staged = ?meta, incoming = ?next,
+                        "staged decoded PCM source mappings do not join");
                     self.quantum_failed = true;
                     return false;
                 };

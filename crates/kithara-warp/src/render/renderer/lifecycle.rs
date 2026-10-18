@@ -834,9 +834,12 @@ where
         mut chunk: AudioChunk,
     ) -> ControlFlow<AudioChunk, Option<AudioChunk>> {
         if self.terminal_error.is_some() {
+            tracing::error!(error = ?self.terminal_error, input = ?chunk.meta,
+                "prepared Warp input reached a terminated renderer");
             return ControlFlow::Break(chunk);
         }
         let Some(prepared) = self.prepared_quantum else {
+            tracing::error!(input = ?chunk.meta, "Warp input has no prepared quantum");
             return ControlFlow::Break(chunk);
         };
         if chunk.frames() != prepared.frames
@@ -844,6 +847,10 @@ where
             || chunk.spec() != self.spec
             || self.transition_pending()
         {
+            tracing::error!(input = ?chunk.meta, prepared_frames = prepared.frames,
+                prepared_source_start = prepared.source_start, prepared_span = ?prepared.source_span,
+                expected_spec = ?self.spec, transition_pending = self.transition_pending(),
+                "Warp input does not match its prepared quantum");
             return ControlFlow::Break(chunk);
         }
         self.prepared_quantum = None;

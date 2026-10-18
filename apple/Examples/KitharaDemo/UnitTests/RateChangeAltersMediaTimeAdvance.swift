@@ -35,14 +35,16 @@ extension IntegrationRegressionsIOS {
             "precondition: media time did not advance during the rate-1.0 window"
         )
 
-        // `playingRate` is the accepted target. `currentRate` remains a
-        // separate live transport fact and is checked after the media window.
+        // Getters publish applied commands; media advance verifies the live result.
         let requestedRate = 2.0
         player.playingRate = Float(requestedRate)
+        try await waitForRateFact("the applied playing rate to be published") {
+            abs(Double(player.playingRate) - requestedRate) < 0.05
+        }
         try #require(
             abs(Double(player.playingRate) - requestedRate) < 0.05,
             """
-            precondition: the player did not accept a playing rate of \
+            precondition: the player did not publish an applied playing rate of \
             \(requestedRate); it reports \(player.playingRate)
             """
         )
@@ -50,7 +52,7 @@ extension IntegrationRegressionsIOS {
         #expect(
             abs(Double(player.currentRate) - requestedRate) < 0.05,
             """
-            playingRate reports the accepted target \(player.playingRate), \
+            playingRate reports the applied target \(player.playingRate), \
             but currentRate reports the live rate \(player.currentRate)
             """
         )
