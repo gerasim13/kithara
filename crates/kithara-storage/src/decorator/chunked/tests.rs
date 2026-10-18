@@ -20,7 +20,7 @@ use kithara_platform::{
     time::Duration,
 };
 #[cfg(feature = "flash")]
-use kithara_platform::{flash, thread, tokio::sync::oneshot};
+use kithara_platform::{flash, tokio::task};
 use tempfile::TempDir;
 
 use super::core::{AtomicChunked, OpenIntent, make_tmp_path};
@@ -396,11 +396,10 @@ async fn atomic_publication_wakes_a_waiter_already_parked_on_the_original_core(
     resource.write_at(0, b"payload").unwrap();
     let returned = Arc::new(AtomicBool::new(false));
     let completed = Arc::clone(&returned);
-    let (done_tx, done_rx) = oneshot::channel();
-    let waiter = thread::spawn(move || {
+    let waiter = task::spawn_blocking(move || {
         let result = old_reader.wait_range(7..8);
         completed.store(true, Ordering::Relaxed);
-        done_tx.send(result).unwrap();
+        result
     });
 
     flash::yield_now().await;
@@ -410,13 +409,12 @@ async fn atomic_publication_wakes_a_waiter_already_parked_on_the_original_core(
     }
     assert_eq!(resource.commit(Some(7)).is_err(), fail_rename);
 
-    let outcome = done_rx.await.unwrap();
+    let outcome = waiter.await.unwrap();
     if fail_rename {
         assert!(matches!(outcome, Err(StorageError::Failed(_))));
     } else {
         assert_eq!(outcome.unwrap(), crate::WaitOutcome::Eof);
     }
-    waiter.join().unwrap();
 }
 
 #[kithara::test(timeout(Duration::from_secs(2)))]
