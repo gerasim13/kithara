@@ -148,12 +148,14 @@ fn trim_start(chunk: &mut AudioChunk, drop_frames: usize) -> DecodeResult<()> {
     let timestamp = if let Some(span) = source_span {
         span.position_at(0).ok_or_else(mapping_error)?
     } else {
-        let origin = chunk
+        let elapsed = spec
+            .duration_for(frame_offset)?
+            .checked_sub(spec.duration_for(chunk.meta.frame_offset)?)
+            .ok_or_else(mapping_error)?;
+        chunk
             .meta
             .timestamp
-            .saturating_sub(spec.duration_for(chunk.meta.frame_offset)?);
-        origin
-            .checked_add(spec.duration_for(frame_offset)?)
+            .checked_add(elapsed)
             .ok_or_else(mapping_error)?
     };
     let channels = usize::from(spec.channels.max(1));
@@ -362,5 +364,66 @@ mod tests {
                 }
             }
         }
+        assert_negative_native_phase(mapped, drop_frames);
+    }
+
+    fn assert_negative_native_phase(mapped: bool, drop_frames: usize) {
+        let pools = pools();
+        let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("native output rate"));
+        let first_frame = 1_674_633;
+        let first_timestamp = Duration::from_nanos(34_888_184_382);
+        let mut native = AudioChunkInfo {
+            spec,
+            frame_offset: first_frame,
+            timestamp: first_timestamp,
+            end_timestamp: Duration::from_nanos(34_888_267_715),
+            frames: 4,
+            ..AudioChunkInfo::default()
+        };
+        let basis = native.source_geometry().expect("native packet geometry");
+        native.source_span = mapped.then_some(basis);
+        let next = AudioChunkInfo {
+            spec,
+            frame_offset: first_frame + 4,
+            timestamp: Duration::from_nanos(34_888_267_715),
+            end_timestamp: Duration::from_nanos(34_888_351_048),
+            frames: 4,
+            ..AudioChunkInfo::default()
+        }
+        .source_geometry()
+        .expect("independently timestamped adjacent packet");
+        assert!(basis.followed_by(next).is_some());
+        let (target_ns, expected_ns) = [
+            (34_888_190_476, 34_888_184_382),
+            (34_888_226_048, 34_888_205_215),
+        ][drop_frames];
+        let pcm = [0.25, -0.25, 0.5, -0.5, 0.75, -0.75, 1.0, -1.0];
+        let mut resume = ResumeState {
+            target: ResumeTarget::Render(Duration::from_nanos(target_ns)),
+            trim_head: true,
+        };
+        let retained = apply(
+            AudioChunk::new(native, sample_buffer(&pools, &pcm)),
+            Some(&mut resume),
+        )
+        .expect("negative-phase render prefix")
+        .expect("the decoded suffix remains");
+        let drop = u64::try_from(drop_frames).expect("bounded prefix trim");
+        assert_eq!(retained.samples.as_ref(), &pcm[drop_frames * 2..]);
+        assert_eq!(retained.meta.frame_offset, first_frame + drop);
+        assert_eq!(retained.meta.timestamp, Duration::from_nanos(expected_ns));
+        assert_eq!(retained.meta.end_timestamp, native.end_timestamp);
+        let expected = basis
+            .for_output_range(drop..4)
+            .and_then(|suffix| suffix.followed_by(next))
+            .expect("retained prefix joins the following native packet");
+        assert_eq!(
+            retained
+                .meta
+                .source_geometry()
+                .and_then(|suffix| suffix.followed_by(next)),
+            Some(expected)
+        );
+        assert!(!resume.trim_head);
     }
 }
