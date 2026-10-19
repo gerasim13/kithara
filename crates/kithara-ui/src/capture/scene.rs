@@ -12,7 +12,7 @@ use masonry::vello::{
 use crate::{
     app::Frame,
     backends::read_back,
-    masonry::{shader::ShaderPass, vis::VisPass},
+    masonry::{external::Placeholders, shader::ShaderPass, vis::VisPass},
 };
 
 /// A wgpu device with no surface, plus the Vello renderer that targets it.
@@ -22,6 +22,7 @@ use crate::{
 /// the two hosts page by page.
 pub struct Offscreen {
     device: Device,
+    placeholders: Placeholders,
     queue: Queue,
     renderer: Renderer,
     shaders: ShaderPass,
@@ -74,6 +75,7 @@ impl Offscreen {
         let vis = VisPass::new(&device, TextureFormat::Rgba8Unorm);
         Ok(Self {
             device,
+            placeholders: Placeholders::default(),
             queue,
             renderer,
             shaders,
@@ -104,6 +106,8 @@ impl Offscreen {
             &mut self.renderer,
             frame.shaders(),
         );
+        self.placeholders
+            .bind(&self.device, &mut self.renderer, frame.external_images());
         self.renderer
             .render_to_texture(
                 &self.device,
