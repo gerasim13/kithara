@@ -10,7 +10,7 @@ use kithara_ui::{
     registry::MapEndpoints,
     render::{
         CustomSkin, UiEvent, WindowCommand,
-        custom::{CustomKinds, CustomWidget, Size2, SizeLimits, TextMeasurer},
+        custom::{CustomKinds, CustomWidget, Repaint, Size2, SizeLimits, TextMeasurer},
         external::ExternalImageDeclaration,
     },
     source::MemResolver,
@@ -170,6 +170,50 @@ impl CustomWidget for Misfit {
             ),
             bounds,
         );
+    }
+}
+
+/// A preview whose producer resized its texture: each press swaps the shown
+/// declaration for a spare one under the same identity at another extent, and
+/// the widget paints whichever it shows.
+struct Swapping {
+    shown: ExternalImageDeclaration,
+    spare: ExternalImageDeclaration,
+}
+
+impl CustomWidget for Swapping {
+    type Action = ();
+
+    fn external_image(&self, id: &ImageId) -> Option<&ExternalImageDeclaration> {
+        (id == self.shown.image().id()).then_some(&self.shown)
+    }
+
+    fn input(&mut self, input: Input<'_>, hit: Hit) -> Outcome<Self::Action> {
+        match input {
+            Input::Pointer(pointer) if pointer.phase == PointerPhase::Down && hit.over() => {
+                std::mem::swap(&mut self.shown, &mut self.spare);
+                Outcome::captured().with_ownership(PointerOwnership::Claim)
+            }
+            _ => Outcome::IGNORED,
+        }
+    }
+
+    fn measure(&mut self, _text: &mut TextMeasurer<'_>, _limits: SizeLimits) -> Size2 {
+        Size2::new(64.0, 64.0)
+    }
+
+    fn paint(
+        &mut self,
+        list: &mut DrawListBuilder,
+        _text: &mut TextMeasurer<'_>,
+        bounds: Rect,
+        _skin: &CustomSkin,
+    ) {
+        list.image(self.shown.image().clone(), bounds);
+    }
+
+    fn repaint(&self) -> Repaint {
+        Repaint::NextFrame
     }
 }
 
@@ -846,6 +890,128 @@ fn embedded_frame_declares_a_shared_device_picture_once() {
         "both previews must draw the shared picture"
     );
     assert_eq!(tokens(&frame), [token]);
+}
+
+/// A widget that swaps the declaration it shows declares only the one its
+/// latest paint drew; the picture it no longer paints leaves the frame.
+#[kithara::test]
+fn embedded_frame_follows_a_widget_that_swaps_its_device_picture() {
+    let first = declaration();
+    let second =
+        ExternalImageDeclaration::new(first.image().id().clone(), 3, 1, ImageAlphaType::Alpha)
+            .expect("the resized producer must declare a nonempty preview");
+    let ids = [first.image_data().data.id(), second.image_data().data.id()];
+    let kinds = CustomKinds::default().with(
+        "fixture-swapping",
+        move || Swapping {
+            shown: first.clone(),
+            spare: second.clone(),
+        },
+        |()| UiEvent::Window(WindowCommand::Minimize),
+    );
+    let (registry, mut resolver) = documents();
+    resolver.insert(
+        "one.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1,
+        id: "swapping-preview", chrome: Plain,
+        root: Column(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+            Custom(id: "preview", kind: "fixture-swapping", size: Some((w: Fill, h: Fill))),
+        ]))"#,
+    );
+    let mut ui = mounted(Editor::default(), &registry, &resolver, &kinds);
+    assert_eq!(tokens(&rendered(&mut ui)), [ids[0]]);
+    let at = centre(
+        ui.rect_of("demo/preview")
+            .expect("the preview must be laid out"),
+    );
+    for shown in [1, 0, 1] {
+        press(&mut ui, at);
+        let frame = rendered(&mut ui);
+        assert_eq!(
+            pictures(frame.scene())
+                .iter()
+                .map(|image| image.data.id())
+                .collect::<Vec<_>>(),
+            [ids[shown]],
+            "the scene must sample only the picture shown now"
+        );
+        assert_eq!(
+            tokens(&frame),
+            [ids[shown]],
+            "the frame must declare only the picture shown now"
+        );
+    }
+}
+
+/// Two widgets painting distinct producers' pictures are both declared; once
+/// one is stashed behind a hidden `Optional`, only the other is.
+#[kithara::test]
+fn embedded_frame_declares_each_shown_widget_s_device_picture() {
+    let left = declaration();
+    let right =
+        ExternalImageDeclaration::new(ImageId::new("fixture/second"), 2, 1, ImageAlphaType::Alpha)
+            .expect("the second producer must declare a nonempty preview");
+    let ids = [left.image_data().data.id(), right.image_data().data.id()];
+    let kinds = [("fixture-left", left), ("fixture-right", right)]
+        .into_iter()
+        .fold(CustomKinds::default(), |kinds, (kind, declaration)| {
+            kinds.with(
+                kind,
+                move || Framed {
+                    declaration: Some(declaration.clone()),
+                    image: declaration.image().clone(),
+                },
+                |()| UiEvent::Window(WindowCommand::Minimize),
+            )
+        });
+    let (registry, mut resolver) = documents();
+    resolver.insert(
+        "one.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1,
+        id: "two-previews", chrome: Plain,
+        root: Column(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+            Chip(id: "fire", label: "TOGGLE", size: Some((w: Fill, h: Fixed(40.0))),
+                read: Model(id: "fixture.flag"), write: Command(id: "fixture.fire")),
+            Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+                Custom(id: "left", kind: "fixture-left",
+                    size: Some((w: Fixed(64.0), h: Fixed(64.0)))),
+                Optional(id: "panel", hidden: Model(id: "fixture.hidden"),
+                    child: Custom(id: "right", kind: "fixture-right",
+                        size: Some((w: Fixed(64.0), h: Fixed(64.0))))),
+            ]),
+        ]))"#,
+    );
+    let mut ui = mounted(
+        Editor {
+            active: true,
+            ..Editor::default()
+        },
+        &registry,
+        &resolver,
+        &kinds,
+    );
+    let sorted = |frame: &Frame| {
+        let mut tokens = tokens(frame);
+        tokens.sort_unstable();
+        tokens
+    };
+    let mut both = ids.to_vec();
+    both.sort_unstable();
+    assert_eq!(sorted(&rendered(&mut ui)), both);
+    let toggle = centre(
+        ui.rect_of("demo/fire")
+            .expect("the toggle must be laid out"),
+    );
+    for shown in [false, true] {
+        press(&mut ui, toggle);
+        assert_eq!(ui.app().active, shown);
+        let expected = if shown { both.clone() } else { vec![ids[0]] };
+        assert_eq!(
+            sorted(&rendered(&mut ui)),
+            expected,
+            "the frame must declare the shown widgets' pictures: {shown}"
+        );
+    }
 }
 
 const FIELD: &str = r"

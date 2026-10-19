@@ -6,8 +6,10 @@ use vello_encoding::{Encoding, Patch};
 use super::VelloImageBackend;
 use crate::{
     backends::VelloBackend,
+    builtin,
     draw::{Backend, DrawListBuilder, Image, ImageId, Pen, Pt, Rect, Rgba, Transform, replay},
     masonry::external::ExternalImageDeclaration,
+    shaping::TextContext,
 };
 
 const BOUNDS: Rect = Rect {
@@ -123,8 +125,12 @@ fn image_backend_without_device_pictures_encodes_what_the_plain_backend_does() {
         Arc::from([17_u8; 4]),
     )
     .expect("one complete pixel must form a CPU picture");
+    let run = TextContext::new()
+        .expect("the bundled fonts must load")
+        .shape("GAIN", builtin::skin().text.cell, None);
     let mut list = DrawListBuilder::default();
     list.fill_rect(BOUNDS, RED);
+    list.text(&run, "GAIN", Transform::IDENTITY, GREEN);
     list.stroke_line(
         Pt { x: 0.0, y: 0.0 },
         Pt { x: 40.0, y: 30.0 },
@@ -150,6 +156,20 @@ fn image_backend_without_device_pictures_encodes_what_the_plain_backend_does() {
     let (plain, routed) = (plain.encoding(), routed.encoding());
     assert!(plain.n_clips >= 2);
     assert_same_geometry(plain, routed);
+    assert!(
+        !routed.resources.glyphs.is_empty(),
+        "the text run must reach the scene"
+    );
+    assert_eq!(
+        [
+            plain.resources.glyphs.len(),
+            plain.resources.glyph_runs.len()
+        ],
+        [
+            routed.resources.glyphs.len(),
+            routed.resources.glyph_runs.len()
+        ]
+    );
     let pictures = |encoding: &Encoding| {
         encoding
             .resources
@@ -177,8 +197,8 @@ fn image_backend_without_device_pictures_encodes_what_the_plain_backend_does() {
     let routed = pictures(routed);
     assert_eq!(pictures(plain), routed);
     assert!(
-        matches!(routed.as_slice(), [Some((_, pixels, ..))] if pixels.as_slice() == [17_u8; 4]),
-        "the CPU picture must reach the scene once, with its own pixels"
+        matches!(routed.as_slice(), [None, Some((_, pixels, ..))] if pixels.as_slice() == [17_u8; 4]),
+        "the glyph run, then the CPU picture once with its own pixels, must reach the scene"
     );
 }
 
