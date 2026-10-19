@@ -17,6 +17,7 @@ use kithara_ui::{
 };
 use vello::{
     Scene,
+    kurbo::Affine,
     peniko::{ImageAlphaType, ImageData},
 };
 use vello_encoding::{DrawTag, Patch};
@@ -775,4 +776,61 @@ fn embedded_frame_declares_a_shared_device_picture_once() {
         "both previews must draw the shared picture"
     );
     assert_eq!(tokens(&frame), [token]);
+}
+
+const FIELD: &str = r"
+@fragment
+fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
+    return vec4<f32>(position.xy / kithara.viewport.xy, 0.0, 1.0);
+}
+";
+
+/// A document shader paints the target its pass renders into as one picture
+/// with no pixels, as large as its box and placed on it. That picture is the
+/// shader's to declare, not a custom widget's.
+#[kithara::test]
+fn embedded_shader_picture_is_placed_on_its_box() {
+    let kinds = CustomKinds::default();
+    let (registry, mut resolver) = documents();
+    resolver.insert(
+        "one.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1,
+        id: "shaded", chrome: Plain,
+        root: Column(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+            Spacer(id: "lead", size: Some((w: Fill, h: Fixed(12.0)))),
+            Shader(id: "field", source: "field.wgsl",
+                uniforms: { "flag": Model(id: "fixture.flag") },
+                size: (w: Fixed(30.0), h: Fixed(20.0))),
+        ]))"#,
+    );
+    resolver.insert("field.wgsl", FIELD);
+    let mut ui = mounted(Editor::default(), &registry, &resolver, &kinds);
+    let frame = rendered(&mut ui);
+    assert_eq!(frame.shaders().len(), 1);
+    assert!(frame.external_images().is_empty());
+    let images = pictures(frame.scene());
+    assert_eq!(images.len(), 1, "the shader must paint one picture");
+    assert!(images[0].data.data().is_empty());
+    let field = ui
+        .rect_of("demo/field")
+        .expect("the shader must be laid out");
+    let extent = [images[0].width, images[0].height];
+    assert_eq!(extent, [30, 20], "the target must be as large as {field:?}");
+    let expected = Affine::translate((f64::from(field.x), f64::from(field.y)))
+        * Affine::scale_non_uniform(
+            f64::from(field.w) / f64::from(extent[0]),
+            f64::from(field.h) / f64::from(extent[1]),
+        );
+    let [a, b, c, d, e, f] = expected.as_coeffs();
+    assert!(
+        frame.scene().encoding().transforms.iter().any(|transform| {
+            let [m0, m1, m2, m3] = transform.matrix;
+            let [t0, t1] = transform.translation;
+            [m0, m1, m2, m3, t0, t1]
+                .iter()
+                .zip([a, b, c, d, e, f])
+                .all(|(got, want)| (f64::from(*got) - want).abs() < 1e-4)
+        }),
+        "the shader picture must be placed on {field:?}"
+    );
 }
