@@ -1,7 +1,8 @@
 use kithara_platform::time::Duration;
 
 use crate::{
-    draw::{DrawListBuilder, Rect},
+    backends::ExternalImageDeclaration,
+    draw::{DrawListBuilder, ImageId, Rect},
     interact::{Hit, Input, Outcome},
     render::{
         custom::{CustomWidget, Repaint, Size2, SizeLimits, TextMeasurer},
@@ -38,6 +39,7 @@ where
     delegate::delegate! {
         to self.inner {
             fn accepts_text_input(&self) -> bool;
+            fn external_image(&self, id: &ImageId) -> Option<&ExternalImageDeclaration>;
             fn measure(&mut self, text: &mut TextMeasurer<'_>, limits: SizeLimits) -> Size2;
             #[expr($.map(&self.map))]
             fn input(&mut self, input: Input<'_>, hit: Hit) -> Outcome<To>;

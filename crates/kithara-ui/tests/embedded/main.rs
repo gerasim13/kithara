@@ -2,6 +2,8 @@
 
 //! Embedded host contracts that do not require iced, a window or a GPU.
 
+mod external_image;
+
 use std::sync::LazyLock;
 
 use kithara_platform::time::Duration;

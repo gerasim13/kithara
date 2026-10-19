@@ -4,37 +4,33 @@ use vello::{
     peniko::{ImageBrush, ImageData},
 };
 
-use super::vello::backend::has_system_text;
 use crate::{
-    backends::VelloBackend,
+    backends::{
+        VelloBackend,
+        vello::backend::{has_system_text, placed},
+    },
     draw::{
         Backend, Caps, DrawList, Geom, Image, ImageId, Paint, Pen, Rect, Rgba, Transform, replay,
     },
     shaping::GlyphRun,
 };
 
-/// A Vello encoder with one externally owned image available to the list.
-pub(crate) struct VelloImageBackend<'scene, 'image> {
-    image: &'image ImageData,
-    image_id: &'image ImageId,
+/// A Vello encoder borrowing the leaf's device-image lookup for one replay.
+pub(crate) struct VelloImageBackend<'scene, Lookup> {
+    lookup: Lookup,
     scene: &'scene mut Scene,
 }
 
-impl<'scene, 'image> VelloImageBackend<'scene, 'image> {
-    pub(crate) const fn new(
-        scene: &'scene mut Scene,
-        image_id: &'image ImageId,
-        image: &'image ImageData,
-    ) -> Self {
-        Self {
-            image,
-            image_id,
-            scene,
-        }
+impl<'scene, Lookup> VelloImageBackend<'scene, Lookup> {
+    pub(crate) const fn new(scene: &'scene mut Scene, lookup: Lookup) -> Self {
+        Self { lookup, scene }
     }
 }
 
-impl Backend for VelloImageBackend<'_, '_> {
+impl<'image, Lookup> Backend for VelloImageBackend<'_, Lookup>
+where
+    Lookup: Fn(&ImageId) -> Option<&'image ImageData>,
+{
     const CAPS: Caps = Caps::EVERYTHING;
 
     fn clip(&mut self, region: Rect, list: &DrawList) {
@@ -58,23 +54,24 @@ impl Backend for VelloImageBackend<'_, '_> {
         self.scene.pop_layer();
     }
 
-    fn image(&mut self, image: &Image, rect: Rect, _turn: f32) {
-        if image.id() != self.image_id {
-            tracing::error!(?image, "Vello image registry does not own this image");
+    fn image(&mut self, image: &Image, rect: Rect, turn: f32) {
+        if image.rgba().is_some() {
+            VelloBackend::new(self.scene).image(image, rect, turn);
             return;
         }
-        let natural = [f64::from(self.image.width), f64::from(self.image.height)];
-        if natural[0] == 0.0 || natural[1] == 0.0 {
-            tracing::error!(?image, "Vello image registry contains an empty image");
+        let Some(data) = (self.lookup)(image.id()) else {
+            tracing::error!(?image, "Vello image lookup does not own this image");
+            return;
+        };
+        if image.width() == 0
+            || image.height() == 0
+            || [data.width, data.height] != [image.width(), image.height()]
+        {
+            tracing::error!(?image, "Vello device image has an inconsistent extent");
             return;
         }
-        let transform = Affine::translate((f64::from(rect.x), f64::from(rect.y)))
-            * Affine::scale_non_uniform(
-                f64::from(rect.w) / natural[0],
-                f64::from(rect.h) / natural[1],
-            );
-        let brush = ImageBrush::new(self.image.clone());
-        self.scene.draw_image(&brush, transform);
+        self.scene
+            .draw_image(&ImageBrush::new(data.clone()), placed(image, rect, turn));
     }
 
     delegate::delegate! {

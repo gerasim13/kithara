@@ -1,5 +1,7 @@
 #[cfg(all(test, feature = "masonry"))]
 pub(crate) mod conformance;
+#[cfg(feature = "vello")]
+mod external_image;
 #[cfg(feature = "iced")]
 mod iced_canvas;
 #[cfg(feature = "masonry")]
@@ -11,6 +13,8 @@ mod readback;
 #[cfg(feature = "vello")]
 mod vello;
 
+#[cfg(feature = "vello")]
+pub use external_image::ExternalImageDeclaration;
 #[cfg(feature = "iced")]
 pub(crate) use iced_canvas::{font, path, replay_ordered, replay_ordered_in};
 #[cfg(feature = "masonry")]

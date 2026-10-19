@@ -19,8 +19,8 @@ use super::{
     mount::NodeLayout, shader::ShaderLeaf, vis::VisLeaf,
 };
 use crate::{
-    backends::VelloBackend,
-    draw::{DrawList, DrawListBuilder, Pt, Rect, Rgba, Transform, replay},
+    backends::{ExternalImageDeclaration, VelloBackend, VelloImageBackend},
+    draw::{DrawList, DrawListBuilder, ImageId, Pt, Rect, Rgba, Transform, replay},
     hosts::{
         layer::{HostLayer, WindowLayerProgram},
         solve::{Length, Size},
@@ -262,7 +262,18 @@ impl Leaf {
                 widget.paint(list, &mut TextMeasurer::new(text), bounds, skin);
             }
         });
-        replay(&list.finish(), &mut VelloBackend::new(scene));
+        let list = list.finish();
+        if let Self::Custom { widget, .. } = self {
+            let lookup = |id: &ImageId| {
+                widget
+                    .external_image(id)
+                    .filter(|declaration| declaration.image().id() == id)
+                    .map(ExternalImageDeclaration::image_data)
+            };
+            replay(&list, &mut VelloImageBackend::new(scene, lookup));
+        } else {
+            replay(&list, &mut VelloBackend::new(scene));
+        }
     }
 
     /// Whether this leaf draws differently while the pointer rests on it.
