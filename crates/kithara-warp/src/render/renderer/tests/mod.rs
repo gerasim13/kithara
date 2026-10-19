@@ -4,6 +4,7 @@ mod latency_tests;
 mod mapping_tests;
 #[cfg(feature = "stretch-signalsmith")]
 mod native_tests;
+mod quantum_tests;
 mod residency_tests;
 
 use std::num::NonZeroU32;
