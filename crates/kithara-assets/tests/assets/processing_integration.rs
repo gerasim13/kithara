@@ -77,7 +77,10 @@ fn processing_caches_result_on_subsequent_reads(temp_dir: kithara_test_utils::Te
         panic!("committed acquire must be Ready");
     };
     let mut buf1 = vec![0u8; original_data.len()];
-    processed_res.read_at(0, &mut buf1).unwrap();
+    let n = processed_res.read_at(0, &mut buf1).unwrap();
+    assert_eq!(n, original_data.len());
+    let expected: Vec<u8> = original_data.iter().map(|b| b ^ 0xAB).collect();
+    assert_eq!(buf1, expected);
     assert_eq!(call_count.load(Ordering::SeqCst), count_after_commit);
 
     let mut buf2 = vec![0u8; original_data.len()];
