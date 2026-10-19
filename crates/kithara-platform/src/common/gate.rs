@@ -179,18 +179,19 @@ impl ThreadGate {
         let deadline = thread::gate_instant(&self.backend) + timeout;
         let result = loop {
             let posts = self.backend.posts();
-            let state = self.state.load(Ordering::SeqCst);
-            if Self::sequence(state) != since || state & Self::POSTED != 0 {
+            if self.moved(since) || self.take_posted() {
                 break true;
             }
             let now = thread::gate_instant(&self.backend);
             if now >= deadline {
-                break Self::sequence(self.state.load(Ordering::SeqCst)) != since;
+                break self.moved(since) || self.take_posted();
             }
             self.backend
                 .park_timeout(deadline - now, poll.then_some(posts));
         };
-        self.state.fetch_and(!Self::FLAGS, Ordering::SeqCst);
+        // A post consumes only the wait it woke: one landing after the last
+        // check stays pending for the next wait.
+        self.state.fetch_and(!Self::WAITING, Ordering::SeqCst);
         result
     }
 
@@ -231,6 +232,13 @@ impl ThreadGate {
             self.waiter_id.store(waiter_id, Ordering::Release);
         }
         self.state.fetch_or(Self::WAITING, Ordering::SeqCst);
+    }
+
+    /// Whether a signal moved the edge past `since`. Sequentially consistent:
+    /// it pairs with the waiter flag [`signal`](WaitGate::signal) reads, so
+    /// either the waiter sees the edge or the signaller sees the waiter.
+    fn moved(&self, since: u64) -> bool {
+        Self::sequence(self.state.load(Ordering::SeqCst)) != since
     }
 
     const fn sequence(state: u64) -> u64 {
