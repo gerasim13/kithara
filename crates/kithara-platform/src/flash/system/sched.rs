@@ -259,12 +259,12 @@ impl Core {
         WakeBatch(self.release_due(clock, min))
     }
 
-    /// Where the next advance lands: the earliest deadline when paced, else
-    /// the first one that owes a stop, else the earliest. `None` when nothing
-    /// is timed.
+    /// Where the next advance lands: the earliest deadline when paced or when
+    /// a yielder waits for whatever comes due first, else the first one that
+    /// owes a stop, else the earliest. `None` when nothing is timed.
     fn advance_target(&self, paced: bool, posts: u64) -> Option<u64> {
         let (&(earliest, _), _) = self.sched.timed.iter().next()?;
-        if paced {
+        if paced || !self.sched.yielders.is_empty() {
             return Some(earliest);
         }
         let owed = self
