@@ -17,13 +17,13 @@ use crate::{
 
 /// A Vello encoder borrowing the leaf's device-image lookup for one replay.
 pub(crate) struct VelloImageBackend<'scene, Lookup> {
-    lookup: Lookup,
     scene: &'scene mut Scene,
+    lookup: Lookup,
 }
 
 impl<'scene, Lookup> VelloImageBackend<'scene, Lookup> {
     pub(crate) const fn new(scene: &'scene mut Scene, lookup: Lookup) -> Self {
-        Self { lookup, scene }
+        Self { scene, lookup }
     }
 }
 

@@ -5,7 +5,7 @@ use masonry::vello::{
 
 use crate::{
     backends::VelloImageBackend,
-    draw::{DrawListBuilder, Image, Rect, replay},
+    draw::{DrawListBuilder, Image, ImageId, Rect, replay},
     hosts::shader::{ShaderFrame, frame::ShaderFrameError, logical_extent},
     masonry::shader::ShaderDeclaration,
     render::document::Ctx,
@@ -70,7 +70,7 @@ impl ShaderLeaf {
         );
         replay(
             &list.finish(),
-            &mut VelloImageBackend::new(scene, |id: &crate::draw::ImageId| {
+            &mut VelloImageBackend::new(scene, |id: &ImageId| {
                 (id == frame.image()).then_some(image)
             }),
         );

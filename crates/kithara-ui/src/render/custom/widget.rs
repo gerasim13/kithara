@@ -38,6 +38,20 @@ pub trait CustomWidget: 'static {
         false
     }
 
+    /// Looks up a device picture painted by this component.
+    ///
+    /// The retained Vello host borrows this declaration while replaying the
+    /// component's draw list. CPU pictures require no declaration. The host that
+    /// submits the resulting scene owns texture readiness, binding and lifetime;
+    /// returning a declaration does not establish that its pixels are ready.
+    #[cfg(feature = "vello")]
+    fn external_image(
+        &self,
+        _id: &crate::draw::ImageId,
+    ) -> Option<&crate::backends::ExternalImageDeclaration> {
+        None
+    }
+
     /// Advances retained component state and returns at most one typed action.
     ///
     /// This hook is the egress for actions recognised while drawing or by a
@@ -67,20 +81,6 @@ pub trait CustomWidget: 'static {
         bounds: Rect,
         skin: &CustomSkin,
     );
-
-    /// Looks up a device picture painted by this component.
-    ///
-    /// The retained Vello host borrows this declaration while replaying the
-    /// component's draw list. CPU pictures require no declaration. The host that
-    /// submits the resulting scene owns texture readiness, binding and lifetime;
-    /// returning a declaration does not establish that its pixels are ready.
-    #[cfg(feature = "vello")]
-    fn external_image(
-        &self,
-        _id: &crate::draw::ImageId,
-    ) -> Option<&crate::backends::ExternalImageDeclaration> {
-        None
-    }
 
     /// Declares whether the host should schedule animation frames.
     fn repaint(&self) -> Repaint {

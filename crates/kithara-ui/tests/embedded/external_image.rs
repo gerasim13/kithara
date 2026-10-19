@@ -31,6 +31,10 @@ struct Preview {
 impl CustomWidget for Preview {
     type Action = ();
 
+    fn external_image(&self, id: &ImageId) -> Option<&ExternalImageDeclaration> {
+        (id == self.declaration.image().id()).then_some(&self.declaration)
+    }
+
     fn measure(&mut self, _text: &mut TextMeasurer<'_>, _limits: SizeLimits) -> Size2 {
         Size2::new(64.0, 64.0)
     }
@@ -51,10 +55,6 @@ impl CustomWidget for Preview {
             },
         );
     }
-
-    fn external_image(&self, id: &ImageId) -> Option<&ExternalImageDeclaration> {
-        (id == self.declaration.image().id()).then_some(&self.declaration)
-    }
 }
 
 /// A preview that clips its one picture twice inside its own box and answers
@@ -69,6 +69,12 @@ struct Framed {
 
 impl CustomWidget for Framed {
     type Action = ();
+
+    fn external_image(&self, id: &ImageId) -> Option<&ExternalImageDeclaration> {
+        self.declaration
+            .as_ref()
+            .filter(|declaration| declaration.image().id() == id)
+    }
 
     fn input(&mut self, input: Input<'_>, hit: Hit) -> Outcome<Self::Action> {
         match input {
@@ -95,12 +101,6 @@ impl CustomWidget for Framed {
         inner.image(self.image.clone(), bounds);
         outer.clip(inset(bounds, 4.0), inner.finish());
         list.clip(inset(bounds, 2.0), outer.finish());
-    }
-
-    fn external_image(&self, id: &ImageId) -> Option<&ExternalImageDeclaration> {
-        self.declaration
-            .as_ref()
-            .filter(|declaration| declaration.image().id() == id)
     }
 }
 

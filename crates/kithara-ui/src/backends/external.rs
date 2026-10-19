@@ -27,11 +27,11 @@ impl ExternalImageDeclaration {
         Some(Self {
             image: Image::external(id, width, height),
             data: ImageData {
-                data: Vec::new().into(),
-                format: ImageFormat::Rgba8,
                 alpha_type,
                 width,
                 height,
+                data: Vec::new().into(),
+                format: ImageFormat::Rgba8,
             },
         })
     }
