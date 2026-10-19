@@ -9,13 +9,16 @@ use crate::draw::{Image, ImageId};
 
 /// One externally rendered picture and the stable Vello token its producer binds.
 ///
-/// This declaration owns no CPU pixels. A custom widget hands it out from
-/// `CustomWidget::external_image`, and every retained frame that samples it
-/// lists it once in `app::Frame::external_images`. Before rendering that
-/// frame's scene, the host must bind its [`Self::image_data`] to a ready texture
-/// on the renderer's device. Keep that binding and texture alive until every
-/// submitted scene that references the token has finished using it. A new
-/// extent needs a new declaration.
+/// It holds no CPU pixels. A custom widget hands it out from
+/// [`CustomWidget::external_image`]; each frame that samples it lists it once in
+/// [`Frame::external_images`]. Before rendering that scene the host binds
+/// [`Self::image_data`] on the renderer's device and keeps the texture alive while a
+/// submitted scene uses it. Vello aborts on a listed token nothing binds, so a host
+/// whose producer is not ready binds an `Rgba8Unorm` placeholder of the declared
+/// extent, as the window and capture hosts do. A new extent needs a new declaration.
+///
+/// [`CustomWidget::external_image`]: crate::render::custom::CustomWidget::external_image
+/// [`Frame::external_images`]: crate::app::Frame::external_images
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct ExternalImageDeclaration {
