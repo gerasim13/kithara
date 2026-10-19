@@ -487,7 +487,8 @@ mod tests {
     /// whenever the edge moved, so the loop never parks; a participant that
     /// never parks never lets the engine quiesce, and the virtual clock a
     /// sleeper waits on cannot advance. The sleep below is the discriminator:
-    /// if a spinning participant can freeze the clock, it never returns.
+    /// if a spinning participant can freeze the clock, it never returns. While
+    /// a participant spins the clock keeps real pace, so the sleep is short.
     #[kithara::test]
     fn a_spinning_gate_waiter_must_not_freeze_the_virtual_clock() {
         let gate = Arc::new(ThreadGate::default());
@@ -510,7 +511,7 @@ mod tests {
             }
         });
 
-        thread::sleep(Duration::from_secs(1));
+        thread::sleep(Duration::from_millis(100));
 
         stop.store(true, Ordering::Release);
         gate.signal();
