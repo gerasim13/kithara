@@ -422,8 +422,6 @@ mod tests {
     fn mem_store_capabilities() {
         let store = make_mem_store();
         let caps = store.capabilities();
-        assert!(caps.contains(Capabilities::CACHE));
-        assert!(caps.contains(Capabilities::PROCESSING));
         assert!(!caps.contains(Capabilities::EVICT));
         assert!(!caps.contains(Capabilities::LEASE));
     }

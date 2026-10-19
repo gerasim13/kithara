@@ -2,11 +2,14 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use kithara_assets::{AcquisitionResult, ReadSide, WriteSide};
+use kithara_assets::{AcquisitionResult, AssetStore, ReadSide, StorageBackend, WriteSide};
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_test_utils::{kithara, temp_dir};
+use kithara_test_utils::{bufpool::pools, kithara, temp_dir};
 
-use super::support::{asset_scope, resource, xor_processor};
+use super::support::{
+    LiteralLayout, asset_scope, literal_layouts, pending, read_bytes, resource, source,
+    xor_processor,
+};
 
 #[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 fn processing_transforms_data_on_commit(temp_dir: kithara_test_utils::TestTempDir) {
@@ -21,7 +24,7 @@ fn processing_transforms_data_on_commit(temp_dir: kithara_test_utils::TestTempDi
     {
         let AcquisitionResult::Pending(writer) = scope
             .store()
-            .acquire_resource_with_ctx(&key, None, Some(Arc::clone(&ctx)))
+            .acquire_resource_with_ctx(&key, None, Some(ctx))
             .unwrap()
         else {
             panic!("fresh acquire must be Pending");
@@ -33,10 +36,7 @@ fn processing_transforms_data_on_commit(temp_dir: kithara_test_utils::TestTempDi
 
     assert!(call_count.load(Ordering::SeqCst) > 0);
 
-    let processed_res = scope
-        .store()
-        .open_resource_with_ctx(&key, None, Some(ctx))
-        .unwrap();
+    let processed_res = scope.store().open_resource(&key, None).unwrap();
 
     let mut buf = vec![0u8; original_data.len()];
     let n = processed_res.read_at(0, &mut buf).unwrap();
@@ -69,10 +69,13 @@ fn processing_caches_result_on_subsequent_reads(temp_dir: kithara_test_utils::Te
     }
     let count_after_commit = call_count.load(Ordering::SeqCst);
 
-    let processed_res = scope
+    let AcquisitionResult::Ready(processed_res) = scope
         .store()
-        .open_resource_with_ctx(&key, None, Some(Arc::clone(&ctx)))
-        .unwrap();
+        .acquire_resource_with_ctx(&key, None, Some(Arc::clone(&ctx)))
+        .unwrap()
+    else {
+        panic!("committed acquire must be Ready");
+    };
     let mut buf1 = vec![0u8; original_data.len()];
     processed_res.read_at(0, &mut buf1).unwrap();
     assert_eq!(call_count.load(Ordering::SeqCst), count_after_commit);
@@ -101,7 +104,7 @@ fn processing_partial_reads_work_correctly(temp_dir: kithara_test_utils::TestTem
     {
         let AcquisitionResult::Pending(writer) = scope
             .store()
-            .acquire_resource_with_ctx(&key, None, Some(Arc::clone(&ctx)))
+            .acquire_resource_with_ctx(&key, None, Some(ctx))
             .unwrap()
         else {
             panic!("fresh acquire must be Pending");
@@ -110,10 +113,7 @@ fn processing_partial_reads_work_correctly(temp_dir: kithara_test_utils::TestTem
         writer.commit(Some(original_data.len() as u64)).unwrap();
     }
 
-    let processed_res = scope
-        .store()
-        .open_resource_with_ctx(&key, None, Some(ctx))
-        .unwrap();
+    let processed_res = scope.store().open_resource(&key, None).unwrap();
 
     let mut buf = vec![0u8; 20];
     let n = processed_res.read_at(40, &mut buf).unwrap();
@@ -143,7 +143,7 @@ fn processing_read_past_end_returns_zero(temp_dir: kithara_test_utils::TestTempD
     {
         let AcquisitionResult::Pending(writer) = scope
             .store()
-            .acquire_resource_with_ctx(&key, None, Some(Arc::clone(&ctx)))
+            .acquire_resource_with_ctx(&key, None, Some(ctx))
             .unwrap()
         else {
             panic!("fresh acquire must be Pending");
@@ -152,14 +152,37 @@ fn processing_read_past_end_returns_zero(temp_dir: kithara_test_utils::TestTempD
         writer.commit(Some(original_data.len() as u64)).unwrap();
     }
 
-    let processed_res = scope
-        .store()
-        .open_resource_with_ctx(&key, None, Some(ctx))
-        .unwrap();
+    let processed_res = scope.store().open_resource(&key, None).unwrap();
 
     let mut buf = vec![0u8; 100];
     let n = processed_res.read_at(100, &mut buf).unwrap();
     assert_eq!(n, 0);
+}
+
+#[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+fn memory_store_serves_processed_bytes_after_commit() {
+    let store = AssetStore::builder(pools())
+        .backend(StorageBackend::Memory)
+        .layouts(literal_layouts())
+        .build();
+    let key = store
+        .scope::<LiteralLayout>(&source("memory-processing"))
+        .expect("scope")
+        .key(&resource("data.bin"))
+        .unwrap();
+    let original_data: Vec<u8> = (0..16).collect();
+
+    let writer = pending(
+        store
+            .acquire_resource_with_ctx(&key, None, Some(xor_processor(0x5A, None)))
+            .unwrap(),
+    );
+    writer.write_at(0, &original_data).unwrap();
+    drop(writer.commit(Some(original_data.len() as u64)).unwrap());
+
+    let reader = store.open_resource(&key, None).unwrap();
+    let expected: Vec<u8> = original_data.iter().map(|b| b ^ 0x5A).collect();
+    assert_eq!(read_bytes(&reader, 0, original_data.len()), expected);
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
