@@ -8,7 +8,8 @@ use crate::draw::{Image, ImageId};
 /// the host must bind its [`Self::image_data`] to a ready texture on the renderer's
 /// device. Keep that binding and texture alive until every submitted scene that
 /// references the token has finished using it. A new extent needs a new declaration.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct ExternalImageDeclaration {
     image: Image,
     data: ImageData,

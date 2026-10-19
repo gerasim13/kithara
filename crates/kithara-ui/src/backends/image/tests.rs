@@ -36,6 +36,18 @@ fn external_image_declaration_keeps_one_stable_token_and_explicit_alpha() {
     )
     .expect("a named positive extent must declare a premultiplied picture");
     let cloned = declaration.clone();
+    assert_eq!(declaration, cloned, "a clone binds the same token");
+    assert_ne!(
+        declaration,
+        ExternalImageDeclaration::new(
+            ImageId::new("test/alpha-picture"),
+            2,
+            1,
+            ImageAlphaType::AlphaPremultiplied,
+        )
+        .expect("the same picture must declare again"),
+        "declaring the same picture again mints a new token for the host to bind"
+    );
 
     assert_eq!(declaration.image(), cloned.image());
     assert!(declaration.image().rgba().is_none());
