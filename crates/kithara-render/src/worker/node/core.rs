@@ -153,7 +153,12 @@ where
                         if !meta.end_of_track && meta.frames > 0 {
                             self.source.admitted();
                         }
-                        kithara::probe_event!(chunk_admitted, segment = meta.segment.get());
+                        kithara::probe_event!(
+                            chunk_admitted,
+                            segment = meta.segment.get(),
+                            lane_frame = meta.lane_frame,
+                            frames = u64::from(meta.frames)
+                        );
                         tracing::trace!(
                             target: "render_refill",
                             probe = "chunk_admitted",
