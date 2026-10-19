@@ -9,9 +9,7 @@ use crate::{
         VelloBackend,
         vello::backend::{has_system_text, placed},
     },
-    draw::{
-        Backend, Caps, DrawList, Geom, Image, ImageId, Paint, Pen, Rect, Rgba, Transform, replay,
-    },
+    draw::{Backend, Caps, DrawList, Geom, Image, Paint, Pen, Rect, Rgba, Transform, replay},
     shaping::GlyphRun,
 };
 
@@ -29,7 +27,7 @@ impl<'scene, Lookup> VelloImageBackend<'scene, Lookup> {
 
 impl<'image, Lookup> Backend for VelloImageBackend<'_, Lookup>
 where
-    Lookup: FnMut(&ImageId) -> Option<&'image ImageData>,
+    Lookup: FnMut(&Image) -> Option<&'image ImageData>,
 {
     const CAPS: Caps = Caps::EVERYTHING;
 
@@ -59,7 +57,7 @@ where
             VelloBackend::new(self.scene).image(image, rect, turn);
             return;
         }
-        let Some(data) = (self.lookup)(image.id()) else {
+        let Some(data) = (self.lookup)(image) else {
             tracing::error!(?image, "Vello image lookup does not own this image");
             return;
         };

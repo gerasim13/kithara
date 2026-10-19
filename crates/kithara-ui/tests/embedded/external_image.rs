@@ -137,6 +137,42 @@ impl CustomWidget for Greedy {
     }
 }
 
+/// A widget that declares one extent and paints its picture one pixel wider,
+/// as a producer would after resizing its texture without declaring anew.
+struct Misfit {
+    declaration: ExternalImageDeclaration,
+}
+
+impl CustomWidget for Misfit {
+    type Action = ();
+
+    fn external_image(&self, id: &ImageId) -> Option<&ExternalImageDeclaration> {
+        (id == self.declaration.image().id()).then_some(&self.declaration)
+    }
+
+    fn measure(&mut self, _text: &mut TextMeasurer<'_>, _limits: SizeLimits) -> Size2 {
+        Size2::new(64.0, 64.0)
+    }
+
+    fn paint(
+        &mut self,
+        list: &mut DrawListBuilder,
+        _text: &mut TextMeasurer<'_>,
+        bounds: Rect,
+        _skin: &CustomSkin,
+    ) {
+        let declared = self.declaration.image();
+        list.image(
+            Image::external(
+                declared.id().clone(),
+                declared.width() + 1,
+                declared.height(),
+            ),
+            bounds,
+        );
+    }
+}
+
 fn inset(rect: Rect, by: f32) -> Rect {
     Rect {
         x: rect.x + by,
@@ -665,6 +701,40 @@ fn embedded_host_binds_a_declaration_only_to_the_picture_it_names() {
         "exactly one picture may sample the declared token"
     );
     assert_eq!(tokens(&frame), [token]);
+}
+
+/// A picture painted at an extent other than the one its declaration names is
+/// refused, and the frame does not ask the host to bind a token its scene
+/// never samples.
+#[kithara::test]
+fn embedded_frame_does_not_declare_a_picture_refused_for_its_extent() {
+    let declaration = declaration();
+    let kinds = CustomKinds::default().with(
+        "fixture-misfit",
+        move || Misfit {
+            declaration: declaration.clone(),
+        },
+        |()| UiEvent::Window(WindowCommand::Minimize),
+    );
+    let (registry, mut resolver) = documents();
+    resolver.insert(
+        "one.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1,
+        id: "misfit-preview", chrome: Plain,
+        root: Column(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+            Custom(id: "preview", kind: "fixture-misfit", size: Some((w: Fill, h: Fill))),
+        ]))"#,
+    );
+    let mut ui = mounted(Editor::default(), &registry, &resolver, &kinds);
+    let frame = rendered(&mut ui);
+    assert!(
+        pictures(frame.scene()).is_empty(),
+        "a picture at another extent than its declaration's must be refused"
+    );
+    assert!(
+        tokens(&frame).is_empty(),
+        "a refused picture declares nothing"
+    );
 }
 
 /// A frame declares a device picture only while its widget paints into the

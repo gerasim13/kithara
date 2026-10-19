@@ -20,7 +20,7 @@ use super::{
 };
 use crate::{
     backends::{VelloBackend, VelloImageBackend},
-    draw::{DrawList, DrawListBuilder, ImageId, Pt, Rect, Rgba, Transform, replay},
+    draw::{DrawList, DrawListBuilder, Image, Pt, Rect, Rgba, Transform, replay},
     hosts::{
         layer::{HostLayer, WindowLayerProgram},
         solve::{Length, Size},
@@ -282,10 +282,10 @@ impl Leaf {
         } = self
         {
             pictures.clear();
-            let lookup = |id: &ImageId| {
+            let lookup = |image: &Image| {
                 widget
-                    .external_image(id)
-                    .filter(|declaration| declaration.image().id() == id)
+                    .external_image(image.id())
+                    .filter(|declaration| declaration.image() == image)
                     .inspect(|&declaration| {
                         if !pictures.contains(declaration) {
                             pictures.push(declaration.clone());

@@ -144,7 +144,7 @@ fn image_backend_without_device_pictures_encodes_what_the_plain_backend_does() {
     let mut routed = Scene::new();
     replay(
         &list,
-        &mut VelloImageBackend::new(&mut routed, |_id: &ImageId| None),
+        &mut VelloImageBackend::new(&mut routed, |_image: &Image| None),
     );
 
     let (plain, routed) = (plain.encoding(), routed.encoding());
@@ -210,8 +210,8 @@ fn external_image_replay_matches_cpu_rotation_and_nested_clip_order() {
     let mut device_scene = Scene::new();
     replay(
         &list(declaration.image().clone()),
-        &mut VelloImageBackend::new(&mut device_scene, |id: &ImageId| {
-            (id == declaration.image().id()).then_some(declaration.image_data())
+        &mut VelloImageBackend::new(&mut device_scene, |image: &Image| {
+            (image == declaration.image()).then_some(declaration.image_data())
         }),
     );
 
@@ -247,7 +247,7 @@ fn external_image_lookup_does_not_override_cpu_pixels_with_the_same_identity() {
     let mut scene = Scene::new();
     VelloImageBackend::new(
         &mut scene,
-        |_id: &ImageId| -> Option<&vello::peniko::ImageData> {
+        |_image: &Image| -> Option<&vello::peniko::ImageData> {
             panic!("CPU pixels must never consult a device binding")
         },
     )
@@ -262,7 +262,7 @@ fn external_image_lookup_does_not_override_cpu_pixels_with_the_same_identity() {
 fn external_image_replay_rejects_missing_and_inconsistent_bindings() {
     let declaration = declaration();
     let mut missing = Scene::new();
-    VelloImageBackend::new(&mut missing, |_id: &ImageId| None).image(
+    VelloImageBackend::new(&mut missing, |_image: &Image| None).image(
         declaration.image(),
         BOUNDS,
         0.0,
@@ -272,7 +272,7 @@ fn external_image_replay_rejects_missing_and_inconsistent_bindings() {
     for (width, height) in [(0, 1), (2, 0), (3, 1), (2, 3)] {
         let image = Image::external(declaration.image().id().clone(), width, height);
         let mut scene = Scene::new();
-        VelloImageBackend::new(&mut scene, |_id: &ImageId| Some(declaration.image_data()))
+        VelloImageBackend::new(&mut scene, |_image: &Image| Some(declaration.image_data()))
             .image(&image, BOUNDS, 0.0);
         assert!(scene.encoding().resources.patches.is_empty());
     }
