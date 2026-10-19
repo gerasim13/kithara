@@ -407,6 +407,11 @@ pub(crate) const WORLD_READABLE: u32 = 0o644;
 /// `KITHARA_CI_LINUX_CONFIG`.
 pub(crate) const LINUX_CONFIG_PATH: &str = "/etc/kithara-ci/linux-host.toml";
 
+/// The machine commands a Linux provisioning pass runs as root, in order: the
+/// cache mounts this commit's runners use are created and handed to the job
+/// user before the services that start those runners are installed.
+pub(crate) const LINUX_PROVISION_STEPS: [&str; 2] = ["bootstrap", "install-services"];
+
 pub(crate) const API_VERSION: &str = "X-GitHub-Api-Version";
 
 /// The uid the runner image runs its jobs as. It is the image's, not this
