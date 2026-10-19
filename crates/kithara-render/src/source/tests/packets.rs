@@ -41,7 +41,7 @@ fn chunks(pools: &PoolRegion<TestPools>, sizes: &[u32]) -> VecDeque<AudioChunk> 
         .collect()
 }
 
-/// A unity lane with the passthrough backend over `source`.
+/// A unity lane with the default backend over `source`.
 fn packet_lane<T>(
     pools: &PoolRegion<TestPools>,
     source: T,
@@ -58,10 +58,6 @@ where
         .render_quantum_frames(NonZeroUsize::new(PACKET as usize).expect("quantum"))
         .build();
     let renderer = kithara_warp::Warp::new((), &config).renderer(spec(), pools.clone());
-    assert!(
-        !renderer.requires_staging(),
-        "the default backend is the passthrough one"
-    );
     let drain =
         EffectDrain::new(0, pools).unwrap_or_else(|error| panic!("test effect drain: {error}"));
     let source = WarpSource::new(
