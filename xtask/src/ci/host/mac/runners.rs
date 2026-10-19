@@ -12,7 +12,7 @@ use tracing::info;
 
 use super::services::launchd;
 use crate::{
-    ci::{cache::client_environment, config::CiConfig, process::Process},
+    ci::{cache::client_environment, config::CiConfig, kache, process::Process},
     consts,
 };
 
@@ -101,6 +101,14 @@ impl<'a> RunnerManager<'a> {
             .with_context(|| format!("installing macOS guest {name}"))?;
         }
 
+        for (path, contents) in self.kache_host_files()? {
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("creating {}", parent.display()))?;
+            }
+            // Readable by the container's user: the file names no secret.
+            fs::write(&path, contents).with_context(|| format!("writing {}", path.display()))?;
+        }
         write_secure(
             &runner_root.join("config.toml"),
             &self.runner_config(&home, &tokens)?,
@@ -301,23 +309,32 @@ impl<'a> RunnerManager<'a> {
         let lane_config = consts::MAC_CONFIG_PATH;
         let cargo_home = consts::CARGO_HOME_DIR;
         let image = consts::LINUX_LATEST_IMAGE;
-        let sccache_environment = self
-            .config
-            .host
-            .sccache_s3_env_file
-            .as_deref()
-            .map(client_environment)
-            .transpose()?;
+        let sccache_environment = self.store_environment()?;
+        let kache = |file: PathBuf| {
+            sccache_environment
+                .as_ref()
+                .map(|_| ("KACHE_HOST_CONFIG".to_owned(), file.display().to_string()))
+        };
+        let shell_kache = kache(self.kache_root().join(consts::KACHE_HOST_FILE));
+        let docker_kache = kache(
+            self.config
+                .host
+                .cache_root_linux
+                .join(consts::KACHE_DIR)
+                .join(consts::KACHE_DOCKER_HOST_FILE),
+        );
         let sccache_s3 = sccache_environment
             .clone()
             .into_iter()
             .flatten()
+            .chain(shell_kache)
             .map(|(name, value)| format!(", \"{name}={value}\""))
             .collect::<String>();
         let docker_sccache_s3 = sccache_environment
             .map(docker_client_environment)
             .into_iter()
             .flatten()
+            .chain(docker_kache)
             .map(|(name, value)| format!(", \"{name}={value}\""))
             .collect::<String>();
         let macos = tokens
@@ -477,6 +494,54 @@ impl<'a> RunnerManager<'a> {
                 .join(name),
         )
         .with_context(|| format!("installing shared {name}"))
+    }
+
+    /// kache's host files, by where they are written: one for the shell
+    /// runners and one for the container runner, which reaches the store and
+    /// the cache endpoint by other paths. Without a scoped store there is no
+    /// remote to name, and kache keeps its defaults.
+    ///
+    /// They sit in a namespace of the cache share, not in a trust's: a runner
+    /// serves every trust, and a job that places its own store does so in
+    /// its own configuration, which outranks this layer.
+    pub(super) fn kache_host_files(&self) -> Result<Vec<(PathBuf, String)>> {
+        let Some(environment) = self.store_environment()? else {
+            return Ok(Vec::new());
+        };
+        let shared = self.kache_root();
+        let inside = self.config.host.cache_root_linux.join(consts::KACHE_DIR);
+        let size = &self.config.host.sccache_size;
+        Ok(vec![
+            (
+                shared.join(consts::KACHE_HOST_FILE),
+                kache::host_config(&environment, &shared.join(consts::KACHE_STORE), size)?,
+            ),
+            (
+                shared.join(consts::KACHE_DOCKER_HOST_FILE),
+                kache::host_config(
+                    &docker_client_environment(environment),
+                    &inside.join(consts::KACHE_STORE),
+                    size,
+                )?,
+            ),
+        ])
+    }
+
+    fn kache_root(&self) -> PathBuf {
+        self.config
+            .host
+            .host_root
+            .join("cache")
+            .join(consts::KACHE_DIR)
+    }
+
+    fn store_environment(&self) -> Result<Option<BTreeMap<String, String>>> {
+        self.config
+            .host
+            .sccache_s3_env_file
+            .as_deref()
+            .map(client_environment)
+            .transpose()
     }
 
     pub(super) fn require_ci_user(&self) -> Result<()> {
@@ -1126,6 +1191,86 @@ mod tests {
             linux["docker"]["allowed_images"][0].as_str(),
             Some(consts::LINUX_LATEST_IMAGE)
         );
+    }
+
+    fn scoped_config(directory: &Path) -> CiConfig {
+        use std::os::unix::fs::PermissionsExt;
+
+        let env_file = directory.join("cache.env");
+        fs::write(
+            &env_file,
+            "SCCACHE_BUCKET=cache\nSCCACHE_ENDPOINT=http://127.0.0.1:19000\nAWS_ACCESS_KEY_ID=key\nAWS_SECRET_ACCESS_KEY=secret\n",
+        )
+        .expect("write cache environment");
+        fs::set_permissions(&env_file, fs::Permissions::from_mode(0o600))
+            .expect("restrict cache environment");
+        let mut config = fixture();
+        config.host.sccache_s3_env_file = Some(env_file);
+        config
+    }
+
+    /// A job that compiles before it places its own store — the xtask
+    /// bootstrap, a host job — reaches kache's remote and a store on the cache
+    /// share through the host file its runner names. The container reaches
+    /// both through its own paths.
+    #[test]
+    fn every_runner_names_a_kache_host_file_it_can_reach() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let config = scoped_config(directory.path());
+        let process = Process::new(Path::new("/"), BTreeMap::new());
+        let manager = RunnerManager::new(&config, &process);
+        let files = manager.kache_host_files().expect("the host files render");
+        let rendered: toml::Value = toml::from_str(
+            &manager
+                .runner_config(&manager.ci_home(), &tokens(&config))
+                .expect("render runner config"),
+        )
+        .expect("runner config is TOML");
+
+        let shared = config.host.host_root.join("cache").join(consts::KACHE_DIR);
+        let inside = config.host.cache_root_linux.join(consts::KACHE_DIR);
+        for runner in rendered["runners"].as_array().expect("runners") {
+            let docker = runner.get("docker").is_some();
+            let (named, store, endpoint) = if docker {
+                (
+                    inside.join(consts::KACHE_DOCKER_HOST_FILE),
+                    inside.join(consts::KACHE_STORE),
+                    "http://host.docker.internal:19000",
+                )
+            } else {
+                (
+                    shared.join(consts::KACHE_HOST_FILE),
+                    shared.join(consts::KACHE_STORE),
+                    "http://127.0.0.1:19000",
+                )
+            };
+            let entry = format!("KACHE_HOST_CONFIG={}", named.display());
+            assert!(
+                runner["environment"]
+                    .as_array()
+                    .expect("runner environment")
+                    .iter()
+                    .any(|value| value.as_str() == Some(entry.as_str())),
+                "{} does not name {entry}: {runner}",
+                runner["name"]
+            );
+            let written = shared.join(named.file_name().expect("a file name"));
+            let (_, contents) = files
+                .iter()
+                .find(|(path, _)| *path == written)
+                .unwrap_or_else(|| panic!("{} is not written", written.display()));
+            let file: toml::Table = toml::from_str(contents).expect("the host file is TOML");
+            assert_eq!(
+                file["cache"]["local_store"].as_str().map(PathBuf::from),
+                Some(store)
+            );
+            assert_eq!(
+                file["cache"]["local_max_size"].as_str(),
+                Some(config.host.sccache_size.as_str())
+            );
+            assert_eq!(file["cache"]["remote"]["endpoint"].as_str(), Some(endpoint));
+            assert_eq!(file["cache"]["remote"]["bucket"].as_str(), Some("cache"));
+        }
     }
 
     #[test]

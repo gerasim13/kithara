@@ -262,7 +262,6 @@ impl CiEnvironment {
                         directory: &cache_root.join("kache"),
                         max_size: &sccache.cache_size,
                     }),
-                    &|name| env::var(name).ok(),
                 )?;
                 for (name, value) in kache.environment(&ctx.config.tools) {
                     insert(&mut vars, name, value);
@@ -727,11 +726,10 @@ mod tests {
             kache["cache"]["local_max_size"].as_str(),
             Some(config.host.sccache_size.as_str())
         );
-        assert_eq!(
-            kache["cache"]["remote"]["bucket"].as_str(),
-            Some("kithara-review")
+        assert!(
+            kache["cache"].get("remote").is_none(),
+            "the remote is the runner's, named in kache's host layer"
         );
-        assert!(kache["cache"].get("remote_readonly").is_none());
         assert!(
             kache_config.starts_with(scratch_root()),
             "kache's socket is bound on local storage"

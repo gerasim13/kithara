@@ -315,6 +315,17 @@ pub(crate) const BUILD_ROOT_MOUNT: &str = "/cache/target";
 pub(crate) const BUILD_SLOTS_DIR: &str = "builds";
 pub(crate) const BUILD_SLOTS_MOUNT: &str = "/cache/builds";
 
+/// The host directory, under the cache root, holding one kache directory per
+/// trust, and where a Linux runner mounts its trust's: the host file the
+/// runner writes on every start and the store it names.
+pub(crate) const KACHE_DIR: &str = "kache";
+pub(crate) const KACHE_MOUNT: &str = "/cache/kache";
+pub(crate) const KACHE_HOST_FILE: &str = "host.toml";
+pub(crate) const KACHE_STORE: &str = "store";
+/// The host file a Mac host's container runner names: the same remote and
+/// store, spelled as the container reaches them.
+pub(crate) const KACHE_DOCKER_HOST_FILE: &str = "host-docker.toml";
+
 /// Where a Linux runner mounts the Cargo home of its trust: the image's own
 /// `CARGO_HOME`, so a job that names no home and one that is told it key their
 /// compilations alike.
@@ -388,6 +399,9 @@ pub(crate) const OWNER_ONLY: u32 = 0o600;
 
 /// A mode anyone may read and run, and only its owner may write.
 pub(crate) const EXECUTABLE: u32 = 0o755;
+
+/// A mode anyone may read, and only its owner may write.
+pub(crate) const WORLD_READABLE: u32 = 0o644;
 
 /// Installed profile every Linux CI machine reads through
 /// `KITHARA_CI_LINUX_CONFIG`.
