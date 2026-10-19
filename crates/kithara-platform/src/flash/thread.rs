@@ -102,22 +102,42 @@ impl Default for GateBackend {
 }
 
 impl GateBackend {
-    /// A gate park is a backstop under the gate's edge: the signal releases it, while the timeout
-    /// only guards a missed edge from wedging the waiter, at the cost of one clock hop per poll
-    /// interval.
+    /// Deferred edges posted so far under the engine, read before an edge
+    /// check so a poll parked after it owes a stop for any later post.
     #[inline]
-    pub(crate) fn park_timeout(&self, duration: Duration, poll_deadline: bool) {
+    pub(crate) fn posts(&self) -> u64 {
+        match self {
+            Self::Engine => crate::flash::system::posts(),
+            Self::Native => 0,
+        }
+    }
+
+    /// Count a deferred edge for the engine's poll stops. Lock-free.
+    #[inline]
+    pub(crate) fn post(&self) {
+        match self {
+            Self::Engine => crate::flash::system::post(),
+            Self::Native => {}
+        }
+    }
+
+    /// A gate park is a backstop under the gate's edge: the signal releases it,
+    /// while the timeout only guards a missed edge from wedging the waiter. A
+    /// poll (`poll_posts`, the [`Self::posts`] count read before its edge check)
+    /// also observes deferred edges, so it owes the clock a stop once one is
+    /// posted after that read.
+    #[inline]
+    pub(crate) fn park_timeout(&self, duration: Duration, poll_posts: Option<u64>) {
         match self {
             Self::Engine => {
                 let key = ThreadKey::of(current().id());
                 crate::flash::system::park_timed_unparkable(
                     duration,
                     key,
-                    if poll_deadline {
-                        crate::flash::system::ParkRole::Deadline
-                    } else {
-                        crate::flash::system::ParkRole::Backstop
-                    },
+                    poll_posts.map_or(
+                        crate::flash::system::ParkRole::Backstop,
+                        crate::flash::system::ParkRole::Poll,
+                    ),
                 );
             }
             Self::Native => crate::backend::thread::park_timeout(duration),

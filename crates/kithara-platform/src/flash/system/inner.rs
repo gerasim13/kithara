@@ -47,6 +47,10 @@ pub(in crate::flash) struct Clock {
     /// same mode). NOT cleared by [`FlashInner::reset`], exactly like the old
     /// function-local `REAL_EPOCH`.
     real_epoch: OnceLock<Instant>,
+    /// Deferred edges posted so far. A [`ParkRole::Poll`](super::ParkRole::Poll)
+    /// park owes the timeline a stop only once this has moved past the count
+    /// it parked with. Lock-free, so a real-time poster never touches `core`.
+    posts: AtomicU64,
 }
 
 impl Clock {
@@ -54,7 +58,18 @@ impl Clock {
         Self {
             nanos: AtomicU64::new(crate::flash::Instant::BASE_NANOS),
             real_epoch: OnceLock::new(),
+            posts: AtomicU64::new(0),
         }
+    }
+
+    /// Count one deferred edge (see [`Self::posts`]).
+    pub(in crate::flash) fn post(&self) {
+        self.posts.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Deferred edges posted so far: the snapshot a poll parks with.
+    pub(in crate::flash) fn posts(&self) -> u64 {
+        self.posts.load(Ordering::SeqCst)
     }
 
     /// Manually advance the virtual clock. Additive and test-only: the

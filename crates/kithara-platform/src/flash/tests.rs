@@ -642,41 +642,44 @@ fn deferred_worker_poll_precedes_distant_timer() {
     let _a = ambient_scope(true);
 
     assert_eq!(
-        run_deferred_worker_poll(false),
+        run_deferred_worker_poll(false, true),
         3_000,
         "an ordinary gate backstop must not drive the clock ahead of the distant timer"
     );
     assert_eq!(
-        run_deferred_worker_poll(true),
+        run_deferred_worker_poll(true, true),
         10,
-        "deferred work must be polled at the worker's 10ms interval, before the 3s timer"
+        "posted work must be polled at the worker's 10ms interval, before the 3s timer"
+    );
+    assert_eq!(
+        run_deferred_worker_poll(true, false),
+        3_000,
+        "a poll with nothing posted must not drive the clock ahead of the distant timer"
     );
 }
 
-fn run_deferred_worker_poll(poll_deadline: bool) -> usize {
+fn run_deferred_worker_poll(poll: bool, post: bool) -> usize {
     reset();
     let flash = Arc::clone(&super::system::FLASH);
     let base = flash.clock.now_nanos();
     let gate = Arc::new(ThreadGate::default());
-    let deferred = Arc::new(AtomicUsize::new(0));
     let observed_ms = Arc::new(AtomicUsize::new(0));
     let coordinator = flash.test_hold();
 
     let worker = {
         let flash = Arc::clone(&flash);
         let gate = Arc::clone(&gate);
-        let deferred = Arc::clone(&deferred);
         let observed_ms = Arc::clone(&observed_ms);
         thread::spawn(move || {
             bracketed_on(&flash, || {
                 let since = gate.current();
-                let signalled = if poll_deadline {
+                let woken = if poll {
                     gate.wait_poll_timeout(since, Duration::from_millis(10))
                 } else {
                     gate.wait_timeout(since, Duration::from_millis(10))
                 };
-                assert!(!signalled);
-                assert_eq!(deferred.load(Ordering::Acquire), 1);
+                assert_eq!(woken, post, "the wait reports exactly the posted edge");
+                assert_eq!(gate.current(), since, "a post is not a signal");
                 observed_ms.store(
                     ((flash.clock.now_nanos() - base) / 1_000_000) as usize,
                     Ordering::Release,
@@ -692,10 +695,13 @@ fn run_deferred_worker_poll(poll_deadline: bool) -> usize {
     };
     let notifier = {
         let flash = Arc::clone(&flash);
+        let gate = Arc::clone(&gate);
         thread::spawn(move || {
             bracketed_on(&flash, || {
                 flash.park_for(Duration::from_millis(5));
-                deferred.store(1, Ordering::Release);
+                if post {
+                    gate.post();
+                }
             });
         })
     };

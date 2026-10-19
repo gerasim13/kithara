@@ -40,7 +40,7 @@ pub(super) mod wake;
 
 pub(in crate::flash) use credit::AsyncHandle;
 pub(in crate::flash) use forward::{
-    async_acquire, describe_cvid, dump, next_condvar_id, park_timed_unparkable,
+    async_acquire, describe_cvid, dump, next_condvar_id, park_timed_unparkable, post, posts,
     register_channel_async, register_condvar_timed, register_condvar_untimed,
     register_notify_async, register_sleep_async, register_yield_async, signal_channel,
     signal_condvar, signal_notify, sleep_timed, unpark, yield_until_advance,

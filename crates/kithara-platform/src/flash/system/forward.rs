@@ -38,6 +38,16 @@ pub(crate) fn park_timed_unparkable(
     FLASH.park_timed_unparkable(d, thread_id, role);
 }
 
+/// Process-engine forward of [`Clock::post`](super::Clock::post).
+pub(crate) fn post() {
+    FLASH.clock.post();
+}
+
+/// Process-engine forward of [`Clock::posts`](super::Clock::posts).
+pub(crate) fn posts() -> u64 {
+    FLASH.clock.posts()
+}
+
 /// Process-engine forward of [`FlashInner::sleep_timed`](super::FlashInner::sleep_timed).
 pub(crate) fn sleep_timed(d: crate::flash::Duration) {
     FLASH.sleep_timed(d);

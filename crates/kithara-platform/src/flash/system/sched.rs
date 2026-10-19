@@ -77,28 +77,45 @@ pub(in crate::flash) enum ParkRole {
     /// happened observes nothing, so the clock bounds such a park instead of
     /// stopping at it.
     Backstop,
+    /// The deadline is a POLL for deferred edges, which are posted without a
+    /// wake: holding the [`FlashInner::posts`] count read before the poller
+    /// last checked its edge. Until a post moves that count, re-checking
+    /// observes nothing and the park is a [`ParkRole::Backstop`]; after one,
+    /// the poll is how the waiter observes it, so the clock owes it a stop.
+    Poll(u64),
+}
+
+impl ParkRole {
+    /// Whether the clock owes this park a stop at its deadline, given the
+    /// current [`FlashInner::posts`] count.
+    fn owes_stop(self, posts: u64) -> bool {
+        match self {
+            Self::Deadline => true,
+            Self::Backstop => false,
+            Self::Poll(seen) => seen != posts,
+        }
+    }
 }
 
 /// A parked waiter's wake handle plus the group it belongs to.
 pub(super) struct Entry {
     /// `Some` for deadline-less waiters only. See [`Parked`].
     pub(super) parked: Option<Parked>,
-    /// What this entry's deadline means. A [`ParkRole::Backstop`] entry never
-    /// becomes the advance target while some other deadline exists; a jump that
-    /// passes it still wakes it.
+    /// What this entry's deadline means. An entry that owes no stop
+    /// ([`ParkRole::owes_stop`]) never becomes the advance target while some
+    /// other deadline exists; a jump that passes it still wakes it.
     pub(super) role: ParkRole,
     pub(super) kind: WaitKind,
     pub(super) wake: Wake,
 }
 
 impl Entry {
-    /// A waiter whose deadline is only a backstop under an edge. See
-    /// [`ParkRole::Backstop`].
-    fn backstop(kind: WaitKind, wake: Wake) -> Self {
+    /// A timed waiter whose deadline means `role`.
+    fn with_role(kind: WaitKind, wake: Wake, role: ParkRole) -> Self {
         Self {
             kind,
             wake,
-            role: ParkRole::Backstop,
+            role,
             parked: None,
         }
     }
@@ -301,8 +318,10 @@ impl Core {
 
     /// Releases yielders immediately when timed parks are only edge backstops.
     /// Otherwise advances to the next owed stop, waking its waiting yielders too.
-    /// Both ordinary sleeps and gate polls owe a stop.
+    /// Ordinary sleeps owe a stop; a gate poll owes one once an edge was
+    /// posted after it last checked ([`ParkRole::Poll`]).
     fn try_advance_once(&mut self, clock: &Clock) -> WakeBatch {
+        let posts = clock.posts();
         let paced = self.sched.real_io != 0 && self.sched.pace_anchor.is_some();
         if self.registry.active != 0
             || (!paced && self.registry.pinning_async() != 0)
@@ -312,11 +331,7 @@ impl Core {
             return WakeBatch(Vec::new());
         }
         if !self.sched.yielders.is_empty()
-            && self
-                .sched
-                .timed
-                .values()
-                .all(|e| e.role == ParkRole::Backstop)
+            && self.sched.timed.values().all(|e| !e.role.owes_stop(posts))
         {
             let woken: Vec<Wake> = std::mem::take(&mut self.sched.yielders)
                 .into_values()
@@ -335,7 +350,7 @@ impl Core {
             self.sched
                 .timed
                 .iter()
-                .find(|(_, e)| e.role != ParkRole::Backstop)
+                .find(|(_, e)| e.role.owes_stop(posts))
                 .map_or(earliest, |(&(deadline, _), _)| deadline)
         };
         if paced {
@@ -459,14 +474,11 @@ impl FlashInner {
         s.bound_pace_lag(&self.clock);
         s.sched.timed.insert(
             (deadline, id),
-            match role {
-                ParkRole::Deadline => {
-                    Entry::timed(WaitKind::Thread(thread_id), Wake::Sync(Arc::clone(&token)))
-                }
-                ParkRole::Backstop => {
-                    Entry::backstop(WaitKind::Thread(thread_id), Wake::Sync(Arc::clone(&token)))
-                }
-            },
+            Entry::with_role(
+                WaitKind::Thread(thread_id),
+                Wake::Sync(Arc::clone(&token)),
+                role,
+            ),
         );
         let wait = self.enter_wait_locked(&mut s);
         let adv = s.try_advance(&self.clock);

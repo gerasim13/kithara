@@ -154,37 +154,55 @@ impl Default for ThreadGate {
 }
 
 impl ThreadGate {
-    /// Wait for an edge or a required poll deadline under Flash.
-    /// Use this when work can arrive without a matching [`WaitGate::signal`].
+    /// Record a deferred edge without waking the waiter: one atomic RMW, no
+    /// syscall, so a real-time thread may call it. The next wait observes it,
+    /// and a [`wait_poll_timeout`](Self::wait_poll_timeout) poll observes it at
+    /// its next deadline.
+    pub fn post(&self) {
+        self.state.fetch_or(Self::POSTED, Ordering::SeqCst);
+        self.backend.post();
+    }
+
+    /// Consume a posted edge, reporting whether one was pending.
+    pub fn take_posted(&self) -> bool {
+        self.state.fetch_and(!Self::POSTED, Ordering::AcqRel) & Self::POSTED != 0
+    }
+
+    /// Wait for an edge, a posted edge, or the poll deadline. Use this when work
+    /// can arrive by [`post`](Self::post), which wakes nothing.
     pub fn wait_poll_timeout(&self, since: u64, timeout: Duration) -> bool {
         self.wait_timeout_inner(since, timeout, true)
     }
 
-    fn wait_timeout_inner(&self, since: u64, timeout: Duration, poll_deadline: bool) -> bool {
+    fn wait_timeout_inner(&self, since: u64, timeout: Duration, poll: bool) -> bool {
         self.register();
         let deadline = thread::gate_instant(&self.backend) + timeout;
         let result = loop {
+            let posts = self.backend.posts();
             let state = self.state.load(Ordering::SeqCst);
-            if Self::sequence(state) != since {
+            if Self::sequence(state) != since || state & Self::POSTED != 0 {
                 break true;
             }
             let now = thread::gate_instant(&self.backend);
             if now >= deadline {
                 break Self::sequence(self.state.load(Ordering::SeqCst)) != since;
             }
-            self.backend.park_timeout(deadline - now, poll_deadline);
+            self.backend
+                .park_timeout(deadline - now, poll.then_some(posts));
         };
-        self.state.fetch_and(Self::SEQUENCE_MASK, Ordering::SeqCst);
+        self.state.fetch_and(!Self::FLAGS, Ordering::SeqCst);
         result
     }
 
-    const SEQUENCE_MASK: u64 = !Self::WAITING;
+    const FLAGS: u64 = Self::WAITING | Self::POSTED;
+    const POSTED: u64 = 1 << 62;
+    const SEQUENCE_MASK: u64 = !Self::FLAGS;
     const WAITING: u64 = 1 << 63;
 
     fn advance(&self) -> u64 {
         let mut current = self.state.load(Ordering::SeqCst);
         loop {
-            let next = (current & Self::WAITING) | (current.wrapping_add(1) & Self::SEQUENCE_MASK);
+            let next = (current & Self::FLAGS) | (current.wrapping_add(1) & Self::SEQUENCE_MASK);
             match self.state.compare_exchange_weak(
                 current,
                 next,
