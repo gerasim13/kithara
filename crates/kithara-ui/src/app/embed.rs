@@ -318,7 +318,8 @@ where
     }
 
     /// Draws the current document, in the physical pixels the caller sized it
-    /// with. The caller prepares [`crate::masonry::shader::ShaderPass`],
+    /// with. The caller prepares [`crate::masonry::shader::ShaderPass`], binds
+    /// every [`Frame::external_images`] declaration to its producer's texture,
     /// rasterises the Vello scene, then sends native declarations through
     /// [`crate::masonry::vis::VisPass`] on the same target.
     ///
@@ -335,6 +336,7 @@ where
             .map_err(|error| RunError::Host(error.to_string()))?;
         let shaders = self.root.shader_declarations();
         let vis = self.root.vis_declarations();
+        let external_images = self.root.external_images();
         let scene = if (self.scale - 1.0).abs() < f64::EPSILON {
             scene
         } else {
@@ -342,7 +344,7 @@ where
             scaled.append(&scene, Some(Affine::scale(self.scale)));
             scaled
         };
-        Ok(Frame::new(scene, shaders, vis))
+        Ok(Frame::new(scene, shaders, vis, external_images))
     }
 
     /// Tells the UI how big its rectangle is now, in physical pixels.

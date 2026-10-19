@@ -202,6 +202,7 @@ where
                 widget,
                 skin: kind.map_or_else(CustomSkin::default, |kind| self.skin.custom(kind).clone()),
                 text: Box::new(TextContext::from(self.skin.text_resources.as_ref())),
+                pictures: Vec::new(),
             }),
             declared,
             Vec::new(),

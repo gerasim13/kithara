@@ -29,7 +29,7 @@ impl<'scene, Lookup> VelloImageBackend<'scene, Lookup> {
 
 impl<'image, Lookup> Backend for VelloImageBackend<'_, Lookup>
 where
-    Lookup: Fn(&ImageId) -> Option<&'image ImageData>,
+    Lookup: FnMut(&ImageId) -> Option<&'image ImageData>,
 {
     const CAPS: Caps = Caps::EVERYTHING;
 

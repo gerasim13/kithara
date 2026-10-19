@@ -4,10 +4,13 @@ use crate::draw::{Image, ImageId};
 
 /// One externally rendered picture and the stable Vello token its producer binds.
 ///
-/// This declaration owns no CPU pixels. Before rendering a scene containing it,
-/// the host must bind its [`Self::image_data`] to a ready texture on the renderer's
-/// device. Keep that binding and texture alive until every submitted scene that
-/// references the token has finished using it. A new extent needs a new declaration.
+/// This declaration owns no CPU pixels. A custom widget hands it out from
+/// `CustomWidget::external_image`, and every retained frame that samples it
+/// lists it once in `app::Frame::external_images`. Before rendering that
+/// frame's scene, the host must bind its [`Self::image_data`] to a ready texture
+/// on the renderer's device. Keep that binding and texture alive until every
+/// submitted scene that references the token has finished using it. A new
+/// extent needs a new declaration.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct ExternalImageDeclaration {

@@ -1,6 +1,9 @@
 use masonry::vello::Scene;
 
-use crate::masonry::{shader::ShaderDeclaration, vis::VisDeclaration};
+use crate::{
+    backends::ExternalImageDeclaration,
+    masonry::{shader::ShaderDeclaration, vis::VisDeclaration},
+};
 
 /// One complete retained frame: shader images, Vello commands, then native Vis draws.
 #[non_exhaustive]
@@ -8,6 +11,7 @@ pub struct Frame {
     scene: Scene,
     shaders: Vec<ShaderDeclaration>,
     vis: Vec<VisDeclaration>,
+    external_images: Vec<ExternalImageDeclaration>,
 }
 
 impl Frame {
@@ -15,12 +19,22 @@ impl Frame {
         scene: Scene,
         shaders: Vec<ShaderDeclaration>,
         vis: Vec<VisDeclaration>,
+        external_images: Vec<ExternalImageDeclaration>,
     ) -> Self {
         Self {
             scene,
             shaders,
             vis,
+            external_images,
         }
+    }
+
+    /// Device pictures custom widgets drew into the Vello scene, each once.
+    /// The host binds every one to its producer's ready texture before it
+    /// rasterises the scene.
+    #[must_use]
+    pub fn external_images(&self) -> &[ExternalImageDeclaration] {
+        &self.external_images
     }
 
     /// The Vello scene drawn before native effects.

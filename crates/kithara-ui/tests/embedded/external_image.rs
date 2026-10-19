@@ -1,7 +1,7 @@
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_test_utils::kithara;
 use kithara_ui::{
-    app::{Config, Handled, Ui},
+    app::{Config, Frame, Handled, Ui},
     backends::ExternalImageDeclaration,
     builtin,
     draw::{DrawListBuilder, Image, ImageId, Pt, Rect},
@@ -161,13 +161,54 @@ fn mounted<'a>(
     .expect("the preview document must mount")
 }
 
-fn painted(ui: &mut Ui<'_, Editor>) -> Scene {
+/// One frame of the embedded host, checked to declare exactly the device
+/// pictures its scene samples.
+fn rendered(ui: &mut Ui<'_, Editor>) -> Frame {
     ui.frame(Duration::from_millis(16));
-    let scene = ui
-        .scene()
+    let frame = ui
+        .render()
         .expect("the preview must paint through the embedded host");
     ui.complete_frame();
-    scene
+    assert_declares_what_it_samples(&frame);
+    frame
+}
+
+fn painted(ui: &mut Ui<'_, Editor>) -> Scene {
+    rendered(ui).into()
+}
+
+/// The tokens a frame asks its host to bind, in the order it lists them.
+fn tokens(frame: &Frame) -> Vec<u64> {
+    frame
+        .external_images()
+        .iter()
+        .map(|declaration| declaration.image_data().data.id())
+        .collect()
+}
+
+/// The frame declares every device picture its scene samples, once, and none
+/// it does not sample. Document shaders declare their own targets apart.
+fn assert_declares_what_it_samples(frame: &Frame) {
+    let mut sampled: Vec<&ImageData> = Vec::new();
+    for image in pictures(frame.scene()) {
+        if image.data.data().is_empty() && !sampled.contains(&image) {
+            sampled.push(image);
+        }
+    }
+    let declared: Vec<&ImageData> = frame
+        .external_images()
+        .iter()
+        .map(ExternalImageDeclaration::image_data)
+        .collect();
+    assert!(
+        declared.iter().all(|image| sampled.contains(image)),
+        "the frame declares a device picture its scene does not sample"
+    );
+    assert_eq!(
+        declared.len() + frame.shaders().len(),
+        sampled.len(),
+        "the frame must declare each device picture its scene samples, once"
+    );
 }
 
 /// Every picture the scene samples, in draw order.
@@ -552,4 +593,115 @@ fn embedded_popover_covers_the_device_preview_and_keeps_its_presses_until_dismis
         ),
         "the uncovered preview must take the press"
     );
+}
+
+/// A frame declares a device picture only while its widget paints into the
+/// scene. Behind a hidden `Optional` the widget is stashed: its picture leaves
+/// the scene and its declaration leaves the frame, and both come back with it.
+#[kithara::test]
+fn embedded_frame_declares_a_device_picture_only_while_it_is_shown() {
+    let declaration = declaration();
+    let token = declaration.image_data().data.id();
+    let kinds = framed(declaration.image().clone(), Some(declaration));
+    let (registry, mut resolver) = documents();
+    resolver.insert(
+        "one.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1,
+        id: "optional-preview", chrome: Plain,
+        root: Column(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+            Chip(id: "fire", label: "TOGGLE", size: Some((w: Fill, h: Fixed(40.0))),
+                read: Model(id: "fixture.flag"), write: Command(id: "fixture.fire")),
+            Optional(id: "panel", hidden: Model(id: "fixture.hidden"),
+                child: Custom(id: "preview", kind: "fixture-framed",
+                    size: Some((w: Fill, h: Fill)))),
+        ]))"#,
+    );
+    let mut ui = mounted(Editor::default(), &registry, &resolver, &kinds);
+    assert!(
+        tokens(&rendered(&mut ui)).is_empty(),
+        "a hidden preview declares nothing"
+    );
+    let toggle = centre(
+        ui.rect_of("demo/fire")
+            .expect("the toggle must be laid out"),
+    );
+    for shown in [true, false, true] {
+        press(&mut ui, toggle);
+        assert_eq!(ui.app().active, shown);
+        let expected = if shown { vec![token] } else { Vec::new() };
+        assert_eq!(
+            tokens(&rendered(&mut ui)),
+            expected,
+            "the frame must follow the preview being shown: {shown}"
+        );
+    }
+}
+
+/// A preview inside a popover's surface is declared while the popover stands
+/// open, and not once a press beside the surface has shut it.
+#[kithara::test]
+fn embedded_frame_drops_the_device_picture_of_a_shut_popover() {
+    let declaration = declaration();
+    let token = declaration.image_data().data.id();
+    let kinds = framed(declaration.image().clone(), Some(declaration));
+    let (registry, mut resolver) = documents();
+    resolver.insert(
+        "one.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1,
+        id: "menu-preview", chrome: Plain,
+        root: Column(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+            Popover(id: "menu", open: View(id: "menu"), align: Start,
+                anchor: Pressable(id: "burger", press: View(id: "menu"),
+                    child: Spacer(id: "anchor", size: Some((w: Fixed(40.0), h: Fixed(20.0))))),
+                content: Custom(id: "preview", kind: "fixture-framed",
+                    size: Some((w: Fixed(64.0), h: Fixed(64.0))))),
+            Spacer(id: "room", size: Some((w: Fill, h: Fill))),
+        ]))"#,
+    );
+    let mut ui = mounted(Editor::default(), &registry, &resolver, &kinds);
+    assert!(
+        tokens(&rendered(&mut ui)).is_empty(),
+        "a shut popover's preview declares nothing"
+    );
+    let anchor = ui
+        .rect_of("demo/anchor")
+        .expect("the anchor the popover hangs on must be laid out");
+    press(&mut ui, centre(anchor));
+    assert_eq!(tokens(&rendered(&mut ui)), [token]);
+
+    press(&mut ui, Pt { x: 230.0, y: 150.0 });
+    assert!(
+        tokens(&rendered(&mut ui)).is_empty(),
+        "the dismissed popover's preview must leave the frame"
+    );
+}
+
+/// Two widgets painting one producer's picture sample the same token, and the
+/// frame asks the host to bind it once.
+#[kithara::test]
+fn embedded_frame_declares_a_shared_device_picture_once() {
+    let declaration = declaration();
+    let token = declaration.image_data().data.id();
+    let kinds = framed(declaration.image().clone(), Some(declaration));
+    let (registry, mut resolver) = documents();
+    resolver.insert(
+        "one.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1,
+        id: "twin-previews", chrome: Plain,
+        root: Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+            Custom(id: "left", kind: "fixture-framed", size: Some((w: Fixed(64.0), h: Fixed(64.0)))),
+            Custom(id: "right", kind: "fixture-framed", size: Some((w: Fixed(64.0), h: Fixed(64.0)))),
+        ]))"#,
+    );
+    let mut ui = mounted(Editor::default(), &registry, &resolver, &kinds);
+    let frame = rendered(&mut ui);
+    assert_eq!(
+        pictures(frame.scene())
+            .iter()
+            .map(|image| image.data.id())
+            .collect::<Vec<_>>(),
+        [token, token],
+        "both previews must draw the shared picture"
+    );
+    assert_eq!(tokens(&frame), [token]);
 }

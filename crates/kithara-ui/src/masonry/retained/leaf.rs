@@ -57,6 +57,9 @@ pub(crate) enum Leaf {
         /// What the skin this leaf was mounted under dresses its kind in.
         skin: CustomSkin,
         text: Box<TextContext>,
+        /// The device pictures the last paint drew, each once, for the frame
+        /// to hand the host that binds them.
+        pictures: Vec<ExternalImageDeclaration>,
     },
     Shader(ShaderLeaf),
     Vis(VisLeaf),
@@ -127,6 +130,15 @@ impl Leaf {
             | Self::Custom { .. }
             | Self::Shader(_)
             | Self::Vis(_) => CursorShape::None,
+        }
+    }
+
+    /// The device pictures this leaf's last paint drew, each once.
+    pub(crate) fn external_images(&self) -> &[ExternalImageDeclaration] {
+        if let Self::Custom { pictures, .. } = self {
+            pictures
+        } else {
+            &[]
         }
     }
 
@@ -258,16 +270,27 @@ impl Leaf {
                     );
                 }
             }
-            Self::Custom { widget, skin, text } => {
+            Self::Custom {
+                widget, skin, text, ..
+            } => {
                 widget.paint(list, &mut TextMeasurer::new(text), bounds, skin);
             }
         });
         let list = list.finish();
-        if let Self::Custom { widget, .. } = self {
+        if let Self::Custom {
+            widget, pictures, ..
+        } = self
+        {
+            pictures.clear();
             let lookup = |id: &ImageId| {
                 widget
                     .external_image(id)
                     .filter(|declaration| declaration.image().id() == id)
+                    .inspect(|&declaration| {
+                        if !pictures.contains(declaration) {
+                            pictures.push(declaration.clone());
+                        }
+                    })
                     .map(ExternalImageDeclaration::image_data)
             };
             replay(&list, &mut VelloImageBackend::new(scene, lookup));
