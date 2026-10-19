@@ -291,7 +291,7 @@ impl ActiveDecode {
         )?;
         self.active.observe_visible_origin(&chunk);
         chunk.meta.visible_origin = self.active.visible_origin();
-        chunk.meta.media_origin = self.active.media_origin();
+        chunk.meta.media_origin = self.media_origin();
         chunk.meta.media_end = self.active.media_end(
             self.gapless_mode,
             physical_duration,
@@ -394,6 +394,11 @@ impl ActiveDecode {
         self.reset();
         self.discard_incoming()
     }
+    /// Content zero of the active generation under this pipeline's gapless mode.
+    pub(crate) fn media_origin(&self) -> Option<Duration> {
+        self.active.content_origin(self.gapless_mode)
+    }
+
     pub(crate) fn seek(&mut self, position: Duration) -> DecodeResult<DecoderSeekOutcome> {
         self.seek_selected(position, false)
     }

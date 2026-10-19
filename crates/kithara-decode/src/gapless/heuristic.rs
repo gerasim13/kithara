@@ -15,9 +15,9 @@ pub enum GaplessMode {
     /// Passthrough PCM: no [`GaplessTrimmer`] (decoder-reported [`GaplessInfo`] is ignored).
     Disabled,
     /// Use decoder gapless counts when present; otherwise leave samples unchanged.
-    #[default]
     MediaOnly,
     /// When [`GaplessInfo`] is absent, trim a codec-specific leading priming estimate.
+    #[default]
     CodecPriming,
     /// When [`GaplessInfo`] is absent, trim leading silence per [`SilenceTrimParams`].
     SilenceTrim(SilenceTrimParams),

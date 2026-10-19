@@ -204,7 +204,7 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
     fn commit_source_end(&mut self, end: crate::SourceEnd, meta: kithara_signal::AudioChunkInfo) {
         if meta.source_revision == self.decode.discontinuity().revision()
             && meta.visible_origin == self.decode.active().visible_origin()
-            && meta.media_origin == self.decode.active().media_origin()
+            && meta.media_origin == self.decode.media_origin()
         {
             self.resume.commit_source_end(end);
         }
@@ -213,8 +213,10 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
     delegate::delegate! {
         to self.decode.active() {
             fn native_pcm_basis(&self) -> Option<kithara_signal::AudioChunkInfo>;
-            fn media_origin(&self) -> Option<Duration>;
             fn visible_origin(&self) -> Option<Duration>;
+        }
+        to self.decode {
+            fn media_origin(&self) -> Option<Duration>;
         }
     }
 

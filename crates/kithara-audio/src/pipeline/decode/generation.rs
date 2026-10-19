@@ -136,6 +136,7 @@ impl DecoderGeneration {
             }
             _ => (physical, self.visible_origin),
         };
+        let content_shift = self.timeline_origin_duration(mode)?;
         crate::pipeline::gapless::media_end(
             declared,
             self.gapless_profile,
@@ -145,6 +146,7 @@ impl DecoderGeneration {
             self.media_origin,
             decoded_end,
         )
+        .map(|end| end.saturating_sub(content_shift))
     }
 
     pub(crate) fn new(
@@ -260,6 +262,21 @@ impl DecoderGeneration {
     pub(crate) fn comparison_origin(&self, mode: GaplessMode) -> Option<u64> {
         self.timeline_origin(mode)
             .checked_add(self.comparison_base_frames()?)
+    }
+
+    /// Raw PCM coordinate of content zero: the decoder's media zero moved by
+    /// the timeline origin a variant switch compares, so every variant of one
+    /// stream reports one content time.
+    pub(crate) fn content_origin(&self, mode: GaplessMode) -> Option<Duration> {
+        self.media_origin?
+            .checked_add(self.timeline_origin_duration(mode)?)
+    }
+
+    fn timeline_origin_duration(&self, mode: GaplessMode) -> Option<Duration> {
+        self.decoder
+            .spec()
+            .duration_for(self.timeline_origin(mode))
+            .ok()
     }
 
     pub(crate) fn comparison_origin_with_gap(&self, mode: GaplessMode, gap: u64) -> Option<u64> {

@@ -527,6 +527,7 @@ pub(super) async fn render_switch(
     let mut samples = Vec::with_capacity(observation_frames * usize::from(CHANNELS));
     let mut applied_frame = None;
     let mut decoder_events = Vec::new();
+    let mut position_jumps = Vec::new();
     while samples.len() / usize::from(CHANNELS) < observation_frames {
         hang_tick!();
         let before = prepared.player.position();
@@ -538,6 +539,14 @@ pub(super) async fn render_switch(
         );
         if prepared.player.position() > before {
             hang_reset!();
+        }
+        // A switch must not move the play head by anything but the frames it
+        // played: one content timeline spans every variant of the stream.
+        let advanced = source_frame(prepared.player.position(), transition.label)
+            - source_frame(before, transition.label);
+        let render_limit = i64::try_from(render_frames).expect("render block fits i64");
+        if !(0..=render_limit).contains(&advanced) {
+            position_jumps.push((rendered_frames, advanced, render_frames));
         }
         let rendered_frames = samples.len() / usize::from(CHANNELS);
         decoder_events.extend(drain_decoder_events(&mut prepared.events, rendered_frames));
@@ -552,6 +561,11 @@ pub(super) async fn render_switch(
         transition.label,
     );
 
+    assert!(
+        position_jumps.is_empty(),
+        "{} position advanced by other than the rendered frames (window frame, advanced, rendered): {position_jumps:?}",
+        transition.label,
+    );
     let applied_frame = applied_frame.unwrap_or_else(|| {
         panic!(
             "{} did not apply inside the observation window: current={:?}, frames={}",
