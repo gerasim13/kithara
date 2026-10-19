@@ -222,3 +222,35 @@ fn a_discontinuity_never_joins_staged_frames_to_the_next_chunk() {
 
     assert_eq!(packets, [(0, SHORT), (10_000, PACKET)]);
 }
+
+/// An ABR variant promotion keeps the raw source coordinates but may drop the
+/// generation's visible origin. Frames on both sides still join into one
+/// packet, which carries the origin of the chunk it ends in.
+#[kithara::test]
+fn a_variant_origin_change_joins_contiguous_frames() {
+    let pools = pools();
+    let mut chunks = chunks(&pools, &[SHORT, LONG]);
+    if let Some(outgoing) = chunks.front_mut() {
+        outgoing.meta.visible_origin = Some(Duration::ZERO);
+    }
+    let raw = RawSource {
+        chunks,
+        head: Arc::new(AtomicU64::new(0)),
+    };
+    let (mut source, _lane) = packet_lane(&pools, raw);
+
+    let first = (0..64)
+        .find_map(|_| match source.step_track() {
+            TrackStep::Produced(Fetch::Data { data, .. }) => Some(data.meta),
+            TrackStep::Failed(failure) => panic!("the lane failed: {failure:?}"),
+            TrackStep::Eof | TrackStep::Blocked(_) => panic!("the lane stopped before a packet"),
+            TrackStep::Produced(_) | TrackStep::StateChanged => {
+                flush_deferred(&mut source);
+                None
+            }
+        })
+        .expect("the lane renders a packet");
+
+    assert_eq!((first.frame_offset, first.frames), (0, PACKET));
+    assert_eq!(first.visible_origin, None);
+}
