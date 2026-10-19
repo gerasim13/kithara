@@ -75,7 +75,6 @@ impl Offscreen {
         let vis = VisPass::new(&device, TextureFormat::Rgba8Unorm);
         Ok(Self {
             device,
-            placeholders: Placeholders::default(),
             queue,
             renderer,
             shaders,
@@ -83,6 +82,7 @@ impl Offscreen {
             vis,
             height,
             width,
+            placeholders: Placeholders::default(),
         })
     }
 
