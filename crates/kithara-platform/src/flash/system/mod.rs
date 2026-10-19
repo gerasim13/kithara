@@ -12,6 +12,9 @@ pub(super) mod credit;
 /// Hang-dump rendering: the `fmt::Display for FlashInner` snapshot of counters,
 /// quiescence pinners, parked waiters and engine primitives — see `dump.rs`.
 pub(super) mod dump;
+/// Parked-waiter records ([`entry::Entry`], [`entry::ParkRole`]) the
+/// scheduler queues and the hang dump reads — see `entry.rs`.
+pub(super) mod entry;
 /// The process-engine facade: one thin `FLASH.method(...)` free fn per engine
 /// method, the only way code outside `system/` reaches the engine — see
 /// `forward.rs`.
@@ -39,6 +42,7 @@ pub(super) mod state;
 pub(super) mod wake;
 
 pub(in crate::flash) use credit::AsyncHandle;
+pub(in crate::flash) use entry::ParkRole;
 pub(in crate::flash) use forward::{
     async_acquire, describe_cvid, dump, next_condvar_id, park_timed_unparkable, post, posts,
     register_channel_async, register_condvar_timed, register_condvar_untimed,
@@ -49,4 +53,3 @@ pub(in crate::flash) use inner::{
     Clock, Core, CvDesc, CvId, FLASH, FlashInner, Registry, SyncHolder, WaiterId,
 };
 pub(in crate::flash) use pace::{real_io_enter, real_io_exit};
-pub(in crate::flash) use sched::ParkRole;

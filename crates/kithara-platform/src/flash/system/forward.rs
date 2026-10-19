@@ -3,8 +3,9 @@ use std::{panic::Location, task::Waker};
 use super::{
     CvId, FLASH,
     credit::{AsyncHandle, WaitGuard},
+    entry::ParkRole,
     gate::TaskGate,
-    sched::{ParkRole, WakeBatch},
+    sched::WakeBatch,
     wake::Token,
 };
 use crate::{

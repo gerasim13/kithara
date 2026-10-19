@@ -2,7 +2,7 @@ use std::fmt;
 
 use super::{
     FlashInner, Registry,
-    sched::{Entry, WaitKind},
+    entry::{Entry, WaitKind},
     wake::Wake,
 };
 

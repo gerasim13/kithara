@@ -642,23 +642,41 @@ fn deferred_worker_poll_precedes_distant_timer() {
     let _a = ambient_scope(true);
 
     assert_eq!(
-        run_deferred_worker_poll(false, true),
+        run_deferred_worker_poll(false, PollActivity::Post),
         3_000,
         "an ordinary gate backstop must not drive the clock ahead of the distant timer"
     );
     assert_eq!(
-        run_deferred_worker_poll(true, true),
+        run_deferred_worker_poll(true, PollActivity::Post),
         10,
         "posted work must be polled at the worker's 10ms interval, before the 3s timer"
     );
     assert_eq!(
-        run_deferred_worker_poll(true, false),
+        run_deferred_worker_poll(true, PollActivity::Wake),
+        10,
+        "a participant woken after the poll last checked may have queued work \
+         without a post, so the poll is served before the 3s timer"
+    );
+    assert_eq!(
+        run_deferred_worker_poll(true, PollActivity::Idle),
         3_000,
-        "a poll with nothing posted must not drive the clock ahead of the distant timer"
+        "a poll with nothing happening must not drive the clock ahead of the distant timer"
     );
 }
 
-fn run_deferred_worker_poll(poll: bool, post: bool) -> usize {
+/// What happens beside the worker's poll before the distant timer.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PollActivity {
+    /// Nothing wakes and nothing is posted.
+    Idle,
+    /// A notifier wakes at 5ms and posts nothing.
+    Wake,
+    /// A notifier wakes at 5ms and posts an edge.
+    Post,
+}
+
+fn run_deferred_worker_poll(poll: bool, activity: PollActivity) -> usize {
+    let post = activity == PollActivity::Post;
     reset();
     let flash = Arc::clone(&super::system::FLASH);
     let base = flash.clock.now_nanos();
@@ -693,7 +711,7 @@ fn run_deferred_worker_poll(poll: bool, post: bool) -> usize {
             bracketed_on(&flash, || flash.park_for(Duration::from_secs(3)));
         })
     };
-    let notifier = {
+    let notifier = (activity != PollActivity::Idle).then(|| {
         let flash = Arc::clone(&flash);
         let gate = Arc::clone(&gate);
         thread::spawn(move || {
@@ -704,13 +722,16 @@ fn run_deferred_worker_poll(poll: bool, post: bool) -> usize {
                 }
             });
         })
-    };
-    while flash.timed_count() != 3 {
+    });
+    let parked = if notifier.is_some() { 3 } else { 2 };
+    while flash.timed_count() != parked {
         thread::yield_now();
     }
     drop(coordinator);
 
-    notifier.join().expect("deferred notifier panicked");
+    if let Some(notifier) = notifier {
+        notifier.join().expect("deferred notifier panicked");
+    }
     worker.join().expect("worker panicked");
     producer.join().expect("distant timer panicked");
     assert_eq!(flash.active_count(), 0, "all wake credits must settle");

@@ -10,7 +10,7 @@ use std::{
 
 use web_time::Instant;
 
-use super::{pace::Pacer, sched::Entry, state::TaskDiag, wake::Wake};
+use super::{entry::Entry, pace::Pacer, state::TaskDiag, wake::Wake};
 use crate::{
     common::time::Instant as RealInstant,
     flash::{diag::PrimKind, ids::ThreadKey},
@@ -47,9 +47,11 @@ pub(in crate::flash) struct Clock {
     /// same mode). NOT cleared by [`FlashInner::reset`], exactly like the old
     /// function-local `REAL_EPOCH`.
     real_epoch: OnceLock<Instant>,
-    /// Deferred edges posted so far. A [`ParkRole::Poll`](super::ParkRole::Poll)
-    /// park owes the timeline a stop only once this has moved past the count
-    /// it parked with. Lock-free, so a real-time poster never touches `core`.
+    /// Edges a poll may observe so far: deferred posts plus wakes of any
+    /// participant other than a poll by its own deadline. A
+    /// [`ParkRole::Poll`](super::ParkRole::Poll) park owes the timeline a stop
+    /// only once this has moved past the count it parked with. Lock-free, so a
+    /// real-time poster never touches `core`.
     posts: AtomicU64,
 }
 
@@ -62,12 +64,12 @@ impl Clock {
         }
     }
 
-    /// Count one deferred edge (see [`Self::posts`]).
+    /// Count one edge a poll may observe (see [`Self::posts`]).
     pub(in crate::flash) fn post(&self) {
         self.posts.fetch_add(1, Ordering::SeqCst);
     }
 
-    /// Deferred edges posted so far: the snapshot a poll parks with.
+    /// Edges counted so far: the snapshot a poll parks with.
     pub(in crate::flash) fn posts(&self) -> u64 {
         self.posts.load(Ordering::SeqCst)
     }
