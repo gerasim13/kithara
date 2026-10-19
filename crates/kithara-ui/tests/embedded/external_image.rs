@@ -104,6 +104,38 @@ impl CustomWidget for Framed {
     }
 }
 
+/// A widget that answers its one declaration whatever identity it is asked
+/// about, and paints a second device picture under another identity with the
+/// same extent. Only the host's own identity check keeps the stray picture
+/// from sampling the declared texture.
+struct Greedy {
+    declaration: ExternalImageDeclaration,
+    stray: Image,
+}
+
+impl CustomWidget for Greedy {
+    type Action = ();
+
+    fn external_image(&self, _id: &ImageId) -> Option<&ExternalImageDeclaration> {
+        Some(&self.declaration)
+    }
+
+    fn measure(&mut self, _text: &mut TextMeasurer<'_>, _limits: SizeLimits) -> Size2 {
+        Size2::new(64.0, 64.0)
+    }
+
+    fn paint(
+        &mut self,
+        list: &mut DrawListBuilder,
+        _text: &mut TextMeasurer<'_>,
+        bounds: Rect,
+        _skin: &CustomSkin,
+    ) {
+        list.image(self.declaration.image().clone(), bounds);
+        list.image(self.stray.clone(), bounds);
+    }
+}
+
 fn inset(rect: Rect, by: f32) -> Rect {
     Rect {
         x: rect.x + by,
@@ -593,6 +625,45 @@ fn embedded_popover_covers_the_device_preview_and_keeps_its_presses_until_dismis
         ),
         "the uncovered preview must take the press"
     );
+}
+
+/// The host binds a declaration only to the picture that names it. A widget
+/// that answers the same declaration whatever identity it is asked about
+/// still gets the token on its own picture alone; the stray picture is
+/// refused rather than drawn with another producer's texture.
+#[kithara::test]
+fn embedded_host_binds_a_declaration_only_to_the_picture_it_names() {
+    let declaration = declaration();
+    let token = declaration.image_data().data.id();
+    let stray = Image::external(ImageId::new("fixture/stray"), 2, 1);
+    let kinds = CustomKinds::default().with(
+        "fixture-greedy",
+        move || Greedy {
+            declaration: declaration.clone(),
+            stray: stray.clone(),
+        },
+        |()| UiEvent::Window(WindowCommand::Minimize),
+    );
+    let (registry, mut resolver) = documents();
+    resolver.insert(
+        "one.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1,
+        id: "greedy-preview", chrome: Plain,
+        root: Column(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+            Custom(id: "preview", kind: "fixture-greedy", size: Some((w: Fill, h: Fill))),
+        ]))"#,
+    );
+    let mut ui = mounted(Editor::default(), &registry, &resolver, &kinds);
+    let frame = rendered(&mut ui);
+    assert_eq!(
+        pictures(frame.scene())
+            .iter()
+            .map(|image| image.data.id())
+            .collect::<Vec<_>>(),
+        [token],
+        "exactly one picture may sample the declared token"
+    );
+    assert_eq!(tokens(&frame), [token]);
 }
 
 /// A frame declares a device picture only while its widget paints into the
