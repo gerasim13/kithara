@@ -11,18 +11,15 @@ use crate::{
 bitflags::bitflags! {
     /// Decorator capabilities advertised by a base store.
     ///
-    /// Decorators check the relevant bit before activating their logic;
-    /// when the bit is absent the decorator passes through to the inner layer.
+    /// `EvictAssets` and `LeaseAssets` check their bit before activating their
+    /// logic; when the bit is absent they pass through to the inner layer. The
+    /// handle cache and processing have no bit: they run on every store.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct Capabilities: u8 {
-        /// In-process LRU handle cache (`CachedAssets`).
-        const CACHE      = 0b0001;
         /// LRU eviction with per-asset byte accounting (`EvictAssets`).
-        const EVICT      = 0b0010;
+        const EVICT = 0b0001;
         /// RAII pin/lease semantics (`LeaseAssets`).
-        const LEASE      = 0b0100;
-        /// Chunk-based processing on commit (`ProcessingAssets`).
-        const PROCESSING = 0b1000;
+        const LEASE = 0b0010;
     }
 }
 
@@ -39,9 +36,6 @@ pub trait Assets: Clone + Send + Sync + 'static {
     type ActiveRes: WriteSide<Reader = Self::ReadyRes>;
     /// Context type for resource processing. Use `()` for no context.
     type Context: Clone + Send + Sync + Debug + 'static;
-    /// Resource type for index persistence (pins, LRU). Cached and cloned by
-    /// the cache decorator; no resource API is invoked on it directly.
-    type IndexRes: Clone + Send + Sync + Debug + 'static;
     /// Reader (Ready) phase returned by `open_resource*` and by the `Ready`
     /// arm of `acquire_resource*`.
     type ReadyRes: ReadSide<Writer = Self::ActiveRes>;
@@ -80,18 +74,6 @@ pub trait Assets: Clone + Send + Sync + 'static {
     /// # Errors
     /// Returns `AssetsError` if the asset directory cannot be removed.
     fn delete_asset(&self, asset_root: &str) -> AssetsResult<()>;
-
-    /// Open the resource used for persisting the LRU index.
-    ///
-    /// # Errors
-    /// Returns `AssetsError` if the index resource cannot be opened.
-    fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes>;
-
-    /// Open the resource used for persisting the pins index.
-    ///
-    /// # Errors
-    /// Returns `AssetsError` if the index resource cannot be opened.
-    fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes>;
 
     /// Open a resource for read (no context).
     ///

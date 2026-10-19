@@ -223,7 +223,6 @@ where
 {
     type ActiveRes = BaseWriter;
     type Context = ();
-    type IndexRes = StorageResource;
     type ReadyRes = BaseReader;
 
     fn acquire_resource_with_ctx(
@@ -280,21 +279,7 @@ where
     }
 
     fn capabilities(&self) -> Capabilities {
-        Capabilities::CACHE | Capabilities::PROCESSING
-    }
-
-    fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes> {
-        Ok(StorageResource::from(MemResource::new(
-            self.cancel.clone(),
-            self.config.pools.get::<u8>(),
-        )))
-    }
-
-    fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes> {
-        Ok(StorageResource::from(MemResource::new(
-            self.cancel.clone(),
-            self.config.pools.get::<u8>(),
-        )))
+        Capabilities::empty()
     }
 
     fn open_resource_with_ctx(
