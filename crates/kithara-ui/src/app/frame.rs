@@ -9,23 +9,23 @@ use crate::{
 #[non_exhaustive]
 pub struct Frame {
     scene: Scene,
+    external_images: Vec<ExternalImageDeclaration>,
     shaders: Vec<ShaderDeclaration>,
     vis: Vec<VisDeclaration>,
-    external_images: Vec<ExternalImageDeclaration>,
 }
 
 impl Frame {
     pub(super) fn new(
         scene: Scene,
+        external_images: Vec<ExternalImageDeclaration>,
         shaders: Vec<ShaderDeclaration>,
         vis: Vec<VisDeclaration>,
-        external_images: Vec<ExternalImageDeclaration>,
     ) -> Self {
         Self {
             scene,
+            external_images,
             shaders,
             vis,
-            external_images,
         }
     }
 

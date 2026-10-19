@@ -344,7 +344,7 @@ where
             scaled.append(&scene, Some(Affine::scale(self.scale)));
             scaled
         };
-        Ok(Frame::new(scene, shaders, vis, external_images))
+        Ok(Frame::new(scene, external_images, shaders, vis))
     }
 
     /// Tells the UI how big its rectangle is now, in physical pixels.
