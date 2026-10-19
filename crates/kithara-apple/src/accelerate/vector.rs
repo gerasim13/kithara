@@ -1,8 +1,7 @@
 use std::ptr;
 
 use super::ffi::{
-    vDSP_conv, vDSP_maxmgv, vDSP_svesq, vDSP_vadd, vDSP_vma, vDSP_vmul, vDSP_vramp, vDSP_vsma,
-    vDSP_vsmsa, vDSP_vsub,
+    vDSP_conv, vDSP_maxmgv, vDSP_svesq, vDSP_vadd, vDSP_vmul, vDSP_vsma, vDSP_vsmsa, vDSP_vsub,
 };
 
 /// The largest `|x|` in `samples`; `0.0` for an empty slice.
@@ -77,26 +76,6 @@ pub fn sum_squares_f32(samples: &[f32]) -> f32 {
     sum
 }
 
-/// `output[i] = start + i·step` over all of `output`; returns its length.
-#[must_use]
-pub fn ramp_f32(output: &mut [f32], start: f32, step: f32) -> usize {
-    if output.is_empty() {
-        return 0;
-    }
-    // SAFETY: start and step are valid f32 sources for the synchronous call.
-    // SAFETY: output holds output.len() writable floats at stride one.
-    unsafe {
-        vDSP_vramp(
-            ptr::from_ref(&start),
-            ptr::from_ref(&step),
-            output.as_mut_ptr(),
-            1,
-            output.len(),
-        );
-    }
-    output.len()
-}
-
 /// `x[i] = x[i]·scale + offset` in place; returns the length of `x`.
 #[must_use]
 pub fn affine_f32(x: &mut [f32], scale: f32, offset: f32) -> usize {
@@ -155,34 +134,6 @@ pub fn scale_add_f32(x: &[f32], gain: f32, acc: &mut [f32]) -> usize {
             x.as_ptr(),
             1,
             ptr::from_ref(&gain),
-            sums.cast_const(),
-            1,
-            sums,
-            1,
-            len,
-        );
-    }
-    len
-}
-
-/// `acc[i] += x[i]·y[i]` over the common prefix of the three slices;
-/// returns its length.
-#[must_use]
-pub fn mul_add_f32(x: &[f32], y: &[f32], acc: &mut [f32]) -> usize {
-    let len = x.len().min(y.len()).min(acc.len());
-    if len == 0 {
-        return 0;
-    }
-    let sums = acc.as_mut_ptr();
-    // SAFETY: x, y and sums each hold at least len floats at stride one.
-    // SAFETY: acc is an exclusive borrow, so neither input overlaps it; vDSP
-    // SAFETY: reads and writes each element of acc in place.
-    unsafe {
-        vDSP_vma(
-            x.as_ptr(),
-            1,
-            y.as_ptr(),
-            1,
             sums.cast_const(),
             1,
             sums,

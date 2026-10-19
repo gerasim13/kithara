@@ -1,4 +1,4 @@
-use std::ops::Div;
+use std::ops::{Add, Div};
 
 use fearless_simd::{Level, dispatch, prelude::*};
 
@@ -35,6 +35,40 @@ pub(crate) fn div(samples: &mut [f32], divisor: f32) -> usize {
 pub(super) fn div_kernel<S: Simd>(simd: S, samples: &mut [f32], divisor: f32) -> usize {
     let divisor = S::f32s::splat(simd, divisor);
     update(simd, samples, [], |x, []| x.div(divisor))
+}
+
+/// `output[i] = start + i·step`, rounded once while `i` stays below 2²⁴;
+/// returns `output.len()`.
+pub(crate) fn ramp(output: &mut [f32], start: f32, step: f32) -> usize {
+    dispatch!(Level::new(), simd => ramp_kernel(simd, output, start, step))
+}
+
+#[inline(always)]
+pub(super) fn ramp_kernel<S: Simd>(simd: S, output: &mut [f32], start: f32, step: f32) -> usize {
+    let mut index = S::f32s::splat(simd, 0.0);
+    let mut count = 0.0_f32;
+    for slot in index.as_mut_slice() {
+        *slot = count;
+        count += 1.0;
+    }
+    let stride = S::f32s::splat(simd, count);
+    let (start, step) = (S::f32s::splat(simd, start), S::f32s::splat(simd, step));
+    update(simd, output, [], |_, []| {
+        let value = index.mul_add_precise(step, start);
+        index = index.add(stride);
+        value
+    })
+}
+
+/// `acc[i] += x[i]·y[i]`, rounded once, over the common prefix of the three
+/// slices; returns its length.
+pub(crate) fn mul_add(x: &[f32], y: &[f32], acc: &mut [f32]) -> usize {
+    dispatch!(Level::new(), simd => mul_add_kernel(simd, x, y, acc))
+}
+
+#[inline(always)]
+pub(super) fn mul_add_kernel<S: Simd>(simd: S, x: &[f32], y: &[f32], acc: &mut [f32]) -> usize {
+    update(simd, acc, [x, y], |acc, [x, y]| x.mul_add_precise(y, acc))
 }
 
 /// `target[i] = f(target[i], [inputs[0][i], …])` over the common prefix of

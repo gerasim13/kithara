@@ -186,27 +186,6 @@ pub(super) fn sum_squares_kernel<S: Simd>(simd: S, samples: &[f32]) -> f32 {
     dot(simd, samples, samples)
 }
 
-pub(crate) fn ramp(output: &mut [f32], start: f32, step: f32) -> usize {
-    dispatch!(Level::new(), simd => ramp_kernel(simd, output, start, step))
-}
-
-#[inline(always)]
-pub(super) fn ramp_kernel<S: Simd>(simd: S, output: &mut [f32], start: f32, step: f32) -> usize {
-    let mut index = S::f32s::splat(simd, 0.0);
-    let mut count = 0.0_f32;
-    for slot in index.as_mut_slice() {
-        *slot = count;
-        count += 1.0;
-    }
-    let stride = S::f32s::splat(simd, count);
-    let (start, step) = (S::f32s::splat(simd, start), S::f32s::splat(simd, step));
-    update(simd, output, [], |_, []| {
-        let value = index.mul_add_precise(step, start);
-        index = index.add(stride);
-        value
-    })
-}
-
 pub(crate) fn affine(samples: &mut [f32], scale: f32, offset: f32) -> usize {
     dispatch!(Level::new(), simd => affine_kernel(simd, samples, scale, offset))
 }
@@ -239,15 +218,6 @@ pub(crate) fn scale_add(x: &[f32], gain: f32, acc: &mut [f32]) -> usize {
 pub(super) fn scale_add_kernel<S: Simd>(simd: S, x: &[f32], gain: f32, acc: &mut [f32]) -> usize {
     let gain = S::f32s::splat(simd, gain);
     update(simd, acc, [x], |acc, [x]| x.mul_add_precise(gain, acc))
-}
-
-pub(crate) fn mul_add(x: &[f32], y: &[f32], acc: &mut [f32]) -> usize {
-    dispatch!(Level::new(), simd => mul_add_kernel(simd, x, y, acc))
-}
-
-#[inline(always)]
-pub(super) fn mul_add_kernel<S: Simd>(simd: S, x: &[f32], y: &[f32], acc: &mut [f32]) -> usize {
-    update(simd, acc, [x, y], |acc, [x, y]| x.mul_add_precise(y, acc))
 }
 
 pub(crate) fn add(x: &[f32], acc: &mut [f32]) -> usize {

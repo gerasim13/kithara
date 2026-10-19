@@ -6,8 +6,8 @@ use kithara_test_utils::kithara;
 use super::{
     BiquadError, DftError, MultichannelBiquad, OutOfWindow, RealDft, add_f32, affine_f32,
     correlate_f32, deinterleave_pair_f32, downmix_pair_f32, interleave_pair_f32,
-    linear_interpolate_f32, max_magnitude_f32, mul_add_f32, multiply_f32,
-    quadratic_interpolate_f32, ramp_f32, scale_add_f32, sub_f32, sum_squares_f32,
+    linear_interpolate_f32, max_magnitude_f32, multiply_f32, quadratic_interpolate_f32,
+    scale_add_f32, sub_f32, sum_squares_f32,
 };
 
 const SPECIALS: [f32; 8] = [
@@ -28,15 +28,6 @@ struct Plane<const N: usize>([f32; N]);
 
 fn bits<const N: usize>(values: [f32; N]) -> [u32; N] {
     values.map(f32::to_bits)
-}
-
-fn slice_bits(values: &[f32]) -> Vec<u32> {
-    values.iter().map(|value| value.to_bits()).collect()
-}
-
-/// Every frame index of a 4096-frame block, as `f32`.
-fn frame_indices() -> Vec<f32> {
-    (0..4096_u16).map(f32::from).collect()
 }
 
 #[kithara::test(native, flash(false))]
@@ -315,19 +306,6 @@ fn sum_squares_adds_the_square_of_every_sample() {
 }
 
 #[kithara::test(native)]
-fn ramp_counts_from_its_start_by_its_step() {
-    let mut output = [UNWRITTEN; 5];
-    assert_eq!(ramp_f32(&mut output, -2.0, 1.5), 5);
-    assert_eq!(bits(output), bits([-2.0, -0.5, 1.0, 2.5, 4.0]));
-
-    let expected = frame_indices();
-    let mut frames = vec![UNWRITTEN; expected.len()];
-    assert_eq!(ramp_f32(&mut frames, 0.0, 1.0), expected.len());
-    assert_eq!(slice_bits(&frames), slice_bits(&expected), "frame indices");
-    assert_eq!(ramp_f32(&mut [], 0.0, 1.0), 0, "an empty output");
-}
-
-#[kithara::test(native)]
 fn affine_scales_then_offsets_every_sample() {
     let mut x = [0.5_f32, -1.0, 2.0, 0.0];
     let expected = x.map(|value| value * -2.0 + 1.0);
@@ -356,23 +334,6 @@ fn scale_add_accumulates_the_scaled_common_prefix() {
     assert_eq!(bits(acc), bits(expected));
     assert_eq!(scale_add_f32(&[], 0.5, &mut acc), 0, "an empty source");
     assert_eq!(bits(acc), bits(expected), "an empty source writes nothing");
-}
-
-#[kithara::test(native)]
-fn mul_add_accumulates_the_product_of_the_common_prefix() {
-    let x = [1.0_f32, -0.5, 4.0, 8.0];
-    let y = [2.0_f32, 0.25, -0.5];
-    let mut acc = [0.25_f32, 1.0, -1.0, UNWRITTEN, UNWRITTEN];
-    let expected = [
-        0.25 + 1.0 * 2.0,
-        1.0 + -0.5 * 0.25,
-        -1.0 + 4.0 * -0.5,
-        UNWRITTEN,
-        UNWRITTEN,
-    ];
-    assert_eq!(mul_add_f32(&x, &y, &mut acc), 3);
-    assert_eq!(bits(acc), bits(expected));
-    assert_eq!(mul_add_f32(&x, &[], &mut acc), 0, "an empty factor");
 }
 
 #[kithara::test(native)]

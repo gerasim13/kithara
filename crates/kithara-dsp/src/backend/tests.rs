@@ -670,11 +670,9 @@ struct Vectors {
     #[cfg(feature = "spectrum")]
     multiply: Multiply,
     sum_squares: SumSquares,
-    ramp: WithScalars,
     affine: WithScalars,
     sub: Sub,
     scale_add: ScaleAdd,
-    mul_add: MulAdd,
     add: Accumulate,
 }
 
@@ -685,11 +683,9 @@ fn vectors() -> Vec<Vectors> {
             #[cfg(feature = "spectrum")]
             multiply: portable::multiply,
             sum_squares: portable::sum_squares,
-            ramp: portable::ramp,
             affine: portable::affine,
             sub: portable::sub,
             scale_add: portable::scale_add,
-            mul_add: portable::mul_add,
             add: portable::add,
         },
         Vectors {
@@ -697,11 +693,9 @@ fn vectors() -> Vec<Vectors> {
             #[cfg(feature = "spectrum")]
             multiply: |a, b, output| dispatch!(Level::fallback(), simd => portable::multiply_kernel(simd, a, b, output)),
             sum_squares: |samples| dispatch!(Level::fallback(), simd => portable::sum_squares_kernel(simd, samples)),
-            ramp: |output, start, step| dispatch!(Level::fallback(), simd => portable::ramp_kernel(simd, output, start, step)),
             affine: |samples, scale, offset| dispatch!(Level::fallback(), simd => portable::affine_kernel(simd, samples, scale, offset)),
             sub: |x, y| dispatch!(Level::fallback(), simd => portable::sub_kernel(simd, x, y)),
             scale_add: |x, gain, acc| dispatch!(Level::fallback(), simd => portable::scale_add_kernel(simd, x, gain, acc)),
-            mul_add: |x, y, acc| dispatch!(Level::fallback(), simd => portable::mul_add_kernel(simd, x, y, acc)),
             add: |x, acc| dispatch!(Level::fallback(), simd => portable::add_kernel(simd, x, acc)),
         },
         #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -710,14 +704,36 @@ fn vectors() -> Vec<Vectors> {
             #[cfg(feature = "spectrum")]
             multiply: accelerate::multiply,
             sum_squares: accelerate::sum_squares,
-            ramp: accelerate::ramp,
             affine: accelerate::affine,
             sub: accelerate::sub,
             scale_add: accelerate::scale_add,
-            mul_add: accelerate::mul_add,
             add: accelerate::add,
         },
     ])
+}
+
+/// The `ramp` kernel at the native and the fallback level: one kernel on
+/// every platform.
+fn ramps() -> [(&'static str, WithScalars); 2] {
+    [
+        ("native", simd::ramp),
+        (
+            "fallback",
+            |output, start, step| dispatch!(Level::fallback(), simd => simd::ramp_kernel(simd, output, start, step)),
+        ),
+    ]
+}
+
+/// The `mul_add` kernel at the native and the fallback level: one kernel on
+/// every platform.
+fn mul_adds() -> [(&'static str, MulAdd); 2] {
+    [
+        ("native", simd::mul_add),
+        (
+            "fallback",
+            |x, y, acc| dispatch!(Level::fallback(), simd => simd::mul_add_kernel(simd, x, y, acc)),
+        ),
+    ]
 }
 
 /// Equal bits, or both `NaN`: a `NaN` payload is the backend's to choose.
@@ -974,11 +990,10 @@ fn float(value: usize) -> f32 {
     value.to_f32().expect("test indices are finite")
 }
 
-/// Integer ramps are exact on every backend, from every special start.
+/// Integer ramps are exact at every level, from every special start.
 #[kithara::test]
-fn ramp_counts_exactly_on_every_backend() {
-    for row in vectors() {
-        let name = row.name;
+fn ramp_counts_exactly_at_every_level() {
+    for (name, ramp) in ramps() {
         for start in SPECIALS.into_iter().chain([5.0, -7.0]) {
             for step in [1.0, -3.0] {
                 for size in SIZES {
@@ -987,7 +1002,7 @@ fn ramp_counts_exactly_on_every_backend() {
                             vec![UNWRITTEN; size.saturating_add(offset).saturating_add(2)];
                         let region = output.split_at_mut(offset).1;
                         let (head, _) = region.split_at_mut(size);
-                        let count = (row.ramp)(head, start, step);
+                        let count = ramp(head, start, step);
                         assert_prefix(
                             &format!("{name}: {start} by {step}, size {size}, offset {offset}"),
                             count,
@@ -1126,9 +1141,8 @@ fn scale_add_rounds_within_one_ulp_on_every_backend() {
 }
 
 #[kithara::test]
-fn mul_add_rounds_within_one_ulp_on_every_backend() {
-    for row in vectors() {
-        let name = row.name;
+fn mul_add_rounds_within_one_ulp_at_every_level() {
+    for (name, mul_add) in mul_adds() {
         for size in SIZES {
             for offset in OFFSETS {
                 let x = signal(size.saturating_add(offset), SINE);
@@ -1139,7 +1153,7 @@ fn mul_add_rounds_within_one_ulp_on_every_backend() {
                 let acc = padded_signal(size.saturating_add(offset), Wave::Sawtooth);
                 let mut output = acc.clone();
                 let region = output.split_at_mut(offset).1;
-                let count = (row.mul_add)(x.split_at(offset).1, y.split_at(offset).1, region);
+                let count = mul_add(x.split_at(offset).1, y.split_at(offset).1, region);
                 let (x, y, acc) = (
                     x.split_at(offset).1,
                     y.split_at(offset).1,
@@ -1164,6 +1178,38 @@ fn mul_add_rounds_within_one_ulp_on_every_backend() {
                     },
                 );
             }
+        }
+    }
+}
+
+/// `(1 + 2⁻¹²)·(1 + 2⁻¹²) − (1 + 2⁻¹¹)` is exactly 2⁻²⁴, but the product
+/// rounded alone cancels to `0.0`: a kernel that rounds the product before
+/// the add loses the whole result.
+const CANCELLING_TRIPLE: [f32; 3] = [1.000_244_1, 1.000_244_1, -1.000_488_3];
+
+#[kithara::test]
+fn every_multiply_add_rounds_once_on_a_cancelling_triple() {
+    let [x, y, acc] = CANCELLING_TRIPLE;
+    let exact = f64::from(x).mul_add(f64::from(y), f64::from(acc));
+    let assert_rounds_once = |context: &str, output: &[f32]| {
+        for (index, got) in output.iter().enumerate() {
+            assert!(within_ulps(*got, exact, 1), "{context}: {got} at {index}");
+        }
+    };
+    for size in SIZES {
+        for row in vectors() {
+            let name = row.name;
+            let mut affine = vec![x; size];
+            (row.affine)(&mut affine, y, acc);
+            assert_rounds_once(&format!("{name}: affine, size {size}"), &affine);
+            let mut scale_add = vec![acc; size];
+            (row.scale_add)(&vec![x; size], y, &mut scale_add);
+            assert_rounds_once(&format!("{name}: scale_add, size {size}"), &scale_add);
+        }
+        for (name, mul_add) in mul_adds() {
+            let mut output = vec![acc; size];
+            mul_add(&vec![x; size], &vec![y; size], &mut output);
+            assert_rounds_once(&format!("{name}: mul_add, size {size}"), &output);
         }
     }
 }
@@ -1210,12 +1256,11 @@ fn a_short_target_bounds_every_elementwise_kernel() {
             5,
             "{name}: scale_add"
         );
-        assert_eq!(
-            (row.mul_add)(&input, &input, &mut target),
-            5,
-            "{name}: mul_add"
-        );
         assert_eq!((row.add)(&input, &mut target), 5, "{name}: add");
+    }
+    for (name, mul_add) in mul_adds() {
+        let mut target = [0.0_f32; 5];
+        assert_eq!(mul_add(&input, &input, &mut target), 5, "{name}: mul_add");
     }
 }
 

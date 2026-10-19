@@ -9,12 +9,10 @@ pub fn sum_squares(samples: &[f32]) -> f32 {
     platform::sum_squares(samples)
 }
 
-/// `output[i] = start + i·step`; returns `output.len()`.
-///
-/// Exact while every `i·step` and `start + i·step` is an integer below 2²⁴
-/// in magnitude; elsewhere the backends may round differently.
+/// `output[i] = start + i·step`, rounded once while `i` stays below 2²⁴;
+/// returns `output.len()`.
 pub fn ramp(output: &mut [f32], start: f32, step: f32) -> usize {
-    platform::ramp(output, start, step)
+    backend::ramp(output, start, step)
 }
 
 /// `samples[i] /= divisor`, correctly rounded as IEEE division; returns
@@ -41,10 +39,10 @@ pub fn scale_add(x: &[f32], gain: f32, acc: &mut [f32]) -> usize {
     platform::scale_add(x, gain, acc)
 }
 
-/// `acc[i] += x[i]·y[i]` over the common prefix of the three slices,
-/// within 1 ulp of the exact value; returns its length.
+/// `acc[i] += x[i]·y[i]`, rounded once, over the common prefix of the three
+/// slices; returns its length.
 pub fn mul_add(x: &[f32], y: &[f32], acc: &mut [f32]) -> usize {
-    platform::mul_add(x, y, acc)
+    backend::mul_add(x, y, acc)
 }
 
 /// `acc[i] += x[i]` over the common prefix, correctly rounded; returns its

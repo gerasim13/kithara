@@ -122,18 +122,6 @@ unsafe extern "C" {
         m: VdspLength,
     );
 
-    pub(super) fn vDSP_vma(
-        a: *const f32,
-        ia: VdspStride,
-        b: *const f32,
-        ib: VdspStride,
-        c: *const f32,
-        ic: VdspStride,
-        d: *mut f32,
-        id: VdspStride,
-        n: VdspLength,
-    );
-
     pub(super) fn vDSP_vmul(
         a: *const f32,
         ia: VdspStride,
@@ -152,14 +140,6 @@ unsafe extern "C" {
         ic: VdspStride,
         n: VdspLength,
         m: VdspLength,
-    );
-
-    pub(super) fn vDSP_vramp(
-        a: *const f32,
-        b: *const f32,
-        c: *mut f32,
-        ic: VdspStride,
-        n: VdspLength,
     );
 
     pub(super) fn vDSP_vsma(
