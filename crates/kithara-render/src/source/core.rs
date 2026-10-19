@@ -406,8 +406,7 @@ where
         if staged > 0
             && (expected_frame != pending_frame
                 || self.staged_meta.is_some_and(|meta| {
-                    meta.visible_origin != pending.chunk.meta.visible_origin
-                        || meta.media_origin != pending.chunk.meta.media_origin
+                    meta.media_origin != pending.chunk.meta.media_origin
                         || meta.source_revision != pending.chunk.meta.source_revision
                 }))
         {
@@ -448,6 +447,7 @@ where
                 meta.source_span = Some(span);
             }
             meta.end_timestamp = next.end_timestamp;
+            meta.visible_origin = next.visible_origin;
             let Ok(total) = u32::try_from(staged_frames.saturating_add(frames)) else {
                 self.quantum_failed = true;
                 return false;
