@@ -1,9 +1,9 @@
 use kithara_platform::time::Duration;
 
 use crate::{
-    backends::ExternalImageDeclaration,
     draw::{DrawListBuilder, ImageId, Rect},
     interact::{Hit, Input, Outcome},
+    masonry::external::ExternalImageDeclaration,
     render::{
         custom::{CustomWidget, Repaint, Size2, SizeLimits, TextMeasurer},
         skin::CustomSkin,

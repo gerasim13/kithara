@@ -19,7 +19,7 @@ use super::{
     mount::NodeLayout, shader::ShaderLeaf, vis::VisLeaf,
 };
 use crate::{
-    backends::{ExternalImageDeclaration, VelloBackend, VelloImageBackend},
+    backends::{VelloBackend, VelloImageBackend},
     draw::{DrawList, DrawListBuilder, ImageId, Pt, Rect, Rgba, Transform, replay},
     hosts::{
         layer::{HostLayer, WindowLayerProgram},
@@ -29,7 +29,7 @@ use crate::{
         CursorShape, Hit, Input, MOUSE, Outcome, PointerInput, PointerOwnership, PointerPhase,
         masonry::{cursor_icon, pointer_button},
     },
-    masonry::shader::ShaderDeclaration,
+    masonry::{external::ExternalImageDeclaration, shader::ShaderDeclaration},
     module::TextAlign,
     render::{
         CustomSkin, Published, ReadValue, WindowCommand, custom::CustomWidget, document::Ctx,

@@ -24,7 +24,7 @@ use super::{
     spot::Spot,
 };
 use crate::{
-    backends::{ExternalImageDeclaration, VelloBackend},
+    backends::VelloBackend,
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform, replay},
     hosts::{
         solve::{self, Limits, Size},
@@ -40,6 +40,7 @@ use crate::{
     },
     layout::{FrameCorners, FrameSides},
     masonry::{
+        external::ExternalImageDeclaration,
         paint::corner::{corner_frame, corner_path},
         shader::ShaderDeclaration,
     },

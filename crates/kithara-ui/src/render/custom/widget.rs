@@ -44,11 +44,11 @@ pub trait CustomWidget: 'static {
     /// component's draw list. CPU pictures require no declaration. The host that
     /// submits the resulting scene owns texture readiness, binding and lifetime;
     /// returning a declaration does not establish that its pixels are ready.
-    #[cfg(feature = "vello")]
+    #[cfg(feature = "masonry")]
     fn external_image(
         &self,
         _id: &crate::draw::ImageId,
-    ) -> Option<&crate::backends::ExternalImageDeclaration> {
+    ) -> Option<&crate::masonry::external::ExternalImageDeclaration> {
         None
     }
 
@@ -109,11 +109,11 @@ where
     delegate::delegate! {
         to self.widget {
             fn accepts_text_input(&self) -> bool;
-            #[cfg(feature = "vello")]
+            #[cfg(feature = "masonry")]
             fn external_image(
                 &self,
                 id: &crate::draw::ImageId,
-            ) -> Option<&crate::backends::ExternalImageDeclaration>;
+            ) -> Option<&crate::masonry::external::ExternalImageDeclaration>;
             fn measure(&mut self, text: &mut TextMeasurer<'_>, limits: SizeLimits) -> Size2;
             #[expr($.map(&self.map))]
             fn input(&mut self, input: Input<'_>, hit: Hit) -> Outcome<Action>;

@@ -29,14 +29,16 @@ use super::{
 #[cfg(feature = "capture")]
 use crate::draw::Rgba;
 use crate::{
-    backends::ExternalImageDeclaration,
     draw::Pt,
     hosts::drag::DragSession,
     interact::{
         CursorShape,
         masonry::{changes_modifiers, cursor_icon},
     },
-    masonry::{poses::placements, shader::ShaderDeclaration, vis::VisDeclaration},
+    masonry::{
+        external::ExternalImageDeclaration, poses::placements, shader::ShaderDeclaration,
+        vis::VisDeclaration,
+    },
     render::{Published, document::Ctx},
 };
 

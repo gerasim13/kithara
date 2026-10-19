@@ -2,7 +2,6 @@ use kithara_platform::{sync::Arc, time::Duration};
 use kithara_test_utils::kithara;
 use kithara_ui::{
     app::{Config, Frame, Handled, Ui},
-    backends::ExternalImageDeclaration,
     builtin,
     draw::{DrawListBuilder, Image, ImageId, Pt, Rect},
     interact::{
@@ -12,6 +11,7 @@ use kithara_ui::{
     render::{
         CustomSkin, UiEvent, WindowCommand,
         custom::{CustomKinds, CustomWidget, Size2, SizeLimits, TextMeasurer},
+        external::ExternalImageDeclaration,
     },
     source::MemResolver,
 };

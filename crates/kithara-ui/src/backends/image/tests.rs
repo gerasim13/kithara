@@ -5,8 +5,9 @@ use vello_encoding::{Encoding, Patch};
 
 use super::VelloImageBackend;
 use crate::{
-    backends::{ExternalImageDeclaration, VelloBackend},
+    backends::VelloBackend,
     draw::{Backend, DrawListBuilder, Image, ImageId, Pen, Pt, Rect, Rgba, Transform, replay},
+    masonry::external::ExternalImageDeclaration,
 };
 
 const BOUNDS: Rect = Rect {
