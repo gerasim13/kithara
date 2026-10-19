@@ -1,6 +1,6 @@
 use kithara_config::Config;
 use kithara_derive::Patch;
-use kithara_dsp::fade::FadeCurve;
+use kithara_dsp::fade::{self, FadeCurve};
 
 /// A crossfade setting out of its range: the field and the value refused.
 #[derive(Clone, Copy, Debug, PartialEq, thiserror::Error)]
@@ -81,8 +81,8 @@ impl CrossfadeSettings {
         } else {
             0.5 + (x - self.position) / (2.0 * (1.0 - self.position))
         };
-        let linear = FadeCurve::Linear.compute_gains_0_to_1(u);
-        let selected = FadeCurve::from(self.curve).compute_gains_0_to_1(u);
+        let linear = curve_gains(FadeCurve::Linear, u);
+        let selected = curve_gains(FadeCurve::from(self.curve), u);
         (
             self.depth.mul_add(selected.0 - linear.0, linear.0),
             self.depth.mul_add(selected.1 - linear.1, linear.1),
@@ -124,6 +124,15 @@ impl From<CrossfadeCurve> for FadeCurve {
             CrossfadeCurve::EqualPower => Self::EqualPower3dB,
         }
     }
+}
+
+/// The outgoing and incoming gains of `curve` at `u`, from the kernel a fade
+/// sounds its blocks with, so the law and the sounded fade agree bit for bit.
+fn curve_gains(curve: FadeCurve, u: f32) -> (f32, f32) {
+    let (mut outgoing, mut incoming) = ([0.0], [0.0]);
+    fade::gains(curve, &[u], &mut outgoing, &mut incoming);
+    let ([outgoing], [incoming]) = (outgoing, incoming);
+    (outgoing, incoming)
 }
 
 #[cfg(test)]
