@@ -140,8 +140,8 @@ fn chunked_fades_keep_the_gain_law_through_the_settled_tail() {
     let sample_rate = NonZeroU32::new(1_000).expect("nonzero rate");
     for curve in [CrossfadeCurve::Linear, CrossfadeCurve::EqualPower] {
         for depth in [0.0, 0.7, 1.0] {
-            let settings = CrossfadeSettings::new(0.513, curve, depth, 0.3)
-                .expect("valid settings");
+            let settings =
+                CrossfadeSettings::new(0.513, curve, depth, 0.3).expect("valid settings");
             for outgoing in [false, true] {
                 let mut fade = TrackFade::default();
                 if outgoing {
