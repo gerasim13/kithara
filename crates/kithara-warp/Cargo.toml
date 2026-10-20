@@ -57,10 +57,13 @@ kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspac
 kithara-bufpool = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true, features = ["usdt", "client-reqwest", "tls-rustls"] }
-kithara-warp = { path = ".", default-features = false, features = ["usdt", "stretch-identity", "stretch-glide", "stretch-signalsmith", "stretch-bungee"] }
+kithara-warp = { path = ".", default-features = false, features = ["usdt", "stretch-identity", "stretch-glide", "stretch-signalsmith"] }
 
 realfft = { workspace = true }
 serde_json = { workspace = true }
+
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android"), not(all(target_os = "windows", target_env = "msvc"))))'.dev-dependencies]
+kithara-warp = { path = ".", default-features = false, features = ["stretch-bungee"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }

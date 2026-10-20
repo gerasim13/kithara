@@ -89,10 +89,19 @@ fn quantum(renderer: &mut WarpRenderer<TestPools>, source: &mut u64) -> AudioChu
 
 #[kithara::test]
 #[kithara::hang_watchdog]
-#[case::bungee_to_signalsmith(StretchKind::Bungee, StretchKind::Signalsmith)]
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee_to_signalsmith(StretchKind::Bungee, StretchKind::Signalsmith)
+)]
 #[case::glide_to_signalsmith(StretchKind::Glide, StretchKind::Signalsmith)]
-#[case::signalsmith_to_bungee(StretchKind::Signalsmith, StretchKind::Bungee)]
-#[case::glide_to_bungee(StretchKind::Glide, StretchKind::Bungee)]
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::signalsmith_to_bungee(StretchKind::Signalsmith, StretchKind::Bungee)
+)]
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::glide_to_bungee(StretchKind::Glide, StretchKind::Bungee)
+)]
 fn retiring_keylock_admits_both_engines_source_packets(
     #[case] backend: StretchKind,
     #[case] next: StretchKind,
