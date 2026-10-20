@@ -284,15 +284,19 @@ where
         }
     }
 
-    /// Half a packet of the lane's output: the consumer frees a ring slot only
-    /// by playing out a whole packet, so a sooner pass finds the ring full.
+    /// Half the lead a full ring holds beyond the consumer's next packet. A slot
+    /// frees only when the consumer takes the ring head, which can happen at
+    /// once, so the rest of the lead is the refill budget; a one-packet ring has
+    /// no lead to spare and keeps the configured poll.
     fn backpressure_recheck(&self) -> Option<Duration> {
         let packet = self
             .last_output
             .spec
             .duration_for(u64::from(self.last_output.frames))
             .ok()?;
-        (!packet.is_zero()).then(|| packet / 2)
+        let behind_head = u32::try_from(self.port.forward.capacity().get() - 1).ok()?;
+        let lead = packet.checked_mul(behind_head)?;
+        (!lead.is_zero()).then(|| lead / 2)
     }
 
     #[kithara::hang_watchdog]
@@ -450,29 +454,33 @@ mod tests {
         ))));
     }
 
-    /// A full ring frees a slot only once its consumer plays out a packet, so
-    /// the lane asks to be rechecked after half of one, not on a fixed poll.
+    /// A full ring is rechecked within half of the lead it holds beyond the
+    /// consumer's next packet, and a one-packet ring keeps the configured poll.
     #[kithara::test(tokio)]
-    async fn a_full_ring_is_rechecked_after_half_a_packet() {
-        let mut fixture = NodeFixture::new(1).await;
-        assert_eq!(
-            fixture.node.backpressure_recheck(),
-            None,
-            "a lane that has not output a packet keeps the configured poll"
-        );
-        fixture.stage(PcmPacket::Chunk(Box::new(chunk(
-            SegmentId::FIRST,
-            &[0.25; 480],
-        ))));
-        assert_eq!(fixture.node.admit(), TickResult::Progress);
-        stage(&mut fixture, 0.5);
-        assert_eq!(fixture.node.admit(), TickResult::Backpressured);
+    async fn a_full_ring_is_rechecked_within_half_its_spare_lead() {
+        for (capacity, expected) in [(1, None), (3, Some(Duration::from_millis(10)))] {
+            let mut fixture = NodeFixture::new(capacity).await;
+            assert_eq!(
+                fixture.node.backpressure_recheck(),
+                None,
+                "a lane that has not output a packet keeps the configured poll"
+            );
+            for _ in 0..capacity {
+                fixture.stage(PcmPacket::Chunk(Box::new(chunk(
+                    SegmentId::FIRST,
+                    &[0.25; 480],
+                ))));
+                assert_eq!(fixture.node.admit(), TickResult::Progress);
+            }
+            stage(&mut fixture, 0.5);
+            assert_eq!(fixture.node.admit(), TickResult::Backpressured);
 
-        assert_eq!(
-            fixture.node.backpressure_recheck(),
-            Some(Duration::from_millis(5)),
-            "480 frames at 48 kHz play out in 10 ms"
-        );
+            assert_eq!(
+                fixture.node.backpressure_recheck(),
+                expected,
+                "{capacity} slots of 480 frames at 48 kHz hold 10 ms each"
+            );
+        }
     }
 
     #[kithara::test(tokio)]
