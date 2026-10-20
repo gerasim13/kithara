@@ -11,7 +11,7 @@ use kithara_play::{
     TrackReceipt, mock, mock::DeckRig,
 };
 use kithara_signal::{FrameCount, SessionFrame};
-pub use kithara_test_utils::bufpool::{TestPools, pools};
+pub(crate) use kithara_test_utils::bufpool::{TestPools, pools};
 use kithara_test_utils::{TestTempDir, kithara};
 
 use crate::{Queue, QueueCommand, QueueConfig, TrackSource};
@@ -58,7 +58,7 @@ pub(crate) fn seed_fixture(store: &AssetStore<TestPools>, uri: &str, bytes: &[u8
 ///
 /// # Panics
 /// Panics if the fixture's deck scope is absent or the operation panics.
-pub fn with_outbox<Value, Run>(
+pub(crate) fn with_outbox<Value, Run>(
     queue: &mut Queue<TestPools>,
     rig: &mut DeckRig<TestPools>,
     run: Run,
@@ -86,7 +86,7 @@ where
 /// # Panics
 /// Panics if fixture creation, path conversion, or command admission fails.
 #[must_use]
-pub fn pending_selection() -> (
+pub(crate) fn pending_selection() -> (
     Queue<TestPools>,
     TrackId,
     TrackId,
@@ -129,7 +129,7 @@ pub fn pending_selection() -> (
 /// Panics if fixture preparation or opening fails, or opening makes no progress.
 #[kithara::flash(io)]
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-pub async fn loaded_fixture(
+pub(crate) async fn loaded_fixture(
     worker: &PlayWorker<TestPools>,
     rig: &mut DeckRig<TestPools>,
     dir: &TestTempDir,
@@ -203,7 +203,7 @@ pub(crate) fn opened_with_source(
 /// # Panics
 /// Panics if the fixture cannot open or the pending dispatcher command cannot settle.
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-pub async fn answer_load(
+pub(crate) async fn answer_load(
     queue: &mut Queue<TestPools>,
     rig: &mut DeckRig<TestPools>,
     _dir: &TestTempDir,
@@ -228,7 +228,7 @@ pub async fn answer_load(
 /// Panics if the requested load is missing, refused, or stalls.
 #[kithara::flash(io)]
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-pub async fn loaded_request(
+pub(crate) async fn loaded_request(
     worker: &PlayWorker<TestPools>,
     rig: &mut DeckRig<TestPools>,
     seq: Seq,
@@ -261,7 +261,7 @@ pub async fn loaded_request(
 /// # Panics
 /// Panics if a command, fixture, or receipt is missing, unsupported, or stalls.
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-pub fn answer_loaded(
+pub(crate) fn answer_loaded(
     queue: &mut Queue<TestPools>,
     rig: &mut DeckRig<TestPools>,
     loaded: kithara_render::Loaded<kithara_play::OpenedTrack>,
@@ -320,7 +320,7 @@ pub fn answer_loaded(
 ///
 /// # Panics
 /// Panics if publication, deck scope, entry batch, or receipt is missing or invalid.
-pub fn answer_deck(
+pub(crate) fn answer_deck(
     queue: &mut Queue<TestPools>,
     rig: &mut DeckRig<TestPools>,
     at: SessionFrame,
@@ -363,7 +363,7 @@ pub fn answer_deck(
 /// # Panics
 /// Panics if the PCM fixture cannot be written or the command rig cannot be created.
 #[must_use]
-pub fn empty_queue() -> (Queue<TestPools>, DeckRig<TestPools>, TestTempDir) {
+pub(crate) fn empty_queue() -> (Queue<TestPools>, DeckRig<TestPools>, TestTempDir) {
     queue_with_load_settings(NonZeroUsize::new(3).expect("default cap"), false)
 }
 
@@ -373,7 +373,7 @@ pub fn empty_queue() -> (Queue<TestPools>, DeckRig<TestPools>, TestTempDir) {
 /// # Panics
 /// Panics if the PCM fixture cannot be written or the command rig cannot be created.
 #[must_use]
-pub fn queue_with_load_settings(
+pub(crate) fn queue_with_load_settings(
     max_concurrent_loads: NonZeroUsize,
     should_autoplay: bool,
 ) -> (Queue<TestPools>, DeckRig<TestPools>, TestTempDir) {
@@ -408,7 +408,7 @@ pub fn queue_with_load_settings(
 /// # Panics
 /// Panics if the fixture's deck scope is absent or event settlement stalls.
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-pub fn tick_fixture(queue: &mut Queue<TestPools>, rig: &mut DeckRig<TestPools>) {
+pub(crate) fn tick_fixture(queue: &mut Queue<TestPools>, rig: &mut DeckRig<TestPools>) {
     let events = rig.events.drain();
     let output = mock::output(None).get();
     let mut deck = queue.deck.mixer.clone();
@@ -436,7 +436,7 @@ pub fn tick_fixture(queue: &mut Queue<TestPools>, rig: &mut DeckRig<TestPools>) 
 /// # Panics
 /// Panics if the deck block fails, its scope is absent, or receipt settlement stalls.
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-pub fn settle(queue: &mut Queue<TestPools>, rig: &mut DeckRig<TestPools>, at: SessionFrame) {
+pub(crate) fn settle(queue: &mut Queue<TestPools>, rig: &mut DeckRig<TestPools>, at: SessionFrame) {
     for receipt in rig.block(at, 0.0).expect("deck block") {
         hang_tick!();
         let seq = receipt.seq();
@@ -461,7 +461,7 @@ pub fn settle(queue: &mut Queue<TestPools>, rig: &mut DeckRig<TestPools>, at: Se
 /// # Panics
 /// Panics if a fixture deck block or its receipt settlement fails or stalls.
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-pub fn finish(queue: &mut Queue<TestPools>, rig: &mut DeckRig<TestPools>) {
+pub(crate) fn finish(queue: &mut Queue<TestPools>, rig: &mut DeckRig<TestPools>) {
     for at in [0, 128, 256] {
         hang_tick!();
         settle(queue, rig, SessionFrame::new(at));
@@ -474,7 +474,7 @@ pub fn finish(queue: &mut Queue<TestPools>, rig: &mut DeckRig<TestPools>) {
 /// # Panics
 /// Panics if fixture creation, load admission, or deck entry fails or stalls.
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-pub async fn selected() -> (
+pub(crate) async fn selected() -> (
     Queue<TestPools>,
     TrackId,
     TrackId,

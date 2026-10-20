@@ -16,12 +16,6 @@ ignored = ["serde"]
 
 [features]
 default = ["symphonia", "stretch-signalsmith", "client-reqwest", "tls-rustls"]
-mock = [
-    "dep:kithara-render",
-    "dep:kithara-test-fixtures",
-    "kithara-play/mock",
-    "kithara-test-utils/temp-dir",
-]
 # HTTP backend forwarding to every kithara-net-reaching dep.
 client-reqwest = ["kithara-play/client-reqwest", "kithara-download/client-reqwest", "kithara-abr/client-reqwest"]
 client-wreq = ["kithara-play/client-wreq", "kithara-download/client-wreq", "kithara-abr/client-wreq"]
@@ -54,7 +48,6 @@ kithara-events = { workspace = true }
 kithara-net = { workspace = true, default-features = false }
 kithara-platform = { workspace = true }
 kithara-play = { workspace = true, default-features = false }
-kithara-render = { workspace = true, optional = true, default-features = false }
 kithara-signal = { workspace = true }
 kithara-test-utils = { workspace = true }
 
@@ -71,9 +64,6 @@ tracing = { workspace = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"], optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { workspace = true, features = ["wasm_js"] }
