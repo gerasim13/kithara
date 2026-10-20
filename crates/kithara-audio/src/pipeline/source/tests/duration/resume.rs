@@ -213,7 +213,7 @@ async fn empty_promoted_tail_keeps_its_own_resume_endpoint_without_refining_dura
         Some(Duration::from_millis(17))
     );
     assert_eq!(source.playhead.duration(), declared);
-    assert_eq!(source.media_end(), Some(Duration::from_millis(59_969)));
+    assert_eq!(source.media_end(), Some(Duration::from_millis(59_952)));
     assert_ne!(source.media_end(), Some(original.meta.end_timestamp));
 }
 

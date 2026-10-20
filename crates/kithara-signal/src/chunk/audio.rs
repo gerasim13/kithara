@@ -17,7 +17,7 @@ pub struct AudioChunkInfo {
     pub end_timestamp: Duration,
     /// Raw decoded-source position of the first frame in this chunk.
     pub timestamp: Duration,
-    /// Raw decoded-source coordinate of track-media zero, independent of trimming.
+    /// Raw decoded-source coordinate of content zero: track-media zero past the codec's leading frames, so every variant of one stream shares it.
     pub media_origin: Option<Duration>,
     /// Audio-owned logical media endpoint for this source revision, when known.
     pub media_end: Option<Duration>,

@@ -129,6 +129,16 @@ impl<S> PlayerImpl<S> {
         self.attaching.is_some() || self.attach_at.is_some()
     }
 
+    /// Content position of a raw source time. A raw time read from the
+    /// source keeps the observed source's frame grid across the subtraction.
+    pub(super) fn content_position(&self, raw: Position) -> Option<Position> {
+        let origin = self.media_origin?;
+        Some(self.observed_source.map_or_else(
+            || raw.saturating_sub(origin),
+            |source| source.spec.elapsed_since(origin, raw),
+        ))
+    }
+
     pub(super) fn raw_position(&self, position: Position) -> Result<Position, PlayError> {
         self.media_origin
             .and_then(|origin| origin.checked_add(position))
@@ -172,9 +182,10 @@ impl<S> PlayerImpl<S> {
                 .is_some_and(|mark| mark.lane.segment == self.segment)
                 && slot.position.is_finite()
                 && slot.position >= 0.0
-                && let Some(origin) = self.media_origin
+                && let Some(position) =
+                    self.content_position(Position::from_secs_f64(slot.position))
             {
-                self.position = Position::from_secs_f64(slot.position).saturating_sub(origin);
+                self.position = position;
             }
         }
     }
