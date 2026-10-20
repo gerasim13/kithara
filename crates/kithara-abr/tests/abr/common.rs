@@ -1,5 +1,8 @@
-use kithara_abr::{AbrSettings, VariantDuration, VariantIndex, VariantInfo};
-use kithara_platform::time::Duration;
+use kithara_abr::{AbrDecision, AbrSettings, AbrState, VariantDuration, VariantIndex, VariantInfo};
+use kithara_platform::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 pub(super) fn fast_settings() -> AbrSettings {
     AbrSettings::builder()
@@ -22,4 +25,13 @@ pub(super) fn variants(bitrates: &[u64]) -> Vec<VariantInfo> {
             container: None,
         })
         .collect()
+}
+
+pub(super) fn publish(state: &Arc<AbrState>, decision: AbrDecision, now: Instant) {
+    if decision.changed() {
+        state.request_target(decision.target(), decision.reason());
+    }
+    if let Some(claim) = state.claim_pending_decision(state.current_variant_index()) {
+        assert!(state.publisher().commit_pending(claim, now));
+    }
 }
