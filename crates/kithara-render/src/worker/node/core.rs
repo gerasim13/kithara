@@ -284,19 +284,18 @@ where
         }
     }
 
-    /// Half the lead a full ring holds beyond the consumer's next packet. A slot
-    /// frees only when the consumer takes the ring head, which can happen at
-    /// once, so the rest of the lead is the refill budget; a one-packet ring has
-    /// no lead to spare and keeps the configured poll.
+    /// Half a packet while a full ring holds a packet behind the consumer's next
+    /// one. The consumer frees a slot without waking the worker and can read
+    /// faster than real time, so the recheck never outgrows the packet it
+    /// refills; a one-packet ring has no lead to spare and keeps the
+    /// configured poll.
     fn backpressure_recheck(&self) -> Option<Duration> {
         let packet = self
             .last_output
             .spec
             .duration_for(u64::from(self.last_output.frames))
             .ok()?;
-        let behind_head = u32::try_from(self.port.forward.capacity().get() - 1).ok()?;
-        let lead = packet.checked_mul(behind_head)?;
-        (!lead.is_zero()).then(|| lead / 2)
+        (self.port.forward.capacity().get() > 1 && !packet.is_zero()).then(|| packet / 2)
     }
 
     #[kithara::hang_watchdog]
@@ -457,8 +456,12 @@ mod tests {
     /// A full ring is rechecked within half of the lead it holds beyond the
     /// consumer's next packet, and a one-packet ring keeps the configured poll.
     #[kithara::test(tokio)]
-    async fn a_full_ring_is_rechecked_within_half_its_spare_lead() {
-        for (capacity, expected) in [(1, None), (3, Some(Duration::from_millis(10)))] {
+    async fn a_full_ring_is_rechecked_within_half_a_packet() {
+        for (capacity, expected) in [
+            (1, None),
+            (3, Some(Duration::from_millis(5))),
+            (8, Some(Duration::from_millis(5))),
+        ] {
             let mut fixture = NodeFixture::new(capacity).await;
             assert_eq!(
                 fixture.node.backpressure_recheck(),
