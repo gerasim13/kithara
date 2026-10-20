@@ -117,7 +117,7 @@ impl FrameCodec for AndroidCodec {
     ) -> DecodeResult<crate::codec::DecodedPacket> {
         let crate::demuxer::Frame {
             data: frame_data,
-            pts: pts,
+            pts,
             packet_desc: _packet_desc,
             ..
         } = frame;
@@ -324,8 +324,8 @@ fn append_pcm16(bytes: &[u8], out: &mut SampleBuffer) -> DecodeResult<()> {
     let start = out.len();
     let end = start + bytes.len() / 2;
     out.ensure_len(end)?;
-    for (dst, chunk) in out[start..end].iter_mut().zip(bytes.chunks_exact(2)) {
-        let s = i16::from_le_bytes([chunk[0], chunk[1]]);
+    for (dst, chunk) in out[start..end].iter_mut().zip(bytes.as_chunks::<2>().0) {
+        let s = i16::from_le_bytes(*chunk);
         *dst = f32::from(s) / consts::PCM16_SCALE;
     }
     out.truncate(end);
@@ -338,9 +338,9 @@ fn append_pcm_float(bytes: &[u8], out: &mut SampleBuffer) -> DecodeResult<()> {
     out.ensure_len(end)?;
     out[start..end]
         .iter_mut()
-        .zip(bytes.chunks_exact(4))
+        .zip(bytes.as_chunks::<4>().0)
         .for_each(|(dst, chunk)| {
-            *dst = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+            *dst = f32::from_le_bytes(*chunk);
         });
     out.truncate(end);
     Ok(())
