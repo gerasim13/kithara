@@ -329,7 +329,7 @@ async fn capture_tiny_ring(
             .map(|duration| duration.as_micros());
         let snapshot_before = prepared.player.deck_snapshot();
         let block = render_paced(&mut prepared.player, &mut prepared.pacer, frames).await;
-        let admitted = admitted_ends();
+        let admitted_count = kithara_test_utils::test::usdt::count("chunk_admitted");
         let snapshot_after = prepared.player.deck_snapshot();
         let output_end = prepared.player.host().position();
         let short =
@@ -380,17 +380,20 @@ async fn capture_tiny_ring(
         if observed_events.len() == 32 {
             event_error = Some("per-block ItemEvent capture reached 32 events".into());
         }
-        blocks.push(CaptureBlock {
-            capture: capture_start..capture_start + frames,
-            output: output_start..output_end,
-            started_unix_micros,
-            before: snapshot_before,
-            after: snapshot_after,
-            item_events: observed_events,
-            event_error,
-            refill_probes,
-            admitted,
-        });
+        blocks.push((
+            CaptureBlock {
+                capture: capture_start..capture_start + frames,
+                output: output_start..output_end,
+                started_unix_micros,
+                before: snapshot_before,
+                after: snapshot_after,
+                item_events: observed_events,
+                event_error,
+                refill_probes,
+                admitted: Vec::new(),
+            },
+            admitted_count,
+        ));
         samples.extend_from_slice(&block);
         if prepared.player.position() > before {
             hang_reset!();
@@ -400,13 +403,27 @@ async fn capture_tiny_ring(
             samples.len() / usize::from(CHANNELS),
         ));
     }
+    let admissions = kithara_test_utils::test::usdt::events_of("chunk_admitted");
+    let mut through = 0;
+    let mut ends = Vec::new();
+    let blocks = blocks
+        .into_iter()
+        .map(|(mut block, count)| {
+            extend_admitted_ends(&mut ends, &admissions[through..count]);
+            through = count;
+            block.admitted = ends.clone();
+            block
+        })
+        .collect();
     (samples, decoder_events, blocks)
 }
 
 /// The end of the last packet each segment admitted so far.
-fn admitted_ends() -> Vec<(u64, u64)> {
-    let mut ends: Vec<(u64, u64)> = Vec::new();
-    for event in kithara_test_utils::test::usdt::events_of("chunk_admitted") {
+fn extend_admitted_ends(
+    ends: &mut Vec<(u64, u64)>,
+    admissions: &[kithara_test_utils::test::usdt::ProbeEvent],
+) {
+    for event in admissions {
         let (Some(segment), Some(start), Some(frames)) = (
             event.field("segment"),
             event.field("lane_frame"),
@@ -419,7 +436,6 @@ fn admitted_ends() -> Vec<(u64, u64)> {
             None => ends.push((segment, start + frames)),
         }
     }
-    ends
 }
 
 async fn render_tiny_ring_control(
