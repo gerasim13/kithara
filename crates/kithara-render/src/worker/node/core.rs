@@ -2,7 +2,11 @@ use std::task::{Context, Poll};
 
 use kithara_audio::{AudioSource, Fetch, TrackFailureKind, TrackStep, WaitingReason};
 use kithara_bufpool::{HasPool, PoolRegion};
-use kithara_platform::{CancelToken, sync::Arc, time::WallInstant};
+use kithara_platform::{
+    CancelToken,
+    sync::Arc,
+    time::{Duration, WallInstant},
+};
 use kithara_signal::{AudioChunk, AudioChunkInfo, FrameCount, SegmentId, SourceSpan};
 use kithara_stream::ActivityWriter;
 use kithara_test_utils::kithara;
@@ -280,6 +284,17 @@ where
         }
     }
 
+    /// Half a packet of the lane's output: the consumer frees a ring slot only
+    /// by playing out a whole packet, so a sooner pass finds the ring full.
+    fn backpressure_recheck(&self) -> Option<Duration> {
+        let packet = self
+            .last_output
+            .spec
+            .duration_for(u64::from(self.last_output.frames))
+            .ok()?;
+        (!packet.is_zero()).then(|| packet / 2)
+    }
+
     #[kithara::hang_watchdog]
     fn recycle(&mut self) {
         tracing::trace!(
@@ -409,6 +424,7 @@ impl<T, S> Drop for DecoderNode<T, S> {
 
 #[cfg(test)]
 mod tests {
+    use kithara_platform::time::Duration;
     use kithara_signal::SegmentId;
     use kithara_test_utils::kithara;
     use kithara_worker::{Task, TickResult};
@@ -432,6 +448,31 @@ mod tests {
             SegmentId::FIRST,
             &[value],
         ))));
+    }
+
+    /// A full ring frees a slot only once its consumer plays out a packet, so
+    /// the lane asks to be rechecked after half of one, not on a fixed poll.
+    #[kithara::test(tokio)]
+    async fn a_full_ring_is_rechecked_after_half_a_packet() {
+        let mut fixture = NodeFixture::new(1).await;
+        assert_eq!(
+            fixture.node.backpressure_recheck(),
+            None,
+            "a lane that has not output a packet keeps the configured poll"
+        );
+        fixture.stage(PcmPacket::Chunk(Box::new(chunk(
+            SegmentId::FIRST,
+            &[0.25; 480],
+        ))));
+        assert_eq!(fixture.node.admit(), TickResult::Progress);
+        stage(&mut fixture, 0.5);
+        assert_eq!(fixture.node.admit(), TickResult::Backpressured);
+
+        assert_eq!(
+            fixture.node.backpressure_recheck(),
+            Some(Duration::from_millis(5)),
+            "480 frames at 48 kHz play out in 10 ms"
+        );
     }
 
     #[kithara::test(tokio)]

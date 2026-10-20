@@ -411,6 +411,17 @@ where
             .filter_map(|resident| resident.task.priority())
             .max()
     }
+
+    /// Soonest recheck of the resident lanes; a lane without its own keeps
+    /// the dispatcher's configured poll interval.
+    fn backpressure_recheck(&self) -> Option<Duration> {
+        let mut soonest: Option<Duration> = None;
+        for resident in &self.lanes {
+            let lane = resident.task.backpressure_recheck()?;
+            soonest = Some(soonest.map_or(lane, |soonest| soonest.min(lane)));
+        }
+        soonest
+    }
 }
 
 /// Drive source opens, commands and resident lanes on the current owner thread.
@@ -463,6 +474,7 @@ where
     delegate::delegate! {
         to self.dispatcher {
             fn priority(&self) -> Option<Priority>;
+            fn backpressure_recheck(&self) -> Option<Duration>;
             #[call(cancel_lanes)]
             fn on_cancel(&mut self);
         }

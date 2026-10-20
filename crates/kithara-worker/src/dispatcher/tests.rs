@@ -744,10 +744,23 @@ mod native {
     use super::*;
     use crate::consts;
 
-    fn backpressured_report(backpressured_tasks: usize) -> PassReport {
+    fn backpressured_report(recheck: Duration) -> PassReport {
         let mut report = pass_report(PassOutcome::Backpressured);
-        report.backpressured_tasks = backpressured_tasks;
+        report.backpressured_tasks = 1;
+        report.backpressure_recheck = Some(recheck);
         report
+    }
+
+    struct RecheckTask(Option<Duration>);
+
+    impl Task for RecheckTask {
+        fn backpressure_recheck(&self) -> Option<Duration> {
+            self.0
+        }
+
+        fn tick(&mut self) -> TickResult {
+            TickResult::Backpressured
+        }
     }
 
     struct BackpressureCountingTask {
@@ -895,7 +908,12 @@ mod native {
         let mut streak = 0;
         let started = Instant::now();
 
-        park_after_outcome(&wake, &configured, backpressured_report(1), &mut streak);
+        park_after_outcome(
+            &wake,
+            &configured,
+            backpressured_report(configured.backpressure_poll_interval),
+            &mut streak,
+        );
 
         assert!(
             started.elapsed() < consts::PARK_BUDGET,
@@ -913,11 +931,75 @@ mod native {
         let mut streak = 0;
         let started = Instant::now();
 
-        park_after_outcome(&wake, &configured, backpressured_report(1), &mut streak);
+        park_after_outcome(
+            &wake,
+            &configured,
+            backpressured_report(configured.backpressure_poll_interval),
+            &mut streak,
+        );
 
         assert!(
             started.elapsed() >= consts::PARK_BUDGET,
             "a backpressure wait no edge woke parks on the wait budget, not on one poll interval"
+        );
+    }
+
+    /// A sink that frees room only after its own interval is not polled sooner.
+    #[kithara::test(native)]
+    fn a_backpressure_wait_rechecks_no_sooner_than_the_task_asked() {
+        let wake = Wake::default();
+        let mut configured = budgets();
+        configured.backpressure_poll_interval = consts::PARK_BUDGET / 5;
+        configured.wait_timeout = consts::PARK_BUDGET;
+        let recheck = consts::PARK_BUDGET * 3;
+        let mut streak = 0;
+        let started = Instant::now();
+
+        park_after_outcome(
+            &wake,
+            &configured,
+            backpressured_report(recheck),
+            &mut streak,
+        );
+
+        assert!(
+            started.elapsed() >= recheck,
+            "a backpressured pass must park until the soonest task recheck, not one wait budget"
+        );
+    }
+
+    #[kithara::test(native)]
+    fn a_pass_reports_the_soonest_backpressure_recheck() {
+        let configured = budgets();
+        let mut observer = Events::default();
+        let mut slots = vec![
+            slot(
+                1,
+                Priority::default(),
+                RecheckTask(Some(Duration::from_millis(7))),
+            ),
+            slot(
+                2,
+                Priority::default(),
+                RecheckTask(Some(Duration::from_millis(3))),
+            ),
+        ];
+        let report = produce_pass(&mut slots, &configured, &mut observer);
+        assert_eq!(report.backpressure_recheck, Some(Duration::from_millis(3)));
+
+        let mut slots = vec![
+            slot(
+                1,
+                Priority::default(),
+                RecheckTask(Some(Duration::from_secs(1))),
+            ),
+            slot(2, Priority::default(), RecheckTask(None)),
+        ];
+        let report = produce_pass(&mut slots, &configured, &mut observer);
+        assert_eq!(
+            report.backpressure_recheck,
+            Some(configured.backpressure_poll_interval),
+            "a task without its own recheck keeps the configured poll interval"
         );
     }
 
