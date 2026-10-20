@@ -206,6 +206,7 @@ where
                     landed_frame: 0,
                     landed_byte: None,
                     preroll: kithara::stream::PrerollHint::NotNeeded,
+                    clock: kithara::decode::LandingClock::Kept,
                 })
             }))
             .at_least_times(0),

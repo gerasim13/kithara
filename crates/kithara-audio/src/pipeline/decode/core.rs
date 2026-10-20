@@ -8,7 +8,7 @@ use std::{
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_decode::{
     BlenderProfile, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome,
-    DecoderFactory as BackendDecoderFactory, DecoderSeekOutcome, GaplessMode,
+    DecoderFactory as BackendDecoderFactory, DecoderSeekOutcome, GaplessMode, LandingClock,
 };
 use kithara_events::DeferredBus;
 use kithara_platform::{sync::Arc, time::Duration};
@@ -328,7 +328,21 @@ impl ActiveDecode {
             .prepare_deferred(prepare_input, self.gapless_mode);
         self.active.decoder_mut().flush_reader_signals();
         self.flush_incoming_reader_signals();
+        if let Ok(Some(outcome)) = &result {
+            self.observe_landing(outcome);
+        }
         result
+    }
+
+    /// A restarted output clock can produce different PCM at an earlier frame.
+    fn observe_landing(&mut self, outcome: &DecoderSeekOutcome) {
+        if let DecoderSeekOutcome::Landed {
+            clock: LandingClock::Restarted,
+            ..
+        } = outcome
+        {
+            self.discontinuity_revision = self.discontinuity_revision.wrapping_add(1);
+        }
     }
 
     pub(crate) fn prepare_incoming_profile(&mut self, profile: BlenderProfile) {
@@ -417,6 +431,9 @@ impl ActiveDecode {
         } else {
             self.active.seek(position, self.gapless_mode)
         };
+        if let Ok(ref outcome) = outcome {
+            self.observe_landing(outcome);
+        }
         if let Ok(ref outcome) = outcome
             && matches!(
                 outcome,
@@ -1543,6 +1560,7 @@ mod tests {
                 landed_frame: 0,
                 landed_byte: None,
                 preroll: PrerollHint::NotNeeded,
+                clock: LandingClock::Kept,
             })
         }
 
