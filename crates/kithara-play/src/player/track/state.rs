@@ -106,7 +106,7 @@ pub struct TrackSnapshot {
     pub slot: Option<Slot>,
     pub status: TrackStatus,
     pub speed: f32,
-    /// Last known media position; retains the commanded position until its source basis is known.
+    /// Last known media position; an unconsumed segment retains its exact entry mark.
     pub position: Position,
     /// End of the track on the same media clock as its grid and cues.
     pub duration: Option<Duration>,
