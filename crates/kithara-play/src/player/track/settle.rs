@@ -294,10 +294,11 @@ impl<S> PlayerImpl<S> {
 
     fn stopped(&mut self, resume: Option<SlotMark>) {
         self.resume = resume.filter(|mark| mark.lane.segment == self.segment);
-        if let Some(mark) = self.resume
-            && let Some(origin) = self.media_origin
+        if let Some(position) = self
+            .resume
+            .and_then(|mark| self.content_position(mark.position))
         {
-            self.position = mark.position.saturating_sub(origin);
+            self.position = position;
         }
         self.status = TrackStatus::Paused { at: self.position };
     }

@@ -50,6 +50,21 @@ impl AudioSpec {
         time::frame_at(self.sample_rate, timestamp)
     }
 
+    /// Time from `origin` to `time`, saturating at zero.
+    ///
+    /// Frame times are rounded to nanoseconds, so the difference of two of
+    /// them can miss the time of their frame difference by one nanosecond;
+    /// such a difference is that frame's time.
+    #[must_use]
+    pub fn elapsed_since(self, origin: Duration, time: Duration) -> Duration {
+        let elapsed = time.saturating_sub(origin);
+        self.frame_at(elapsed)
+            .and_then(|frame| self.duration_for(frame))
+            .ok()
+            .filter(|frame_time| elapsed.abs_diff(*frame_time) <= Duration::from_nanos(1))
+            .unwrap_or(elapsed)
+    }
+
     /// Convert an exact interleaved sample count to complete frames.
     ///
     /// # Errors
@@ -133,6 +148,31 @@ mod tests {
                 Some(expected),
             );
         }
+    }
+
+    #[kithara::test]
+    fn elapsed_frame_time_matches_the_frame_difference() {
+        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("sample rate"));
+        let time = |frame| spec.duration_for(frame).expect("frame time");
+        for (origin, frame) in [(1_024, 1_025), (1_024, 1_536), (0, 512), (1_105, 45_000)] {
+            assert_eq!(
+                spec.elapsed_since(time(origin), time(frame)),
+                time(frame - origin),
+                "frame {frame} after origin {origin}",
+            );
+        }
+        assert_eq!(
+            spec.elapsed_since(time(1_024), time(1_536) - Duration::from_nanos(1)),
+            time(512),
+            "a time one nanosecond short of a frame is that frame's time",
+        );
+        let between = time(1_536) + Duration::from_nanos(10_000);
+        assert_eq!(
+            spec.elapsed_since(time(1_024), between),
+            between - time(1_024),
+            "a time between frames keeps its nanoseconds",
+        );
+        assert_eq!(spec.elapsed_since(time(512), time(256)), Duration::ZERO);
     }
 
     #[kithara::test]

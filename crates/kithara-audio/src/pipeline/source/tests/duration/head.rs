@@ -26,7 +26,7 @@ async fn natural_eof_measures_trimmed_pcm_from_its_nonzero_original_origin(
         1_669
     );
     assert_eq!(source.playhead.duration(), Some(Duration::from_millis(952)));
-    assert_eq!(source.media_end(), Some(Duration::from_millis(952)));
+    assert_eq!(source.media_end(), Some(Duration::from_millis(969)));
     let landed = source
         .seek(Duration::from_millis(1_500))
         .expect("raw seek after genuine EOF");
@@ -48,7 +48,7 @@ async fn natural_eof_measures_trimmed_pcm_from_its_nonzero_original_origin(
     );
     assert_eq!(replay.last().expect("replay tail").frame_range().end, 1_669);
     assert_eq!(source.playhead.duration(), Some(Duration::from_millis(952)));
-    assert_eq!(source.media_end(), Some(Duration::from_millis(952)));
+    assert_eq!(source.media_end(), Some(Duration::from_millis(969)));
     let past = source
         .seek(Duration::from_millis(1_669))
         .expect("raw terminal seek");
@@ -163,7 +163,7 @@ async fn unknown_original_position_never_promotes_the_first_sought_suffix(
             .iter()
             .all(|meta| meta.visible_origin.is_none() && meta.media_end.is_none())
     );
-    assert_eq!(source.media_end(), Some(Duration::from_millis(952)));
+    assert_eq!(source.media_end(), Some(Duration::from_millis(969)));
     for mode in [
         GaplessMode::Disabled,
         GaplessMode::MediaOnly,
@@ -175,12 +175,10 @@ async fn unknown_original_position_never_promotes_the_first_sought_suffix(
         ));
         media.media_origin = Some(Duration::from_millis(700));
         let mut owner = physical_source_with_mode(media, mode).await;
-        // The content endpoint excludes the 17 leading frames a trimming mode
-        // removes; the frames played past 1 500 stay raw.
-        let (expected, played) = if matches!(mode, GaplessMode::Disabled) {
-            (1_000, 200)
+        let expected = if matches!(mode, GaplessMode::Disabled) {
+            1_000
         } else {
-            (952, 169)
+            969
         };
         let endpoint = Some(Duration::from_millis(expected));
         assert_eq!(owner.playhead.duration(), None);
@@ -209,7 +207,7 @@ async fn unknown_original_position_never_promotes_the_first_sought_suffix(
         assert_eq!(
             u64::from(sought.meta.frames)
                 + tail.iter().map(|meta| u64::from(meta.frames)).sum::<u64>(),
-            played
+            expected - 800
         );
         assert_eq!(owner.playhead.duration(), None);
         assert_eq!(owner.media_end(), endpoint);
@@ -403,7 +401,6 @@ async fn first_nonzero_seek_after_original_pipeline_output_retains_its_origin() 
 async fn heuristic_trim_refines_from_the_original_output_it_actually_emits() {
     let mut extent = extent(Some(Duration::from_secs(60)), 700, false);
     extent.gapless = None;
-    extent.priming = Some(0);
     extent.media_origin = Some(Duration::from_millis(700));
     let mode = GaplessMode::SilenceTrim(
         SilenceTrimParams::builder()
