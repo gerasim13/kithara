@@ -17,7 +17,7 @@ export KACHE_FALLBACK := if kache == "" { "" } else { sccache }
 
 # Container CI limits its own CPU and memory; a shared kache scheduler would
 # give every runner only the calling container's CPU slots.
-export KACHE_SCHEDULER := if os() == "linux" && env("CI", "") == "true" && env("KITHARA_CI_BUILD_SLOTS", "") != "" { "0" } else { env("KACHE_SCHEDULER", "1") }
+export KACHE_SCHEDULER := if os() == "linux" { if env("CI", "") == "true" { if env("KITHARA_CI_BUILD_SLOTS", "") != "" { "0" } else { env("KACHE_SCHEDULER", "1") } } else { env("KACHE_SCHEDULER", "1") } } else { env("KACHE_SCHEDULER", "1") }
 
 # cc-rs puts kache in front of a build script's C compile on its own; a CMake
 # build takes it as its compiler launcher, so the compiler CMake records stays
