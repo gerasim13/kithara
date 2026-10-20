@@ -95,19 +95,12 @@ pub(in crate::pipeline::source) fn promotion_frontier_for(
     transition: VariantTransition,
     frontier: OutgoingFrontier,
 ) -> OutgoingFrontier {
-    if transition.outgoing_disposition() == OutgoingDisposition::Abandoned {
+    if transition.outgoing_disposition() == OutgoingDisposition::Abandoned
+        && frontier == OutgoingFrontier::Awaiting
+    {
         OutgoingFrontier::Unavailable
     } else {
         frontier
-    }
-}
-pub(in crate::pipeline::source) fn initial_promotion_frontier(
-    transition: VariantTransition,
-) -> OutgoingFrontier {
-    if transition.outgoing_disposition() == OutgoingDisposition::Abandoned {
-        OutgoingFrontier::Unavailable
-    } else {
-        OutgoingFrontier::Awaiting
     }
 }
 

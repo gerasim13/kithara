@@ -1163,6 +1163,7 @@ mod tests {
             outgoing_gap: 0,
             outgoing_origin: 0,
             outgoing_exhausted: true,
+            outgoing_disposition: kithara_stream::OutgoingDisposition::Retained,
             join_frames: 0,
             gapless_mode: GaplessMode::Disabled,
         };
