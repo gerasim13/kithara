@@ -1,6 +1,6 @@
 use std::io::Error;
 
-use kithara_config::{CheckedConfig, Config, ConfigOwner, ConfigOwnerMut, LiveConfig};
+use kithara_config::{CheckedConfig, Config, ConfigOwner, LiveConfig};
 use kithara_test_utils::kithara;
 
 /// A level of at most four under a limit of at most nine.
@@ -102,7 +102,6 @@ struct Kind {
 
 #[derive(ConfigOwner)]
 #[config_owner(config)]
-#[config_owner_mut]
 struct Owner {
     config: Gauge,
 }
@@ -113,12 +112,13 @@ struct NestedOwner {
     inner: std::sync::Arc<Owner>,
 }
 
-/// An owner whose configuration is whatever its field owns.
-#[derive(ConfigOwner)]
-#[config_owner(delegate(owner))]
-#[config_owner_mut]
-struct Delegating {
-    owner: Owner,
+mod without_trait {
+    /// An owner whose configuration is whatever its field owns.
+    #[derive(kithara_config::ConfigOwner)]
+    #[config_owner(delegate(owner))]
+    pub(super) struct Delegating {
+        pub(super) owner: super::NestedOwner,
+    }
 }
 
 fn refusal<T: core::fmt::Debug>(result: Result<T, Error>) -> String {
@@ -228,37 +228,18 @@ fn a_config_without_checks_refuses_nothing_and_still_nests() {
 }
 
 #[kithara::test]
-fn an_owner_change_is_checked_and_a_refusal_keeps_the_value() {
-    let mut owner = Owner {
-        config: Gauge::default(),
-    };
-    owner
-        .apply_config_change(GaugeChange::Level(3))
-        .expect("level in bounds");
-    assert_eq!(owner.level(), 3);
-    assert_eq!(
-        refusal(owner.apply_config_change(GaugeChange::Level(7))),
-        "level"
-    );
-    assert_eq!(owner.level(), 3);
-
-    let nested = NestedOwner {
-        inner: std::sync::Arc::new(owner),
-    };
-    assert!(std::ptr::eq(nested.config(), &nested.inner.config));
-    assert_eq!(nested.level(), 3);
-}
-
-#[kithara::test]
-fn a_delegating_owner_reads_and_changes_the_config_its_field_owns() {
-    let mut delegating = Delegating {
-        owner: Owner {
-            config: Gauge::default(),
+fn a_delegating_owner_reads_the_configuration_its_field_owns() {
+    let delegating = without_trait::Delegating {
+        owner: NestedOwner {
+            inner: std::sync::Arc::new(Owner {
+                config: Gauge { level: 4, limit: 9 },
+            }),
         },
     };
-    assert!(std::ptr::eq(delegating.config(), &delegating.owner.config));
-    delegating
-        .apply_config_change(GaugeChange::Level(4))
-        .expect("level in bounds");
-    assert_eq!((delegating.level(), delegating.owner.level()), (4, 4));
+    assert!(std::ptr::eq(
+        delegating.config(),
+        &delegating.owner.inner.config
+    ));
+    assert_eq!(*delegating.config(), Gauge { level: 4, limit: 9 });
+    assert_eq!(delegating.level(), 4);
 }
