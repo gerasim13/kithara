@@ -1,27 +1,21 @@
 use std::future::Future;
 
-use async_trait::async_trait;
-use bytes::Bytes;
 use kithara_platform::{CancelToken, time::sleep, tokio};
-use url::Url;
 
 use crate::{
-    ByteStream,
     error::{NetError, Retryability},
     observe::Observer,
-    traits::Net,
-    types::{Headers, RangeSpec, RetryPolicy},
+    types::RetryPolicy,
 };
 
-/// Retry decorator for Net implementations
+/// Retry loop over one backend and its request operations.
 pub(crate) struct RetryNet<N> {
     cancel: CancelToken,
     inner: N,
-    observer: Option<Observer>,
     retry_policy: RetryPolicy,
 }
 
-impl<N: Net> RetryNet<N> {
+impl<N> RetryNet<N> {
     delegate::delegate! {
         to self {
             #[field(&inner)]
@@ -29,16 +23,10 @@ impl<N: Net> RetryNet<N> {
         }
     }
 
-    pub(crate) const fn new(
-        inner: N,
-        retry_policy: RetryPolicy,
-        cancel: CancelToken,
-        observer: Option<Observer>,
-    ) -> Self {
+    pub(crate) const fn new(inner: N, retry_policy: RetryPolicy, cancel: CancelToken) -> Self {
         Self {
             cancel,
             inner,
-            observer,
             retry_policy,
         }
     }
@@ -46,7 +34,11 @@ impl<N: Net> RetryNet<N> {
     /// Promotes a transient error to a terminal `RetryExhausted` once a non-zero retry budget has
     /// been spent, so downstream (HLS settle, readers) treats it as a give-up rather than a
     /// transient signal.
-    async fn retry_loop<F, Fut, T>(&self, mut op: F) -> Result<T, NetError>
+    pub(crate) async fn retry_loop<F, Fut, T>(
+        &self,
+        observer: Option<&Observer>,
+        mut op: F,
+    ) -> Result<T, NetError>
     where
         F: FnMut() -> Fut,
         Fut: Future<Output = Result<T, NetError>>,
@@ -61,7 +53,7 @@ impl<N: Net> RetryNet<N> {
             if !self.retry_policy.should_retry(&error, attempt) {
                 return Err(
                     if max > 0 && error.retryability() == Retryability::Transient {
-                        if let Some(observer) = self.observer.as_ref() {
+                        if let Some(observer) = observer {
                             observer.0.retry_exhausted(max, 0, &error);
                         }
                         NetError::RetryExhausted {
@@ -74,7 +66,7 @@ impl<N: Net> RetryNet<N> {
                 );
             }
             let delay = self.retry_policy.delay_for_attempt(attempt);
-            if let Some(observer) = self.observer.as_ref() {
+            if let Some(observer) = observer {
                 observer.0.retrying(attempt + 1, max, &error, delay);
             }
             tokio::select! {
@@ -84,51 +76,6 @@ impl<N: Net> RetryNet<N> {
             }
             attempt += 1;
         }
-    }
-}
-
-#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
-#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
-impl<N: Net> Net for RetryNet<N> {
-    async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError> {
-        self.retry_loop(|| self.inner.get_bytes(url.clone(), headers.clone()))
-            .await
-    }
-
-    async fn get_range(
-        &self,
-        url: Url,
-        range: RangeSpec,
-        headers: Option<Headers>,
-    ) -> Result<ByteStream, NetError> {
-        self.retry_loop(|| {
-            self.inner
-                .get_range(url.clone(), range.clone(), headers.clone())
-        })
-        .await
-    }
-
-    async fn head(&self, url: Url, headers: Option<Headers>) -> Result<Headers, NetError> {
-        self.retry_loop(|| self.inner.head(url.clone(), headers.clone()))
-            .await
-    }
-
-    async fn post_bytes(
-        &self,
-        url: Url,
-        body: Bytes,
-        headers: Option<Headers>,
-    ) -> Result<Bytes, NetError> {
-        self.retry_loop(|| {
-            self.inner
-                .post_bytes(url.clone(), body.clone(), headers.clone())
-        })
-        .await
-    }
-
-    async fn stream(&self, url: Url, headers: Option<Headers>) -> Result<ByteStream, NetError> {
-        self.retry_loop(|| self.inner.stream(url.clone(), headers.clone()))
-            .await
     }
 }
 

@@ -26,8 +26,7 @@ use crate::{
     observe::Observer,
     range_response::{accepts_response_status, validate_range_response},
     resumable::{Refetch, Resumed, resumable_body},
-    retry::{RetryClient, RetryNet},
-    traits::Net,
+    retry::{RawBackend, RetryClient, RetryNet},
     types::{AcceptEncodingPolicy, Headers, NetOptions, RangeSpec, RetryPolicy},
 };
 
@@ -113,7 +112,7 @@ fn extract_headers(resp: &Response) -> Headers {
 
 /// Raw HTTP client (one `Client`, no retry layer). Lives
 /// behind [`HttpClient`]'s [`RetryNet`] decorator — exposed only via
-/// the [`Net`] trait, never constructed by callers directly.
+/// the [`crate::Net`] trait, never constructed by callers directly.
 #[derive(Clone)]
 pub struct RawHttp {
     /// Master-derived cancel, captured by the self-healing body so a re-fetch
@@ -176,6 +175,7 @@ impl RawHttp {
         range: Option<RangeSpec>,
         headers: Option<Headers>,
         accept_partial: bool,
+        observer: Option<&Observer>,
     ) -> Result<crate::ByteStream, NetError> {
         let mut req = self.inner.get(url.as_str());
         if let Some(range) = &range {
@@ -188,6 +188,7 @@ impl RawHttp {
                 url.clone(),
                 accept_partial,
                 AcceptEncodingPolicy::Identity,
+                observer,
             )
             .await?;
         Self::response_to_stream(resp, range.as_ref(), &url)
@@ -219,12 +220,13 @@ impl RawHttp {
         url: Url,
         accept_partial: bool,
         encoding: AcceptEncodingPolicy,
+        observer: Option<&Observer>,
     ) -> Result<Response, NetError> {
         let req = self.apply_headers(req, headers, encoding);
         let started = Instant::now();
         let resp = self.send_idle_bounded(req).await?;
         let status = resp.status();
-        if let Some(observer) = self.options.observer.as_ref() {
+        if let Some(observer) = observer {
             observer.0.first_byte(
                 started.elapsed(),
                 status.as_u16(),
@@ -278,6 +280,7 @@ impl RawHttp {
         base_start: u64,
         end: Option<u64>,
         headers: Option<Headers>,
+        observer: Option<&Observer>,
     ) -> crate::ByteStream {
         let out_headers = first.headers.clone();
         let partial = first.is_partial();
@@ -288,14 +291,18 @@ impl RawHttp {
         } else {
             (0, None)
         };
+        let refetch_observer = observer.cloned();
         let refetch: Refetch = Box::new(move |consumed| {
             let me = me.clone();
             let url = url.clone();
             let headers = headers.clone();
+            let observer = refetch_observer.clone();
             let abs = resume_base.saturating_add(consumed);
             let resume = RangeSpec::new(abs, resume_end);
             Box::pin(async move {
-                let stream = me.raw_body(url, Some(resume), headers, true).await?;
+                let stream = me
+                    .raw_body(url, Some(resume), headers, true, observer.as_ref())
+                    .await?;
                 let skip = if stream.is_partial() { 0 } else { abs };
                 Ok(Resumed { stream, skip })
             })
@@ -307,7 +314,7 @@ impl RawHttp {
             self.options.inactivity_timeout,
             self.options.retry_policy,
             self.cancel.clone(),
-            self.options.observer.clone(),
+            observer.cloned(),
         );
         crate::ByteStream::with_partial(out_headers, body, partial)
     }
@@ -315,7 +322,7 @@ impl RawHttp {
 
 /// Production HTTP client used across the workspace. Wraps a raw
 /// `Client` with the workspace's [`RetryNet`] decorator so
-/// every [`Net`] method (`head`/`get_bytes`/`post_bytes`/`get_range`/`stream`) honours
+/// every [`crate::Net`] method (`head`/`get_bytes`/`post_bytes`/`get_range`/`stream`) honours
 /// `options.retry_policy` — retryable errors (TLS-close, timeout,
 /// 5xx, IO) are re-issued with exponential backoff; non-retryable
 /// errors (HTTP 4xx, cancellation) propagate immediately.
@@ -355,17 +362,20 @@ impl RetryClient<RawHttp> {
             cancel: cancel.clone(),
         };
         let retry_policy = raw.options.retry_policy;
-        let observer = raw.options.observer.clone();
-        let net = Arc::new(RetryNet::new(raw, retry_policy, cancel, observer));
+        let net = Arc::new(RetryNet::new(raw, retry_policy, cancel));
         Self {
             net,
             connection_metrics,
+            observer: None,
         }
     }
 
+    /// Derive an observed handle sharing the backend, options, and retry policy.
     #[must_use]
     pub fn with_observer(&self, observer: Option<Observer>) -> Self {
-        self.with_options(self.options().clone().with_observer(observer))
+        let mut handle = self.clone();
+        handle.observer = observer;
+        handle
     }
 
     /// Returns a handle with a different retry policy, sharing the HTTP
@@ -385,16 +395,11 @@ impl RetryClient<RawHttp> {
             cancel: current.cancel.clone(),
         };
         let retry_policy = raw.options.retry_policy;
-        let observer = raw.options.observer.clone();
-        let net = Arc::new(RetryNet::new(
-            raw,
-            retry_policy,
-            current.cancel.clone(),
-            observer,
-        ));
+        let net = Arc::new(RetryNet::new(raw, retry_policy, current.cancel.clone()));
         Self {
             net,
             connection_metrics: self.connection_metrics.clone(),
+            observer: self.observer.clone(),
         }
     }
 
@@ -409,12 +414,24 @@ impl RetryClient<RawHttp> {
 
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
-impl Net for RawHttp {
+impl RawBackend for RawHttp {
     #[kithara::measure]
-    async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError> {
+    async fn get_bytes(
+        &self,
+        url: Url,
+        headers: Option<Headers>,
+        observer: Option<&Observer>,
+    ) -> Result<Bytes, NetError> {
         let req = self.inner.get(url.as_str());
         let resp = self
-            .send_checked(req, headers, url, false, AcceptEncodingPolicy::Configured)
+            .send_checked(
+                req,
+                headers,
+                url,
+                false,
+                AcceptEncodingPolicy::Configured,
+                observer,
+            )
             .await?;
         body_bytes(resp, self.options.inactivity_timeout).await
     }
@@ -425,15 +442,27 @@ impl Net for RawHttp {
         url: Url,
         range: RangeSpec,
         headers: Option<Headers>,
+        observer: Option<&Observer>,
     ) -> Result<crate::ByteStream, NetError> {
         let first = self
-            .raw_body(url.clone(), Some(range.clone()), headers.clone(), true)
+            .raw_body(
+                url.clone(),
+                Some(range.clone()),
+                headers.clone(),
+                true,
+                observer,
+            )
             .await?;
-        Ok(self.wrap_resumable(first, url, range.start, range.end, headers))
+        Ok(self.wrap_resumable(first, url, range.start, range.end, headers, observer))
     }
 
     #[kithara::measure]
-    async fn head(&self, url: Url, headers: Option<Headers>) -> Result<Headers, NetError> {
+    async fn head(
+        &self,
+        url: Url,
+        headers: Option<Headers>,
+        _observer: Option<&Observer>,
+    ) -> Result<Headers, NetError> {
         let req = self.head_request(&url);
         let req = self.apply_headers(req, headers, AcceptEncodingPolicy::Identity);
         let resp = self.send_idle_bounded(req).await?;
@@ -470,10 +499,18 @@ impl Net for RawHttp {
         url: Url,
         body: Bytes,
         headers: Option<Headers>,
+        observer: Option<&Observer>,
     ) -> Result<Bytes, NetError> {
         let req = post_request(&self.inner, &url, body);
         let resp = self
-            .send_checked(req, headers, url, false, AcceptEncodingPolicy::Configured)
+            .send_checked(
+                req,
+                headers,
+                url,
+                false,
+                AcceptEncodingPolicy::Configured,
+                observer,
+            )
             .await?;
         body_bytes(resp, self.options.inactivity_timeout).await
     }
@@ -484,11 +521,12 @@ impl Net for RawHttp {
         &self,
         url: Url,
         headers: Option<Headers>,
+        observer: Option<&Observer>,
     ) -> Result<crate::ByteStream, NetError> {
         let first = self
-            .raw_body(url.clone(), None, headers.clone(), false)
+            .raw_body(url.clone(), None, headers.clone(), false, observer)
             .await?;
-        Ok(self.wrap_resumable(first, url, 0, None, headers))
+        Ok(self.wrap_resumable(first, url, 0, None, headers, observer))
     }
 }
 

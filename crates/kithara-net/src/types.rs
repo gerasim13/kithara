@@ -6,10 +6,7 @@ use kithara_derive::Patch;
 use kithara_platform::time::Duration;
 use serde::{Deserialize, Deserializer};
 
-use crate::{
-    error::{NetError, Retryability},
-    observe::Observer,
-};
+use crate::error::{NetError, Retryability};
 
 bitflags! {
     /// HTTP codings auto-decoded for whole-body native requests.
@@ -234,8 +231,6 @@ pub struct NetOptions {
     /// backend and on wasm32 (no emulation there).
     #[config(builder(default))]
     pub(crate) impersonate: ImpersonatePreset,
-    #[config(skip = "injected request observer", patch(skip))]
-    pub(crate) observer: Option<Observer>,
     #[config(nested, builder(default), patch(nested))]
     pub(crate) retry_policy: RetryPolicy,
     /// Accept invalid TLS certificates (self-signed, expired, wrong hostname).
@@ -257,44 +252,6 @@ pub struct NetOptions {
     /// Set to 0 to disable pooling.
     #[config(builder(default = 8))]
     pub(crate) pool_max_idle_per_host: usize,
-}
-
-impl NetOptions {
-    /// The same options carrying a different observer.
-    ///
-    /// The source is destructured exhaustively on purpose. Rebuilding through
-    /// the builder is the workspace form for a config, and a bare
-    /// `Self::builder()` chain would silently reset any option nobody
-    /// remembered to list here; the pattern has no rest, so an option added
-    /// to the struct breaks this build instead.
-    #[must_use]
-    pub fn with_observer(&self, observer: Option<Observer>) -> Self {
-        let Self {
-            compression,
-            inactivity_timeout,
-            impersonate,
-            observer: _,
-            retry_policy,
-            is_insecure,
-            body_queue_capacity,
-            body_queue_resume_at,
-            pool_max_idle_per_host,
-            pool_idle_timeout,
-        } = self.clone();
-
-        Self::builder()
-            .compression(compression)
-            .inactivity_timeout(inactivity_timeout)
-            .impersonate(impersonate)
-            .maybe_observer(observer)
-            .retry_policy(retry_policy)
-            .is_insecure(is_insecure)
-            .body_queue_capacity(body_queue_capacity)
-            .body_queue_resume_at(body_queue_resume_at)
-            .pool_max_idle_per_host(pool_max_idle_per_host)
-            .pool_idle_timeout(pool_idle_timeout)
-            .build()
-    }
 }
 
 #[cfg(test)]

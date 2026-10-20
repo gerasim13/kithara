@@ -21,8 +21,7 @@ use crate::{
     observe::Observer,
     range_response::{accepts_response_status, validate_range_response},
     resumable::{Refetch, Resumed, resumable_body},
-    retry::{RetryClient, RetryNet},
-    traits::Net,
+    retry::{RawBackend, RetryClient, RetryNet},
     types::{AcceptEncodingPolicy, Headers, NetOptions, RangeSpec, RetryPolicy},
 };
 
@@ -44,13 +43,20 @@ impl RawAppleNet {
         range: Option<RangeSpec>,
         headers: Option<Headers>,
         accept_partial: bool,
+        observer: Option<&Observer>,
     ) -> Result<ByteStream, NetError> {
         let base_start = range.as_ref().map_or(0, |range| range.start);
         let end = range.as_ref().and_then(|range| range.end);
         let first = self
-            .raw_body(url.clone(), range, headers.clone(), accept_partial)
+            .raw_body(
+                url.clone(),
+                range,
+                headers.clone(),
+                accept_partial,
+                observer,
+            )
             .await?;
-        Ok(self.wrap_resumable(first, url, base_start, end, headers))
+        Ok(self.wrap_resumable(first, url, base_start, end, headers, observer))
     }
 
     #[kithara::flash(io)]
@@ -59,7 +65,7 @@ impl RawAppleNet {
         method: Method,
         url: Url,
         body: Option<Bytes>,
-        range: Option<RangeSpec>,
+        observer: Option<&Observer>,
         headers: Option<Headers>,
         accept_partial: bool,
     ) -> Result<AppleDataResponse, NetError> {
@@ -69,7 +75,7 @@ impl RawAppleNet {
                 Method::Get | Method::Post => AcceptEncodingPolicy::Configured,
                 Method::Head => AcceptEncodingPolicy::Identity,
             };
-            let request = AppleRequest::new(&url, method, range, headers, body, accept_encoding)?;
+            let request = AppleRequest::new(&url, method, None, headers, body, accept_encoding)?;
             timeout(
                 self.options.inactivity_timeout,
                 self.session.data(request, self.cancel.clone()),
@@ -77,7 +83,7 @@ impl RawAppleNet {
         }
         .await
         .map_err(|_| NetError::Timeout)??;
-        if let (Some(observer), Some(status)) = (self.options.observer.as_ref(), response.status) {
+        if let (Some(observer), Some(status)) = (observer, response.status) {
             observer
                 .0
                 .first_byte(started.elapsed(), status, status == HTTP_PARTIAL_CONTENT);
@@ -93,6 +99,7 @@ impl RawAppleNet {
         range: Option<RangeSpec>,
         headers: Option<Headers>,
         accept_partial: bool,
+        observer: Option<&Observer>,
     ) -> Result<ByteStream, NetError> {
         let started = Instant::now();
         let response = {
@@ -111,7 +118,7 @@ impl RawAppleNet {
         }
         .await
         .map_err(|_| NetError::Timeout)??;
-        if let (Some(observer), Some(status)) = (self.options.observer.as_ref(), response.status) {
+        if let (Some(observer), Some(status)) = (observer, response.status) {
             observer
                 .0
                 .first_byte(started.elapsed(), status, status == HTTP_PARTIAL_CONTENT);
@@ -139,6 +146,7 @@ impl RawAppleNet {
         base_start: u64,
         end: Option<u64>,
         headers: Option<Headers>,
+        observer: Option<&Observer>,
     ) -> ByteStream {
         let out_headers = first.headers.clone();
         let partial = first.is_partial();
@@ -149,14 +157,18 @@ impl RawAppleNet {
         } else {
             (0, None)
         };
+        let refetch_observer = observer.cloned();
         let refetch: Refetch = Box::new(move |consumed| {
             let me = me.clone();
             let url = url.clone();
             let headers = headers.clone();
+            let observer = refetch_observer.clone();
             let abs = resume_base.saturating_add(consumed);
             let resume = RangeSpec::new(abs, resume_end);
             Box::pin(async move {
-                let stream = me.raw_body(url, Some(resume), headers, true).await?;
+                let stream = me
+                    .raw_body(url, Some(resume), headers, true, observer.as_ref())
+                    .await?;
                 let skip = if stream.is_partial() { 0 } else { abs };
                 Ok(Resumed { stream, skip })
             })
@@ -168,7 +180,7 @@ impl RawAppleNet {
             self.options.inactivity_timeout,
             self.options.retry_policy,
             self.cancel.clone(),
-            self.options.observer.clone(),
+            observer.cloned(),
         );
         ByteStream::with_partial(out_headers, body, partial)
     }
@@ -198,17 +210,20 @@ impl RetryClient<RawAppleNet> {
             options,
         };
         let retry_policy = raw.options.retry_policy;
-        let observer = raw.options.observer.clone();
-        let net = Arc::new(RetryNet::new(raw, retry_policy, cancel, observer));
+        let net = Arc::new(RetryNet::new(raw, retry_policy, cancel));
         Self {
             net,
             connection_metrics,
+            observer: None,
         }
     }
 
+    /// Derive an observed handle sharing the backend, options, and retry policy.
     #[must_use]
     pub fn with_observer(&self, observer: Option<Observer>) -> Self {
-        self.with_options(self.options().clone().with_observer(observer))
+        let mut handle = self.clone();
+        handle.observer = observer;
+        handle
     }
 
     /// Returns a handle with a different retry policy, sharing the HTTP session.
@@ -227,16 +242,11 @@ impl RetryClient<RawAppleNet> {
             options,
         };
         let retry_policy = raw.options.retry_policy;
-        let observer = raw.options.observer.clone();
-        let net = Arc::new(RetryNet::new(
-            raw,
-            retry_policy,
-            current.cancel.clone(),
-            observer,
-        ));
+        let net = Arc::new(RetryNet::new(raw, retry_policy, current.cancel.clone()));
         Self {
             net,
             connection_metrics: self.connection_metrics.clone(),
+            observer: self.observer.clone(),
         }
     }
 
@@ -250,9 +260,14 @@ impl RetryClient<RawAppleNet> {
 }
 
 #[async_trait]
-impl Net for RawAppleNet {
-    async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError> {
-        self.data(Method::Get, url, None, None, headers, false)
+impl RawBackend for RawAppleNet {
+    async fn get_bytes(
+        &self,
+        url: Url,
+        headers: Option<Headers>,
+        observer: Option<&Observer>,
+    ) -> Result<Bytes, NetError> {
+        self.data(Method::Get, url, None, observer, headers, false)
             .await
             .map(|response| response.body)
     }
@@ -262,12 +277,19 @@ impl Net for RawAppleNet {
         url: Url,
         range: RangeSpec,
         headers: Option<Headers>,
+        observer: Option<&Observer>,
     ) -> Result<ByteStream, NetError> {
-        self.body_stream(url, Some(range), headers, true).await
+        self.body_stream(url, Some(range), headers, true, observer)
+            .await
     }
 
-    async fn head(&self, url: Url, headers: Option<Headers>) -> Result<Headers, NetError> {
-        self.data(Method::Head, url, None, None, headers, true)
+    async fn head(
+        &self,
+        url: Url,
+        headers: Option<Headers>,
+        observer: Option<&Observer>,
+    ) -> Result<Headers, NetError> {
+        self.data(Method::Head, url, None, observer, headers, true)
             .await
             .map(|response| normalize_head_headers(response.headers))
     }
@@ -277,14 +299,20 @@ impl Net for RawAppleNet {
         url: Url,
         body: Bytes,
         headers: Option<Headers>,
+        observer: Option<&Observer>,
     ) -> Result<Bytes, NetError> {
-        self.data(Method::Post, url, Some(body), None, headers, false)
+        self.data(Method::Post, url, Some(body), observer, headers, false)
             .await
             .map(|response| response.body)
     }
 
-    async fn stream(&self, url: Url, headers: Option<Headers>) -> Result<ByteStream, NetError> {
-        self.body_stream(url, None, headers, false).await
+    async fn stream(
+        &self,
+        url: Url,
+        headers: Option<Headers>,
+        observer: Option<&Observer>,
+    ) -> Result<ByteStream, NetError> {
+        self.body_stream(url, None, headers, false, observer).await
     }
 }
 
