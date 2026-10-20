@@ -514,7 +514,7 @@ impl<'a> RunnerManager<'a> {
         Ok(vec![
             (
                 shared.join(consts::KACHE_HOST_FILE),
-                kache::host_config(&environment, &shared.join(consts::KACHE_STORE), size, true)?,
+                kache::host_config(&environment, &shared.join(consts::KACHE_STORE), size)?,
             ),
             (
                 shared.join(consts::KACHE_DOCKER_HOST_FILE),
@@ -522,7 +522,6 @@ impl<'a> RunnerManager<'a> {
                     &docker_client_environment(environment),
                     &inside.join(consts::KACHE_STORE),
                     size,
-                    false,
                 )?,
             ),
         ])
@@ -1261,10 +1260,6 @@ mod tests {
                 .find(|(path, _)| *path == written)
                 .unwrap_or_else(|| panic!("{} is not written", written.display()));
             let file: toml::Table = toml::from_str(contents).expect("the host file is TOML");
-            assert_eq!(
-                file["cache"].get("scheduler").and_then(toml::Value::as_bool),
-                Some(!docker)
-            );
             assert_eq!(
                 file["cache"]["local_store"].as_str().map(PathBuf::from),
                 Some(store)

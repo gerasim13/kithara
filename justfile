@@ -15,6 +15,10 @@ kache := if os_family() == "windows" { "" } else { `command -v kache 2>/dev/null
 export RUSTC_WRAPPER := if kache == "" { sccache } else { kache }
 export KACHE_FALLBACK := if kache == "" { "" } else { sccache }
 
+# Container CI limits its own CPU and memory; a shared kache scheduler would
+# give every runner only the calling container's CPU slots.
+export KACHE_SCHEDULER := if os() == "linux" && env("CI", "") == "true" && env("KITHARA_CI_BUILD_SLOTS", "") != "" { "0" } else { env("KACHE_SCHEDULER", "1") }
+
 # cc-rs puts kache in front of a build script's C compile on its own; a CMake
 # build takes it as its compiler launcher, so the compiler CMake records stays
 # the real one and a build directory configured without kache keeps its cache.

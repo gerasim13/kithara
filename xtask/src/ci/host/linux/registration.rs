@@ -140,7 +140,6 @@ pub(super) fn write_kache(host: &LinuxHost, runner: &LinuxRunner) -> Result<()> 
         &store,
         &Path::new(consts::KACHE_MOUNT).join(consts::KACHE_STORE),
         &host.compiler_cache_size,
-        false,
     )?;
     let directory = Container::kache(host, runner);
     fs::create_dir_all(&directory).with_context(|| format!("creating {}", directory.display()))?;
@@ -382,10 +381,6 @@ mod tests {
         .expect("the host file is readable");
         let config: toml::Table = toml::from_str(&written).expect("the host file is TOML");
         let cache = config["cache"].as_table().expect("a cache table");
-        assert_eq!(
-            cache.get("scheduler").and_then(toml::Value::as_bool),
-            Some(false)
-        );
         assert_eq!(
             cache["local_store"].as_str().map(std::path::PathBuf::from),
             Some(std::path::Path::new(consts::KACHE_MOUNT).join(consts::KACHE_STORE))
