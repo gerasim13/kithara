@@ -4,7 +4,7 @@ use num_traits::ToPrimitive;
 use super::*;
 use crate::{
     AdvanceReason, Transition,
-    mock::{fixture_uri, seed_fixture},
+    mock::{fixture_uri, loaded_request, seed_fixture},
 };
 
 const THRESHOLD_ITEM: TrackId = TrackId(1);
@@ -939,8 +939,28 @@ async fn cancel_preload_unloads_a_successor_only_while_it_preloads(
                 .expect("prepare paused leading");
         },
     );
-    let leading = loaded_fixture(queue.worker().expect("fixture worker"), &mut rig, &dir).await;
-    let receipt = rig.open(Ok(leading)).expect("leading load");
+    let leading_load = queue
+        .active
+        .iter()
+        .find(|active| active.item == first)
+        .and_then(|active| active.load)
+        .expect("leading load")
+        .seq();
+    let leading = loaded_request(
+        queue.worker().expect("fixture worker"),
+        &mut rig,
+        leading_load,
+    )
+    .await;
+    rig.opens
+        .resume(leading_load, (), ())
+        .expect("leading dispatcher command")
+        .apply(kithara_render::Dispatched::Loaded(leading));
+    let receipt = rig
+        .dispatcher
+        .receipts()
+        .next()
+        .expect("leading load receipt");
     real_outbox(
         &mut queue,
         &mut mixer,
@@ -982,13 +1002,28 @@ async fn cancel_preload_unloads_a_successor_only_while_it_preloads(
         },
     )
     .expect("gapless successor");
-    let successor = loaded_fixture(
+    let successor_load = queue
+        .active
+        .iter()
+        .find(|active| active.item == second)
+        .and_then(|active| active.load)
+        .expect("successor load")
+        .seq();
+    let successor = loaded_request(
         queue.worker().expect("fixture worker"),
         &mut rig,
-        &successor_dir,
+        successor_load,
     )
     .await;
-    let receipt = rig.open(Ok(successor)).expect("successor load");
+    rig.opens
+        .resume(successor_load, (), ())
+        .expect("successor dispatcher command")
+        .apply(kithara_render::Dispatched::Loaded(successor));
+    let receipt = rig
+        .dispatcher
+        .receipts()
+        .next()
+        .expect("successor load receipt");
     real_outbox(
         &mut queue,
         &mut mixer,
