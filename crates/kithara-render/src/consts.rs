@@ -66,6 +66,6 @@ pub(crate) const MS_PER_SEC: f64 = 1000.0;
 pub(crate) const MIN_STEREO: usize = 2;
 pub(crate) const EVENTS_PER_SLOT: usize = 16;
 
-/// Frames per stack chunk of a track fade: the five gain arrays of one chunk
+/// Frames per stack chunk of a track fade: the four gain arrays of one chunk
 /// stay within the real-time stack budget.
 pub(crate) const FADE_CHUNK: usize = 256;

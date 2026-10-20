@@ -88,7 +88,7 @@ impl TrackFade {
         let (output_r, settled_r) = output_r.split_at_mut(fading);
         let (input_l, unity_l) = input_l.split_at(fading);
         let (input_r, unity_r) = input_r.split_at(fading);
-        if self.gain_at(last) == 1.0 {
+        if !settled_l.is_empty() && self.gain_at(last) == 1.0 {
             kithara_dsp::add(unity_l, settled_l);
             kithara_dsp::add(unity_r, settled_r);
         }
@@ -136,21 +136,22 @@ impl TrackFade {
     fn crossfade(&self, first: u64, gain: &mut [f32]) {
         let frames = gain.len();
         self.positions(first, gain);
-        let mut selected = [[0.0; FADE_CHUNK]; 2];
-        let mut linear = [[0.0; FADE_CHUNK]; 2];
-        let [selected_out, selected_in] = &mut selected;
-        let [linear_out, linear_in] = &mut linear;
+        let mut outgoing = [0.0; FADE_CHUNK];
+        let mut incoming = [0.0; FADE_CHUNK];
         fade::gains(
             FadeCurve::from(self.settings.curve),
             gain,
-            selected_out,
-            selected_in,
+            &mut outgoing[..frames],
+            &mut incoming[..frames],
         );
-        fade::gains(FadeCurve::Linear, gain, linear_out, linear_in);
-        let (selected, linear) = if matches!(self.direction, Direction::In) {
-            (&mut selected_in[..frames], &mut linear_in[..frames])
+        let mut linear = [0.0; FADE_CHUNK];
+        let linear = &mut linear[..frames];
+        let selected = if matches!(self.direction, Direction::In) {
+            fade::gains(FadeCurve::Linear, gain, &mut outgoing[..frames], linear);
+            &mut incoming[..frames]
         } else {
-            (&mut selected_out[..frames], &mut linear_out[..frames])
+            fade::gains(FadeCurve::Linear, gain, linear, &mut incoming[..frames]);
+            &mut outgoing[..frames]
         };
         kithara_dsp::sub(selected, linear);
         kithara_dsp::scale_add(selected, self.settings.depth, linear);
