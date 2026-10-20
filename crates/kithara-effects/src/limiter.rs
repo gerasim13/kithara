@@ -287,6 +287,7 @@ impl PeakLimiter {
 
 #[cfg(test)]
 mod tests {
+    use kithara_fixture_media::reconstruction::reconstructed_peak;
     use kithara_test_fixtures::unit_fixtures::{
         limiter_attack, limiter_half, limiter_infinity, limiter_intersample, limiter_left,
         limiter_negative, limiter_negative_infinity, limiter_peak, limiter_quiet, limiter_recovery,
@@ -295,7 +296,6 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::mock::reconstructed_peak;
 
     fn limiter(sample_rate: u32, release_ms: f32) -> PeakLimiter {
         PeakLimiter::new(

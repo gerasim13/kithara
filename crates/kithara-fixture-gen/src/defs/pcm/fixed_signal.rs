@@ -105,14 +105,12 @@ fn warp_native_tone() -> Vec<u8> {
 #[kithara::asset(ext = "f32le", content_type = "application/octet-stream", format = metronome_format)]
 #[case::default()]
 fn host_metronome_held() -> Vec<u8> {
-    let ceiling = kithara_effects::LimiterConfig::default().ceiling();
-    (0..8_192_u16)
-        .map(|frame| {
-            let rise = (f32::from(frame) / 512.0).min(1.0);
-            ceiling * 0.5 * (1.0 - (std::f32::consts::PI * rise).cos())
-        })
-        .flat_map(f32::to_le_bytes)
-        .collect()
+    kithara_fixture_media::signal::metronome_held(
+        kithara_effects::LimiterConfig::default().ceiling(),
+    )
+    .into_iter()
+    .flat_map(f32::to_le_bytes)
+    .collect()
 }
 
 #[kithara::asset(
@@ -122,17 +120,14 @@ fn host_metronome_held() -> Vec<u8> {
 )]
 #[case::default()]
 fn host_metronome_tone(inputs: &[&[u8]]) -> Vec<u8> {
-    inputs[0]
+    let held: Vec<_> = inputs[0]
         .as_chunks::<4>()
         .0
         .iter()
-        .zip(0..8_192_u16)
-        .map(|(level, frame)| {
-            let level = f32::from_le_bytes(*level);
-            let cycles = (f64::from(frame) * 10_000.0 / f64::from(44_100)).fract();
-            let tone = f64::from(level) * std::f64::consts::TAU.mul_add(cycles, 2.1).cos();
-            tone.to_f32().expect("a tone sample fits f32")
-        })
+        .map(|sample| f32::from_le_bytes(*sample))
+        .collect();
+    kithara_fixture_media::signal::metronome_tone(&held)
+        .into_iter()
         .flat_map(f32::to_le_bytes)
         .collect()
 }

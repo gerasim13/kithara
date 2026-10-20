@@ -1,8 +1,10 @@
 use std::path::Path;
 
 use kithara_fixture_media::signal::Wave;
+use num_traits::ToPrimitive;
 
 pub(super) fn verify(output: &Path) {
+    prepared_metronome_mixes_preserve_the_original_ceiling_and_sample_bits(output);
     prepared_eq_sine_preserves_the_original_unquantized_f32_law(output);
     prepared_hero_levels_preserve_the_original_waveform_law(output);
     prepared_sine_and_harmonics_preserve_every_original_sample_bit(output);
@@ -161,4 +163,24 @@ fn prepared_polar_points_preserve_every_original_bit_including_signed_zeros(outp
     assert_eq!(im.len(), 201);
     assert_bits(&re, expected_re.into_iter());
     assert_bits(&im, expected_im.into_iter());
+}
+
+fn prepared_metronome_mixes_preserve_the_original_ceiling_and_sample_bits(output: &Path) {
+    let ceiling = kithara_effects::LimiterConfig::default().ceiling();
+    let held: Vec<_> = (0..8_192_u16)
+        .map(|frame| {
+            let rise = (f32::from(frame) / 512.0).min(1.0);
+            ceiling * 0.5 * (1.0 - (std::f32::consts::PI * rise).cos())
+        })
+        .collect();
+    assert_bits(&read(output, "host_metronome_held"), held.iter().copied());
+    assert_bits(
+        &read(output, "host_metronome_tone"),
+        held.iter().zip(0..8_192_u16).map(|(level, frame)| {
+            let cycles = (f64::from(frame) * 10_000.0 / f64::from(44_100)).fract();
+            (f64::from(*level) * std::f64::consts::TAU.mul_add(cycles, 2.1).cos())
+                .to_f32()
+                .expect("bounded tone")
+        }),
+    );
 }

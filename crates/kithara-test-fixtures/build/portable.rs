@@ -3,6 +3,15 @@ use std::path::Path;
 use kithara_fixture_media::signal::Wave;
 
 pub(super) fn generate(output: &Path) {
+    let held = kithara_fixture_media::signal::metronome_held(
+        kithara_effects::LimiterConfig::default().ceiling(),
+    );
+    write_pcm(
+        output,
+        "host_metronome_tone",
+        kithara_fixture_media::signal::metronome_tone(&held).into_iter(),
+    );
+    write_pcm(output, "host_metronome_held", held.into_iter());
     write_pcm(
         output,
         "eq_sine_440",

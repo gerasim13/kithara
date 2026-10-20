@@ -63,8 +63,10 @@ kithara-stream = { workspace = true, default-features = false, optional = true }
 serde_json = { workspace = true, features = ["float_roundtrip"], optional = true }
 
 [build-dependencies]
+kithara-effects = { workspace = true }
 kithara-fixture-gen = { workspace = true, optional = true }
 kithara-fixture-media = { workspace = true }
+num-traits = { workspace = true }
 
 [dev-dependencies]
 kithara-analysis = { workspace = true, default-features = false, features = ["client-reqwest", "tls-rustls"] }
@@ -85,6 +87,10 @@ toml = { workspace = true }
 kithara-analysis = { workspace = true, features = ["symphonia"] }
 kithara-decode = { workspace = true, default-features = false, features = ["client-reqwest", "symphonia", "tls-rustls"] }
 kithara-resampler = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+kithara-test-utils = { workspace = true, features = ["subscriber"] }
+wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dev-dependencies]
 kithara-test-dylib = { workspace = true }

@@ -526,7 +526,8 @@ mod tests {
     use core::f32::consts::PI;
 
     use kithara_config::{CheckedConfig, LiveConfig};
-    use kithara_effects::{LimiterConfig, mock::reconstructed_peak};
+    use kithara_effects::LimiterConfig;
+    use kithara_fixture_media::reconstruction::reconstructed_peak;
 
     use super::*;
 
@@ -584,10 +585,10 @@ mod tests {
         // reconstructs about a ten-thousandth of a decibel over it.
         const DOCUMENTED_OVER_DB: f32 = 0.001;
         const ONSET: usize = 1_024;
-        let held = kithara_test_fixtures::unit_fixtures::host_metronome_held();
+        let held = kithara_test_fixtures::portable::host_metronome_held().to_vec();
         // WHY: A moving mix under a full-depth duck, far enough under Nyquist
         // that the duck's modulation folds nothing back over the ceiling.
-        let tone = kithara_test_fixtures::unit_fixtures::host_metronome_tone();
+        let tone = kithara_test_fixtures::portable::host_metronome_tone().to_vec();
         let sharpest = MetronomeConfig::builder()
             .decay(Duration::from_millis(8))
             .hold(Duration::ZERO)

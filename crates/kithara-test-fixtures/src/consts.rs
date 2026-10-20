@@ -77,3 +77,12 @@ const fn pcm<const N: usize>(bytes: &[u8]) -> [f32; N] {
     }
     samples
 }
+
+pub(crate) static METRONOME_HELD: [f32; 8_192] = pcm(include_bytes!(concat!(
+    env!("OUT_DIR"),
+    "/host_metronome_held.f32le"
+)));
+pub(crate) static METRONOME_TONE: [f32; 8_192] = pcm(include_bytes!(concat!(
+    env!("OUT_DIR"),
+    "/host_metronome_tone.f32le"
+)));

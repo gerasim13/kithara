@@ -119,3 +119,17 @@ fn prepared_polar_points_preserve_every_host_bit_including_signed_zeros() {
         assert_eq!(im.to_bits(), expected_im.to_bits());
     }
 }
+
+#[kithara::test]
+fn prepared_metronome_mixes_preserve_every_portable_host_byte() {
+    assert_bytes(
+        portable::host_metronome_held(),
+        include_bytes!(concat!(env!("OUT_DIR"), "/host_metronome_held.f32le")),
+        8_192,
+    );
+    assert_bytes(
+        portable::host_metronome_tone(),
+        include_bytes!(concat!(env!("OUT_DIR"), "/host_metronome_tone.f32le")),
+        8_192,
+    );
+}

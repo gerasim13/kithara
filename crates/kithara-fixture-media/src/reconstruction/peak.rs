@@ -1,3 +1,5 @@
+use super::true_peak_kernel;
+
 /// Reconstructs the continuous waveform by windowed-sinc interpolation and
 /// returns its largest magnitude: the true peak a limiter ceiling bounds,
 /// measured independently of the limiter's own detector.
@@ -6,7 +8,7 @@
 #[must_use]
 pub fn reconstructed_peak(samples: &[f32]) -> f32 {
     const HALF_WIDTH: i16 = 32;
-    let (sinc, window) = kithara_fixture_media::reconstruction::true_peak_kernel();
+    let (sinc, window) = true_peak_kernel();
     let mut peak = 0.0_f32;
     let tail = usize::from(HALF_WIDTH.unsigned_abs());
     for index in 0..samples.len().saturating_sub(tail) {
@@ -31,7 +33,7 @@ pub fn reconstructed_peak(samples: &[f32]) -> f32 {
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::reconstructed_peak;
+    use super::{reconstructed_peak, true_peak_kernel};
 
     const MIXED: [f32; 97] = {
         let pattern = [0.13, -0.71, 0.333_333_34, -0.125, 0.91, -0.001, 0.49];
@@ -58,7 +60,7 @@ mod tests {
     };
 
     fn scalar_reference(samples: &[f32]) -> f32 {
-        let (sinc, window) = kithara_fixture_media::reconstruction::true_peak_kernel();
+        let (sinc, window) = true_peak_kernel();
         let mut peak = 0.0_f32;
         for index in 0..samples.len().saturating_sub(32) {
             for phase in 0..16 {

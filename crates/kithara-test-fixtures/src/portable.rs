@@ -58,3 +58,15 @@ pub fn glide_two_tones() -> &'static [f32] {
 pub fn polar_points() -> (&'static [f32], &'static [f32]) {
     (&consts::POLAR_RE, &consts::POLAR_IM)
 }
+
+/// Full-depth duck input at the canonical limiter ceiling.
+#[must_use]
+pub fn host_metronome_held() -> &'static [f32] {
+    &consts::METRONOME_HELD
+}
+
+/// A 10 kHz moving mix under the canonical full-depth duck envelope.
+#[must_use]
+pub fn host_metronome_tone() -> &'static [f32] {
+    &consts::METRONOME_TONE
+}
