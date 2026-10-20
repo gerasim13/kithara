@@ -1193,7 +1193,12 @@ async fn live_same_spec_promotion_arms_the_crossfade_ramp(route_pcm: RoutePcm) {
 }
 
 #[kithara::test(tokio)]
-async fn abandoned_incoming_hard_cuts_without_outgoing_join_pcm(route_pcm: RoutePcm) {
+#[case::matching_frontier(false)]
+#[case::stale_landing(true)]
+async fn abandoned_incoming_hard_cuts_without_outgoing_join_pcm(
+    route_pcm: RoutePcm,
+    #[case] stale_landing: bool,
+) {
     const INCOMING_CHUNKS: usize = 5;
 
     let mut fixture =
@@ -1204,11 +1209,22 @@ async fn abandoned_incoming_hard_cuts_without_outgoing_join_pcm(route_pcm: Route
     };
     assert_eq!(produced_data(first_outgoing).meta.frame_offset, 0);
     assert!(fixture.source.decode.active().staged_span().is_none());
-    let cut = u64::try_from(consts::ROUTE_CHUNK_FRAMES).unwrap_or(u64::MAX);
+    let planned_cut = u64::try_from(consts::ROUTE_CHUNK_FRAMES).unwrap_or(u64::MAX);
+    let cut = if stale_landing {
+        let TrackStep::Produced(outgoing) = fixture.source.step_track() else {
+            panic!("the outgoing must advance beyond the plan's landing snapshot");
+        };
+        let outgoing = produced_data(outgoing);
+        assert_route_signal(&outgoing, planned_cut);
+        assert!(fixture.source.decode.active().staged_span().is_none());
+        outgoing.meta.frame_range().end
+    } else {
+        planned_cut
+    };
     let landing = spec(consts::SAMPLE_RATE)
         .duration_for(cut)
         .expect("abandoned fixture landing fits Duration");
-    let plan = abandoned_incoming_plan_at(cut);
+    let plan = abandoned_incoming_plan_at(planned_cut);
     let transition = plan.transition();
     assert_eq!(
         transition.outgoing_disposition(),

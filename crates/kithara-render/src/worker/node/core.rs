@@ -2,7 +2,11 @@ use std::task::{Context, Poll};
 
 use kithara_audio::{AudioSource, Fetch, TrackFailureKind, TrackStep, WaitingReason};
 use kithara_bufpool::{HasPool, PoolRegion};
-use kithara_platform::{CancelToken, sync::Arc, time::WallInstant};
+use kithara_platform::{
+    CancelToken,
+    sync::Arc,
+    time::{Duration, WallInstant},
+};
 use kithara_signal::{AudioChunk, AudioChunkInfo, FrameCount, SegmentId, SourceSpan};
 use kithara_stream::ActivityWriter;
 use kithara_test_utils::kithara;
@@ -153,7 +157,12 @@ where
                         if !meta.end_of_track && meta.frames > 0 {
                             self.source.admitted();
                         }
-                        kithara::probe_event!(chunk_admitted, segment = meta.segment.get());
+                        kithara::probe_event!(
+                            chunk_admitted,
+                            segment = meta.segment.get(),
+                            lane_frame = meta.lane_frame,
+                            frames = u64::from(meta.frames)
+                        );
                         tracing::trace!(
                             target: "render_refill",
                             probe = "chunk_admitted",
@@ -273,6 +282,20 @@ where
         if let Some(activity) = &mut self.activity {
             activity.set_playing(false);
         }
+    }
+
+    /// Half a packet while a full ring holds a packet behind the consumer's next
+    /// one. The consumer frees a slot without waking the worker and can read
+    /// faster than real time, so the recheck never outgrows the packet it
+    /// refills; a one-packet ring has no lead to spare and keeps the
+    /// configured poll.
+    fn backpressure_recheck(&self) -> Option<Duration> {
+        let packet = self
+            .last_output
+            .spec
+            .duration_for(u64::from(self.last_output.frames))
+            .ok()?;
+        (self.port.forward.capacity().get() > 1 && !packet.is_zero()).then(|| packet / 2)
     }
 
     #[kithara::hang_watchdog]
@@ -404,6 +427,7 @@ impl<T, S> Drop for DecoderNode<T, S> {
 
 #[cfg(test)]
 mod tests {
+    use kithara_platform::time::Duration;
     use kithara_signal::SegmentId;
     use kithara_test_utils::kithara;
     use kithara_worker::{Task, TickResult};
@@ -427,6 +451,39 @@ mod tests {
             SegmentId::FIRST,
             &[value],
         ))));
+    }
+
+    /// A full ring is rechecked within half of the lead it holds beyond the
+    /// consumer's next packet, and a one-packet ring keeps the configured poll.
+    #[kithara::test(tokio)]
+    async fn a_full_ring_is_rechecked_within_half_a_packet() {
+        for (capacity, expected) in [
+            (1, None),
+            (3, Some(Duration::from_millis(5))),
+            (8, Some(Duration::from_millis(5))),
+        ] {
+            let mut fixture = NodeFixture::new(capacity).await;
+            assert_eq!(
+                fixture.node.backpressure_recheck(),
+                None,
+                "a lane that has not output a packet keeps the configured poll"
+            );
+            for _ in 0..capacity {
+                fixture.stage(PcmPacket::Chunk(Box::new(chunk(
+                    SegmentId::FIRST,
+                    &[0.25; 480],
+                ))));
+                assert_eq!(fixture.node.admit(), TickResult::Progress);
+            }
+            stage(&mut fixture, 0.5);
+            assert_eq!(fixture.node.admit(), TickResult::Backpressured);
+
+            assert_eq!(
+                fixture.node.backpressure_recheck(),
+                expected,
+                "{capacity} slots of 480 frames at 48 kHz hold 10 ms each"
+            );
+        }
     }
 
     #[kithara::test(tokio)]

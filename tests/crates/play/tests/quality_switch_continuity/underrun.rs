@@ -42,9 +42,25 @@ struct CaptureBlock {
     item_events: Vec<ItemEvent>,
     event_error: Option<String>,
     refill_probes: Vec<kithara_test_utils::test::usdt::ProbeEvent>,
+    /// The end of the last packet each segment admitted, read before `after`.
+    admitted: Vec<(u64, u64)>,
 }
 
 impl CaptureBlock {
+    /// `(lead, admitted end)` of each playing slot after this block: the
+    /// frames rendered past the slot's read mark. The admitted end is read
+    /// before the mark, so a lead is never overstated.
+    fn leads(&self) -> impl Iterator<Item = (u64, u64)> + '_ {
+        self.after.slots.iter().filter_map(|slot| {
+            let mark = slot.mark?;
+            let &(_, admitted) = self
+                .admitted
+                .iter()
+                .find(|(segment, _)| *segment == mark.lane.segment.get())?;
+            Some((admitted.saturating_sub(mark.lane.frame), admitted))
+        })
+    }
+
     fn diagnostic(&self) -> String {
         let lane_frames = self
             .before
@@ -313,6 +329,7 @@ async fn capture_tiny_ring(
             .map(|duration| duration.as_micros());
         let snapshot_before = prepared.player.deck_snapshot();
         let block = render_paced(&mut prepared.player, &mut prepared.pacer, frames).await;
+        let admitted = admitted_ends();
         let snapshot_after = prepared.player.deck_snapshot();
         let output_end = prepared.player.host().position();
         let short =
@@ -372,6 +389,7 @@ async fn capture_tiny_ring(
             item_events: observed_events,
             event_error,
             refill_probes,
+            admitted,
         });
         samples.extend_from_slice(&block);
         if prepared.player.position() > before {
@@ -383,6 +401,25 @@ async fn capture_tiny_ring(
         ));
     }
     (samples, decoder_events, blocks)
+}
+
+/// The end of the last packet each segment admitted so far.
+fn admitted_ends() -> Vec<(u64, u64)> {
+    let mut ends: Vec<(u64, u64)> = Vec::new();
+    for event in kithara_test_utils::test::usdt::events_of("chunk_admitted") {
+        let (Some(segment), Some(start), Some(frames)) = (
+            event.field("segment"),
+            event.field("lane_frame"),
+            event.field("frames"),
+        ) else {
+            continue;
+        };
+        match ends.iter_mut().find(|(known, _)| *known == segment) {
+            Some((_, end)) => *end = (*end).max(start + frames),
+            None => ends.push((segment, start + frames)),
+        }
+    }
+    ends
 }
 
 async fn render_tiny_ring_control(
@@ -618,6 +655,89 @@ async fn cold_target_variant_switch_keeps_playback_uninterrupted(
         "switching to a cold target variant interrupted playback (delay_ms={COLD_TARGET_SEGMENT_DELAY_MS}): {}",
         failures.join("; "),
     );
+}
+
+/// A deck renders full lane packets whatever the AAC decoder's chunking: FDK
+/// splits each AAC frame into 363 and 661 frames, and a packet still carries
+/// the render quantum, so a one-slot ring holds the lead the lane geometry
+/// promises.
+#[kithara::test(
+    tokio,
+    multi_thread,
+    native,
+    serial,
+    timeout(Duration::from_secs(30)),
+    hang_timeout_secs(3)
+)]
+#[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
+#[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::apple(DecoderBackend::Apple)
+)]
+async fn aac_lane_packets_carry_the_render_quantum(
+    #[case] backend: DecoderBackend,
+    #[future(awt)] aac_source: (TestServerHelper, CreatedHls),
+) {
+    let _probe_scope = kithara_test_utils::test::usdt::scope();
+    let (_server, created) = &aac_source;
+    let control = render_tiny_ring_control(&created.master_url(), AAC_TO_FLAC, backend).await;
+
+    let packets: Vec<(u64, u64, u64)> = kithara_test_utils::test::usdt::events_of("chunk_admitted")
+        .iter()
+        .filter_map(|event| {
+            Some((
+                event.field("segment")?,
+                event.field("lane_frame")?,
+                event.field("frames")?,
+            ))
+        })
+        .filter(|&(_, _, frames)| frames > 0)
+        .collect();
+    assert!(
+        packets.len() > OBSERVATION_FRAMES / BLOCK_FRAMES,
+        "the deck admitted too few packets to judge: {packets:?}"
+    );
+    let packet = u64::try_from(BLOCK_FRAMES).expect("block fits u64");
+    for pair in packets.windows(2) {
+        let [(segment, start, frames), (next_segment, next_start, _)] = pair else {
+            continue;
+        };
+        if segment != next_segment {
+            continue;
+        }
+        assert_eq!(
+            start + frames,
+            *next_start,
+            "lane packets in segment {segment} must be contiguous: {pair:?}"
+        );
+        assert_eq!(
+            *frames, packet,
+            "a lane packet that no cut ends carries the render quantum: {pair:?}"
+        );
+    }
+
+    let horizon =
+        (u64::try_from(OUTPUT_RING_CHUNKS).expect("ring depth fits u64") + 1) * packet - 1;
+    for block in &control.blocks {
+        for (lead, admitted) in block.leads() {
+            assert!(
+                lead <= horizon,
+                "the rendered lead {lead} passed the {horizon}-frame horizon (admitted end {admitted}): {}",
+                block.diagnostic()
+            );
+        }
+    }
+}
+
+#[kithara::fixture]
+async fn aac_source() -> (TestServerHelper, CreatedHls) {
+    let server = TestServerHelper::new().await;
+    let created = server
+        .create_hls(cold_target_fixture(FLAC))
+        .await
+        .unwrap_or_else(|error| panic!("create AAC fixture: {error:?}"));
+    (server, created)
 }
 
 /// The no-switch control of `transition`'s source variant, when it still

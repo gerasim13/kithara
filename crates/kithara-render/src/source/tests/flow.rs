@@ -154,7 +154,10 @@ fn upstream_terminal_failure_keeps_its_classification_after_buffered_pcm(
         "the configured backend must render PCM before failure"
     );
     assert!(terminal_seen, "the upstream failure must remain terminal");
-    assert_eq!(staged_prefix_seen, staged);
+    assert!(
+        staged_prefix_seen,
+        "a decoded chunk longer than the quantum renders across several packets"
+    );
     for _ in 0..3 {
         hang_tick!();
         flush_deferred(&mut source);
@@ -418,7 +421,9 @@ fn live_warp_drain_holds_the_source_and_seek_discards_stale_unity(
     for backend in keylock_backends() {
         const ACTIVE_FRAMES: u32 = 4096;
         const UNITY_FRAMES: u32 = 4096;
-        const SENTINEL_FRAMES: u32 = 4096;
+        // One whole lane packet (the default source block), so the post-seek
+        // chunk renders as itself, without a copy.
+        const SENTINEL_FRAMES: u32 = 8192;
 
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
         let pools = pools();
@@ -428,12 +433,13 @@ fn live_warp_drain_holds_the_source_and_seek_discards_stale_unity(
 
         let first_active = chunk_with_frames(&pools, spec, 0, ACTIVE_FRAMES, &quarter);
         let first_unity = chunk_with_frames(&pools, spec, first_active_end, UNITY_FRAMES, &half);
+        let sentinel_input = three_quarter.repeat(2);
         let mut sentinel = chunk_with_frames(
             &pools,
             spec,
             first_unity_end,
             SENTINEL_FRAMES,
-            &three_quarter,
+            &sentinel_input,
         );
         let sentinel_origin = 44_100;
         sentinel.meta.source_span = SourceSpan::new(

@@ -3,8 +3,9 @@ use std::{panic::Location, task::Waker};
 use super::{
     CvId, FLASH,
     credit::{AsyncHandle, WaitGuard},
+    entry::ParkRole,
     gate::TaskGate,
-    sched::{ParkRole, WakeBatch},
+    sched::WakeBatch,
     wake::Token,
 };
 use crate::{
@@ -36,6 +37,16 @@ pub(crate) fn park_timed_unparkable(
     role: ParkRole,
 ) {
     FLASH.park_timed_unparkable(d, thread_id, role);
+}
+
+/// Process-engine forward of [`Clock::post`](super::Clock::post).
+pub(crate) fn post() {
+    FLASH.clock.post();
+}
+
+/// Process-engine forward of [`Clock::posts`](super::Clock::posts).
+pub(crate) fn posts() -> u64 {
+    FLASH.clock.posts()
 }
 
 /// Process-engine forward of [`FlashInner::sleep_timed`](super::FlashInner::sleep_timed).

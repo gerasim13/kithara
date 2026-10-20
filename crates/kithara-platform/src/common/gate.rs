@@ -154,37 +154,56 @@ impl Default for ThreadGate {
 }
 
 impl ThreadGate {
-    /// Wait for an edge or a required poll deadline under Flash.
-    /// Use this when work can arrive without a matching [`WaitGate::signal`].
+    /// Record a deferred edge without waking the waiter: one atomic RMW, no
+    /// syscall, so a real-time thread may call it. The next wait observes it,
+    /// and a [`wait_poll_timeout`](Self::wait_poll_timeout) poll observes it at
+    /// its next deadline.
+    pub fn post(&self) {
+        self.state.fetch_or(Self::POSTED, Ordering::SeqCst);
+        self.backend.post();
+    }
+
+    /// Consume a posted edge, reporting whether one was pending.
+    pub fn take_posted(&self) -> bool {
+        self.state.fetch_and(!Self::POSTED, Ordering::AcqRel) & Self::POSTED != 0
+    }
+
+    /// Wait for an edge, a posted edge, or the poll deadline. Use this when work
+    /// can arrive by [`post`](Self::post), which wakes nothing.
     pub fn wait_poll_timeout(&self, since: u64, timeout: Duration) -> bool {
         self.wait_timeout_inner(since, timeout, true)
     }
 
-    fn wait_timeout_inner(&self, since: u64, timeout: Duration, poll_deadline: bool) -> bool {
+    fn wait_timeout_inner(&self, since: u64, timeout: Duration, poll: bool) -> bool {
         self.register();
         let deadline = thread::gate_instant(&self.backend) + timeout;
         let result = loop {
-            let state = self.state.load(Ordering::SeqCst);
-            if Self::sequence(state) != since {
+            let posts = self.backend.posts();
+            if self.moved(since) || self.take_posted() {
                 break true;
             }
             let now = thread::gate_instant(&self.backend);
             if now >= deadline {
-                break Self::sequence(self.state.load(Ordering::SeqCst)) != since;
+                break self.moved(since) || self.take_posted();
             }
-            self.backend.park_timeout(deadline - now, poll_deadline);
+            self.backend
+                .park_timeout(deadline - now, poll.then_some(posts));
         };
-        self.state.fetch_and(Self::SEQUENCE_MASK, Ordering::SeqCst);
+        // A post consumes only the wait it woke: one landing after the last
+        // check stays pending for the next wait.
+        self.state.fetch_and(!Self::WAITING, Ordering::SeqCst);
         result
     }
 
-    const SEQUENCE_MASK: u64 = !Self::WAITING;
+    const FLAGS: u64 = Self::WAITING | Self::POSTED;
+    const POSTED: u64 = 1 << 62;
+    const SEQUENCE_MASK: u64 = !Self::FLAGS;
     const WAITING: u64 = 1 << 63;
 
     fn advance(&self) -> u64 {
         let mut current = self.state.load(Ordering::SeqCst);
         loop {
-            let next = (current & Self::WAITING) | (current.wrapping_add(1) & Self::SEQUENCE_MASK);
+            let next = (current & Self::FLAGS) | (current.wrapping_add(1) & Self::SEQUENCE_MASK);
             match self.state.compare_exchange_weak(
                 current,
                 next,
@@ -213,6 +232,13 @@ impl ThreadGate {
             self.waiter_id.store(waiter_id, Ordering::Release);
         }
         self.state.fetch_or(Self::WAITING, Ordering::SeqCst);
+    }
+
+    /// Whether a signal moved the edge past `since`. Sequentially consistent:
+    /// it pairs with the waiter flag [`signal`](WaitGate::signal) reads, so
+    /// either the waiter sees the edge or the signaller sees the waiter.
+    fn moved(&self, since: u64) -> bool {
+        Self::sequence(self.state.load(Ordering::SeqCst)) != since
     }
 
     const fn sequence(state: u64) -> u64 {
@@ -461,7 +487,8 @@ mod tests {
     /// whenever the edge moved, so the loop never parks; a participant that
     /// never parks never lets the engine quiesce, and the virtual clock a
     /// sleeper waits on cannot advance. The sleep below is the discriminator:
-    /// if a spinning participant can freeze the clock, it never returns.
+    /// if a spinning participant can freeze the clock, it never returns. While
+    /// a participant spins the clock keeps real pace, so the sleep is short.
     #[kithara::test]
     fn a_spinning_gate_waiter_must_not_freeze_the_virtual_clock() {
         let gate = Arc::new(ThreadGate::default());
@@ -484,7 +511,7 @@ mod tests {
             }
         });
 
-        thread::sleep(Duration::from_secs(1));
+        thread::sleep(Duration::from_millis(100));
 
         stop.store(true, Ordering::Release);
         gate.signal();
