@@ -588,7 +588,7 @@ impl WaitPark {
             hang_park!(|remaining| {
                 parked = Some(self.condvar.wait_timeout(
                     parked.take().expect("owned wait guard"),
-                    kithara_platform::time::Instant::now() + remaining,
+                    self.condvar.instant() + remaining,
                 ));
             });
         }

@@ -23,7 +23,7 @@ use super::{
 };
 use crate::{
     consts,
-    sync::{Arc, Notify, ThreadGate, WaitGate},
+    sync::{Arc, CondvarGate, Notify, ThreadGate, WaitGate},
 };
 
 /// Serialize the cases that drive the process-global `FLASH` engine (the
@@ -2647,4 +2647,84 @@ fn synchronous_participation_reuses_async_credit_and_settles_unwinds() {
     assert!(matches!(super::ctx::credit(), super::ctx::Credit::None));
     assert_eq!(super::system::FLASH.active_count(), 0);
     assert_eq!(forward::async_active_count(), 0);
+}
+
+fn pooled_wait_elapsed<F>(engine: bool, make_wait: impl FnOnce() -> F) -> Duration
+where
+    F: FnOnce() + Send + 'static,
+{
+    let _g = guard();
+    reset();
+    let wait = {
+        let _ambient = ambient_scope(engine);
+        make_wait()
+    };
+    let _ambient = ambient_scope(true);
+    let _flash = enter_dynamic(true);
+    let clock = &super::system::FLASH.clock;
+    let ahead = clock.real_now_nanos() + 2 * consts::NANOS_PER_SEC;
+    clock.advance(ahead.saturating_sub(clock.now_nanos()));
+    let work = super::thread::joined_pool_task(
+        move || {
+            let _mode = enter_dynamic(!engine);
+            let start = Instant::now_virtual();
+            wait();
+            Instant::now_virtual().duration_since(start)
+        },
+        None,
+    );
+    let elapsed = thread::spawn(work).join().expect("pooled timed gate");
+    assert_eq!(super::system::FLASH.active_count(), 0);
+    assert_eq!(forward::async_active_count(), 0);
+    assert_eq!(super::system::FLASH.timed_count(), 0);
+    elapsed
+}
+
+fn pooled_condvar_timeout_elapsed(engine: bool) -> Duration {
+    pooled_wait_elapsed(engine, || {
+        let gate = CondvarGate::<u64>::default();
+        move || assert!(!gate.wait_timeout(gate.current(), Duration::from_millis(25)))
+    })
+}
+
+fn pooled_channel_timeout_elapsed(engine: bool) -> Duration {
+    pooled_wait_elapsed(engine, || {
+        let (sender, receiver) = crate::sync::mpsc::channel::<()>();
+        move || {
+            let real_started = RealInstant::now();
+            let deadline = Instant::now() + Duration::from_millis(25);
+            assert_eq!(
+                receiver.recv_timeout(deadline),
+                Err(crate::sync::mpsc::RecvTimeoutError::Timeout)
+            );
+            if !engine {
+                assert!(real_started.elapsed() >= Duration::from_millis(25));
+            }
+            drop(sender);
+        }
+    })
+}
+
+#[kithara::test(native, flash(false))]
+fn pooled_channel_timeout_uses_latched_engine_clock() {
+    let elapsed = pooled_channel_timeout_elapsed(true);
+    assert!(elapsed <= Duration::from_millis(25));
+}
+
+#[kithara::test(native, flash(false))]
+fn pooled_channel_timeout_uses_latched_native_clock() {
+    assert_eq!(pooled_channel_timeout_elapsed(false), Duration::ZERO);
+}
+
+#[kithara::test(native, flash(false))]
+fn pooled_condvar_timeout_uses_latched_engine_clock() {
+    assert_eq!(
+        pooled_condvar_timeout_elapsed(true),
+        Duration::from_millis(25)
+    );
+}
+
+#[kithara::test(native, flash(false))]
+fn pooled_condvar_timeout_uses_latched_native_clock() {
+    assert_eq!(pooled_condvar_timeout_elapsed(false), Duration::ZERO);
 }

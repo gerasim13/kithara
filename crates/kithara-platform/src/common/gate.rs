@@ -53,6 +53,9 @@ impl<S> CondvarGate<S> {
 
     delegate::delegate! {
         to self.cv {
+            /// Current time in this gate's deadline clock.
+            #[must_use]
+            pub fn instant(&self) -> Instant;
             /// Wake every waiter. Call after mutating the guarded state (the wait
             /// re-checks its predicate on wake).
             pub fn notify_all(&self);
@@ -61,7 +64,7 @@ impl<S> CondvarGate<S> {
             /// released for the park and re-acquired on wake.
             #[must_use]
             pub fn wait<'a>(&self, guard: MutexGuard<'a, S>) -> MutexGuard<'a, S>;
-            /// Park until the next [`notify_all`](Self::notify_all) or `deadline`.
+            /// Park until the next [`notify_all`](Self::notify_all) or a deadline from [`Self::instant`].
             #[must_use]
             #[call(wait_timeout)]
             pub fn wait_until<'a>(&self, guard: MutexGuard<'a, S>, deadline: Instant) -> MutexGuard<'a, S>;
@@ -117,13 +120,13 @@ impl WaitGate for CondvarGate<u64> {
     }
 
     fn wait_timeout(&self, since: u64, timeout: Duration) -> bool {
-        let deadline = Instant::now() + timeout;
+        let deadline = self.cv.instant() + timeout;
         let mut guard = self.lock();
         loop {
             if *guard != since {
                 return true;
             }
-            if Instant::now() >= deadline {
+            if self.cv.instant() >= deadline {
                 return false;
             }
             guard = self.cv.wait_timeout(guard, deadline);
