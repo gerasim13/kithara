@@ -1,5 +1,3 @@
-use crate::live::{CheckedConfig, LiveConfig};
-
 /// Retained configuration that exposes an owned control-thread snapshot.
 ///
 /// Snapshotting may clone or allocate and does not imply realtime safety.
@@ -43,28 +41,4 @@ pub trait ConfigOwner {
 
     /// The configuration used by this owner.
     fn config(&self) -> &Self::Config;
-}
-
-/// An owner whose accepted configuration can be changed through a mutable borrow.
-///
-/// Owners with shared or realtime state keep their own application boundary.
-pub trait ConfigOwnerMut: ConfigOwner {
-    /// The same configuration returned by [`ConfigOwner::config`].
-    fn config_mut(&mut self) -> &mut Self::Config;
-
-    /// Assigns one live field once its field check accepts the value.
-    ///
-    /// # Errors
-    /// Returns the field check's refusal without changing the configuration.
-    fn apply_config_change(
-        &mut self,
-        change: <Self::Config as LiveConfig>::Change,
-    ) -> Result<(), <Self::Config as CheckedConfig>::Error>
-    where
-        Self::Config: LiveConfig,
-    {
-        let change = <Self::Config as LiveConfig>::check(change)?;
-        self.config_mut().apply_change(change);
-        Ok(())
-    }
 }
