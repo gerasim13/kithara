@@ -137,6 +137,15 @@ impl<S> PlayerImpl<S> {
         ))
     }
 
+    pub(super) fn content_mark_position(&self, mark: SlotMark) -> Option<Position> {
+        if mark.lane.frame == 0 {
+            self.media_origin
+                .map(|origin| mark.position.saturating_sub(origin))
+        } else {
+            self.content_position(mark.position)
+        }
+    }
+
     pub(super) fn raw_position(&self, position: Position) -> Result<Position, PlayError> {
         self.media_origin
             .and_then(|origin| origin.checked_add(position))
@@ -175,13 +184,10 @@ impl<S> PlayerImpl<S> {
                 self.media_origin = source.media_origin;
                 self.duration = source.media_end;
             }
-            if slot
-                .mark
-                .is_some_and(|mark| mark.lane.segment == self.segment)
+            if let Some(mark) = slot.mark.filter(|mark| mark.lane.segment == self.segment)
                 && slot.position.is_finite()
                 && slot.position >= 0.0
-                && let Some(position) =
-                    self.content_position(Position::from_secs_f64(slot.position))
+                && let Some(position) = self.content_mark_position(mark)
             {
                 self.position = position;
             }

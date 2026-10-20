@@ -296,7 +296,7 @@ impl<S> PlayerImpl<S> {
         self.resume = resume.filter(|mark| mark.lane.segment == self.segment);
         if let Some(position) = self
             .resume
-            .and_then(|mark| self.content_position(mark.position))
+            .and_then(|mark| self.content_mark_position(mark))
         {
             self.position = position;
         }
