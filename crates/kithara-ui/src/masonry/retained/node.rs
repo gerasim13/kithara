@@ -40,6 +40,7 @@ use crate::{
     },
     layout::{FrameCorners, FrameSides},
     masonry::{
+        external::ExternalImageDeclaration,
         paint::corner::{corner_frame, corner_path},
         shader::ShaderDeclaration,
     },
@@ -499,17 +500,6 @@ impl Node {
         self.lit = Some(faces);
     }
 
-    pub(crate) fn shader_declaration(&self) -> Option<ShaderDeclaration> {
-        match &self.layout {
-            NodeLayout::Leaf(leaf) => leaf.shader_declaration(),
-            NodeLayout::Flex(_)
-            | NodeLayout::Measured(_)
-            | NodeLayout::Scroll(_)
-            | NodeLayout::Stack
-            | NodeLayout::Stage(_) => None,
-        }
-    }
-
     /// Shows the value an engine just published for this node's control, without
     /// waiting for the rebuild that follows the gesture.
     pub(crate) fn show_live(&mut self, value: &ReadValue<'_>) -> bool {
@@ -526,6 +516,34 @@ impl Node {
         self.detent
             .as_mut()
             .is_some_and(|detent| detent.step(ctx, input, hit))
+    }
+}
+
+/// What the render root reads off a node after paint to declare to the host:
+/// the target its shader renders into, the frame its Vis pass draws and the
+/// device pictures it sampled.
+impl Node {
+    /// The device pictures this node's last paint drew, each once.
+    pub(crate) fn external_images(&self) -> &[ExternalImageDeclaration] {
+        match &self.layout {
+            NodeLayout::Leaf(leaf) => leaf.external_images(),
+            NodeLayout::Flex(_)
+            | NodeLayout::Measured(_)
+            | NodeLayout::Scroll(_)
+            | NodeLayout::Stack
+            | NodeLayout::Stage(_) => &[],
+        }
+    }
+
+    pub(crate) fn shader_declaration(&self) -> Option<ShaderDeclaration> {
+        match &self.layout {
+            NodeLayout::Leaf(leaf) => leaf.shader_declaration(),
+            NodeLayout::Flex(_)
+            | NodeLayout::Measured(_)
+            | NodeLayout::Scroll(_)
+            | NodeLayout::Stack
+            | NodeLayout::Stage(_) => None,
+        }
     }
 
     pub(crate) fn vis_frame(&self) -> Option<VisFrame> {
@@ -553,12 +571,13 @@ impl Node {
 /// only callers are the tree builder and the render root; keeping them apart
 /// from the widget's behaviour is what says so.
 impl Node {
-    /// Whether this node draws through a pass of its own rather than into the
-    /// scene, which is what makes it something the host has to declare.
+    /// Whether this node is something the host has to declare: a leaf that
+    /// draws through a pass of its own rather than into the scene, or a custom
+    /// widget whose pictures may live on the device.
     pub(crate) const fn is_native(&self) -> bool {
         matches!(
             &self.layout,
-            NodeLayout::Leaf(Leaf::Shader(_) | Leaf::Vis(_))
+            NodeLayout::Leaf(Leaf::Custom { .. } | Leaf::Shader(_) | Leaf::Vis(_))
         )
     }
 

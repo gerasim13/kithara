@@ -47,7 +47,8 @@ and privileged fleet provisioning.
 reading everything from the commit it runs on. The macOS host reinstalls its
 services, rewrites its runner configuration, makes sure the pinned Linux image
 is present and reloads its agents; a Linux host builds the images its profile
-asks for and installs its units. Every step is idempotent — an image that is
+asks for, creates every cache mount its runners use and hands it to the job
+user, and installs its units. Every step is idempotent — an image that is
 already there is only retagged — so a run costs seconds when nothing moved.
 
 Neither pipeline runs it on a push. On GitLab it is `host:provision`, reached
@@ -174,10 +175,6 @@ commit carries the verdict of its own GitLab pipeline under the same context;
 a commit that stops being the head is still watched until its pipeline finishes.
 Each status links to its pipeline. Once the default branch moves, the next attempt
 reserves against the new base with a new ref.
-
-A pull request changing a CI control path is rejected before a pipeline exists;
-port it through a GitLab merge request: the code judging pull requests changes
-under GitLab review.
 
 A pipeline is judged on the child the dispatch stage triggers, never its parent,
 which reports `success` over a cancelled child. Divergence is fail-closed and
@@ -356,7 +353,8 @@ soft floor, evicting past the cap. What its sweeps cannot show:
   stale, leaving a retired tool's store behind; `cache_namespaces` lists the
   live ones and cleanup takes the rest whole. A namespace with an owner belongs
   there even when it is quiet: `cargo` holds the Linux guest's Cargo home,
-  which a job fetches into only when its lockfile changes.
+  which a job fetches into only when its lockfile changes, and `kache` holds
+  kache's host files and the store of compiles no job placed.
   An installed profile carries the list verbatim, so adding a name reaches a
   running host only by editing its `/etc/kithara-ci/mac-host.toml` as well.
 - Build-cache bytes for a lane's leased build directory still count against

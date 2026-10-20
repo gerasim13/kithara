@@ -19,8 +19,8 @@ use super::{
     mount::NodeLayout, shader::ShaderLeaf, vis::VisLeaf,
 };
 use crate::{
-    backends::VelloBackend,
-    draw::{DrawList, DrawListBuilder, Pt, Rect, Rgba, Transform, replay},
+    backends::{VelloBackend, VelloImageBackend},
+    draw::{DrawList, DrawListBuilder, Image, Pt, Rect, Rgba, Transform, replay},
     hosts::{
         layer::{HostLayer, WindowLayerProgram},
         solve::{Length, Size},
@@ -29,7 +29,7 @@ use crate::{
         CursorShape, Hit, Input, MOUSE, Outcome, PointerInput, PointerOwnership, PointerPhase,
         masonry::{cursor_icon, pointer_button},
     },
-    masonry::shader::ShaderDeclaration,
+    masonry::{external::ExternalImageDeclaration, shader::ShaderDeclaration},
     module::TextAlign,
     render::{
         CustomSkin, Published, ReadValue, WindowCommand, custom::CustomWidget, document::Ctx,
@@ -57,6 +57,9 @@ pub(crate) enum Leaf {
         /// What the skin this leaf was mounted under dresses its kind in.
         skin: CustomSkin,
         text: Box<TextContext>,
+        /// The device pictures the last paint drew, each once, for the frame
+        /// to hand the host that binds them.
+        pictures: Vec<ExternalImageDeclaration>,
     },
     Shader(ShaderLeaf),
     Vis(VisLeaf),
@@ -127,6 +130,15 @@ impl Leaf {
             | Self::Custom { .. }
             | Self::Shader(_)
             | Self::Vis(_) => CursorShape::None,
+        }
+    }
+
+    /// The device pictures this leaf's last paint drew, each once.
+    pub(crate) fn external_images(&self) -> &[ExternalImageDeclaration] {
+        if let Self::Custom { pictures, .. } = self {
+            pictures
+        } else {
+            &[]
         }
     }
 
@@ -258,11 +270,33 @@ impl Leaf {
                     );
                 }
             }
-            Self::Custom { widget, skin, text } => {
+            Self::Custom {
+                widget, skin, text, ..
+            } => {
                 widget.paint(list, &mut TextMeasurer::new(text), bounds, skin);
             }
         });
-        replay(&list.finish(), &mut VelloBackend::new(scene));
+        let list = list.finish();
+        if let Self::Custom {
+            widget, pictures, ..
+        } = self
+        {
+            pictures.clear();
+            let lookup = |image: &Image| {
+                widget
+                    .external_image(image.id())
+                    .filter(|declaration| declaration.image() == image)
+                    .inspect(|&declaration| {
+                        if !pictures.contains(declaration) {
+                            pictures.push(declaration.clone());
+                        }
+                    })
+                    .map(ExternalImageDeclaration::image_data)
+            };
+            replay(&list, &mut VelloImageBackend::new(scene, lookup));
+        } else {
+            replay(&list, &mut VelloBackend::new(scene));
+        }
     }
 
     /// Whether this leaf draws differently while the pointer rests on it.

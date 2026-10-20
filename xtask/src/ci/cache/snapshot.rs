@@ -32,14 +32,13 @@ impl Snapshot {
 /// internet. Unlike a target snapshot this layer is content-addressed by
 /// `Cargo.lock` alone: sources do not depend on the toolchain, the flags, the
 /// lane or the checkout path, and they are identical on every platform, so one
-/// object serves both fleets. It is published from the trusted scope and read
-/// from there by every scope, which is what the bucket policy already admits.
+/// object serves both fleets. Each scope's default branch publishes it into
+/// the scope's own bucket, and the scope's branches read it from there.
 struct Sources;
 
 impl Sources {
     const SCHEMA: &str = "kithara-source-snapshot-v1";
     const PREFIX: &str = "source-snapshots";
-    const BUCKET: &str = "kithara-trusted";
     /// Records which layer a `CARGO_HOME` already carries, so a job that
     /// already has it neither downloads it again nor unpacks over a live one.
     const MARKER: &str = ".kithara-source-snapshot";
@@ -159,12 +158,12 @@ pub(crate) fn restore_sources(root: &Path, cargo_home: &Path, rc: &Path) -> Resu
         return Ok(Restored::AlreadyPresent);
     }
     let client = Client::load(rc)?;
-    let Some(object) = client.latest(Sources::BUCKET, Sources::PREFIX, &fingerprint)? else {
+    let Some(object) = client.latest(Sources::PREFIX, &fingerprint)? else {
         return Ok(Restored::Absent);
     };
     let expected = checksum_of(&object)?;
     let archive = NamedTempFile::new().context("create source snapshot download")?;
-    client.copy_from(Sources::BUCKET, &object, archive.path())?;
+    client.copy_from(&object, archive.path())?;
     ensure!(
         sha256(archive.path())? == expected,
         "source snapshot checksum mismatch"
@@ -185,19 +184,9 @@ pub(crate) fn restore_sources(root: &Path, cargo_home: &Path, rc: &Path) -> Resu
     Ok(Restored::Layer(object))
 }
 
-/// Publish the sources this job ended up with. Only the trusted scope may
-/// write the bucket, so a branch that fetched something new leaves it for the
-/// default branch to record rather than publishing its own.
+/// Publish the sources this job ended up with into its own scope's bucket.
 pub(crate) fn publish_sources(root: &Path, cargo_home: &Path, rc: &Path) -> Result<()> {
     let client = Client::load(rc)?;
-    // The bucket is named here, but the credentials come from whatever the
-    // host handed this job, and on a Mac host that is one identity for every
-    // lane whatever `KITHARA_CACHE_TRUST` says. Publishing anyway is how this
-    // ended up writing `kithara-trusted` with `kithara-review` keys and being
-    // refused. This is a guard, not a fallback: a job holding another scope's
-    // keys has nothing to publish to, and writing to its own bucket instead
-    // would let one branch poison what every branch reads.
-    ensure_trusted_publisher(&client.bucket)?;
     let fingerprint = sources_fingerprint(root)?;
     let present: Vec<&str> = Sources::PATHS
         .into_iter()
@@ -220,30 +209,13 @@ pub(crate) fn publish_sources(root: &Path, cargo_home: &Path, rc: &Path) -> Resu
     run_command(&mut command, "archive source snapshot")?;
     let checksum = sha256(archive.path())?;
     let object = Sources::object(&fingerprint, &checksum);
-    if client.exists(Sources::BUCKET, &object)? {
+    if client.exists(&object)? {
         info!(%fingerprint, %checksum, "source snapshot already exists");
         return Ok(());
     }
-    client.copy(archive.path(), Sources::BUCKET, &object)?;
+    client.copy(archive.path(), &object)?;
     write_marker(cargo_home, &fingerprint)?;
     info!(%fingerprint, %checksum, "published dependency sources");
-    Ok(())
-}
-
-/// Refuse a publish from a job whose credentials belong to another scope.
-///
-/// The bucket is named in code, but the keys come from whatever the host
-/// handed this job, and on a Mac host that is one identity for every lane
-/// whatever `KITHARA_CACHE_TRUST` says. This is a guard, not a fallback: a job
-/// holding another scope's keys has nothing to publish to, and writing to its
-/// own bucket instead would let one branch poison what every branch reads.
-fn ensure_trusted_publisher(bucket: &str) -> Result<()> {
-    ensure!(
-        bucket == Sources::BUCKET,
-        "refusing to publish the source layer: this job holds '{bucket}' credentials, and only '{}' may write {}",
-        Sources::BUCKET,
-        Sources::PREFIX,
-    );
     Ok(())
 }
 
@@ -372,11 +344,11 @@ fn publish(target: &Path, fingerprint: &str, rc: &Path) -> Result<()> {
     let checksum = sha256(archive.path())?;
     let object = Snapshot::object(fingerprint, &checksum);
     let client = Client::load(rc)?;
-    if client.exists(&client.bucket, &object)? {
+    if client.exists(&object)? {
         info!(%fingerprint, %checksum, "target snapshot already exists");
         return Ok(());
     }
-    client.copy(archive.path(), &client.bucket, &object)?;
+    client.copy(archive.path(), &object)?;
     info!(%fingerprint, %checksum, "published immutable target snapshot");
     Ok(())
 }
@@ -385,13 +357,13 @@ fn restore(target: &Path, fingerprint: &str, rc: &Path) -> Result<bool> {
     validate_fingerprint(fingerprint)?;
     require_target(target, true)?;
     let client = Client::load(rc)?;
-    let Some(object) = client.latest(&client.bucket, Snapshot::PREFIX, fingerprint)? else {
+    let Some(object) = client.latest(Snapshot::PREFIX, fingerprint)? else {
         info!(%fingerprint, "no target snapshot exists");
         return Ok(false);
     };
     let expected = checksum_of(&object)?;
     let archive = NamedTempFile::new().context("create target snapshot download")?;
-    client.copy_from(&client.bucket, &object, archive.path())?;
+    client.copy_from(&object, archive.path())?;
     ensure!(
         sha256(archive.path())? == expected,
         "target snapshot checksum mismatch"
@@ -569,11 +541,11 @@ impl Client {
 
     /// Only an object that is not there reads as absent. A lookup the store
     /// refused or never answered is a failure, not a reason to upload.
-    fn exists(&self, bucket: &str, object: &str) -> Result<bool> {
+    fn exists(&self, object: &str) -> Result<bool> {
         let mut command = self.command()?;
         let output = command
             .args(["object", "stat"])
-            .arg(Self::remote(bucket, object))
+            .arg(self.remote(object))
             .output()
             .context("start snapshot lookup")?;
         if output.status.code() == Some(Self::NOT_FOUND) {
@@ -583,11 +555,11 @@ impl Client {
         Ok(true)
     }
 
-    fn latest(&self, bucket: &str, prefix: &str, fingerprint: &str) -> Result<Option<String>> {
+    fn latest(&self, prefix: &str, fingerprint: &str) -> Result<Option<String>> {
         let mut command = self.command()?;
         let output = command
             .args(["--json", "object", "list"])
-            .arg(Self::remote(bucket, &format!("{prefix}/{fingerprint}/")))
+            .arg(self.remote(&format!("{prefix}/{fingerprint}/")))
             .output()
             .context("start snapshot listing")?;
         require_success(&output, "list snapshots")?;
@@ -603,33 +575,26 @@ impl Client {
         Ok(objects.pop())
     }
 
-    fn copy(&self, source: &Path, bucket: &str, object: &str) -> Result<()> {
+    fn copy(&self, source: &Path, object: &str) -> Result<()> {
         let mut command = self.command()?;
         run_command(
-            command
-                .arg("put")
-                .arg(source)
-                .arg(Self::remote(bucket, object)),
+            command.arg("put").arg(source).arg(self.remote(object)),
             "upload snapshot",
         )
     }
 
-    fn copy_from(&self, bucket: &str, object: &str, destination: &Path) -> Result<()> {
+    fn copy_from(&self, object: &str, destination: &Path) -> Result<()> {
         let mut command = self.command()?;
         run_command(
-            command
-                .arg("get")
-                .arg(Self::remote(bucket, object))
-                .arg(destination),
+            command.arg("get").arg(self.remote(object)).arg(destination),
             "download snapshot",
         )
     }
 
-    /// Addresses a named bucket rather than only this job's own. The source
-    /// layer lives in the trusted scope and is read from there by every scope,
-    /// which is the access the bucket policy grants and nothing wider.
-    fn remote(bucket: &str, object: &str) -> String {
-        format!("snapshot/{bucket}/{object}")
+    /// Addresses an object in this job's own bucket, the only one its
+    /// credentials reach.
+    fn remote(&self, object: &str) -> String {
+        format!("snapshot/{}/{object}", self.bucket)
     }
 }
 
@@ -652,29 +617,6 @@ mod tests {
         assert!(validate_fingerprint("../trusted").is_err());
         assert!(validate_component("audio", "lane").is_ok());
         assert!(validate_component("audio/../trusted", "lane").is_err());
-    }
-
-    /// A source snapshot must be reachable from a scope that is not trusted,
-    /// because that is the whole point: the default branch records the layer
-    /// and every branch reads it. A client that could only address its own
-    /// bucket sent a review job looking for an object only `main` ever writes.
-    #[test]
-    fn a_review_job_reads_sources_from_the_trusted_bucket() {
-        let client = Client {
-            bucket: "kithara-review".to_owned(),
-            endpoint: String::new(),
-            environment: BTreeMap::new(),
-            program: PathBuf::from("rc"),
-        };
-
-        assert_eq!(
-            Client::remote(Sources::BUCKET, &Sources::object("a", "b")),
-            "snapshot/kithara-trusted/source-snapshots/a/b.tar"
-        );
-        assert_eq!(
-            Client::remote(&client.bucket, "target-snapshots/a/b.tar"),
-            "snapshot/kithara-review/target-snapshots/a/b.tar"
-        );
     }
 
     /// The lock file is the entire key. A lane, a profile or a toolchain that
@@ -767,7 +709,7 @@ mod tests {
         };
 
         assert_eq!(
-            Client::remote(&client.bucket, "target-snapshots/fingerprint/archive.tar"),
+            client.remote("target-snapshots/fingerprint/archive.tar"),
             "snapshot/kithara-review/target-snapshots/fingerprint/archive.tar"
         );
     }
@@ -869,22 +811,6 @@ mod tests {
     }
 }
 
-#[cfg(test)]
-mod repair_tests {
-    use super::*;
-
-    #[test]
-    fn only_a_trusted_job_may_publish_the_source_layer() {
-        assert!(ensure_trusted_publisher(Sources::BUCKET).is_ok());
-        let refusal = ensure_trusted_publisher("kithara-review")
-            .expect_err("a review job must not write the trusted bucket");
-        let said = refusal.to_string();
-        assert!(said.contains("kithara-review"), "{said}");
-        assert!(said.contains(Sources::BUCKET), "{said}");
-        assert!(said.contains(Sources::PREFIX), "{said}");
-    }
-}
-
 #[cfg(all(test, unix))]
 mod client_tests {
     use super::*;
@@ -892,8 +818,9 @@ mod client_tests {
 
     /// Speaks `rc` the way the snapshot client relies on: an alias takes a
     /// name, an endpoint and two credentials and nothing more, an object that
-    /// is not there exits 5, a refusal exits 4 with its reason on stderr, and
-    /// anything `rc` would not recognise is a usage error.
+    /// is not there exits 5, a refusal exits 4 with its reason on stderr, a
+    /// listing names the archives stored under its prefix, and anything `rc`
+    /// would not recognise is a usage error.
     fn rc(directory: &Path) -> PathBuf {
         let store = directory.join("store");
         let program = directory.join("rc");
@@ -912,7 +839,15 @@ object)
 --json)
   case "$4" in
   */listed/) printf '%s' '{{"items":[{{"key":"target-snapshots/listed/sub/","is_dir":true}},{{"key":"target-snapshots/listed/b.tar","size_bytes":1,"is_dir":false}},{{"key":"target-snapshots/listed/a.tar","size_bytes":1,"is_dir":false}},{{"key":"target-snapshots/listed/notes.txt","size_bytes":1,"is_dir":false}}],"truncated":false}}' ;;
-  *) printf '%s' '{{"items":[],"truncated":false}}' ;;
+  *)
+    printf '{{"items":['
+    separator=''
+    for object in "$store/$4"*.tar; do
+      [ -f "$object" ] || continue
+      printf '%s{{"key":"%s","size_bytes":1,"is_dir":false}}' "$separator" "${{object#"$store"/snapshot/*/}}"
+      separator=','
+    done
+    printf '],"truncated":false}}' ;;
   esac ;;
 put) mkdir -p "$store/$(dirname "$3")" && cp "$2" "$store/$3" ;;
 get) cp "$store/$2" "$3" ;;
@@ -937,6 +872,64 @@ esac
         }
     }
 
+    /// A scope's default branch records the dependency sources its own
+    /// branches read: both go through the bucket the job's credentials name,
+    /// so no scope reaches into another's. The client reads its credentials
+    /// from the job's environment, so the body runs in a child that has them.
+    #[test]
+    fn the_source_layer_travels_through_the_jobs_own_bucket() {
+        const CHILD: &str = "KITHARA_SOURCE_LAYER_TEST";
+        let Some(directory) = env::var_os(CHILD).map(PathBuf::from) else {
+            let directory = tempfile::tempdir().unwrap();
+            let output = Command::new(env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "ci::cache::snapshot::client_tests::the_source_layer_travels_through_the_jobs_own_bucket",
+                    "--nocapture",
+                ])
+                .env(CHILD, directory.path())
+                .env("SCCACHE_BUCKET", "kithara-review")
+                .env("SCCACHE_ENDPOINT", "http://cache:9000")
+                .env("AWS_ACCESS_KEY_ID", "key")
+                .env("AWS_SECRET_ACCESS_KEY", "secret")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "child failed:\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        let rc = rc(&directory);
+        let root = directory.join("checkout");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("Cargo.lock"), "version = 4\n").unwrap();
+        let recorded = directory.join("recorded");
+        fs::create_dir_all(recorded.join("registry/cache")).unwrap();
+        fs::write(recorded.join("registry/cache/dependency.crate"), b"crate").unwrap();
+
+        publish_sources(&root, &recorded, &rc).expect("the default branch publishes");
+        let read = directory.join("read");
+        let restored = restore_sources(&root, &read, &rc).expect("a branch restores");
+
+        let Restored::Layer(object) = restored else {
+            panic!("the layer the scope published was not found: {restored:?}");
+        };
+        assert!(
+            directory
+                .join("store/snapshot/kithara-review")
+                .join(&object)
+                .is_file(),
+            "{object} is not in the job's own bucket"
+        );
+        assert_eq!(
+            fs::read(read.join("registry/cache/dependency.crate")).unwrap(),
+            b"crate"
+        );
+    }
+
     #[test]
     fn a_snapshot_travels_through_the_store_and_back() {
         let directory = tempfile::tempdir().unwrap();
@@ -945,11 +938,11 @@ esac
         fs::write(&source, b"snapshot bytes").unwrap();
         let object = "target-snapshots/fingerprint/checksum.tar";
 
-        assert!(!client.exists(&client.bucket, object).unwrap());
-        client.copy(&source, &client.bucket, object).unwrap();
-        assert!(client.exists(&client.bucket, object).unwrap());
+        assert!(!client.exists(object).unwrap());
+        client.copy(&source, object).unwrap();
+        assert!(client.exists(object).unwrap());
         let download = directory.path().join("download.tar");
-        client.copy_from(&client.bucket, object, &download).unwrap();
+        client.copy_from(object, &download).unwrap();
         assert_eq!(fs::read(download).unwrap(), b"snapshot bytes");
     }
 
@@ -961,7 +954,7 @@ esac
         let client = client(rc(directory.path()));
 
         let error = client
-            .exists(&client.bucket, "target-snapshots/fingerprint/denied.tar")
+            .exists("target-snapshots/fingerprint/denied.tar")
             .expect_err("a refused lookup must not read as absent");
         assert!(error.to_string().contains("Access denied"), "{error}");
     }
@@ -973,16 +966,11 @@ esac
 
         assert_eq!(
             client
-                .latest(&client.bucket, Snapshot::PREFIX, "listed")
+                .latest(Snapshot::PREFIX, "listed")
                 .unwrap()
                 .as_deref(),
             Some("target-snapshots/listed/b.tar")
         );
-        assert_eq!(
-            client
-                .latest(&client.bucket, Snapshot::PREFIX, "unlisted")
-                .unwrap(),
-            None
-        );
+        assert_eq!(client.latest(Snapshot::PREFIX, "unlisted").unwrap(), None);
     }
 }
