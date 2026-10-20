@@ -7,17 +7,22 @@ use firewheel::{
 };
 use kithara_command::ScopedInbox;
 use kithara_render::bridge::DeckProtocol;
+use ringbuf::{HeapCons, HeapProd};
+#[cfg(feature = "offline")]
 use ringbuf::{
-    HeapCons, HeapProd, HeapRb,
+    HeapRb,
     traits::{Consumer, Producer, Split},
 };
 
-use super::{TransportProcessError, TransportState};
+#[cfg(feature = "offline")]
+use super::TransportProcessError;
+use super::TransportState;
 use crate::session::queue::HostProtocol;
 
 pub(crate) type HostInbox = ScopedInbox<HostProtocol, DeckProtocol>;
 
 /// The offline owner holds the sole inbox between processor turns.
+#[cfg(feature = "offline")]
 pub(crate) struct OfflineInbox {
     inbox: Option<HostInbox>,
     to_processor: HeapProd<(HostInbox, usize)>,
@@ -30,6 +35,7 @@ pub(crate) struct InboxExchange {
     pub(super) remaining_frames: usize,
 }
 
+#[cfg(feature = "offline")]
 impl OfflineInbox {
     pub(crate) fn new(inbox: HostInbox) -> (Self, InboxExchange) {
         let (to_processor, from_owner) = HeapRb::new(1).split();
@@ -78,6 +84,7 @@ impl OfflineInbox {
     }
 }
 
+#[cfg(feature = "offline")]
 impl Drop for OfflineInbox {
     fn drop(&mut self) {
         if let Some(inbox) = self.inbox.take() {
