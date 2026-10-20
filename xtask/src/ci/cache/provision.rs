@@ -188,7 +188,7 @@ fn initialize_scope(
         cancel,
     )?;
     let mut policy_file = tempfile::NamedTempFile::new()?;
-    serde_json::to_writer(&mut policy_file, &policy(scope, &bucket))?;
+    serde_json::to_writer(&mut policy_file, &policy(&bucket))?;
     rc(
         program,
         &[
@@ -280,39 +280,22 @@ fn retention() -> serde_json::Value {
     })
 }
 
-fn policy(scope: &str, bucket: &str) -> serde_json::Value {
-    let mut statements = vec![
-        json!({
-            "Effect": "Allow",
-            "Action": ["s3:ListBucket", "s3:GetBucketLocation"],
-            "Resource": [format!("arn:aws:s3:::{bucket}")]
-        }),
-        json!({
-            "Effect": "Allow",
-            "Action": ["s3:GetObject", "s3:PutObject"],
-            "Resource": [format!("arn:aws:s3:::{bucket}/*")]
-        }),
-    ];
-    if scope != "trusted" {
-        let trusted = "kithara-trusted";
-        statements.extend([
-            json!({
+fn policy(bucket: &str) -> serde_json::Value {
+    json!({
+        "Version": "2012-10-17",
+        "Statement": [
+            {
                 "Effect": "Allow",
-                "Action": ["s3:ListBucket"],
-                "Resource": [format!("arn:aws:s3:::{trusted}")],
-                "Condition": {"StringLike": {"s3:prefix": ["target-snapshots/*", "source-snapshots/*"]}}
-            }),
-            json!({
+                "Action": ["s3:ListBucket", "s3:GetBucketLocation"],
+                "Resource": [format!("arn:aws:s3:::{bucket}")]
+            },
+            {
                 "Effect": "Allow",
-                "Action": ["s3:GetObject"],
-                "Resource": [
-                    format!("arn:aws:s3:::{trusted}/target-snapshots/*"),
-                    format!("arn:aws:s3:::{trusted}/source-snapshots/*")
-                ]
-            }),
-        ]);
-    }
-    json!({"Version": "2012-10-17", "Statement": statements})
+                "Action": ["s3:GetObject", "s3:PutObject"],
+                "Resource": [format!("arn:aws:s3:::{bucket}/*")]
+            }
+        ]
+    })
 }
 
 fn write_environment(
@@ -448,45 +431,24 @@ b",
         assert_eq!(scope_bucket("review-1").unwrap(), "kithara-review-1");
     }
 
+    /// Every layer a scope reads, its own default branch writes: the
+    /// compiler cache, the target snapshots and the source layer. So a scope's
+    /// policy grants its own bucket and nothing of another scope's.
     #[test]
-    fn untrusted_scopes_can_only_read_trusted_target_snapshots() {
-        let review = policy("review", "kithara-review");
-        let statements = review["Statement"].as_array().unwrap();
-        let trusted = statements
-            .iter()
-            .map(serde_json::Value::to_string)
-            .find(|statement| {
-                statement.contains("kithara-trusted/target-snapshots/*")
-                    && statement.contains("s3:GetObject")
-            })
-            .unwrap();
-        assert!(trusted.contains("target-snapshots/*"));
-        assert!(trusted.contains("s3:GetObject"));
-        assert!(!trusted.contains("s3:PutObject"));
-
-        let trusted = policy("trusted", "kithara-trusted").to_string();
-        assert!(!trusted.contains("target-snapshots/*"));
-    }
-
-    /// The source layer is published by the default branch and read by every
-    /// branch. Without this grant a review job asks the trusted bucket for the
-    /// layer, is refused, and fetches every dependency from the internet.
-    #[test]
-    fn untrusted_scopes_read_but_never_write_the_trusted_source_layer() {
-        let review = policy("review", "kithara-review").to_string();
-        assert!(review.contains("kithara-trusted/source-snapshots/*"));
-        assert!(!review.contains(r#"["s3:PutObject"],"Resource":["arn:aws:s3:::kithara-trusted"#));
-
-        let trusted = policy("trusted", "kithara-trusted").to_string();
-        assert!(!trusted.contains("source-snapshots/*"));
-    }
-
-    /// kache, like sccache, writes and reads only its own scope's bucket.
-    #[test]
-    fn no_scope_reaches_another_scopes_kache() {
-        let review = policy("review", "kithara-review").to_string();
-        assert!(!review.contains("kithara-trusted/kache"));
-        assert!(!review.contains(r#""kache/*""#));
+    fn a_scope_is_granted_its_own_bucket_alone() {
+        for bucket in ["kithara-review", "kithara-trusted"] {
+            let policy = policy(bucket);
+            for statement in policy["Statement"].as_array().unwrap() {
+                for resource in statement["Resource"].as_array().unwrap() {
+                    let resource = resource.as_str().unwrap();
+                    assert!(
+                        resource == format!("arn:aws:s3:::{bucket}")
+                            || resource.starts_with(&format!("arn:aws:s3:::{bucket}/")),
+                        "{bucket} is granted {resource}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

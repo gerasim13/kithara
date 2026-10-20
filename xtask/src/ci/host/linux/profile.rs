@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::ci::{
-    config::{default_build_cache_size, parse_build_cache_size},
+    config::{default_build_cache_size, is_whole_gigabytes, parse_build_cache_size},
     environment::CacheTrust,
 };
 
@@ -26,6 +26,10 @@ pub(crate) struct LinuxHost {
     pub(crate) build_cache_size: String,
     /// Directory holding the caches jobs keep between runs.
     pub(crate) cache_root: PathBuf,
+    /// Whole gigabytes, such as `50G`, each trust's compiler-cache store may
+    /// hold. Defaulted: installed profiles predate the store.
+    #[serde(default = "default_compiler_cache_size")]
+    pub(crate) compiler_cache_size: String,
     /// Docker network the runners are confined to.
     pub(crate) network: String,
     /// Address block of that network, fenced off from the rest of the machine.
@@ -129,6 +133,12 @@ pub(crate) enum RunnerFlavor {
     Android,
 }
 
+/// What one trust's store may hold when the profile does not say: every
+/// runner of the trust shares it, and kache evicts to it.
+fn default_compiler_cache_size() -> String {
+    "50G".to_owned()
+}
+
 impl LinuxHost {
     pub(crate) fn load(path: &Path) -> Result<Self> {
         let text = fs::read_to_string(path)
@@ -144,6 +154,11 @@ impl LinuxHost {
             bail!("Linux CI profile build_cache_size must not be empty");
         }
         self.build_cache_budget_bytes()?;
+        if !is_whole_gigabytes(&self.compiler_cache_size) {
+            bail!(
+                "Linux CI profile compiler_cache_size must be a positive whole number followed by G"
+            );
+        }
         if !self.cache_root.is_absolute() {
             bail!("Linux CI profile cache_root must be an absolute path");
         }
@@ -345,6 +360,42 @@ pub(crate) mod tests {
                 .build_cache_size,
             default_build_cache_size()
         );
+    }
+
+    /// Installed profiles predate the compiler cache's store, and the binary
+    /// reaches every host before its profile does.
+    #[test]
+    fn a_profile_without_a_compiler_cache_size_still_loads() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("linux-host.toml");
+        let source =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ci-linux-host.toml");
+        let text = fs::read_to_string(&source).expect("fixture profile");
+        let without: String = text
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("compiler_cache_size"))
+            .map(|line| format!("{line}\n"))
+            .collect();
+        fs::write(&path, without).expect("write profile");
+
+        assert_eq!(
+            LinuxHost::load(&path)
+                .expect("profile loads")
+                .compiler_cache_size,
+            default_compiler_cache_size()
+        );
+    }
+
+    /// kache reads the budget as whole gigabytes; anything else would reach
+    /// every container and fail the first compile of each job.
+    #[test]
+    fn a_compiler_cache_size_is_whole_gigabytes() {
+        for size in ["0G", "50GB", "", "1.5G"] {
+            let mut host = host_fixture();
+            host.compiler_cache_size = size.to_owned();
+
+            assert!(host.validate().is_err(), "{size:?}");
+        }
     }
 
     /// A profile shaped like the machines this command provisions: one plain

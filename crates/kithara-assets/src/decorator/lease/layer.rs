@@ -188,7 +188,6 @@ where
 {
     type ActiveRes = LeaseWriter<A::ActiveRes, LeaseGuard>;
     type Context = A::Context;
-    type IndexRes = A::IndexRes;
     type ReadyRes = LeaseReader<A::ReadyRes, LeaseGuard>;
 
     fn acquire_resource_with_ctx(
@@ -232,8 +231,6 @@ where
         to self.inner {
             fn capabilities(&self) -> Capabilities;
             fn root_dir(&self) -> &Path;
-            fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes>;
-            fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes>;
             fn delete_asset(&self, asset_root: &str) -> AssetsResult<()>;
         }
     }

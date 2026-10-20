@@ -128,10 +128,13 @@ fn reopened_committed_resource_after_cache_eviction_is_not_processed_again() {
     let calls_after_eviction = call_count.load(Ordering::SeqCst);
     assert!(calls_after_eviction > calls_after_first_commit);
 
-    let reopened = scope
+    let AcquisitionResult::Ready(reopened) = scope
         .store()
-        .open_resource_with_ctx(&key0, None, Some(Arc::clone(&proc)))
-        .unwrap();
+        .acquire_resource_with_ctx(&key0, None, Some(Arc::clone(&proc)))
+        .unwrap()
+    else {
+        panic!("committed acquire must be Ready after cache eviction");
+    };
     assert!(
         matches!(reopened.status(), ResourceStatus::Committed { .. }),
         "reopened processed resource must stay committed after cache eviction"

@@ -1,5 +1,6 @@
 build_cache_size = "25GB"
 cache_root = "/var/lib/kithara-ci"
+compiler_cache_size = "40G"
 network = "kithara-ci"
 subnet = "172.16.240.0/24"
 

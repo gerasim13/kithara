@@ -526,7 +526,7 @@ mod tests {
             .build();
 
         let key = ResourceKey::absolute(&file_path).expect("absolute test path");
-        let reader = store.open_resource_with_ctx(&key, None, None).unwrap();
+        let reader = store.open_resource(&key, None).unwrap();
 
         let mut buf = [0u8; 4];
         let n = reader.read_at(0, &mut buf).unwrap();
@@ -644,8 +644,6 @@ mod tests {
             .backend(StorageBackend::Memory)
             .build();
         let caps = store.capabilities();
-        assert!(caps.contains(Capabilities::CACHE));
-        assert!(caps.contains(Capabilities::PROCESSING));
         assert!(!caps.contains(Capabilities::EVICT));
         assert!(!caps.contains(Capabilities::LEASE));
     }

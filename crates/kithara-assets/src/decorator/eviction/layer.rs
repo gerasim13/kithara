@@ -252,7 +252,6 @@ where
 {
     type ActiveRes = A::ActiveRes;
     type Context = A::Context;
-    type IndexRes = A::IndexRes;
     type ReadyRes = A::ReadyRes;
 
     #[kithara::probe]
@@ -285,8 +284,6 @@ where
         to self.inner {
             fn capabilities(&self) -> Capabilities;
             fn root_dir(&self) -> &Path;
-            fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes>;
-            fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes>;
             fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState>;
             fn delete_asset(&self, asset_root: &str) -> AssetsResult<()>;
             fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()>;

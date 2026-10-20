@@ -42,35 +42,26 @@ impl CacheIdentity for crate::decorator::ProcessCtx {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-enum CacheKey {
-    Resource {
-        key: ResourceKey,
-        identity: Option<RequestIdentity>,
-        ctx: Option<CtxIdentity>,
-    },
-    PinsIndex,
-    LruIndex,
+struct CacheKey {
+    key: ResourceKey,
+    identity: Option<RequestIdentity>,
+    ctx: Option<CtxIdentity>,
 }
 
 #[derive(Clone, Debug)]
-enum CacheEntry<R, I> {
-    Resource { reader: R, hits: usize },
-    Index(I),
+struct CacheEntry<R> {
+    reader: R,
+    hits: usize,
 }
 
-type Cache<R, I> = Mutex<LruCache<CacheKey, CacheEntry<R, I>>>;
-type SharedCache<A> = Arc<Cache<<A as Assets>::ReadyRes, <A as Assets>::IndexRes>>;
-type CacheMap<A> = LruCache<CacheKey, CacheEntry<<A as Assets>::ReadyRes, <A as Assets>::IndexRes>>;
-type CacheItem<A> = (
-    CacheKey,
-    CacheEntry<<A as Assets>::ReadyRes, <A as Assets>::IndexRes>,
-);
+type Cache<R> = Mutex<LruCache<CacheKey, CacheEntry<R>>>;
+type SharedCache<A> = Arc<Cache<<A as Assets>::ReadyRes>>;
+type CacheMap<A> = LruCache<CacheKey, CacheEntry<<A as Assets>::ReadyRes>>;
 
 /// A decorator that caches opened resources in memory with LRU eviction.
 ///
 /// Cache key is `(ResourceKey, Option<RequestIdentity>, Option<Ctx>)`; the
-/// `ResourceKey` carries its own asset namespace. Absolute keys bypass caching
-/// (capability gate or absolute-key bypass).
+/// `ResourceKey` carries its own asset namespace. Absolute keys bypass caching.
 #[derive_where::derive_where(Clone; A: Assets, C: Clone)]
 pub struct CachedAssets<A, C = (NonZeroUsize, Option<u64>)>
 where
@@ -116,25 +107,18 @@ where
         &self,
         cache: &mut CacheMap<A>,
         key: CacheKey,
-        entry: CacheEntry<A::ReadyRes, A::IndexRes>,
+        entry: CacheEntry<A::ReadyRes>,
     ) -> Vec<ResourceKey> {
         let mut invalidated: Vec<ResourceKey> = Vec::new();
 
         let effective = self.policy.capacity().get() + self.pinned_cache_count(cache);
 
         while cache.len() >= effective {
-            let Some((displaced_key, displaced_entry)) = self.pop_evictable(cache) else {
+            let Some(displaced) = self.pop_evictable(cache) else {
                 break;
             };
-            if self.volatile
-                && let (
-                    CacheKey::Resource {
-                        key: resource_key, ..
-                    },
-                    CacheEntry::Resource { .. },
-                ) = (displaced_key, displaced_entry)
-            {
-                invalidated.push(resource_key);
+            if self.volatile {
+                invalidated.push(displaced.key);
             }
         }
 
@@ -144,16 +128,10 @@ where
             cache.resize(grow);
         }
 
-        if let Some((displaced_key, displaced_entry)) = cache.push(key, entry)
+        if let Some((displaced, _)) = cache.push(key, entry)
             && self.volatile
-            && let (
-                CacheKey::Resource {
-                    key: resource_key, ..
-                },
-                CacheEntry::Resource { .. },
-            ) = (displaced_key, displaced_entry)
         {
-            invalidated.push(resource_key);
+            invalidated.push(displaced.key);
         }
 
         invalidated
@@ -167,21 +145,11 @@ where
             let mut promote_key = None;
 
             for (cache_key, entry) in cache.iter() {
-                let (
-                    CacheKey::Resource {
-                        key: resource_key, ..
-                    },
-                    CacheEntry::Resource { reader: res, .. },
-                ) = (cache_key, entry)
-                else {
-                    continue;
-                };
-
-                if resource_key != key {
+                if cache_key.key != *key {
                     continue;
                 }
 
-                match res.status() {
+                match entry.reader.status() {
                     ResourceStatus::Failed(reason) => {
                         return Some(AssetResourceState::Failed(reason));
                     }
@@ -211,93 +179,48 @@ where
 
     /// A committed resource of unknown length counts as unbounded, so it cannot stay in a
     /// byte-bounded cache.
-    fn committed_bytes(entry: &CacheEntry<A::ReadyRes, A::IndexRes>) -> Option<u64> {
-        let CacheEntry::Resource { reader, .. } = entry else {
+    fn committed_bytes(entry: &CacheEntry<A::ReadyRes>) -> Option<u64> {
+        let ResourceStatus::Committed { final_len } = entry.reader.status() else {
             return None;
         };
-        let ResourceStatus::Committed { final_len } = reader.status() else {
-            return None;
-        };
-        Some(final_len.or_else(|| reader.len()).unwrap_or(u64::MAX))
-    }
-
-    const fn entry_hits(entry: &CacheEntry<A::ReadyRes, A::IndexRes>) -> usize {
-        match entry {
-            CacheEntry::Resource { hits, .. } => *hits,
-            CacheEntry::Index(_) => 0,
-        }
-    }
-
-    fn is_active(&self) -> bool {
-        self.inner.capabilities().contains(Capabilities::CACHE)
+        Some(final_len.or_else(|| entry.reader.len()).unwrap_or(u64::MAX))
     }
 
     fn is_pinned(pinned: &DashSet<ResourceKey>, key: &CacheKey) -> bool {
-        match key {
-            CacheKey::Resource {
-                key: resource_key, ..
-            } => pinned.contains(resource_key),
-            _ => false,
-        }
+        pinned.contains(&key.key)
     }
 
     fn is_pinned_key(&self, key: &CacheKey) -> bool {
         Self::is_pinned(&self.pinned, key)
     }
 
-    fn is_protected_resource(entry: &CacheEntry<A::ReadyRes, A::IndexRes>) -> bool {
-        matches!(
-            entry,
-            CacheEntry::Resource { reader: res, .. } if matches!(res.status(), ResourceStatus::Active)
-        )
-    }
-
-    fn open_index_resource<F>(&self, cache_key: CacheKey, load: F) -> AssetsResult<A::IndexRes>
-    where
-        F: FnOnce() -> AssetsResult<A::IndexRes>,
-    {
-        if !self.is_active() {
-            return load();
-        }
-
-        let mut cache = self.cache.lock();
-
-        if let Some(CacheEntry::Index(res)) = cache.peek(&cache_key) {
-            return Ok(res.clone());
-        }
-
-        let res = load()?;
-        let _ = self.cache_entry(&mut cache, cache_key, CacheEntry::Index(res.clone()));
-        drop(cache);
-
-        Ok(res)
+    fn is_protected_resource(entry: &CacheEntry<A::ReadyRes>) -> bool {
+        matches!(entry.reader.status(), ResourceStatus::Active)
     }
 
     fn pinned_cache_count(&self, cache: &CacheMap<A>) -> usize {
         cache
             .iter()
-            .filter(|(k, e)| {
-                Self::is_protected_resource(e)
-                    || matches!(k, CacheKey::Resource { key: rk, .. } if self.pinned.contains(rk))
-            })
+            .filter(|(k, e)| Self::is_protected_resource(e) || self.pinned.contains(&k.key))
             .count()
     }
 
     /// The victim is chosen by fewest hits, with ties falling to the least-recently-used end, since
     /// iteration yields most- to least-recently-used and a later equal candidate is the better
     /// victim.
-    fn pop_evictable(&self, cache: &mut CacheMap<A>) -> Option<CacheItem<A>> {
+    fn pop_evictable(&self, cache: &mut CacheMap<A>) -> Option<CacheKey> {
         let key = cache
             .iter()
             .filter_map(|(key, entry)| {
                 if Self::is_protected_resource(entry) || self.is_pinned_key(key) {
                     return None;
                 }
-                Some((key.clone(), Self::entry_hits(entry)))
+                Some((key.clone(), entry.hits))
             })
             .reduce(|best, cand| if cand.1 <= best.1 { cand } else { best })
             .map(|(key, _)| key)?;
-        cache.pop(&key).map(|entry| (key, entry))
+        cache.pop(&key)?;
+        Some(key)
     }
 
     fn retained_bytes(cache: &CacheMap<A>, pinned: &DashSet<ResourceKey>) -> u64 {
@@ -322,7 +245,7 @@ where
                     if bytes == 0 || Self::is_pinned(pinned, key) {
                         return None;
                     }
-                    Some((key.clone(), Self::entry_hits(entry)))
+                    Some((key.clone(), entry.hits))
                 })
                 .reduce(|best, candidate| {
                     if candidate.1 <= best.1 {
@@ -335,18 +258,8 @@ where
             else {
                 break;
             };
-            let Some(entry) = cache.pop(&key) else {
-                continue;
-            };
-            if let (
-                CacheKey::Resource {
-                    key: resource_key, ..
-                },
-                CacheEntry::Resource { .. },
-            ) = (key, entry)
-                && !invalidated.contains(&resource_key)
-            {
-                invalidated.push(resource_key);
+            if cache.pop(&key).is_some() && !invalidated.contains(&key.key) {
+                invalidated.push(key.key);
             }
         }
         invalidated
@@ -390,8 +303,7 @@ where
         }
     }
 
-    /// Wrap an [`AcquisitionResult`] from the inner store in cache wrappers
-    /// (used on the bypass and absolute-key paths where no caching happens).
+    /// Wrap an [`AcquisitionResult`] from the inner store in cache wrappers.
     fn wrap_acq(
         &self,
         key: &ResourceKey,
@@ -454,7 +366,6 @@ where
 {
     type ActiveRes = CachedWriter<A::ActiveRes>;
     type Context = A::Context;
-    type IndexRes = A::IndexRes;
     type ReadyRes = CachedReader<A::ReadyRes>;
 
     /// Reactivating an in-flight slot mints a fresh-generation writer, and its current-generation
@@ -465,27 +376,24 @@ where
         identity: Option<&RequestIdentity>,
         ctx: Option<Self::Context>,
     ) -> AssetsResult<AcquisitionResult<Self::ActiveRes, Self::ReadyRes>> {
-        if !self.is_active() || key.is_absolute() {
+        if key.is_absolute() {
             return Ok(self.wrap_acq(
                 key,
                 self.inner.acquire_resource_with_ctx(key, identity, ctx)?,
             ));
         }
 
-        let cache_key = CacheKey::Resource {
+        let cache_key = CacheKey {
             key: key.clone(),
             identity: identity.cloned(),
             ctx: ctx.as_ref().map(CacheIdentity::cache_identity),
         };
         let mut cache = self.cache.lock();
 
-        let hit = match cache.get_mut(&cache_key) {
-            Some(CacheEntry::Resource { reader, hits }) => {
-                *hits = hits.saturating_add(1);
-                Some((reader.clone(), *hits))
-            }
-            _ => None,
-        };
+        let hit = cache.get_mut(&cache_key).map(|entry| {
+            entry.hits = entry.hits.saturating_add(1);
+            (entry.reader.clone(), entry.hits)
+        });
         if let Some((reader, hit_count)) = hit {
             if matches!(reader.status(), ResourceStatus::Committed { .. }) {
                 drop(cache);
@@ -494,7 +402,7 @@ where
             let writer = reader.reactivate()?;
             cache.put(
                 cache_key,
-                CacheEntry::Resource {
+                CacheEntry {
                     reader: writer.reader(),
                     hits: hit_count,
                 },
@@ -511,7 +419,7 @@ where
         let displaced = self.cache_entry(
             &mut cache,
             cache_key,
-            CacheEntry::Resource {
+            CacheEntry {
                 reader: reader_for_cache,
                 hits: 1,
             },
@@ -537,12 +445,8 @@ where
 
             let keys_to_remove: Vec<CacheKey> = cache
                 .iter()
-                .filter_map(|(k, _)| match k {
-                    CacheKey::Resource { key: rk, .. } if rk.asset_root() == Some(asset_root) => {
-                        Some(k.clone())
-                    }
-                    _ => None,
-                })
+                .filter(|(k, _)| k.key.asset_root() == Some(asset_root))
+                .map(|(k, _)| k.clone())
                 .collect();
 
             for key in keys_to_remove {
@@ -553,29 +457,19 @@ where
         self.inner.delete_asset(asset_root)
     }
 
-    fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes> {
-        self.open_index_resource(CacheKey::LruIndex, || self.inner.open_lru_index_resource())
-    }
-
-    fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes> {
-        self.open_index_resource(CacheKey::PinsIndex, || {
-            self.inner.open_pins_index_resource()
-        })
-    }
-
     fn open_resource_with_ctx(
         &self,
         key: &ResourceKey,
         identity: Option<&RequestIdentity>,
         ctx: Option<Self::Context>,
     ) -> AssetsResult<Self::ReadyRes> {
-        if !self.is_active() || key.is_absolute() {
+        if key.is_absolute() {
             return Ok(
                 self.wrap_reader(key, self.inner.open_resource_with_ctx(key, identity, ctx)?)
             );
         }
 
-        let cache_key = CacheKey::Resource {
+        let cache_key = CacheKey {
             key: key.clone(),
             identity: identity.cloned(),
             ctx: ctx.as_ref().map(CacheIdentity::cache_identity),
@@ -583,28 +477,19 @@ where
 
         let mut cache = self.cache.lock();
 
-        if let Some(CacheEntry::Resource { reader: res, hits }) = cache.get_mut(&cache_key) {
-            *hits = hits.saturating_add(1);
-            return Ok(self.wrap_reader(key, res.clone()));
+        if let Some(entry) = cache.get_mut(&cache_key) {
+            entry.hits = entry.hits.saturating_add(1);
+            return Ok(self.wrap_reader(key, entry.reader.clone()));
         }
 
         if ctx.is_none()
-            && let Some(res) =
-                cache
-                    .iter()
-                    .find_map(|(candidate_key, entry)| match (candidate_key, entry) {
-                        (
-                            CacheKey::Resource {
-                                key: resource_key, ..
-                            },
-                            CacheEntry::Resource { reader: res, .. },
-                        ) if resource_key == key
-                            && matches!(res.status(), ResourceStatus::Committed { .. }) =>
-                        {
-                            Some(res.clone())
-                        }
-                        _ => None,
-                    })
+            && let Some(res) = cache
+                .iter()
+                .find(|(candidate_key, entry)| {
+                    candidate_key.key == *key
+                        && matches!(entry.reader.status(), ResourceStatus::Committed { .. })
+                })
+                .map(|(_, entry)| entry.reader.clone())
         {
             return Ok(self.wrap_reader(key, res));
         }
@@ -613,7 +498,7 @@ where
         let displaced = self.cache_entry(
             &mut cache,
             cache_key,
-            CacheEntry::Resource {
+            CacheEntry {
                 reader: res.clone(),
                 hits: 1,
             },
@@ -638,12 +523,8 @@ where
             let mut cache = self.cache.lock();
             let keys_to_remove: Vec<CacheKey> = cache
                 .iter()
-                .filter_map(|(cache_key, _)| match cache_key {
-                    CacheKey::Resource {
-                        key: resource_key, ..
-                    } if resource_key == key => Some(cache_key.clone()),
-                    _ => None,
-                })
+                .filter(|(cache_key, _)| cache_key.key == *key)
+                .map(|(cache_key, _)| cache_key.clone())
                 .collect();
             for cache_key in keys_to_remove {
                 cache.pop(&cache_key);
@@ -654,10 +535,6 @@ where
     }
 
     fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState> {
-        if !self.is_active() {
-            return self.inner.resource_state(key);
-        }
-
         if let Some(state) = self.cached_state(key) {
             return Ok(state);
         }
@@ -679,7 +556,6 @@ mod tests {
     use std::{fs, path::Path};
 
     use kithara_platform::{CancelToken, sync::Arc, thread, time::Duration, tokio::sync::mpsc};
-    use kithara_storage::StorageResource;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -735,7 +611,7 @@ mod tests {
         let direct = format!("{identity:?}");
         assert_eq!(direct, "CtxIdentity(<32 bytes>)");
 
-        let cache_key = CacheKey::Resource {
+        let cache_key = CacheKey {
             key: ResourceKey::relative("root", "seg.m4s"),
             identity: None,
             ctx: Some(identity),
@@ -768,7 +644,6 @@ mod tests {
     impl Assets for ContextMemStore {
         type ActiveRes = BaseWriter;
         type Context = u8;
-        type IndexRes = StorageResource;
         type ReadyRes = BaseReader;
 
         fn acquire_resource_with_ctx(
@@ -793,8 +668,6 @@ mod tests {
             to self.inner {
                 fn capabilities(&self) -> Capabilities;
                 fn delete_asset(&self, asset_root: &str) -> AssetsResult<()>;
-                fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes>;
-                fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes>;
                 fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState>;
                 fn root_dir(&self) -> &Path;
             }

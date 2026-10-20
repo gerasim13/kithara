@@ -58,7 +58,7 @@ where
             hooks: runtime.hooks,
             frame_offset: 0,
             pending_seek_target: None,
-            resync_frame_offset_to_pts: true,
+            timeline: None,
             timeline_gap_frames: 0,
             head_strip: HeadStrip::default(),
             zero_frame_count: 0,
@@ -92,22 +92,37 @@ where
         let live_spec = self.codec.spec();
         self.spec = live_spec;
 
+        let timestamp_frame = live_spec.frame_at(timestamp).unwrap_or(u64::MAX);
+        let (anchor, anchor_frame) = match self.timeline {
+            Some(anchor) if timestamp_frame <= self.frame_offset => anchor,
+            Some(_) => {
+                self.timeline_gap_frames = self
+                    .timeline_gap_frames
+                    .saturating_add(timestamp_frame.saturating_sub(self.frame_offset));
+                self.frame_offset = timestamp_frame;
+                (timestamp, timestamp_frame)
+            }
+            None => {
+                self.frame_offset = timestamp_frame;
+                (timestamp, timestamp_frame)
+            }
+        };
+        self.timeline = Some((anchor, anchor_frame));
+        let frame_offset = self.frame_offset;
+        self.frame_offset = self.frame_offset.saturating_add(u64::from(frames));
+        let elapsed = live_spec
+            .duration_for(frame_offset)
+            .unwrap_or(Duration::MAX)
+            .saturating_sub(
+                live_spec
+                    .duration_for(anchor_frame)
+                    .unwrap_or(Duration::MAX),
+            );
+        let timestamp = anchor.saturating_add(elapsed);
+
         let chunk_secs = f64::from(frames) / f64::from(live_spec.sample_rate.get());
         let frame_duration = Duration::from_secs_f64(chunk_secs);
         let end_timestamp = timestamp.saturating_add(frame_duration);
-
-        let timestamp_frame = live_spec.frame_at(timestamp).unwrap_or(u64::MAX);
-        if self.resync_frame_offset_to_pts {
-            self.resync_frame_offset_to_pts = false;
-            self.frame_offset = timestamp_frame;
-        } else if timestamp_frame > self.frame_offset {
-            self.timeline_gap_frames = self
-                .timeline_gap_frames
-                .saturating_add(timestamp_frame.saturating_sub(self.frame_offset));
-            self.frame_offset = timestamp_frame;
-        }
-        let frame_offset = self.frame_offset;
-        self.frame_offset = self.frame_offset.saturating_add(u64::from(frames));
 
         let meta = AudioChunkInfo {
             end_timestamp,
@@ -337,7 +352,7 @@ where
                 preroll,
             } => {
                 self.frame_offset = self.spec.frame_at(landed_at).unwrap_or(u64::MAX);
-                self.resync_frame_offset_to_pts = true;
+                self.timeline = None;
                 self.timeline_gap_frames = 0;
                 DecoderSeekOutcome::Landed {
                     landed_byte,

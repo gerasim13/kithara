@@ -6372,6 +6372,7 @@ dependencies = [
  "unicode-segmentation",
  "velato",
  "vello",
+ "vello_encoding",
  "wgpu 26.0.1",
  "window_clipboard",
  "winit",

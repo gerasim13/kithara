@@ -16,10 +16,7 @@ use tracing::warn;
 
 use super::nextest;
 use crate::{
-    ci::{
-        cache::snapshot, config::CiPins, environment::CacheTrust, process::Process,
-        run::PipelineKind,
-    },
+    ci::{cache::snapshot, config::CiPins, process::Process, run::PipelineKind},
     config::{CiLaneConfig, CiLanePin, CiLaneStep},
     consts,
 };
@@ -305,15 +302,14 @@ fn restore_source_layer(process: &Process, tools: &ToolsConfig) {
 }
 
 /// Record what the lane ended up with, once its steps have fetched whatever
-/// the restored layer did not carry. Only the default branch in the trusted
-/// scope publishes, because that scope is the only one the bucket policy lets
-/// write.
+/// the restored layer did not carry. Only the default branch publishes, into
+/// its own scope's bucket, so a branch never changes what its scope reads.
 ///
 /// A publisher's failure fails the lane. The defect this repairs is that it did
 /// not: the publish was refused on every run for weeks and the lane stayed
 /// green, so the layer read as a working cache that happened to always miss.
 fn publish_source_layer(process: &Process, tools: &ToolsConfig, kind: &str) -> Result<()> {
-    if !is_source_publisher(kind, CacheTrust::from_environment()?) {
+    if !is_source_publisher(kind) {
         return Ok(());
     }
     let Some((cargo_home, rc)) = source_layer_access(process, tools) else {
@@ -334,10 +330,8 @@ fn publish_source_layer(process: &Process, tools: &ToolsConfig, kind: &str) -> R
     published
 }
 
-/// A default-branch run in another scope holds that scope's keys: a fork's
-/// `main` runs as `review`, and its publish was refused on every push.
-fn is_source_publisher(kind: &str, trust: CacheTrust) -> bool {
-    kind == PipelineKind::Main.name() && trust == CacheTrust::Trusted
+fn is_source_publisher(kind: &str) -> bool {
+    kind == PipelineKind::Main.name()
 }
 
 fn source_layer_access(process: &Process, tools: &ToolsConfig) -> Option<(PathBuf, PathBuf)> {
@@ -433,6 +427,7 @@ mod tests {
     use super::*;
     use crate::ci::{
         config::fixture,
+        environment::CacheTrust,
         process::{Recording, Step},
     };
 
@@ -891,16 +886,11 @@ test "$1" = install
         FileLock::try_exclusive(lock).expect("per-pin lock released before lane steps");
     }
 
+    /// Each scope records the sources its own branches read, so the default
+    /// branch publishes whichever scope it runs in, and a branch never does.
     #[test]
-    fn only_the_trusted_default_branch_publishes_the_source_layer() {
-        let main = PipelineKind::Main.name();
-
-        assert!(is_source_publisher(main, CacheTrust::Trusted));
-        assert!(!is_source_publisher(main, CacheTrust::Review));
-        assert!(!is_source_publisher(main, CacheTrust::Quarantine));
-        assert!(!is_source_publisher(
-            PipelineKind::Branch.name(),
-            CacheTrust::Trusted
-        ));
+    fn only_the_default_branch_publishes_the_source_layer() {
+        assert!(is_source_publisher(PipelineKind::Main.name()));
+        assert!(!is_source_publisher(PipelineKind::Branch.name()));
     }
 }
