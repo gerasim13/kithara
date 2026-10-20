@@ -23,6 +23,7 @@ use super::{
 };
 use crate::{
     error::NetError,
+    observe::{NetObserver, Observer},
     test_pools::pools,
     types::{Headers, NetOptions, RangeSpec, RetryPolicy},
 };
@@ -570,4 +571,53 @@ async fn a_second_transport_is_refused_and_the_first_keeps_serving() {
     assert!(matches!(second, Err(AlreadyInstalled)), "got {second:?}");
     assert_eq!(answer, Bytes::from_static(b"first"));
     assert_eq!(seen.starts.load(Ordering::SeqCst), 1);
+}
+
+#[derive(Default)]
+struct AttemptLog {
+    first_bytes: Mutex<Vec<u16>>,
+    retries: Mutex<Vec<(u32, u32)>>,
+    exhausted: Mutex<Vec<(u32, u64, NetError)>>,
+}
+
+impl NetObserver for AttemptLog {
+    fn first_byte(&self, _ttfb: Duration, status: u16, _partial: bool) {
+        self.first_bytes.lock().push(status);
+    }
+
+    fn retrying(&self, attempt: u32, max_retries: u32, _error: &NetError, _backoff: Duration) {
+        self.retries.lock().push((attempt, max_retries));
+    }
+
+    fn retry_exhausted(&self, max_retries: u32, consumed: u64, error: &NetError) {
+        self.exhausted
+            .lock()
+            .push((max_retries, consumed, error.clone()));
+    }
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
+async fn an_observed_handle_reports_every_attempt() {
+    let (client, _, url) = client(Plan {
+        status: 500,
+        ..Plan::serving(Bytes::new())
+    });
+
+    let log = Arc::new(AttemptLog::default());
+    let observed = client.with_observer(Some(Observer(log.clone())));
+    observed
+        .get_bytes(url.clone(), None)
+        .await
+        .expect_err("HTTP 500 exhausts retries");
+    assert_eq!(*log.first_bytes.lock(), [500, 500, 500]);
+    assert_eq!(*log.retries.lock(), [(1, 2), (2, 2)]);
+    assert!(matches!(log.exhausted.lock().as_slice(),
+        [(2, 0, NetError::Status { status, .. })] if status.get() == 500));
+    client
+        .get_bytes(url, None)
+        .await
+        .expect_err("base request also fails");
+    assert_eq!(*log.first_bytes.lock(), [500, 500, 500]);
+    assert_eq!(*log.retries.lock(), [(1, 2), (2, 2)]);
+    assert_eq!(log.exhausted.lock().len(), 1);
 }

@@ -139,7 +139,7 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn response_headers_are_lowercased() {
+    fn response_headers_are_found_in_any_case() {
         let reported = pairs(&[("Content-Length", "12"), ("ETag", "\"a\"")]);
 
         let headers = response_headers(reported, 200, &url()).expect("reported headers translate");

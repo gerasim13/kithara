@@ -1068,22 +1068,6 @@ mod tests {
         );
     }
 
-    /// `with_observer` rebuilds the options around the new observer. A field
-    /// it fails to carry over is a knob that silently reverts to its default
-    /// the moment the downloader attaches an observer to the client.
-    #[kithara::test]
-    fn attaching_an_observer_carries_the_options_over() {
-        let options = NetOptions::builder()
-            .pool_idle_timeout(Duration::from_secs(77))
-            .build();
-        let client = HttpClient::new(options, crate::test_pools::pools(), CancelToken::never());
-
-        assert_eq!(
-            client.with_observer(None).options().pool_idle_timeout,
-            Duration::from_secs(77)
-        );
-    }
-
     /// A handle derived with its own retry policy retries by that policy, and
     /// the original keeps retrying by its own.
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]

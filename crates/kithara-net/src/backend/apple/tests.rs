@@ -28,6 +28,7 @@ use kithara_test_utils::TestHttpServer;
 use super::client::HttpClient;
 use crate::{
     error::NetError,
+    observe::{NetObserver, Observer},
     test_pools::pools,
     types::{Compression, Headers, NetOptions, RangeSpec, RetryPolicy},
 };
@@ -607,4 +608,62 @@ async fn apple_stream_observes_cancellation() {
         Err(error) => assert!(matches!(error, NetError::Cancelled)),
         Ok(_) => panic!("head wait must observe cancellation"),
     }
+}
+
+#[derive(Default)]
+struct AttemptLog {
+    first_bytes: Mutex<Vec<u16>>,
+    retries: Mutex<Vec<(u32, u32, NetError)>>,
+    exhausted: Mutex<Vec<(u32, u64, NetError)>>,
+}
+
+impl NetObserver for AttemptLog {
+    fn first_byte(&self, _ttfb: Duration, status: u16, _partial: bool) {
+        self.first_bytes.lock().push(status);
+    }
+
+    fn retrying(&self, attempt: u32, max_retries: u32, error: &NetError, _backoff: Duration) {
+        self.retries
+            .lock()
+            .push((attempt, max_retries, error.clone()));
+    }
+
+    fn retry_exhausted(&self, max_retries: u32, consumed: u64, error: &NetError) {
+        self.exhausted
+            .lock()
+            .push((max_retries, consumed, error.clone()));
+    }
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
+async fn apple_observed_handle_reports_every_attempt() {
+    let server = serve(|| async { StatusCode::INTERNAL_SERVER_ERROR }).await;
+    let url = server.url(PROBE);
+    let mut options = fast_options(2);
+    options.inactivity_timeout = Duration::from_secs(2);
+    let client = HttpClient::new(options, pools(), CancelToken::never());
+
+    let log = Arc::new(AttemptLog::default());
+    let observed = client.with_observer(Some(Observer(log.clone())));
+    observed
+        .get_bytes(url.clone(), None)
+        .await
+        .expect_err("HTTP 500 exhausts retries");
+    assert_eq!(*log.first_bytes.lock(), [500, 500, 500]);
+    assert!(matches!(log.retries.lock().as_slice(),
+        [(1, 2, NetError::Status { status: first, .. }),
+         (2, 2, NetError::Status { status: second, .. })]
+        if first.get() == 500 && second.get() == 500));
+    assert!(matches!(log.exhausted.lock().as_slice(),
+        [(2, 0, NetError::Status { status, .. })] if status.get() == 500));
+    client
+        .get_bytes(url, None)
+        .await
+        .expect_err("base request also fails");
+    assert_eq!(*log.first_bytes.lock(), [500, 500, 500]);
+    assert!(matches!(log.retries.lock().as_slice(),
+        [(1, 2, NetError::Status { status: first, .. }),
+         (2, 2, NetError::Status { status: second, .. })]
+        if first.get() == 500 && second.get() == 500));
+    assert_eq!(log.exhausted.lock().len(), 1);
 }

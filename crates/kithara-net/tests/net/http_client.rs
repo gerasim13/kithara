@@ -777,9 +777,9 @@ async fn cancel_during_backoff_ends_the_call_without_the_delay() {
                 .max_delay(Duration::from_secs(10))
                 .build(),
         )
-        .build()
+        .build();
+    let client = HttpClient::new(options, pools(), cancel.clone())
         .with_observer(Some(Observer(backoff_started.clone())));
-    let client = HttpClient::new(options, pools(), cancel.clone());
     let cancel_in_backoff = async {
         backoff_started.0.notified().await;
         sleep(Duration::from_millis(50)).await;
@@ -810,13 +810,15 @@ impl NetObserver for ExhaustionLog {
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(2)), hang_timeout_secs(1))]
-#[case::budget_spent(2, "/error500", true)]
-#[case::no_budget(0, "/error500", false)]
-#[case::fatal_cause(2, "/error404", false)]
+#[case::budget_spent(2, "/error500", true, false)]
+#[case::no_budget(0, "/error500", false, false)]
+#[case::fatal_cause(2, "/error404", false, false)]
+#[case::policy_after_observer(0, "/error500", true, true)]
 async fn establish_exhaustion_is_reported_once_with_its_cause(
     #[case] max_retries: u32,
     #[case] path: &str,
     #[case] reported: bool,
+    #[case] policy_after_observer: bool,
 ) {
     let server = TestServer::new(test_router()).await;
     let log = Arc::new(ExhaustionLog::default());
@@ -828,9 +830,20 @@ async fn establish_exhaustion_is_reported_once_with_its_cause(
                 .max_delay(Duration::from_millis(5))
                 .build(),
         )
-        .build()
+        .build();
+    let client = HttpClient::new(options, pools(), CancelToken::never())
         .with_observer(Some(Observer(log.clone())));
-    let client = HttpClient::new(options, pools(), CancelToken::never());
+    let client = if policy_after_observer {
+        client.with_retry_policy(
+            RetryPolicy::builder()
+                .max_retries(2)
+                .base_delay(Duration::from_millis(1))
+                .max_delay(Duration::from_millis(5))
+                .build(),
+        )
+    } else {
+        client
+    };
 
     let _ = client.get_bytes(server.url(path), None).await;
 
@@ -849,4 +862,47 @@ async fn establish_exhaustion_is_reported_once_with_its_cause(
             "expected no exhaustion report, got {reports:?}"
         );
     }
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
+#[case::stream(false)]
+#[case::range(true)]
+async fn establishing_a_body_retries_a_transient_status(#[case] range: bool) {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let router = Router::new().route(
+        "/flaky-body",
+        get({
+            let attempts = Arc::clone(&attempts);
+            move || {
+                let attempts = Arc::clone(&attempts);
+                async move {
+                    if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                        (StatusCode::SERVICE_UNAVAILABLE, "retry")
+                    } else {
+                        (StatusCode::OK, "ok")
+                    }
+                }
+            }
+        }),
+    );
+    let server = TestServer::new(router).await;
+    let options = NetOptions::builder()
+        .retry_policy(
+            RetryPolicy::builder()
+                .max_retries(2)
+                .base_delay(Duration::from_millis(1))
+                .max_delay(Duration::from_millis(5))
+                .build(),
+        )
+        .build();
+    let client = HttpClient::new(options, pools(), CancelToken::never());
+    let url = server.url("/flaky-body");
+    let body = if range {
+        test_get_range_success(&client, url, 0, Some(1)).await
+    } else {
+        test_stream_success(&client, url).await
+    }
+    .expect("body establishment must retry");
+    assert_eq!(body, b"ok");
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
 }
