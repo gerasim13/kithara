@@ -77,3 +77,7 @@ vello_shaders = { git = "https://github.com/gerasim13/vello", rev = "b963c3b2cb9
 # upstream drewcrawford/wasm_safe_thread serialises the bootstrap itself.
 wasm_safe_thread = { git = "https://github.com/gerasim13/wasm_safe_thread", rev = "e9b92b93a23f1c6d802a6b4eb7a06f440507e0c9" }
 btls-sys = { git = "https://github.com/0x676e67/btls", rev = "ac7fe822bb1a3386c0ef0b44b4784a9429ba9903" }
+
+# Askama 0.14 config parsing uses the maintained toml parser; remove this
+# patch when UniFFI's Askama dependency drops basic-toml upstream.
+askama_derive = { git = "https://github.com/gerasim13/askama", rev = "8031efd8e5089b654bd9e750cb367a594d6edf7e" }
