@@ -535,15 +535,33 @@ mod tests {
         assert_eq!(headers.get(key), Some(value));
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
-    async fn test_headers_case_sensitive() {
-        let mut headers = Headers::default();
-        headers.insert("Content-Type", "application/json");
-        headers.insert("content-type", "text/plain");
-
-        assert_eq!(headers.get("Content-Type"), Some("application/json"));
-        assert_eq!(headers.get("content-type"), Some("text/plain"));
-        assert_ne!(headers.get("Content-Type"), headers.get("content-type"));
+    #[kithara::test(tokio, timeout(Duration::from_secs(2)))]
+    #[case::insert_then_lookup("insert_then_lookup")]
+    #[case::two_spellings_one_entry("two_spellings_one_entry")]
+    #[case::from_map("from_map")]
+    async fn a_header_name_matches_in_any_case(#[case] scenario: &str) {
+        match scenario {
+            "insert_then_lookup" => {
+                let mut headers = Headers::default();
+                headers.insert("content-length", "13");
+                assert_eq!(headers.get("Content-Length"), Some("13"));
+            }
+            "two_spellings_one_entry" => {
+                let mut headers = Headers::default();
+                headers.insert("content-type", "a");
+                headers.insert("Content-Type", "b");
+                assert_eq!(headers.get("CONTENT-TYPE"), Some("b"));
+                assert_eq!(headers.iter().collect::<Vec<_>>(), [("Content-Type", "b")]);
+            }
+            "from_map" => {
+                let headers = Headers::from(HashMap::from([(
+                    "Content-Length".to_owned(),
+                    "5".to_owned(),
+                )]));
+                assert_eq!(headers.get("content-length"), Some("5"));
+            }
+            _ => unreachable!(),
+        }
     }
 }
 
