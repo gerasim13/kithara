@@ -104,26 +104,49 @@ pub enum ImpersonatePreset {
     Chrome,
 }
 
-#[derive(Clone, Debug, Default, derive_more::From, PartialEq, Eq)]
+/// HTTP headers with case-insensitive names and the last inserted spelling.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Headers {
-    #[from]
-    inner: HashMap<String, String>,
+    inner: HashMap<String, (String, String)>,
 }
 
 impl Headers {
+    #[must_use]
+    pub fn get(&self, key: &str) -> Option<&str> {
+        self.inner
+            .get(&key.to_ascii_lowercase())
+            .map(|(_, value)| value.as_str())
+    }
+
     pub fn insert<K: Into<String>, V: Into<String>>(&mut self, key: K, value: V) {
-        self.inner.insert(key.into(), value.into());
+        let key = key.into();
+        self.inner
+            .insert(key.to_ascii_lowercase(), (key, value.into()));
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.inner
+            .values()
+            .map(|(name, value)| (name.as_str(), value.as_str()))
     }
 
     delegate::delegate! {
         to self.inner {
-            #[expr($.map(String::as_str))]
-            pub fn get(&self, key: &str) -> Option<&str>;
             #[must_use]
             pub fn is_empty(&self) -> bool;
-            #[expr($.map(|(k, v)| (k.as_str(), v.as_str())))]
-            pub fn iter(&self) -> impl Iterator<Item = (&str, &str)>;
         }
+    }
+}
+
+impl From<HashMap<String, String>> for Headers {
+    fn from(entries: HashMap<String, String>) -> Self {
+        let mut headers = Self {
+            inner: HashMap::with_capacity(entries.len()),
+        };
+        for (name, value) in entries {
+            headers.insert(name, value);
+        }
+        headers
     }
 }
 

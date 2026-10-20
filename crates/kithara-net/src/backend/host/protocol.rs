@@ -57,8 +57,7 @@ pub(super) fn response_headers(
         )));
     }
     let mut headers = Headers::default();
-    for (mut name, value) in pairs {
-        name.make_ascii_lowercase();
+    for (name, value) in pairs {
         headers.insert(name, value);
     }
     Ok(headers)
