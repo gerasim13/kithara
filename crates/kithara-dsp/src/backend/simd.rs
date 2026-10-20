@@ -74,37 +74,115 @@ pub(super) fn mul_add_kernel<S: Simd>(simd: S, x: &[f32], y: &[f32], acc: &mut [
 /// `target[i] = f(target[i], [inputs[0][i], …])` over the common prefix of
 /// the target and the inputs, a vector at a time; returns the prefix length.
 #[inline(always)]
-pub(super) fn update<S: Simd, const N: usize>(
+pub(super) fn update<S: Simd, I: Inputs<S>>(
     simd: S,
     target: &mut [f32],
-    inputs: [&[f32]; N],
-    mut f: impl FnMut(S::f32s, [S::f32s; N]) -> S::f32s,
+    inputs: I,
+    mut f: impl FnMut(S::f32s, I::Vectors) -> S::f32s,
 ) -> usize {
-    let len = inputs
-        .iter()
-        .fold(target.len(), |len, input| len.min(input.len()));
-    let (mut target, _) = target.split_at_mut(len);
-    let mut inputs = inputs.map(|input| input.split_at(len).0);
-    let lanes = S::f32s::LEN;
-    while target.len() >= lanes {
-        let (block, rest) = core::mem::take(&mut target).split_at_mut(lanes);
-        let split = inputs.map(|input| input.split_at(lanes));
-        f(
-            S::f32s::from_slice(simd, block),
-            split.map(|(head, _)| S::f32s::from_slice(simd, head)),
-        )
-        .store_slice(block);
-        target = rest;
-        inputs = split.map(|(_, tail)| tail);
-    }
-    let tail = f(
-        padded(simd, target),
-        inputs.map(|input| padded(simd, input)),
-    );
-    for (slot, value) in target.iter_mut().zip(tail.as_slice()) {
-        *slot = *value;
-    }
+    let len = inputs.bound(target.len());
+    blocks::<S>(len, |start, end| {
+        if let Some(block) = target.get_mut(start..end) {
+            store::<S>(f(vector(simd, block), inputs.load(simd, start, end)), block);
+        }
+    });
     len
+}
+
+/// The slices an element-wise kernel reads beside its target. Each arity
+/// destructures its array, so a block loads its vectors without a loop over
+/// the inputs, which the size profile would neither unroll nor inline.
+pub(super) trait Inputs<S: Simd>: Copy {
+    /// One vector per input.
+    type Vectors;
+    /// `len` capped at every input's length.
+    fn bound(self, len: usize) -> usize;
+    /// The vectors of `start..end`, zero-padded to full lanes.
+    fn load(self, simd: S, start: usize, end: usize) -> Self::Vectors;
+}
+
+impl<S: Simd> Inputs<S> for [&[f32]; 0] {
+    type Vectors = [S::f32s; 0];
+
+    #[inline(always)]
+    fn bound(self, len: usize) -> usize {
+        len
+    }
+
+    #[inline(always)]
+    fn load(self, _: S, _: usize, _: usize) -> Self::Vectors {
+        []
+    }
+}
+
+impl<S: Simd> Inputs<S> for [&[f32]; 1] {
+    type Vectors = [S::f32s; 1];
+
+    #[inline(always)]
+    fn bound(self, len: usize) -> usize {
+        let [x] = self;
+        len.min(x.len())
+    }
+
+    #[inline(always)]
+    fn load(self, simd: S, start: usize, end: usize) -> Self::Vectors {
+        let [x] = self;
+        [vector(simd, x.get(start..end).unwrap_or_default())]
+    }
+}
+
+impl<S: Simd> Inputs<S> for [&[f32]; 2] {
+    type Vectors = [S::f32s; 2];
+
+    #[inline(always)]
+    fn bound(self, len: usize) -> usize {
+        let [x, y] = self;
+        len.min(x.len()).min(y.len())
+    }
+
+    #[inline(always)]
+    fn load(self, simd: S, start: usize, end: usize) -> Self::Vectors {
+        let [x, y] = self;
+        [
+            vector(simd, x.get(start..end).unwrap_or_default()),
+            vector(simd, y.get(start..end).unwrap_or_default()),
+        ]
+    }
+}
+
+/// Calls `f(start, end)` for each vector-wide block of `0..len`, the last one
+/// shorter when `len` is not a multiple of the lane count. An index loop:
+/// the size profile leaves slice splitting and chunk iterators as calls.
+#[inline(always)]
+pub(super) fn blocks<S: Simd>(len: usize, mut f: impl FnMut(usize, usize)) {
+    let mut start = 0;
+    while start < len {
+        let end = len.min(start.saturating_add(S::f32s::LEN));
+        f(start, end);
+        start = end;
+    }
+}
+
+/// The vector holding `block`, zero-padded when it is shorter than the lanes.
+#[inline(always)]
+pub(super) fn vector<S: Simd>(simd: S, block: &[f32]) -> S::f32s {
+    if block.len() == S::f32s::LEN {
+        S::f32s::from_slice(simd, block)
+    } else {
+        padded(simd, block)
+    }
+}
+
+/// Writes the first `block.len()` lanes of `value` into `block`.
+#[inline(always)]
+pub(super) fn store<S: Simd>(value: S::f32s, block: &mut [f32]) {
+    if block.len() == S::f32s::LEN {
+        value.store_slice(block);
+    } else {
+        for (slot, lane) in block.iter_mut().zip(value.as_slice()) {
+            *slot = *lane;
+        }
+    }
 }
 
 /// `x` where `MIN_POSITIVE <= |x| <= MAX`, `+0.0` elsewhere; `NaN` fails both tests.

@@ -6,7 +6,7 @@ use std::{
 
 use fearless_simd::{Level, dispatch, prelude::*};
 
-use super::simd::padded;
+use super::simd::{blocks, store, vector};
 use crate::fade::FadeCurve;
 
 mod consts {
@@ -52,29 +52,17 @@ pub(super) fn gains_kernel<S: Simd>(
     incoming: &mut [f32],
 ) -> usize {
     let len = positions.len().min(outgoing.len()).min(incoming.len());
-    let (Some(positions), Some(outgoing), Some(incoming)) = (
-        positions.get(..len),
-        outgoing.get_mut(..len),
-        incoming.get_mut(..len),
-    ) else {
-        return 0;
-    };
-    let lanes = S::f32s::LEN;
-    let mut inputs = positions.chunks_exact(lanes);
-    let mut outs = outgoing.chunks_exact_mut(lanes);
-    let mut ins = incoming.chunks_exact_mut(lanes);
-    for ((position, out), into) in (&mut inputs).zip(&mut outs).zip(&mut ins) {
-        let (from, to) = pair(simd, curve, S::f32s::from_slice(simd, position));
-        from.store_slice(out);
-        to.store_slice(into);
-    }
-    let (from, to) = pair(simd, curve, padded(simd, inputs.remainder()));
-    for (slot, gain) in outs.into_remainder().iter_mut().zip(from.as_slice()) {
-        *slot = *gain;
-    }
-    for (slot, gain) in ins.into_remainder().iter_mut().zip(to.as_slice()) {
-        *slot = *gain;
-    }
+    blocks::<S>(len, |start, end| {
+        if let (Some(position), Some(out), Some(into)) = (
+            positions.get(start..end),
+            outgoing.get_mut(start..end),
+            incoming.get_mut(start..end),
+        ) {
+            let (from, to) = pair(simd, curve, vector(simd, position));
+            store::<S>(from, out);
+            store::<S>(to, into);
+        }
+    });
     len
 }
 
@@ -128,13 +116,13 @@ fn cos_sin<S: Simd>(simd: S, x: S::f64s) -> (S::f64s, S::f64s) {
     (near.select(cosine, sine), near.select(sine, cosine))
 }
 
-/// `Σ coefficients[k]·zᵏ`.
+/// `Σ c[k]·zᵏ`, written out: the size profile neither unrolls nor inlines a
+/// fold over the coefficients.
 #[inline(always)]
-fn horner<S: Simd>(simd: S, z: S::f64s, coefficients: [f64; 5]) -> S::f64s {
-    coefficients
-        .into_iter()
-        .rev()
-        .fold(S::f64s::splat(simd, 0.0), |sum, coefficient| {
-            sum.mul_add(z, S::f64s::splat(simd, coefficient))
-        })
+fn horner<S: Simd>(simd: S, z: S::f64s, [c0, c1, c2, c3, c4]: [f64; 5]) -> S::f64s {
+    S::f64s::splat(simd, c4)
+        .mul_add(z, S::f64s::splat(simd, c3))
+        .mul_add(z, S::f64s::splat(simd, c2))
+        .mul_add(z, S::f64s::splat(simd, c1))
+        .mul_add(z, S::f64s::splat(simd, c0))
 }
