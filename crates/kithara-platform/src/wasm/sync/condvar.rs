@@ -7,6 +7,13 @@ type WstCondvar = wasm_safe_thread::condvar::Condvar;
 pub struct Condvar(WstCondvar);
 
 impl Condvar {
+    /// Current time in this condition variable's deadline clock.
+    #[inline]
+    #[must_use]
+    pub fn instant(&self) -> Instant {
+        Instant::now()
+    }
+
     #[inline]
     pub fn wait<'a, T>(&self, guard: MutexGuard<'a, T>) -> MutexGuard<'a, T> {
         MutexGuard(self.0.wait_sync(guard.0))
