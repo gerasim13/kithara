@@ -1,9 +1,11 @@
+use std::collections::HashSet;
+
 use kithara::{
     abr::AbrEvent,
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, ChunkOutcome, ReadOutcome},
     decode::DecoderBackend,
-    download::{Downloader, DownloaderConfig},
+    download::{Downloader, DownloaderConfig, DownloaderEvent, RequestId},
     events::{EventBus, EventReceiver},
     file::{File, FileConfig},
     hls::{AbrMode, Hls, HlsConfig},
@@ -456,20 +458,53 @@ fn drain_abr_decisions(events: &mut EventReceiver<TestEvent>, sink: &mut Vec<Abr
     }
 }
 
-#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-fn lowest_pending_estimate(events: &mut EventReceiver<TestEvent>) -> Option<u64> {
-    let mut lowest: Option<u64> = None;
-    loop {
-        hang_tick!();
-        match events.try_recv() {
-            Ok(envelope) => {
-                hang_reset!();
-                if let TestEvent::Abr(AbrEvent::BandwidthEstimate { bps }) = envelope.event {
-                    lowest = Some(lowest.map_or(bps, |low| low.min(bps)));
+struct SeekPressure {
+    warm_urls: HashSet<Url>,
+    pending_warm: HashSet<RequestId>,
+    estimate: Option<u64>,
+}
+
+impl SeekPressure {
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+    fn drain(&mut self, events: &mut EventReceiver<TestEvent>) -> bool {
+        let mut progressed = false;
+        loop {
+            hang_tick!();
+            match events.try_recv() {
+                Ok(envelope) => {
+                    hang_reset!();
+                    match envelope.event {
+                        TestEvent::Downloader(DownloaderEvent::RequestEnqueued {
+                            request_id,
+                            url,
+                            ..
+                        }) if self.warm_urls.contains(&url) => {
+                            self.pending_warm.insert(request_id);
+                        }
+                        TestEvent::Downloader(DownloaderEvent::RequestCompleted {
+                            request_id,
+                            ..
+                        }) => {
+                            progressed |= self.pending_warm.remove(&request_id);
+                        }
+                        TestEvent::Downloader(
+                            DownloaderEvent::RequestFailed { request_id, .. }
+                            | DownloaderEvent::RequestCancelled { request_id, .. },
+                        ) => assert!(
+                            !self.pending_warm.contains(&request_id),
+                            "warm body request {request_id:?} did not complete"
+                        ),
+                        TestEvent::Abr(AbrEvent::BandwidthEstimate { bps }) => {
+                            progressed |= self.estimate != Some(bps);
+                            self.estimate = Some(bps);
+                        }
+                        _ => {}
+                    }
                 }
+                Err(TryRecvError::Lagged(lost)) => panic!("lost {lost} ABR seek events"),
+                Err(TryRecvError::Closed) => panic!("ABR seek event bus closed"),
+                Err(TryRecvError::Empty) => return progressed,
             }
-            Err(TryRecvError::Lagged(_)) => {}
-            Err(TryRecvError::Empty | TryRecvError::Closed) => return lowest,
         }
     }
 }
@@ -641,22 +676,24 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) 
         hang_reset!();
     }
 
-    let _ = lowest_pending_estimate(&mut events);
+    let mut pressure = SeekPressure {
+        warm_urls: (0..SEEK_SEGMENT)
+            .map(|segment| created.segment_url(TOP_VARIANT, segment))
+            .collect(),
+        pending_warm: HashSet::new(),
+        estimate: None,
+    };
+    pressure.drain(&mut events);
+    pressure.estimate = None;
     audio.seek(SEEK_TARGET).expect("seek must not fail");
     {
         let _real_io = kithara::platform::flash::real_io();
-        let pressure_deadline = Instant::now() + Duration::from_millis(slow_segment_delay_ms * 4);
-        let mut lowest_while_pending: Option<u64> = None;
+        let mut pressure_deadline = None;
         while seek_segment.requested() == 0
-            || lowest_while_pending.is_none_or(|bps| bps >= top_bandwidth)
+            || !pressure.pending_warm.is_empty()
+            || pressure.estimate.is_none_or(|bps| bps >= top_bandwidth)
         {
             hang_tick!();
-            assert!(
-                Instant::now() <= pressure_deadline,
-                "the estimate did not fall below the top bandwidth {top_bandwidth} while the seek \
-             was pending: lowest {lowest_while_pending:?}, seek target requested {} times",
-                seek_segment.requested()
-            );
             let _ = audio.preload();
             assert!(
                 matches!(
@@ -666,9 +703,22 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) 
                 ),
                 "the gated seek target must not produce PCM before release"
             );
-            if let Some(bps) = lowest_pending_estimate(&mut events) {
-                lowest_while_pending = Some(lowest_while_pending.map_or(bps, |low| low.min(bps)));
+            if pressure.drain(&mut events) {
                 hang_reset!();
+            }
+            // Seek preserves immutable body fetches. Measure slow-transfer pressure
+            // after the preceding warm bodies have released their download slots.
+            if seek_segment.requested() > 0 && pressure.pending_warm.is_empty() {
+                let deadline = pressure_deadline.get_or_insert_with(|| {
+                    Instant::now() + Duration::from_millis(slow_segment_delay_ms * 4)
+                });
+                assert!(
+                    Instant::now() <= *deadline,
+                    "the estimate did not fall below the top bandwidth {top_bandwidth} while the seek \
+                     was pending: estimate {:?}, seek target requested {} times",
+                    pressure.estimate,
+                    seek_segment.requested()
+                );
             }
             time::sleep(Duration::from_millis(2)).await;
         }
