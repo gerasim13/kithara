@@ -1271,23 +1271,34 @@ impl DecodedCapture {
         let last = i64::try_from(domain.end - 1).map_err(|error| error.to_string())?;
         let source =
             i64::try_from(position.0 / position.1.get()).map_err(|error| error.to_string())?;
-        // Every tap of one output sample reads the same few frames, so the
-        // covering chunk is looked up once and reused while it still covers.
-        let covering = std::cell::Cell::new(None::<&DecodedChunk>);
+        let covering = std::cell::Cell::new(None::<(&DecodedChunk, u64)>);
         mapped_sample((position.0, position.1.get()), speed, |offset| {
             let frame = source
                 .checked_add(offset)
                 .ok_or_else(|| "fixture sample coordinate overflows".to_owned())?;
             let frame =
                 u64::try_from(frame.clamp(first, last)).map_err(|error| error.to_string())?;
-            let known = covering
-                .get()
-                .filter(|(decoded, _)| decoded.frame_range().contains(&frame));
+            let known = covering.get().filter(|((decoded, _), end)| {
+                decoded.frame_range().contains(&frame) && frame < *end
+            });
             let chunk = if let Some(chunk) = known {
-                chunk
+                chunk.0
             } else {
                 let chunk = self.chunk(info, frame)?;
-                covering.set(Some(chunk));
+                // A later captured start supersedes even an overlapping chunk.
+                let next = self
+                    .chunks
+                    .range((
+                        std::ops::Bound::Excluded((info.source_revision, frame)),
+                        std::ops::Bound::Unbounded,
+                    ))
+                    .next()
+                    .filter(|((revision, _), _)| *revision == info.source_revision)
+                    .map_or_else(
+                        || chunk.0.frame_range().end,
+                        |((_, start), _)| (*start).min(chunk.0.frame_range().end),
+                    );
+                covering.set(Some((chunk, next)));
                 chunk
             };
             Self::read(chunk, frame, channel)
@@ -1701,4 +1712,148 @@ impl PhysicalReference {
         }
         Ok(())
     }
+}
+
+#[kithara::test(native)]
+fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
+    let reference = Audio {
+        samples: (0_u16..192).map(f32::from).collect(),
+        channels: 2,
+        sample_rate: 48_000,
+    };
+    let spec = AudioSpec::new(
+        reference.channels,
+        NonZeroU32::new(reference.sample_rate).expect("fixture sample rate"),
+    );
+    let mut capture = DecodedCapture::default();
+    for start in [0_u64, 32, 64] {
+        let info = kithara::signal::AudioChunkInfo {
+            spec,
+            source_revision: 7,
+            frame_offset: start,
+            frames: 32,
+            timestamp: spec.duration_for(start).expect("chunk start"),
+            end_timestamp: spec.duration_for(start + 32).expect("chunk end"),
+            media_origin: Some(Duration::ZERO),
+            ..kithara::signal::AudioChunkInfo::default()
+        };
+        let start = usize::try_from(start).expect("fixture frame offset");
+        let channels = usize::from(reference.channels);
+        let samples = reference.samples[start * channels..(start + 32) * channels].to_vec();
+        capture.samples += samples.len();
+        capture
+            .chunks
+            .insert((7, info.frame_offset), (info, samples));
+    }
+    let identity = super::consumed::SourceIdentity {
+        spec,
+        source_revision: 7,
+        media_origin: Some(Duration::ZERO),
+    };
+    let denominator = std::num::NonZeroU128::new(4).expect("quarter-frame phase");
+    let domain = 0..96;
+    for (frame, speed) in [
+        (0_i64, 1.25),
+        (30, 1.5),
+        (31, 1.75),
+        (32, 1.25),
+        (63, 1.5),
+        (95, 1.25),
+    ] {
+        let numerator = u128::try_from(frame).expect("nonnegative frame") * 4 + 1;
+        for channel in 0..usize::from(reference.channels) {
+            let expected = mapped_sample((numerator, denominator.get()), speed, |offset| {
+                capture.sample(identity, (frame + offset).clamp(0, 95), channel)
+            })
+            .expect("independent per-tap lookup");
+            let actual = capture
+                .sample_at_domain(identity, (numerator, denominator), speed, channel, &domain)
+                .expect("covering chunk lookup");
+            assert_eq!(actual.to_bits(), expected.to_bits());
+        }
+    }
+    let mut overlapping = capture.clone();
+    let channels = usize::from(reference.channels);
+    let first = overlapping
+        .chunks
+        .get_mut(&(7, 0))
+        .expect("first source chunk");
+    first.0.frames = 64;
+    first.0.end_timestamp = spec.duration_for(64).expect("extended source end");
+    first.1 = reference.samples[..64 * channels].to_vec();
+    let replacement = kithara::signal::AudioChunkInfo {
+        frame_offset: 31,
+        frames: 32,
+        timestamp: spec.duration_for(31).expect("overlapping source start"),
+        end_timestamp: spec.duration_for(63).expect("overlapping source end"),
+        ..first.0
+    };
+    overlapping.chunks.insert(
+        (7, 31),
+        (
+            replacement,
+            reference.samples[31 * channels..63 * channels].to_vec(),
+        ),
+    );
+    overlapping.samples += 64 * channels;
+    let expected = mapped_sample((125, denominator.get()), 1.5, |offset| {
+        overlapping.sample(identity, 31 + offset, 0)
+    })
+    .expect("latest-start overlapping source");
+    assert_eq!(
+        overlapping
+            .sample_at_domain(identity, (125, denominator), 1.5, 0, &domain)
+            .expect("covering overlapping source")
+            .to_bits(),
+        expected.to_bits(),
+    );
+    overlapping
+        .chunks
+        .get_mut(&(7, 31))
+        .expect("overlapping source chunk")
+        .0
+        .media_origin = Some(Duration::from_millis(1));
+    assert!(
+        mapped_sample((125, denominator.get()), 1.5, |offset| {
+            overlapping.sample(identity, 31 + offset, 0)
+        })
+        .is_err()
+    );
+    assert!(
+        overlapping
+            .sample_at_domain(identity, (125, denominator), 1.5, 0, &domain)
+            .is_err()
+    );
+    let wrong_identity = super::consumed::SourceIdentity {
+        source_revision: 8,
+        ..identity
+    };
+    assert!(
+        capture
+            .sample_at_domain(wrong_identity, (125, denominator), 1.5, 0, &domain)
+            .is_err()
+    );
+    let wrong_identity = super::consumed::SourceIdentity {
+        media_origin: Some(Duration::from_millis(1)),
+        ..identity
+    };
+    assert!(
+        capture
+            .sample_at_domain(wrong_identity, (125, denominator), 1.5, 0, &domain)
+            .is_err()
+    );
+    let wrong_identity = super::consumed::SourceIdentity {
+        spec: AudioSpec::new(1, spec.sample_rate),
+        ..identity
+    };
+    assert!(
+        capture
+            .sample_at_domain(wrong_identity, (125, denominator), 1.5, 0, &domain)
+            .is_err()
+    );
+    assert!(
+        capture
+            .sample_at_domain(identity, (125, denominator), 1.5, 0, &(32..32))
+            .is_err()
+    );
 }
