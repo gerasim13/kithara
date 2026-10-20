@@ -177,6 +177,7 @@ fn a_command_cuts_the_packet_at_its_frame() {
 
     assert_eq!(packets.first(), Some(&(0, 100)));
     assert_eq!(packets.get(1).map(|&(start, _)| start), Some(AT));
+    assert_eq!(sizes(&packets), [100, PACKET, PACKET, PACKET, 412]);
 }
 
 #[kithara::test]
