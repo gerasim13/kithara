@@ -114,6 +114,7 @@ pub(crate) fn host_config(
     environment: &BTreeMap<String, String>,
     store: &Path,
     max_size: &str,
+    schedule_compiles: bool,
 ) -> Result<String> {
     let value = |name: &str| {
         environment
@@ -130,6 +131,7 @@ pub(crate) fn host_config(
     let mut cache = toml::Table::new();
     cache.insert("local_store".into(), path_value(store)?);
     cache.insert("local_max_size".into(), max_size.into());
+    cache.insert("scheduler".into(), schedule_compiles.into());
     cache.insert("remote".into(), remote.into());
     let mut config = toml::Table::new();
     config.insert("cache".into(), cache.into());
@@ -198,6 +200,7 @@ mod tests {
                 &store_environment(bucket),
                 Path::new("/cache/kache/store"),
                 "50G",
+                true,
             )
             .unwrap();
 
@@ -225,6 +228,7 @@ mod tests {
             &store_environment("kithara-review"),
             Path::new("/cache/kache/store"),
             "50G",
+            true,
         )
         .unwrap();
 

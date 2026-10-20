@@ -214,6 +214,12 @@ a regression.
 
 ## Object cache service
 
+Container runners leave compile admission to their CPU and memory limits.
+Their kache host configuration disables its store-wide scheduler: kache sizes
+that shared pool from the calling container's CPU count, so independent
+containers would otherwise compete for one container's slots. Shell runners
+retain kache scheduling because they share the host's full resource domain.
+
 Each host runs its own RustFS stack, the compose project `kithara-ci-cache`
 published on `127.0.0.1:19000`; the two hosts share no cache. Jobs reach it
 through the `rc` client.
