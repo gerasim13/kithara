@@ -1,25 +1,17 @@
-use std::{
-    io::{Seek, SeekFrom},
-    sync::atomic::Ordering,
-};
+use std::io::{Seek, SeekFrom};
 
 use kithara_bufpool::HasPool;
 use kithara_resampler::ResamplerBackend;
-use symphonia_core::{
-    formats::FormatOptions,
-    io::{MediaSourceStream, MediaSourceStreamOptions, ReadBytes},
-};
+use symphonia_core::{formats::FormatOptions, io::ReadBytes};
 use symphonia_format_riff::WavReader;
 
 use super::{
     build::finish,
     probe::{skip_id3_tags, sniff_wav_format},
+    reader::open_reader,
 };
 use crate::{
-    DecodeError, DecodeResult, Decoder, DecoderConfig,
-    pcm::PcmCodec,
-    symphonia::{SymphoniaDemuxer, adapter::ReadSeekAdapter},
-    traits::BoxedSource,
+    DecodeError, DecodeResult, Decoder, DecoderConfig, pcm::PcmCodec, traits::BoxedSource,
 };
 
 pub(super) fn build_wave_decoder(
@@ -32,32 +24,15 @@ pub(super) fn build_wave_decoder(
     let audio_start = skip_id3_tags(&mut source)?;
     let (_, block_align) = sniff_wav_format(&mut source)?;
     source.seek(SeekFrom::Start(0))?;
-    let control = config
-        .reader_control
-        .clone()
-        .unwrap_or_else(|| kithara_stream::ReaderControl::new(None));
-    control.require_blocking();
-    let adapter = ReadSeekAdapter::new(source, config.byte_len_handle.take(), false)
-        .with_control(control.clone());
-    let byte_len = adapter.byte_len_handle();
-    let byte_pos = adapter.byte_pos_handle();
-    let seek_enabled = adapter.seek_enabled_handle();
-    let mut stream = MediaSourceStream::new(Box::new(adapter), MediaSourceStreamOptions::default());
-    stream
-        .ignore_bytes(audio_start)
-        .map_err(DecodeError::backend)?;
-    let reader =
-        WavReader::try_new(stream, FormatOptions::default()).map_err(DecodeError::backend)?;
-    seek_enabled.store(true, Ordering::Release);
-    let demuxer = SymphoniaDemuxer::from_reader_with_layout(
-        Box::new(reader),
-        Some(byte_pos),
-        config.byte_map.take(),
-        Some(block_align),
-        control,
-    )?;
+    let demuxer = open_reader(source, &mut config, Some(block_align), |mut stream| {
+        stream
+            .ignore_bytes(audio_start)
+            .map_err(DecodeError::backend)?;
+        Ok(Box::new(
+            WavReader::try_new(stream, FormatOptions::default()).map_err(DecodeError::backend)?,
+        ))
+    })?;
     let codec = PcmCodec::open(&demuxer.native_params)?;
-    config.byte_len_handle = Some(byte_len);
     finish(demuxer, codec, config)
 }
 

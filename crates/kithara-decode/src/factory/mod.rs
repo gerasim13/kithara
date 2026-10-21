@@ -5,6 +5,8 @@
 //! `DecodeError::BackendUnavailable`, one that rejects the codec/container returns
 //! `DecodeError::UnsupportedCodec`, both terminal.
 
+#[cfg(any(android_backend, all(test, feature = "android", feature = "symphonia")))]
+mod adts;
 mod backend;
 mod build;
 mod config;
@@ -12,6 +14,8 @@ mod inner;
 #[cfg(any(android_backend, apple_backend, feature = "symphonia"))]
 mod mpeg;
 mod probe;
+#[cfg(any(android_backend, all(test, feature = "android", feature = "symphonia")))]
+mod reader;
 mod segment;
 #[cfg(feature = "symphonia")]
 mod software;

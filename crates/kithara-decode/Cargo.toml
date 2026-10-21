@@ -32,7 +32,13 @@ apple = [
 apple-codec-embedded-resampler = ["apple"]
 # In-tree fdk-aac adapter needs symphonia-core macros (`codec_profile!`,
 # `support_audio_codec!`) which expand to `symphonia_core::*` paths.
-android = ["dep:kithara-mpa", "dep:symphonia-codec-pcm", "dep:symphonia-core", "dep:symphonia-format-riff"]
+android = [
+    "dep:kithara-mpa",
+    "dep:symphonia-codec-aac",
+    "dep:symphonia-codec-pcm",
+    "dep:symphonia-core",
+    "dep:symphonia-format-riff",
+]
 # Enables the software (Symphonia) decoder path. When disabled, the
 # factory only uses the compiled hardware backend — no fallback.
 symphonia = ["dep:symphonia", "dep:symphonia-core", "dep:kithara-mpa"]
@@ -78,6 +84,7 @@ re_mp4 = { workspace = true }
 serde = { workspace = true }
 smallvec = { workspace = true }
 symphonia = { workspace = true, optional = true }
+symphonia-codec-aac = { workspace = true, optional = true }
 symphonia-codec-pcm = { workspace = true, optional = true }
 symphonia-core = { workspace = true, optional = true }
 symphonia-format-riff = { workspace = true, optional = true }
