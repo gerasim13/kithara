@@ -123,7 +123,7 @@ pub mod usdt_trace;
 /// different part.
 #[cfg(all(feature = "all", not(target_arch = "wasm32")))]
 pub mod user_sim;
-#[cfg(all(feature = "all", not(target_arch = "wasm32")))]
+#[cfg(any(feature = "all", feature = "wasm"))]
 pub mod waits;
 
 #[cfg(feature = "all")]

@@ -7,7 +7,6 @@
 //! wall-clock guess. The `deadline` argument bounds only a non-progress watchdog
 //! that returns `Err` (callers `.expect()` it); it is never an early-success
 //! path that lets a later assertion pass on timeout.
-#![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
     audio::AudioEvent,
@@ -487,7 +486,7 @@ pub async fn render_until_position(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use kithara::events::EventBus;
 
