@@ -99,30 +99,31 @@ class NetworkPolicyTest {
             deleteRecursively()
             mkdirs()
         }
-        val player = KitharaPlayer(
+        KitharaPlayer(
             config = KitharaPlayer.Config(store = AssetStore(root = cacheDir.absolutePath)),
-        )
-        val status = TerminalStatus()
-        val subscribed = CountDownLatch(1)
-        val scope = CoroutineScope(Dispatchers.Default)
-        scope.launch {
-            player.events.onSubscription { subscribed.countDown() }.collect { event ->
-                if (event is KitharaPlayerEvent.TrackStatusChanged) {
-                    Log.i(TAG, "$name: ${event.itemId} -> ${event.status}")
-                    status.offer(event.status)
+        ).use { player ->
+            val status = TerminalStatus()
+            val subscribed = CountDownLatch(1)
+            val scope = CoroutineScope(Dispatchers.Default)
+            scope.launch {
+                player.events.onSubscription { subscribed.countDown() }.collect { event ->
+                    if (event is KitharaPlayerEvent.TrackStatusChanged) {
+                        Log.i(TAG, "$name: ${event.itemId} -> ${event.status}")
+                        status.offer(event.status)
+                    }
                 }
             }
-        }
-        try {
-            assertTrue(
-                "the collector is registered before insert()",
-                subscribed.await(SUBSCRIBE_TIMEOUT_SECONDS, TimeUnit.SECONDS),
-            )
-            return body(player, status)
-        } finally {
-            player.pause()
-            scope.cancel()
-            player.removeAllItems()
+            try {
+                assertTrue(
+                    "the collector is registered before insert()",
+                    subscribed.await(SUBSCRIBE_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                )
+                return body(player, status)
+            } finally {
+                scope.cancel()
+                player.pause()
+                player.removeAllItems()
+            }
         }
     }
 
