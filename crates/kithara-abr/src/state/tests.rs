@@ -15,7 +15,7 @@ use kithara_test_utils::kithara;
 use proptest::prelude::*;
 use unimock::{MockFn, Unimock, matching};
 
-use super::{AbrDecision, AbrState, AbrView, PendingAbrClaim, PendingAbrDecision};
+use super::{AbrState, AbrView, PendingAbrClaim, PendingAbrDecision};
 use crate::{
     Abr, AbrController, AbrEvent, AbrMock, AbrMode, AbrProgressSnapshot, AbrReason, AbrSettings,
     BandwidthSource, Estimator, ThroughputEstimator, VariantDuration, VariantIndex, VariantInfo,
@@ -236,33 +236,6 @@ fn decide_buffer_too_low_for_upswitch() {
 }
 
 #[kithara::test]
-fn apply_updates_current_variant_and_timestamp() {
-    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
-    state.apply_decision(
-        &AbrDecision::UpSwitch {
-            from: VariantIndex::new(0),
-            to: VariantIndex::new(2),
-            reason: AbrReason::UpSwitch,
-        },
-        Instant::now(),
-    );
-    assert_eq!(state.current_variant_index(), VariantIndex::new(2));
-}
-
-#[kithara::test]
-fn apply_decision_stay_is_noop() {
-    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(1))));
-    state.apply_decision(
-        &AbrDecision::Stay {
-            current: VariantIndex::new(1),
-            reason: AbrReason::AlreadyOptimal,
-        },
-        Instant::now(),
-    );
-    assert_eq!(state.current_variant_index(), VariantIndex::new(1));
-}
-
-#[kithara::test]
 fn lock_is_refcounted() {
     let state = AbrState::new(AbrMode::Auto(None));
     state.lock();
@@ -359,19 +332,17 @@ fn stale_claim_cannot_commit_after_same_target_aba() {
 #[kithara::test]
 fn claim_from_old_current_cannot_commit_after_variant_changes() {
     let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    state.request_target(VariantIndex::new(1), AbrReason::UpSwitch);
+    let first = state
+        .claim_pending_decision(VariantIndex::new(0))
+        .expect("request must be claimable from the initial variant");
+    assert!(state.commit_pending(first, Instant::now()));
+    assert_eq!(state.current_variant_index(), VariantIndex::new(1));
+
     state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
     let stale = state
         .claim_pending_decision(VariantIndex::new(0))
-        .expect("request must be claimable from the initial variant");
-
-    state.apply_decision(
-        &AbrDecision::UpSwitch {
-            from: VariantIndex::new(0),
-            to: VariantIndex::new(1),
-            reason: AbrReason::UpSwitch,
-        },
-        Instant::now(),
-    );
+        .expect("request must be claimable from the old variant");
 
     assert!(!state.commit_pending(stale, Instant::now()));
     assert_eq!(state.current_variant_index(), VariantIndex::new(1));
@@ -538,43 +509,6 @@ fn peek_pending_decision_does_not_mutate_current_variant() {
 }
 
 #[kithara::test]
-fn apply_decision_publishes_and_clears_matching_pending() {
-    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
-    state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
-    let decision = state
-        .peek_pending_decision(VariantIndex::new(0))
-        .expect("pending request must produce a decision");
-    state.apply_decision(&decision, Instant::now());
-    assert_eq!(state.current_variant_index(), VariantIndex::new(2));
-    assert_eq!(
-        state.pending_target(),
-        None,
-        "matching pending must be cleared atomically"
-    );
-}
-
-#[kithara::test]
-fn apply_decision_preserves_pending_overwritten_after_peek() {
-    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
-    state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
-    let decision = state
-        .peek_pending_decision(VariantIndex::new(0))
-        .expect("pending request must produce a decision");
-    state.request_target(VariantIndex::new(3), AbrReason::DownSwitch);
-    state.apply_decision(&decision, Instant::now());
-    assert_eq!(
-        state.current_variant_index(),
-        VariantIndex::new(2),
-        "captured decision applies regardless of later pending overwrite"
-    );
-    assert_eq!(
-        state.pending_target(),
-        Some(VariantIndex::new(3)),
-        "new pending must survive an apply for a different target"
-    );
-}
-
-#[kithara::test]
 fn peek_pending_decision_honors_is_locked() {
     let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
     state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
@@ -603,23 +537,22 @@ fn peek_pending_decision_returns_none_when_target_equals_current() {
 }
 
 #[kithara::test]
-fn apply_decision_after_unlock_applies_still_pending_intent() {
+fn an_auto_intent_formed_under_the_lock_is_published_only_after_unlock() {
     let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
     state.lock();
     state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
-    assert!(state.peek_pending_decision(VariantIndex::new(0)).is_none());
+    assert!(state.claim_pending_decision(VariantIndex::new(0)).is_none());
     state.unlock();
-    let decision = state
-        .peek_pending_decision(VariantIndex::new(0))
-        .expect("post-unlock peek must surface the still-pending intent");
-    state.apply_decision(&decision, Instant::now());
-    assert_eq!(decision.target(), VariantIndex::new(2));
+    let claim = state
+        .claim_pending_decision(VariantIndex::new(0))
+        .expect("post-unlock claim must surface the still-pending intent");
+    assert!(state.commit_pending(claim, Instant::now()));
     assert_eq!(state.current_variant_index(), VariantIndex::new(2));
 }
 
 /// Ping-pong root (#107): a queued `Manual(w)` boundary switch must die
 /// the moment the user re-pins to another variant. Without the supersede
-/// rule the slot is only cleared by `apply_decision` or a seek, so a
+/// rule the slot is only cleared by `commit_pending` or a seek, so a
 /// later boundary commits the superseded pin against the user's latest
 /// choice.
 #[kithara::test]
@@ -781,7 +714,11 @@ fn min_switch_interval_prevents_oscillation() {
     let settled = now + Duration::from_secs(30);
     let d1 = state.decide(&view, settled);
     assert!(d1.changed());
-    state.apply_decision(&d1, settled);
+    state.request_target(d1.target(), d1.reason());
+    let claim = state
+        .claim_pending_decision(state.current_variant_index())
+        .expect("a changed decision must queue a claimable request");
+    assert!(state.commit_pending(claim, settled));
 
     // Evidence that would immediately send the variant back down — this is the
     // oscillation the interval exists to damp.
@@ -794,6 +731,39 @@ fn min_switch_interval_prevents_oscillation() {
     };
     let d2 = state.decide(&reversal, settled + Duration::from_secs(1));
     assert_eq!(d2.reason(), AbrReason::MinInterval);
+}
+
+#[kithara::test]
+fn a_refused_commit_does_not_restart_the_switch_interval() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    let variants = test_variants_3();
+    let settings = AbrSettings::builder()
+        .min_switch_interval(Duration::from_secs(30))
+        .min_buffer_for_up_switch(Duration::ZERO)
+        .build();
+    let now = Instant::now();
+    let view = AbrView {
+        estimate_bps: Some(3_000_000),
+        buffer_ahead: None,
+        bytes_downloaded: 10 * 1024 * 1024,
+        variants: &variants,
+        settings: &settings,
+    };
+    let settled = now + Duration::from_secs(30);
+    state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
+    let stale = state
+        .claim_pending_decision(VariantIndex::new(1))
+        .expect("a claim formed from another variant still names the live request");
+    assert!(!state.commit_pending(stale, settled));
+    let claim = state
+        .claim_pending_decision(VariantIndex::new(0))
+        .expect("request must be claimable before the lock");
+    state.lock();
+    assert!(!state.commit_pending(claim, settled));
+    state.unlock();
+
+    let next = state.decide(&view, settled + Duration::from_secs(1));
+    assert_eq!(next.reason(), AbrReason::UpSwitch);
 }
 
 /// Wall-clock interval measured against the instant `AbrState` captured at
@@ -1674,7 +1644,11 @@ proptest! {
                 );
             }
             if d.changed() {
-                state.apply_decision(&d, now);
+                state.request_target(d.target(), d.reason());
+                let claim = state
+                    .claim_pending_decision(state.current_variant_index())
+                    .expect("a changed decision must queue a claimable request");
+                prop_assert!(state.commit_pending(claim, now));
             }
             let current = state.current_variant_index();
             if let Some(prev) = prev_variant {

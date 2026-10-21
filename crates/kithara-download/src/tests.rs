@@ -13,8 +13,8 @@ use axum::{
 use bytes::Bytes;
 use futures::StreamExt;
 use kithara_abr::{
-    Abr, AbrDecision, AbrEvent, AbrMode, AbrReason, AbrSettings, AbrState, VariantDuration,
-    VariantIndex, VariantInfo,
+    Abr, AbrEvent, AbrMode, AbrReason, AbrSettings, AbrState, VariantDuration, VariantIndex,
+    VariantInfo,
 };
 #[cfg(target_os = "android")]
 use kithara_android as _;
@@ -78,14 +78,13 @@ impl Abr for ScheduledAbrPeer {
 
     fn variants(&self) -> Vec<VariantInfo> {
         if self.arm_interval_on_tick.swap(false, Ordering::AcqRel) {
-            self.state.apply_decision(
-                &AbrDecision::DownSwitch {
-                    from: VariantIndex::new(1),
-                    to: VariantIndex::new(0),
-                    reason: AbrReason::DownSwitch,
-                },
-                Instant::now(),
-            );
+            self.state
+                .request_target(VariantIndex::new(0), AbrReason::DownSwitch);
+            let claim = self
+                .state
+                .claim_pending_decision(self.state.current_variant_index())
+                .expect("the down-switch request must be claimable");
+            assert!(self.state.publisher().commit_pending(claim, Instant::now()));
         }
         [66_000_u64, 134_000, 270_000, 900_000]
             .into_iter()
