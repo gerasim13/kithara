@@ -318,6 +318,11 @@ impl Packets {
                 Ok(Some(Reply::Read(Err(_)) | Reply::Seek(Err(_)) | Reply::Retired)) | Err(_) => {
                     self.operation = Operation::Retired;
                 }
+                Ok(None)
+                    if self.control.pending_reason().is_none() && !self.control.is_cancelled() =>
+                {
+                    return InputState::Busy;
+                }
                 Ok(None) => {
                     self.control.cancel();
                     if let Some(requests) = &self.requests {
@@ -342,7 +347,8 @@ impl Packets {
         match self.operation {
             Operation::Idle => InputState::Idle,
             Operation::Retired => InputState::Retired,
-            Operation::Reading | Operation::Seeking | Operation::Retiring => InputState::Retiring,
+            Operation::Reading | Operation::Seeking => InputState::Busy,
+            Operation::Retiring => InputState::Retiring,
         }
     }
 }
@@ -520,6 +526,78 @@ mod tests {
             requested.try_recv(),
             Err(mpsc::TryRecvError::Empty)
         ));
+    }
+
+    #[kithara::test]
+    #[case::read(false)]
+    #[case::seek(true)]
+    fn healthy_native_work_finishes_before_input_release(#[case] seeking: bool) {
+        let (requests, requested) = mpsc::channel();
+        let (completed, completion) = mpsc::channel();
+        let control = ReaderControl::new(None);
+        let mut packets = Packets {
+            requests: Some(requests),
+            completion,
+            operation: Operation::Idle,
+            packet: None,
+            control: control.clone(),
+        };
+        let landed = SeekedTo {
+            track_id: 7,
+            required_ts: Timestamp::new(19),
+            actual_ts: Timestamp::new(17),
+        };
+        if seeking {
+            assert!(
+                packets
+                    .seek(
+                        SeekMode::Accurate,
+                        SeekTo::Timestamp {
+                            ts: landed.required_ts,
+                            track_id: 7
+                        },
+                        PrepareWait::Poll,
+                    )
+                    .expect("submit native seek")
+                    .is_none()
+            );
+            assert!(matches!(requested.try_recv(), Ok(Request::Seek { .. })));
+        } else {
+            assert!(packets.read(PrepareWait::Poll).is_err());
+            assert!(matches!(requested.try_recv(), Ok(Request::Read)));
+        }
+        assert_eq!(packets.release_input(), InputState::Busy);
+        assert!(
+            !control.is_cancelled(),
+            "healthy native work must finish without retirement"
+        );
+        assert!(matches!(
+            requested.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        let reply = if seeking {
+            Reply::Seek(Ok(landed))
+        } else {
+            Reply::Read(Ok(None))
+        };
+        control.set_pending(PendingReason::Retry);
+        assert!(completed.send(reply).is_ok());
+        assert_eq!(packets.release_input(), InputState::Idle);
+        assert!(!control.is_cancelled());
+
+        assert!(packets.read(PrepareWait::Poll).is_err());
+        assert!(matches!(requested.try_recv(), Ok(Request::Read)));
+        assert_eq!(packets.release_input(), InputState::Busy);
+        assert!(!control.is_cancelled());
+        control.set_pending(PendingReason::NotReady(NotReadyCause::SourcePending));
+        assert_eq!(packets.release_input(), InputState::Retiring);
+        assert!(
+            control.is_cancelled(),
+            "source wait must cancel the retained operation"
+        );
+        assert!(matches!(requested.try_recv(), Ok(Request::Retire)));
+        assert!(completed.send(Reply::Retired).is_ok());
+        assert_eq!(packets.release_input(), InputState::Retired);
     }
 
     #[kithara::test]
