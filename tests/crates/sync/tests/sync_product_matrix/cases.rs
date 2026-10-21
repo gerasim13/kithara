@@ -212,7 +212,6 @@ impl SyncCase {
         self.decks
     }
 
-    #[cfg(not(target_os = "android"))]
     pub(crate) const fn id(self) -> &'static str {
         self.id
     }
