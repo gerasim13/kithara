@@ -203,6 +203,11 @@ fn elementwise_kernels_and_fade_gains_never_allocate() {
                 fade::gains(curve, &positions, &mut outgoing, &mut incoming),
                 FRAMES
             );
+            for frame in [0, FRAMES / 2, FRAMES - 1] {
+                let (a, b) = fade::gains_at(curve, positions[frame]);
+                assert_eq!(a.to_bits(), outgoing[frame].to_bits());
+                assert_eq!(b.to_bits(), incoming[frame].to_bits());
+            }
         }
     });
 }

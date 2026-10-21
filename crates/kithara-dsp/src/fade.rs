@@ -16,3 +16,12 @@ pub fn gains(
 ) -> usize {
     crate::backend::gains(curve, positions, outgoing, incoming)
 }
+
+/// The outgoing and incoming gains at `position`, bit-identical to [`gains`].
+#[must_use]
+pub fn gains_at(curve: FadeCurve, position: f32) -> (f32, f32) {
+    let (mut outgoing, mut incoming) = ([0.0], [0.0]);
+    gains(curve, &[position], &mut outgoing, &mut incoming);
+    let ([outgoing], [incoming]) = (outgoing, incoming);
+    (outgoing, incoming)
+}
