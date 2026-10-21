@@ -37,6 +37,35 @@ use types::{
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 const MAX_SAFE_INTEGER_F64: f64 = 9_007_199_254_740_991.0;
 
+#[wasm_bindgen::prelude::wasm_bindgen(inline_js = r#"
+export async function ownerWaitDiagnostic() {
+    const locks = await navigator.locks.query();
+    return JSON.stringify({
+        userAgent: navigator.userAgent,
+        isolated: globalThis.crossOriginIsolated,
+        held: locks.held.slice(-8),
+        pending: locks.pending.slice(-8),
+        resources: performance.getEntriesByType("resource").slice(-8).map(entry => ({
+            name: entry.name.slice(0, 256),
+            duration: entry.duration,
+            status: entry.responseStatus,
+        })),
+    });
+}
+"#)]
+extern "C" {
+    #[wasm_bindgen::prelude::wasm_bindgen(catch, js_name = ownerWaitDiagnostic)]
+    fn owner_wait_diagnostic() -> Result<js_sys::Promise, JsValue>;
+}
+
+async fn owner_wait_failure(error: &str) -> String {
+    let diagnostic = match owner_wait_diagnostic() {
+        Ok(promise) => js_sys::futures::JsFuture::from(promise).await,
+        Err(error) => Err(error),
+    };
+    format!("{error}; browser={diagnostic:?}")
+}
+
 fn surface_fixture_url() -> String {
     let wav = Uint8Array::from(
         &b"RIFF\x26\0\0\0WAVEfmt \x10\0\0\0\x01\0\x01\0\x80\xbb\0\0\0\x77\x01\0\x02\0\x10\0data\x02\0\0\0\0\0"[..],
@@ -59,12 +88,17 @@ async fn surface_ids_fixture() -> (AudioPlayer, String, f64) {
     let url = surface_fixture_url();
     let player = AudioPlayer::new_js();
     let id = player.insert_js(url.clone(), -1.0).expect("insert fixture");
-    wait_until(Duration::from_secs(5), "fixture insertion", || {
+    if let Err(error) = wait_until(Duration::from_secs(5), "fixture insertion", || {
         player.tick_js();
         player.item_count_js() == 1
     })
     .await
-    .expect("owner admits fixture insertion");
+    {
+        panic!(
+            "owner admits fixture insertion: {}",
+            owner_wait_failure(&error).await
+        );
+    }
     (player, url, id)
 }
 
