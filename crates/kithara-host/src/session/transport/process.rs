@@ -9,8 +9,9 @@ use kithara_sync::{SessionAnchor, SessionBeat};
 use ringbuf::traits::{Consumer, Producer};
 use triple_buffer::Input;
 
+#[cfg(feature = "offline")]
+use super::OfflineInbox;
 use super::{
-    OfflineInbox,
     commit::{SessionGridGeneration, TransportObservation, TransportProcessError},
     inbox::InboxExchange,
 };
@@ -178,6 +179,7 @@ impl TransportState {
         }
     }
 
+    #[cfg(feature = "offline")]
     pub(crate) fn park_offline_inbox(&mut self) -> Result<OfflineInbox, TransportProcessError> {
         self.acquire_inbox()?;
         let inbox = self
