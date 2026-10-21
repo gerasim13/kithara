@@ -5818,6 +5818,7 @@ dependencies = [
  "derive_more",
  "fieldwork",
  "futures",
+ "gloo-timers",
  "js-sys",
  "kithara-platform",
  "kithara-test-dylib",
