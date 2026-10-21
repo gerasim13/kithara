@@ -43,6 +43,8 @@ struct CaptureBlock {
     item_events: Vec<ItemEvent>,
     event_error: Option<String>,
     refill_probes: Vec<kithara_test_utils::test::usdt::ProbeEvent>,
+    flight_events: Vec<String>,
+    flight_probes: Vec<String>,
 }
 
 impl CaptureBlock {
@@ -62,17 +64,19 @@ impl CaptureBlock {
             })
             .collect::<Vec<_>>();
         format!(
-            "capture={:?} output={:?} started_unix_micros={:?} lane_frames={lane_frames:?} metrics_before={:?} metrics_after={:?} slots_before={:#?} slots_after={:#?} item_events={:?} event_error={:?} refill_probes={:?}",
+            "capture={:?} output={:?} started_unix_micros={:?} lane_frames={lane_frames:?} refill_probes={:?} flight_probes={:?} flight_events={:?} metrics_before={:?} metrics_after={:?} slots_before={:#?} slots_after={:#?} item_events={:?} event_error={:?}",
             self.capture,
             self.output,
             self.started_unix_micros,
+            self.refill_probes,
+            self.flight_probes,
+            self.flight_events,
             self.before.metrics,
             self.after.metrics,
             self.before.slots,
             self.after.slots,
             self.item_events,
             self.event_error,
-            self.refill_probes,
         )
     }
 }
@@ -346,19 +350,34 @@ async fn capture_tiny_ring(
                             )
                     })
                 });
-        let refill_probes = if short && refill_snapshots < 3 {
+        let capture_refill =
+            (short || longest_silent_run(&block) > MAX_EXTRA_SILENT_FRAMES) && refill_snapshots < 3;
+        let (flight_events, flight_probes) = if capture_refill {
+            let mut events = kithara_test_utils::flight::tail();
+            let mut probes = kithara_test_utils::flight::probes_tail();
+            events.reverse();
+            probes.reverse();
+            (events, probes)
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        let refill_probes = if capture_refill {
             refill_snapshots += 1;
             kithara_test_utils::test::usdt::events_of("feeder_refill_unavailable")
                 .into_iter()
                 .rev()
                 .filter(|event| {
-                    snapshot_after
+                    snapshot_before
                         .slots
                         .iter()
-                        .filter_map(|slot| slot.mark)
-                        .any(|mark| {
-                            event.field("segment") == Some(mark.lane.segment.get())
-                                && event.field("lane_frame") == Some(mark.lane.frame)
+                        .zip(&snapshot_after.slots)
+                        .filter_map(|(before, after)| Some((before.mark?, after.mark?)))
+                        .any(|(before, after)| {
+                            before.lane.segment == after.lane.segment
+                                && event.field("segment") == Some(after.lane.segment.get())
+                                && event.field("lane_frame").is_some_and(|frame| {
+                                    (before.lane.frame..=after.lane.frame).contains(&frame)
+                                })
                         })
                 })
                 .take(8)
@@ -390,6 +409,8 @@ async fn capture_tiny_ring(
             item_events: observed_events,
             event_error,
             refill_probes,
+            flight_events,
+            flight_probes,
         });
         samples.extend_from_slice(&block);
         if prepared.player.position() > before {
