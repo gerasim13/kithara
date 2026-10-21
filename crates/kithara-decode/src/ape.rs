@@ -197,6 +197,7 @@ where
                 landed_frame: seek.actual_sample,
                 landed_byte: Some(self.decoder.file_info().seek_byte(seek.frame_index)),
                 preroll: PrerollHint::NotNeeded,
+                clock: crate::LandingClock::Kept,
             }
         };
         if let Some(hooks) = self.runtime.hooks.as_mut() {
