@@ -12,6 +12,7 @@ use kithara::{
     hls::{Hls, HlsConfig},
     platform::time::{Duration, Instant},
     play::{PlayWorker, PlayWorkerConfig},
+    signal::SourceSpan,
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
@@ -22,6 +23,7 @@ use kithara_integration_tests::{
 };
 use kithara_test_fixtures::signal;
 use kithara_test_utils::Xorshift64;
+use num_traits::ToPrimitive;
 use tracing::{info, warn};
 use url::Url;
 use wasm_bindgen::JsValue;
@@ -286,29 +288,42 @@ async fn warm_up(
 /// Read with a pending budget in wall-clock milliseconds. `None` is the end
 /// of the stream; `Some(0)` is a reader that stayed pending for the whole
 /// budget.
-#[kithara_test_utils::kithara::hang_watchdog]
 async fn read_with_yield_limit(
     audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>,
     buf: &mut [f32],
     budget_ms: u32,
 ) -> Option<usize> {
+    read_outcome_with_yield_limit(audio, buf, budget_ms)
+        .await
+        .map(|outcome| match outcome {
+            ReadOutcome::Frames { count, .. } => count.get(),
+            _ => 0,
+        })
+}
+
+#[kithara_test_utils::kithara::hang_watchdog]
+async fn read_outcome_with_yield_limit(
+    audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>,
+    buf: &mut [f32],
+    budget_ms: u32,
+) -> Option<ReadOutcome> {
     let deadline = Date::now() + f64::from(budget_ms);
     loop {
         hang_tick!();
-        match audio.read(buf) {
-            Ok(ReadOutcome::Frames { count, .. }) => {
+        let pending = match audio.read(buf) {
+            Ok(outcome @ ReadOutcome::Frames { .. }) => {
                 hang_reset!();
-                return Some(count.get());
+                return Some(outcome);
             }
             Ok(ReadOutcome::Eof { .. }) => return None,
-            Ok(ReadOutcome::Pending { .. }) => {}
+            Ok(outcome @ ReadOutcome::Pending { .. }) => outcome,
             Err(error) => {
                 warn!(%error, "read failed");
                 return None;
             }
-        }
+        };
         if Date::now() >= deadline {
-            return Some(0);
+            return Some(pending);
         }
         yield_macrotask().await;
     }
@@ -467,6 +482,66 @@ async fn stress_read_samples_integrity(#[future(awt)] stress_source: (TestServer
     );
 }
 
+fn saw_phase_at(span: SourceSpan, frame: u64) -> usize {
+    let (numerator, denominator) = span.source_ratio_at(frame).expect("mapped saw frame");
+    let denominator = denominator.get();
+    let phase = usize::try_from((numerator / denominator) % signal::SAW_PERIOD as u128)
+        .expect("saw phase fits usize");
+    let tap = |phase| {
+        f64::from(signal::Wave::Sawtooth.sample(phase, span.sample_rate().get())) / 32_768.0
+    };
+    let current = tap(phase);
+    let next = tap((phase + 1) % signal::SAW_PERIOD);
+    let fraction = (numerator % denominator).to_f64().expect("source fraction")
+        / denominator.to_f64().expect("source denominator");
+    let expected = ((next - current) * fraction + current)
+        .to_f32()
+        .expect("finite interpolated saw sample");
+    signal::phase::units(expected)
+}
+
+fn saw_pair_continuous(span: SourceSpan, frame: u64, previous: usize, current: usize) -> bool {
+    previous == saw_phase_at(span, frame - 1) && current == saw_phase_at(span, frame)
+}
+
+#[kithara::test(wasm)]
+fn fractional_saw_wrap_oracle_rejects_repeated_dropped_and_zeroed_samples() {
+    let denominator = 2_500_000_u128;
+    let span = SourceSpan::try_from((
+        65_536 * denominator - 81,
+        denominator,
+        std::num::NonZeroU128::new(denominator).expect("source denominator"),
+        std::num::NonZeroU32::new(44_100).expect("source rate"),
+        4,
+    ))
+    .expect("fractional saw source span");
+    let samples = [-0.999_935_2_f32, -0.999_969_5, -0.999_938_96, -0.999_908_45];
+    let errors = |samples: &[f32]| {
+        samples
+            .windows(2)
+            .enumerate()
+            .filter(|(frame, pair)| {
+                !saw_pair_continuous(
+                    span,
+                    (*frame + 1) as u64,
+                    signal::phase::units(pair[0]),
+                    signal::phase::units(pair[1]),
+                )
+            })
+            .count()
+    };
+    assert_eq!(errors(&samples), 0, "fractional wrap is continuous");
+    for corrupted in [samples[0], samples[2], 0.0] {
+        let mut broken = samples;
+        broken[1] = corrupted;
+        assert_eq!(
+            errors(&broken),
+            2,
+            "both adjacent pairs must detect corruption"
+        );
+    }
+}
+
 #[kithara::test(wasm, serial, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 #[kithara_test_utils::kithara::hang_watchdog]
 async fn stress_seek_and_read(#[future(awt)] stress_source: (TestServerHelper, Url)) {
@@ -506,11 +581,17 @@ async fn stress_seek_and_read(#[future(awt)] stress_source: (TestServerHelper, U
         let mut position_checked = false;
         for read_idx in 0..10 {
             hang_tick!();
-            let n = read_with_yield(&mut audio, &mut buf).await.unwrap_or(0);
-            if n == 0 {
+            let Some(ReadOutcome::Frames {
+                count, source_span, ..
+            }) = read_outcome_with_yield_limit(&mut audio, &mut buf, 500).await
+            else {
                 break;
-            }
+            };
+            let n = count.get();
             let frames = n / channels;
+            let span = source_span.expect("rendered seek PCM has exact source geometry");
+            assert_eq!(span.output_frames(), frames as u64);
+            assert_eq!(span.sample_rate(), spec.sample_rate);
             hang_reset!();
             post_seek_samples += n;
 
@@ -535,7 +616,7 @@ async fn stress_seek_and_read(#[future(awt)] stress_source: (TestServerHelper, U
                 for f in 1..frames {
                     let prev = signal::phase::units(buf[(f - 1) * channels]);
                     let curr = signal::phase::units(buf[f * channels]);
-                    if curr != (prev + 1) % signal::SAW_PERIOD {
+                    if !saw_pair_continuous(span, f as u64, prev, curr) {
                         continuity_errors += 1;
                         if first_breaks.len() < 8 {
                             first_breaks.push(format!(
