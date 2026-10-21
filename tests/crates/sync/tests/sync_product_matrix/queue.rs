@@ -927,7 +927,6 @@ impl QueueMusic {
         let mut starts_seen = 0;
         let mut law_time = Duration::ZERO;
         let mut render_time = Duration::ZERO;
-        let mut history_visits = 0;
         let mut data = CapturedMusic::default();
         let mut cadence = self.start_clock(&mut data).await;
         hang_reset!();
@@ -1022,18 +1021,15 @@ impl QueueMusic {
                 .iter()
                 .map(|(track, slot)| (track.track.item, *slot))
                 .collect();
-            let inspected_before = data.checks.len();
             let law_started = Instant::now();
             self.inspect_bindings(
                 &snapshot,
                 &grid,
-                &grids,
                 (now, next_beat == Some(frame(now))),
                 None,
                 &mut data,
             );
             law_time += law_started.elapsed();
-            history_visits += (data.checks.len() - inspected_before) * grids.len();
             self.retarget_overlap(&consumed, now, &mut data).await;
             let starts = self
                 .deck
@@ -1045,7 +1041,6 @@ impl QueueMusic {
                     grids.len(),
                     law_time.as_micros(),
                     render_time.as_micros(),
-                    history_visits,
                 );
                 starts_seen = starts;
                 reported = Instant::now();
@@ -1100,17 +1095,8 @@ impl QueueMusic {
             {
                 let copied = self.deck.read_snapshot().await;
                 let law_started = Instant::now();
-                let inspected_before = data.checks.len();
-                self.inspect_bindings(
-                    &snapshot,
-                    &grid,
-                    &grids,
-                    (now, true),
-                    Some(&copied),
-                    &mut data,
-                );
+                self.inspect_bindings(&snapshot, &grid, (now, true), Some(&copied), &mut data);
                 law_time += law_started.elapsed();
-                history_visits += (data.checks.len() - inspected_before) * grids.len();
             }
             next_beat = Some(boundary);
             hang_reset!();
@@ -1125,13 +1111,23 @@ impl QueueMusic {
             };
             time::sleep(cadence.saturating_duration_since(ready)).await;
         }
+        let history = self.deck.observe(|observation| {
+            super::binding::published_host_history(
+                observation,
+                &grids,
+                NonZeroU32::new(RATE).expect("Host history clock"),
+                &mut data.failures,
+            )
+        });
+        if let Err(error) = history {
+            data.failures.push(error);
+        }
         self.trace_runtime(
             wall.elapsed().as_secs_f64(),
             &data,
             grids.len(),
             law_time.as_micros(),
             render_time.as_micros(),
-            history_visits,
         );
         tracing::info!(target: "kithara_test::sync::queue321", phase = "render_complete",
             wall_s = wall.elapsed().as_secs_f64(), frame = self.host.position(), frames = data.pcm.len() / 2);
@@ -1219,7 +1215,6 @@ impl QueueMusic {
         grids: usize,
         law_us: u128,
         render_us: u128,
-        history_visits: usize,
     ) {
         let current = self
             .deck
@@ -1249,7 +1244,7 @@ impl QueueMusic {
                 answered = data.answered.len(), current = ?current, tracks = ?tracks,
                 native_starts = ?capture.starts, faded = ?capture.faded, ended = ?capture.ended,
                 consumed_points = capture.consumed.len(), grids, law_checks = data.checks.len(),
-                law_us, render_us, history_visits);
+                law_us, render_us);
         });
     }
 
@@ -1376,7 +1371,6 @@ impl QueueMusic {
         &mut self,
         snapshot: &[(LinkedSnapshot<TrackSnapshot>, SlotSnapshot)],
         grid: &BeatGridSnapshot,
-        grids: &[(SessionFrame, BeatGridSnapshot)],
         point: (SessionFrame, bool),
         copied: Option<&[(LinkedSnapshot<TrackSnapshot>, SlotSnapshot)]>,
         data: &mut CapturedMusic,
@@ -1442,17 +1436,9 @@ impl QueueMusic {
             }
             let result = self.deck.observe(|o| {
                 if self.forward_oracle {
-                    super::binding::queue_observation(
-                        &voice.model,
-                        grid,
-                        grids,
-                        o,
-                        linked,
-                        first,
-                        *slot,
-                    )
+                    super::binding::queue_observation(&voice.model, grid, o, linked, first, *slot)
                 } else {
-                    super::binding::executed_law(&voice.model, grid, grids, o, linked, first, *slot)
+                    super::binding::executed_law(&voice.model, grid, o, linked, first, *slot)
                 }
             });
             let (speed, failures, mut evidence, reference) = result.unwrap_or_else(|error| {
