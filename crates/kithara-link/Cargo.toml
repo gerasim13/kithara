@@ -9,6 +9,43 @@ description = "Host-tempo synchronization decorators for tracks and decks."
 keywords = ["audio", "player", "tempo", "sync", "dj"]
 categories = ["multimedia::audio"]
 
+[features]
+default = [
+    "backend-cpal",
+    "symphonia",
+    "resample-rubato",
+    "stretch-signalsmith",
+    "client-reqwest",
+    "tls-rustls",
+]
+backend-cpal = ["kithara-host/backend-cpal"]
+client-reqwest = ["kithara-host/client-reqwest", "kithara-queue/client-reqwest", "kithara-render/client-reqwest"]
+client-wreq = ["kithara-host/client-wreq", "kithara-queue/client-wreq", "kithara-render/client-wreq"]
+tls-rustls = ["kithara-host/tls-rustls", "kithara-queue/tls-rustls", "kithara-render/tls-rustls"]
+tls-native = ["kithara-host/tls-native", "kithara-queue/tls-native", "kithara-render/tls-native"]
+apple = ["kithara-host/apple", "kithara-queue/apple"]
+apple-fused-src = ["kithara-host/apple-fused-src", "kithara-queue/apple-fused-src"]
+symphonia = ["kithara-host/symphonia", "kithara-queue/symphonia", "kithara-render/symphonia"]
+webcodecs = ["kithara-host/webcodecs", "kithara-queue/webcodecs"]
+fdk-aac = ["kithara-host/fdk-aac", "kithara-queue/fdk-aac"]
+resample-glide = ["kithara-host/resample-glide"]
+resample-rubato = ["kithara-host/resample-rubato"]
+stretch-signalsmith = [
+    "kithara-host/stretch-signalsmith",
+    "kithara-queue/stretch-signalsmith",
+    "kithara-render/stretch-signalsmith",
+]
+stretch-bungee = ["kithara-host/stretch-bungee", "kithara-queue/stretch-bungee", "kithara-render/stretch-bungee"]
+stretch-glide = ["kithara-host/stretch-glide", "kithara-queue/stretch-glide", "kithara-render/stretch-glide"]
+stretch-identity = [
+    "kithara-host/stretch-identity",
+    "kithara-queue/stretch-identity",
+    "kithara-render/stretch-identity",
+]
+flash = ["kithara-host/flash", "kithara-render/flash"]
+no-block = ["kithara-host/no-block", "kithara-render/no-block"]
+usdt = ["kithara-host/usdt", "kithara-queue/usdt", "kithara-render/usdt"]
+
 [dependencies]
 kithara-beat = { workspace = true }
 kithara-bufpool = { workspace = true }

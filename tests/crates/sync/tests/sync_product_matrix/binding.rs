@@ -185,7 +185,15 @@ pub(super) fn check(
     let mut expected_speed: f32 =
         (f64::from(*host_tempo.value()) / f64::from(*source_tempo.value())).as_();
     if let Some(reference) = reference {
-        expected_speed = binding_speed(&source_grid, host_grid, mark.session, reference)?;
+        expected_speed =
+            binding_speed(&source_grid, host_grid, mark.session, reference).map_err(|error| {
+                format!(
+                    "{error}; mark={mark:?}; source={source:?}; offset={offset}; \
+                     exact_source_ratio={:?}; source_beat={source_beat:.17}; \
+                     reference={reference:?}",
+                    span.source_ratio_at(offset),
+                )
+            })?;
     }
     Ok(GridBinding {
         mark,
@@ -211,7 +219,9 @@ fn binding_speed(
         + (grid_beat_at(host, MapPosition::Session(next))? - reference.host_beat);
     let rate = source.axis().sample_rate();
     let start = source_media_for_beat(source, from, rate)?;
-    if ordinary_span_is_local(source, from, to, rate, false)? {
+    if ordinary_span_is_local(source, from, to, rate, false)
+        .map_err(|error| format!("{error}; at={at:?}; next={next:?}; reference={reference:?}"))?
+    {
         return Ok((grid_tempo(host, MapPosition::Session(at))?
             / grid_tempo(source, media_seconds_position(start, rate)?)?)
         .as_());
@@ -943,7 +953,14 @@ fn ordinary_span_is_local(
             return if boundary == to {
                 Ok(true)
             } else {
-                Err("source span leaves the supplied bounded geometry".to_owned())
+                Err(format!(
+                    "source span leaves the supplied bounded geometry; \
+                     from={from:.17}; to={to:.17}; include_endpoints={include_endpoints}; \
+                     position_seconds={position:.17}; cursor={cursor:?}; \
+                     region_start={:?}; region_end={:?}; boundary={boundary:.17}; rate={rate}",
+                    region.start(),
+                    region.end(),
+                ))
             };
         }
         cursor = region.end();
@@ -1039,15 +1056,10 @@ fn cue_prefix(
     declared_binding_at(source, host, beat, frame_after(origin, through)?)
 }
 
-fn published_host_history(
+fn owned_host_history(
     observation: &LinkObservation,
-    host_grids: &[(SessionFrame, BeatGridSnapshot)],
     rate: NonZeroU32,
-    failures: &mut Vec<String>,
-) -> Result<usize, String> {
-    if host_grids.is_empty() {
-        return Err("law has no actual published Host execution history".to_owned());
-    }
+) -> Result<(usize, &TempoTrajectory), String> {
     let (host_history_input, host_history) = observation
         .owner_inputs
         .iter()
@@ -1058,6 +1070,19 @@ fn published_host_history(
     if host_history.sample_rate() != rate {
         return Err("published Host proof and consumed source have different clocks".to_owned());
     }
+    Ok((host_history_input, host_history))
+}
+
+pub(super) fn published_host_history(
+    observation: &LinkObservation,
+    host_grids: &[(SessionFrame, BeatGridSnapshot)],
+    rate: NonZeroU32,
+    failures: &mut Vec<String>,
+) -> Result<usize, String> {
+    if host_grids.is_empty() {
+        return Err("law has no actual published Host execution history".to_owned());
+    }
+    let (host_history_input, host_history) = owned_host_history(observation, rate)?;
     for (frame, published) in host_grids {
         let expected_beat = f64::from(host_history.beat_at(*frame));
         let actual_beat = grid_beat_at(published, MapPosition::Session(*frame))?;
@@ -1986,7 +2011,6 @@ fn check_commanded_spans(
 pub(super) fn executed_law(
     model: &BeatGridModel,
     host_grid: &BeatGridSnapshot,
-    host_grids: &[(SessionFrame, BeatGridSnapshot)],
     observation: &LinkObservation,
     snapshot: &kithara::link::LinkedSnapshot<kithara::play::TrackSnapshot>,
     capture_start: SlotSnapshot,
@@ -2034,7 +2058,7 @@ pub(super) fn executed_law(
         &curves,
         configured_speed,
     )?;
-    let host_history_input = published_host_history(observation, host_grids, rate, &mut failures)?;
+    let (host_history_input, _) = owned_host_history(observation, rate)?;
     let mut reference =
         consumed_cue_law(model, observation, &curves, snapshot, rate, &mut failures)?;
     let source_grid = declared_source_grid(model, rate)?;
@@ -2169,7 +2193,6 @@ fn queue_source_supported(
 pub(super) fn queue_observation(
     model: &BeatGridModel,
     host_grid: &BeatGridSnapshot,
-    host_grids: &[(SessionFrame, BeatGridSnapshot)],
     observation: &LinkObservation,
     snapshot: &kithara::link::LinkedSnapshot<kithara::play::TrackSnapshot>,
     capture_start: SlotSnapshot,
@@ -2182,7 +2205,6 @@ pub(super) fn queue_observation(
         return executed_law(
             model,
             host_grid,
-            host_grids,
             observation,
             snapshot,
             capture_start,
@@ -4464,4 +4486,106 @@ fn confirmed_targets_and_consumed_laws_have_separate_clocks() {
             "the last positive interval must fail physical source area at horizon {end}: {failures:?}"
         );
     }
+}
+
+#[kithara::test]
+fn completed_host_history_checks_early_cells_and_prior_retimes() {
+    let rate = NonZeroU32::new(48_000).expect("Host rate");
+    let initial = TempoTrajectory::new(
+        TempoStep {
+            frame: SessionFrame::new(0),
+            beat: SessionBeat::default(),
+            tempo: Tempo::new(100.0).expect("initial tempo"),
+        },
+        NonZeroU16::new(4).expect("meter"),
+        rate,
+    );
+    let mut complete = initial.clone();
+    complete
+        .push(
+            SessionFrame::new(48_000),
+            Tempo::new(120.0).expect("retarget"),
+        )
+        .expect("real earlier tempo step");
+    let snapshot = |at| {
+        BeatGridSnapshot::session(
+            BeatGridId::allocate().expect("published Host grid id"),
+            BeatGridRevision::first(),
+            SessionEpoch::new(0),
+            complete.anchor_at(at),
+            None,
+        )
+    };
+    let mut grids: Vec<_> = [0, 24_000, 96_000]
+        .into_iter()
+        .map(|frame| {
+            let at = SessionFrame::new(frame);
+            (at, snapshot(at))
+        })
+        .collect();
+    let mut observation = LinkObservation {
+        owner_inputs: vec![LinkOwnerInput {
+            item: None,
+            at: Some(SessionFrame::new(48_000)),
+            trajectory: Some(complete.clone()),
+            kind: LinkOwnerInputKind::Retime,
+        }],
+        ..LinkObservation::default()
+    };
+    let mut failures = Vec::new();
+    assert_eq!(
+        published_host_history(&observation, &grids, rate, &mut failures),
+        Ok(0)
+    );
+    assert!(failures.is_empty());
+
+    grids[0].1 = BeatGridSnapshot::session(
+        BeatGridId::allocate().expect("wrong first grid id"),
+        BeatGridRevision::first(),
+        SessionEpoch::new(0),
+        SessionAnchor::new(
+            SessionFrame::new(0),
+            SessionBeat::new(1.0).expect("wrong initial beat"),
+            100.0 / 60.0,
+            rate,
+        )
+        .expect("valid misplaced early grid"),
+        None,
+    );
+    published_host_history(&observation, &grids, rate, &mut failures)
+        .expect("all snapshots are queryable");
+    assert_eq!(
+        failures,
+        [
+            "Host execution at SessionFrame(0): complete owner trajectory beat 0 differs from actual published beat 1 or reached tempo"
+        ]
+    );
+    grids[0].1 = snapshot(SessionFrame::new(0));
+    failures.clear();
+
+    observation.owner_inputs[0].trajectory = Some(initial);
+    published_host_history(&observation, &grids, rate, &mut failures)
+        .expect("the incomplete trajectory is queryable");
+    assert_eq!(failures.len(), 1);
+    assert!(failures[0].starts_with("Host execution at SessionFrame(96000):"));
+    observation.owner_inputs[0].trajectory = Some(complete);
+    failures.clear();
+    assert_eq!(
+        published_host_history(&observation, &[], rate, &mut failures),
+        Err("law has no actual published Host execution history".to_owned()),
+    );
+    assert_eq!(
+        published_host_history(
+            &observation,
+            &grids,
+            NonZeroU32::new(44_100).expect("other clock"),
+            &mut failures,
+        ),
+        Err("published Host proof and consumed source have different clocks".to_owned()),
+    );
+    observation.owner_inputs.clear();
+    assert_eq!(
+        published_host_history(&observation, &grids, rate, &mut failures),
+        Err("law has no real complete Host trajectory input".to_owned()),
+    );
 }

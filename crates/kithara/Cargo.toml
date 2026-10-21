@@ -129,6 +129,7 @@ client-reqwest = [
     "kithara-file?/client-reqwest",
     "kithara-hls?/client-reqwest",
     "kithara-host?/client-reqwest",
+    "kithara-link?/client-reqwest",
     "kithara-play?/client-reqwest",
     "kithara-queue?/client-reqwest",
     "kithara-storage?/client-reqwest",
@@ -148,6 +149,7 @@ client-wreq = [
     "kithara-file?/client-wreq",
     "kithara-hls?/client-wreq",
     "kithara-host?/client-wreq",
+    "kithara-link?/client-wreq",
     "kithara-play?/client-wreq",
     "kithara-queue?/client-wreq",
     "kithara-storage?/client-wreq",
@@ -167,6 +169,7 @@ tls-rustls = [
     "kithara-file?/tls-rustls",
     "kithara-hls?/tls-rustls",
     "kithara-host?/tls-rustls",
+    "kithara-link?/tls-rustls",
     "kithara-play?/tls-rustls",
     "kithara-queue?/tls-rustls",
     "kithara-storage?/tls-rustls",
@@ -186,6 +189,7 @@ tls-native = [
     "kithara-file?/tls-native",
     "kithara-hls?/tls-native",
     "kithara-host?/tls-native",
+    "kithara-link?/tls-native",
     "kithara-play?/tls-native",
     "kithara-queue?/tls-native",
     "kithara-storage?/tls-native",
@@ -202,6 +206,7 @@ symphonia = [
     "kithara-audio?/symphonia",
     "kithara-decode?/symphonia",
     "kithara-host?/symphonia",
+    "kithara-link?/symphonia",
     "kithara-play?/symphonia",
     "kithara-queue?/symphonia",
 ]
@@ -212,6 +217,7 @@ webcodecs = [
     "kithara-audio?/webcodecs",
     "kithara-decode?/webcodecs",
     "kithara-host?/webcodecs",
+    "kithara-link?/webcodecs",
     "kithara-play?/webcodecs",
     "kithara-queue?/webcodecs",
 ]
@@ -224,6 +230,7 @@ fdk-aac = [
     "kithara-decode?/fdk-aac",
     "kithara-encode?/fdk-aac",
     "kithara-host?/fdk-aac",
+    "kithara-link?/fdk-aac",
     "kithara-play?/fdk-aac",
     "kithara-queue?/fdk-aac",
 ]
@@ -234,6 +241,7 @@ resample-glide = [
     "kithara-audio?/resample-glide",
     "kithara-decode?/resample-glide",
     "kithara-host?/resample-glide",
+    "kithara-link?/resample-glide",
     "kithara-play?/resample-glide",
     "kithara-resampler?/resample-glide",
 ]
@@ -241,6 +249,7 @@ resample-rubato = [
     "kithara-audio?/resample-rubato",
     "kithara-decode?/resample-rubato",
     "kithara-host?/resample-rubato",
+    "kithara-link?/resample-rubato",
     "kithara-play?/resample-rubato",
     "kithara-resampler?/resample-rubato",
 ]
@@ -251,6 +260,7 @@ analysis-waveform = ["analysis", "kithara-analysis/analysis-waveform", "kithara-
 stretch-signalsmith = [
     "stretch",
     "kithara-host?/stretch-signalsmith",
+    "kithara-link?/stretch-signalsmith",
     "kithara-play?/stretch-signalsmith",
     "kithara-queue?/stretch-signalsmith",
     "kithara-stretch/stretch-signalsmith",
@@ -259,6 +269,7 @@ stretch-signalsmith = [
 stretch-bungee = [
     "stretch",
     "kithara-host?/stretch-bungee",
+    "kithara-link?/stretch-bungee",
     "kithara-play?/stretch-bungee",
     "kithara-queue?/stretch-bungee",
     "kithara-stretch/stretch-bungee",
@@ -267,6 +278,7 @@ stretch-bungee = [
 stretch-glide = [
     "stretch",
     "kithara-host?/stretch-glide",
+    "kithara-link?/stretch-glide",
     "kithara-play?/stretch-glide",
     "kithara-queue?/stretch-glide",
     "kithara-stretch/stretch-glide",
@@ -275,6 +287,7 @@ stretch-glide = [
 stretch-identity = [
     "stretch",
     "kithara-host?/stretch-identity",
+    "kithara-link?/stretch-identity",
     "kithara-play?/stretch-identity",
     "kithara-queue?/stretch-identity",
     "kithara-stretch/stretch-identity",
@@ -292,12 +305,24 @@ beat-dsp = ["analysis", "beat", "kithara-analysis/beat-dsp"]
 ui-capture = ["ui", "kithara-ui/capture"]
 ui-iced = ["ui", "kithara-ui/iced"]
 ui-masonry = ["ui", "kithara-ui/masonry"]
-flash = ["platform", "dep:kithara-test-utils", "kithara-platform/flash", "kithara-test-utils/flash"]
+flash = [
+    "platform",
+    "dep:kithara-test-utils",
+    "kithara-platform/flash",
+    "kithara-test-utils/flash",
+    "kithara-link?/flash",
+]
 loom = ["platform", "kithara-platform/loom"]
-no-block = ["platform", "dep:kithara-test-utils", "kithara-platform/no-block", "kithara-test-utils/no-block"]
+no-block = [
+    "platform",
+    "dep:kithara-test-utils",
+    "kithara-platform/no-block",
+    "kithara-test-utils/no-block",
+    "kithara-link?/no-block",
+]
 tokio-net = ["platform", "kithara-platform/tokio-net"]
 tokio-rt-multi-thread = ["platform", "kithara-platform/tokio-rt-multi-thread"]
-backend-cpal = ["host", "kithara-host/backend-cpal"]
+backend-cpal = ["host", "kithara-host/backend-cpal", "kithara-link?/backend-cpal"]
 backend-web-audio = ["host"]
 usdt = [
     "dep:kithara-test-utils",
@@ -311,6 +336,7 @@ usdt = [
     "kithara-file?/usdt",
     "kithara-hls?/usdt",
     "kithara-host?/usdt",
+    "kithara-link?/usdt",
     "kithara-play?/usdt",
     "kithara-queue?/usdt",
     "kithara-stream?/usdt",
@@ -353,6 +379,7 @@ apple = [
     "kithara-audio?/apple",
     "kithara-decode?/apple",
     "kithara-host?/apple",
+    "kithara-link?/apple",
     "kithara-play?/apple",
     "kithara-queue?/apple",
 ]
@@ -361,6 +388,7 @@ apple-fused-src = [
     "kithara-audio?/apple-fused-src",
     "kithara-decode?/apple",
     "kithara-host?/apple-fused-src",
+    "kithara-link?/apple-fused-src",
     "kithara-play?/apple-fused-src",
     "kithara-queue?/apple-fused-src",
 ]

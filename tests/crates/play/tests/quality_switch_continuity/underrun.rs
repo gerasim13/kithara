@@ -1,4 +1,4 @@
-use std::ops::Range;
+use std::ops::{Range, RangeInclusive};
 
 use cochlea_features::{Audio as ProbeAudio, SegmentOpts, segment_timeline};
 use kithara::{
@@ -9,6 +9,7 @@ use kithara::{
 };
 use kithara_integration_tests::{CreatedHls, TestServerHelper, fixture_protocol::DelayRule};
 use kithara_render::bridge::DeckSnapshot;
+use num_traits::ToPrimitive;
 
 use super::*;
 use crate::bufpool_ext::pools;
@@ -77,6 +78,23 @@ impl CaptureBlock {
 }
 
 impl Render {
+    fn capture_window(&self) -> RangeInclusive<u128> {
+        let mut times = self.blocks.iter().map(|block| {
+            block
+                .started_unix_micros
+                .expect("capture block has a wall timestamp")
+        });
+        let first = times.next().expect("capture has blocks");
+        let last = times.fold(first, |previous, next| {
+            assert!(
+                previous <= next,
+                "capture timestamps must not move backwards"
+            );
+            next
+        });
+        first..=last
+    }
+
     fn silence_diagnostic(&self) -> String {
         let mut current = 0..0;
         let mut longest = 0..0;
@@ -161,7 +179,7 @@ fn cold_target_fixture(target: usize) -> HlsFixtureBuilder {
     }])
 }
 
-#[kithara::flash(io)]
+#[kithara::flash(true)]
 #[kithara_test_utils::kithara::hang_watchdog]
 async fn prepare_tiny_ring_player(
     master_url: &url::Url,
@@ -268,7 +286,7 @@ async fn prepare_tiny_ring_player(
     }
 }
 
-#[kithara::flash(io)]
+#[kithara::flash(true)]
 #[kithara_test_utils::kithara::hang_watchdog]
 async fn render_to_capture_frame(player: &mut OfflinePlayer, pacer: &mut Pacer, label: &str) {
     loop {
@@ -291,7 +309,7 @@ async fn render_to_capture_frame(player: &mut OfflinePlayer, pacer: &mut Pacer, 
     }
 }
 
-#[kithara::flash(io)]
+#[kithara::flash(true)]
 #[kithara_test_utils::kithara::hang_watchdog]
 async fn capture_tiny_ring(
     prepared: &mut PreparedPlayer,
@@ -385,13 +403,8 @@ async fn capture_tiny_ring(
     (samples, decoder_events, blocks)
 }
 
-async fn render_tiny_ring_control(
-    master_url: &url::Url,
-    transition: Transition,
-    backend: DecoderBackend,
-) -> Render {
+async fn capture_tiny_ring_control(mut prepared: PreparedPlayer, transition: Transition) -> Render {
     let label = format!("{}-tiny-ring-control", transition.label);
-    let mut prepared = prepare_tiny_ring_player(master_url, transition.from, backend, &label).await;
     let (samples, decoder_events, blocks) = capture_tiny_ring(&mut prepared).await;
     assert_eq!(
         prepared.abr.current_variant_index(),
@@ -411,13 +424,8 @@ async fn render_tiny_ring_control(
     result
 }
 
-async fn render_tiny_ring_switch(
-    master_url: &url::Url,
-    transition: Transition,
-    backend: DecoderBackend,
-) -> Render {
+async fn capture_tiny_ring_switch(mut prepared: PreparedPlayer, transition: Transition) -> Render {
     let label = format!("{}-tiny-ring-switch", transition.label);
-    let mut prepared = prepare_tiny_ring_player(master_url, transition.from, backend, &label).await;
     prepared
         .abr
         .set_mode(AbrMode::manual(transition.to))
@@ -461,19 +469,66 @@ async fn render_tiny_ring_switch(
 }
 
 fn cochlea_silent_buckets(samples: &[f32]) -> usize {
-    let audio = ProbeAudio {
-        samples: samples.to_vec(),
-        channels: CHANNELS,
-        sample_rate: SAMPLE_RATE,
-    };
-    segment_timeline(
-        &audio,
-        &SegmentOpts::default().with_window_ms(COCHLEA_WINDOW_MS),
-    )
-    .segments
-    .iter()
-    .filter(|segment| segment.silent)
-    .count()
+    let opts = SegmentOpts::default().with_window_ms(COCHLEA_WINDOW_MS);
+    let window_frames = (opts.window_ms / 1000.0 * f64::from(SAMPLE_RATE))
+        .round()
+        .to_usize()
+        .expect("Cochlea window fits a frame count");
+    samples
+        .chunks(window_frames * usize::from(CHANNELS))
+        .flat_map(|samples| {
+            let audio = ProbeAudio {
+                samples: samples.to_vec(),
+                channels: CHANNELS,
+                sample_rate: SAMPLE_RATE,
+            };
+            segment_timeline(&audio, &opts).segments
+        })
+        .filter(|segment| segment.silent)
+        .count()
+}
+
+#[kithara::test]
+fn cochlea_silence_buckets_preserve_whole_timeline_boundaries() {
+    let opts = SegmentOpts::default().with_window_ms(COCHLEA_WINDOW_MS);
+    let window_frames = (opts.window_ms / 1000.0 * f64::from(SAMPLE_RATE))
+        .round()
+        .to_usize()
+        .expect("Cochlea window fits a frame count");
+    let frames = window_frames * 8 + 17;
+    let channels = usize::from(CHANNELS);
+    let mut samples = (0..frames)
+        .flat_map(|frame| match frame / window_frames {
+            0 | 5 | 6 | 8 => [0.0, 0.0],
+            1 => [0.000_999, 0.000_999],
+            2 => [0.001_001, 0.001_001],
+            3 => [0.5, -0.5],
+            4 => [0.002, 0.0],
+            _ => [0.25, 0.25],
+        })
+        .collect::<Vec<_>>();
+    samples[(window_frames * 6 - 1) * channels] = 0.25;
+    samples[window_frames * 6 * channels] = 0.25;
+    let ends = std::iter::once(0)
+        .chain((1..=8).flat_map(|window| {
+            let boundary = window * window_frames;
+            [boundary - 1, boundary, boundary + 1]
+        }))
+        .chain(std::iter::once(frames));
+    for end in ends {
+        let prefix = &samples[..end * channels];
+        let audio = ProbeAudio {
+            samples: prefix.to_vec(),
+            channels: CHANNELS,
+            sample_rate: SAMPLE_RATE,
+        };
+        let expected = segment_timeline(&audio, &opts)
+            .segments
+            .iter()
+            .filter(|segment| segment.silent)
+            .count();
+        assert_eq!(cochlea_silent_buckets(prefix), expected, "prefix={end}");
+    }
 }
 
 #[kithara::test(
@@ -533,10 +588,23 @@ async fn target_rebuild_keeps_player_output_continuous(
     let (_server, created) = source;
     let master_url = created.master_url();
 
-    // Played side by side, the control hears the same host load the switch does.
     let (control, switched) = join!(
-        render_tiny_ring_control(&master_url, AAC_TO_FLAC, backend),
-        render_tiny_ring_switch(&master_url, AAC_TO_FLAC, backend),
+        prepare_tiny_ring_player(
+            &master_url,
+            AAC_TO_FLAC.from,
+            backend,
+            "target-rebuild-control"
+        ),
+        prepare_tiny_ring_player(
+            &master_url,
+            AAC_TO_FLAC.from,
+            backend,
+            "target-rebuild-switch"
+        ),
+    );
+    let (control, switched) = join!(
+        capture_tiny_ring_control(control, AAC_TO_FLAC),
+        capture_tiny_ring_switch(switched, AAC_TO_FLAC),
     );
     assert_eq!(
         switched.capture_frame, control.capture_frame,
@@ -586,31 +654,24 @@ async fn cold_target_variant_switch_keeps_playback_uninterrupted(
         .map(|(transition, (_server, created))| (transition, created.master_url()))
         .collect();
     let mut failures = Vec::new();
-    // A no-switch control depends only on the source variant, and every
-    // fixture serves its source variant undelayed, so each source plays once.
-    // Switches play in pairs, beside any control their sources still lack, so
-    // a control hears the same host load as the switches it is compared with.
-    let mut controls: [Option<Render>; 3] = std::array::from_fn(|_| None);
     for [(first, first_url), (second, second_url)] in sources.as_chunks::<2>().0 {
-        let first_control = controls[first.from].is_none().then_some(*first);
-        let second_control =
-            (controls[second.from].is_none() && second.from != first.from).then_some(*second);
-        let (first_rendered, second_rendered, first_switched, second_switched) = join!(
-            source_control(first_url, first_control, backend),
-            source_control(second_url, second_control, backend),
-            render_tiny_ring_switch(first_url, *first, backend),
-            render_tiny_ring_switch(second_url, *second, backend),
+        let (first_control, second_control, first_switch, second_switch) = join!(
+            prepare_tiny_ring_player(first_url, first.from, backend, first.label),
+            prepare_tiny_ring_player(second_url, second.from, backend, second.label),
+            prepare_tiny_ring_player(first_url, first.from, backend, first.label),
+            prepare_tiny_ring_player(second_url, second.from, backend, second.label),
         );
-        for (transition, rendered) in [(first, first_rendered), (second, second_rendered)] {
-            if let Some(rendered) = rendered {
-                controls[transition.from] = Some(rendered);
-            }
-        }
-        for (transition, switched) in [(first, first_switched), (second, second_switched)] {
-            let control = controls[transition.from]
-                .as_ref()
-                .expect("every source variant control renders with its first switch");
-            failures.extend(cold_switch_failures(*transition, control, &switched));
+        let (first_control, second_control, first_switched, second_switched) = join!(
+            capture_tiny_ring_control(first_control, *first),
+            capture_tiny_ring_control(second_control, *second),
+            capture_tiny_ring_switch(first_switch, *first),
+            capture_tiny_ring_switch(second_switch, *second),
+        );
+        for (transition, control, switched) in [
+            (first, first_control, first_switched),
+            (second, second_control, second_switched),
+        ] {
+            failures.extend(cold_switch_failures(*transition, &control, &switched));
         }
     }
     assert!(
@@ -618,19 +679,6 @@ async fn cold_target_variant_switch_keeps_playback_uninterrupted(
         "switching to a cold target variant interrupted playback (delay_ms={COLD_TARGET_SEGMENT_DELAY_MS}): {}",
         failures.join("; "),
     );
-}
-
-/// The no-switch control of `transition`'s source variant, when it still
-/// needs one.
-async fn source_control(
-    master_url: &url::Url,
-    transition: Option<Transition>,
-    backend: DecoderBackend,
-) -> Option<Render> {
-    match transition {
-        Some(transition) => Some(render_tiny_ring_control(master_url, transition, backend).await),
-        None => None,
-    }
 }
 
 fn cold_switch_failures(
@@ -641,6 +689,14 @@ fn cold_switch_failures(
     assert_eq!(
         switched.capture_frame, control.capture_frame,
         "{} switch and no-switch control must start at the same source frame",
+        transition.label,
+    );
+    let control_window = control.capture_window();
+    let switch_window = switched.capture_window();
+    assert!(
+        control_window.start() <= switch_window.end()
+            && switch_window.start() <= control_window.end(),
+        "{} must compare concurrent captures: control={control_window:?}, switch={switch_window:?}",
         transition.label,
     );
     let mut failures = Vec::new();
