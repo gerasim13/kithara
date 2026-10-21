@@ -6,6 +6,7 @@ use kithara::{
     events::TrackId,
     platform::time::{self, Duration, WallInstant},
     play::PlayerEvent,
+    signal::AudioChunkInfo,
 };
 use kithara_integration_tests::offline::{OfflinePlayer, OfflinePlayerOptions};
 use kithara_test_fixtures::assets;
@@ -70,15 +71,10 @@ async fn fixed_rate_reader_keeps_source_and_player_clock_at_unity() {
         "a rate-2 lane must exhaust the same PCM in half the output blocks, \
          including warmup and excluding the first silent block"
     );
-    assert_eq!(
-        baseline_advance,
-        u64::try_from(CLOCK_BLOCKS * BLOCK_FRAMES).expect("clock window fits u64"),
-        "the unity media clock must advance by every rendered source frame"
-    );
-    assert_eq!(
-        requested_fast_advance,
-        baseline_advance * 2,
-        "the lane's media clock must follow its PCM speed exactly"
+    assert!(
+        (requested_fast_advance - baseline_advance * f64::from(FAST_RATE)).abs() < f64::EPSILON,
+        "the lane's media clock must follow its PCM speed exactly: \
+         {requested_fast_advance}s vs {baseline_advance}s at {FAST_RATE}"
     );
     completed(oracle.close()).await;
 }
@@ -127,11 +123,12 @@ fn rate_events(events: Vec<PlayerEvent>) -> Vec<f32> {
         .collect()
 }
 
-#[kithara::flash(io)]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn loaded_harness(rate: f32) -> OfflinePlayer {
     let harness = completed(OfflinePlayer::with_sample_rate(
-        OfflinePlayerOptions::builder().build(),
+        OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
+            .build(),
         SAMPLE_RATE,
     ))
     .await;
@@ -141,7 +138,7 @@ async fn loaded_harness(rate: f32) -> OfflinePlayer {
         .to_str()
         .expect("UTF-8 fixture path")
         .to_owned();
-    completed(harness.with_queue(move |player| {
+    let deck_id = completed(harness.with_queue(move |player| {
         player.set_default_rate(rate).expect("initial lane speed");
         let deck_id = TrackId::allocate();
         player
@@ -150,21 +147,16 @@ async fn loaded_harness(rate: f32) -> OfflinePlayer {
         player
             .select(deck_id, kithara::queue::Transition::None)
             .expect("select the item");
+        deck_id
     }))
     .await;
 
-    let deadline = WallInstant::now() + Duration::from_secs(5);
-    while !harness
-        .player()
-        .current()
-        .is_some_and(|track| track.status == kithara::queue::TrackStatus::Consumed)
-    {
-        hang_tick!();
-        assert!(WallInstant::now() < deadline, "WAV lane becomes loaded");
-        let _ = completed(harness.render(BLOCK_FRAMES)).await;
-        let _ = completed(harness.tick_and_drain()).await;
-        time::sleep(Duration::from_millis(5)).await;
-    }
+    completed(harness.render_until_current(
+        deck_id,
+        BLOCK_FRAMES,
+        WallInstant::now() + Duration::from_secs(5),
+    ))
+    .await;
     hang_reset!();
     completed(harness.with_queue(kithara::queue::QueueControl::play)).await;
     for _ in 0..WARMUP_BLOCKS {
@@ -196,49 +188,87 @@ async fn blocks_until_silence(rate: f32) -> usize {
 }
 
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-async fn media_advance(rate: f32) -> u64 {
+async fn media_advance(rate: f32) -> f64 {
     let harness = loaded_harness(rate).await;
-    let start = media_frame(&harness);
+    let (start, source) = source_frame(&harness);
     for _ in 0..CLOCK_BLOCKS {
         hang_tick!();
         let _ = completed(harness.render(BLOCK_FRAMES)).await;
         let _ = completed(harness.tick_and_drain()).await;
         hang_reset!();
     }
-    let advance = media_frame(&harness) - start;
+    let (end, finished) = source_frame(&harness);
+    assert_eq!(
+        (
+            source.segment,
+            source.source_revision,
+            source.render_revision,
+            source.mapping_revision
+        ),
+        (
+            finished.segment,
+            finished.source_revision,
+            finished.render_revision,
+            finished.mapping_revision
+        ),
+        "the fixed source keeps its identity during the measured blocks",
+    );
+    let advance = u32::try_from(end.checked_sub(start).expect("source clock advances"))
+        .expect("bounded measured source frames");
+    let output_frames = u32::try_from(CLOCK_BLOCKS * BLOCK_FRAMES).expect("bounded output frames");
+    assert_eq!(
+        f64::from(advance),
+        f64::from(output_frames) * f64::from(rate),
+        "every measured output frame advances the exact requested source clock",
+    );
     completed(harness.close()).await;
-    advance
+    f64::from(advance) / f64::from(SAMPLE_RATE)
 }
 
-fn media_frame(harness: &OfflinePlayer) -> u64 {
+fn source_frame(harness: &OfflinePlayer) -> (u64, AudioChunkInfo) {
     let snapshot = harness.deck_snapshot();
-    let mut playing = snapshot.slots.iter().filter(|slot| slot.mark.is_some());
-    let slot = playing.next().expect("the PCM track has a mixer mark");
-    assert!(playing.next().is_none(), "the fixture plays one track");
-    let mark = slot.mark.expect("marked slot");
-    let source = slot.source.expect("the mixer observed source PCM");
+    let mut playing = snapshot
+        .slots
+        .iter()
+        .filter(|slot| slot.state == kithara_render::bridge::SlotState::Playing);
+    let slot = playing.next().expect("the fixed reader is playing");
+    assert!(playing.next().is_none(), "exactly one fixed reader plays");
+    let mark = slot.mark.expect("applied source mark");
+    let source = slot.source.expect("consumed source identity");
     assert_eq!(mark.lane.segment, source.segment);
+    assert_eq!(source.media_origin, Some(Duration::ZERO));
+    assert_eq!(source.spec.sample_rate.get(), SAMPLE_RATE);
     let offset = mark
         .lane
         .frame
         .checked_sub(source.lane_frame)
-        .expect("the mark lies inside its source chunk");
-    let (numerator, denominator) = source
+        .expect("mark follows source start");
+    let span = source
         .source_geometry()
-        .expect("source PCM carries exact frame geometry")
+        .expect("exact consumed source clock");
+    assert_eq!(span.render_revision(), source.render_revision);
+    assert_eq!(span.mapping_revision(), source.mapping_revision);
+    assert!(offset <= span.output_frames());
+    let (numerator, denominator) = span
         .source_ratio_at(offset)
-        .expect("the mark lies within the source geometry");
+        .expect("source coordinate at mark");
     assert_eq!(
         numerator % denominator.get(),
         0,
-        "integer playback rates must consume whole source frames"
+        "integer-speed source frame"
     );
-    let frame = u32::try_from(numerator / denominator.get()).expect("fixture frame fits u32");
-    let position = Duration::from_secs_f64(f64::from(frame) / f64::from(SAMPLE_RATE));
+    let frame = u64::try_from(numerator / denominator.get()).expect("source frame fits u64");
     assert_eq!(
-        harness.player().position_seconds(),
-        Some(position.as_secs_f64()),
-        "the published media clock must represent the exact source frame at nanosecond precision"
+        harness
+            .player()
+            .position_seconds()
+            .expect("published player position"),
+        source
+            .spec
+            .duration_for(frame)
+            .expect("published source time")
+            .as_secs_f64(),
+        "the public clock agrees exactly at its nanosecond precision",
     );
-    u64::from(frame)
+    (frame, source)
 }

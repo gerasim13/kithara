@@ -59,7 +59,7 @@ impl<S> QueueSnapshot<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
-    pub(super) fn rate(&self) -> f32 {
+    pub(super) fn applied_rate(&self) -> f32 {
         if self.deck.suspended {
             return 0.0;
         }
@@ -288,6 +288,11 @@ where
     }
 
     delegate::delegate! {
+        to self.view.read() {
+            #[must_use]
+            #[call(applied_rate)]
+            pub fn rate(&self) -> f32;
+        }
         to self.view.read().rows {
             #[must_use]
             pub fn len(&self) -> usize;
@@ -358,11 +363,6 @@ where
                 .track
                 .as_ref()
                 .is_some_and(|track| matches!(track.status, PlayingStatus::Playing { .. }))
-    }
-
-    #[must_use]
-    pub fn rate(&self) -> f32 {
-        self.view.read().rate()
     }
 
     #[must_use]

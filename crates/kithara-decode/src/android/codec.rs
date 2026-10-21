@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use kithara_android::{
     AndroidBackendError,
     media::{
@@ -30,6 +32,7 @@ mod consts {
     pub(super) const INPUT_WAIT_BUDGET_US: i64 = 1_000_000;
     pub(super) const NO_WAIT_US: i64 = 0;
     pub(super) const OUTPUT_DEQUEUE_TIMEOUT_US: i64 = 10_000;
+    pub(super) const MP3_REMOVED_HEAD_FRAMES: u64 = 529;
     pub(super) const PCM16_SCALE: f32 = 32_768.0;
 }
 
@@ -48,6 +51,7 @@ enum DrainState {
 /// encoding and codec delay/padding. Output timestamps and EOS come from the
 /// codec's output queue.
 pub(crate) struct AndroidCodec {
+    media_time_rebase: Duration,
     pcm_encoding: AndroidPcmEncoding,
     spec: AudioSpec,
     track_info: DecoderTrackInfo,
@@ -85,8 +89,20 @@ impl AndroidCodec {
         let output = OutputFormat::read(&codec.output_format()?)?;
         let spec = output_spec(&output)?;
         let pcm_encoding = output.pcm_encoding;
+        let media_time_rebase = if track.codec == AudioCodec::Mp3 {
+            let sample_rate =
+                NonZeroU32::new(track.sample_rate).ok_or(DecodeError::InvalidData {
+                    detail: "MP3 source sample rate is zero",
+                })?;
+            AudioSpec::new(track.channels, sample_rate)
+                .duration_for(consts::MP3_REMOVED_HEAD_FRAMES)
+                .map_err(DecodeError::backend)?
+        } else {
+            Duration::ZERO
+        };
 
         Ok(Self {
+            media_time_rebase,
             codec,
             spec,
             pcm_encoding,
@@ -185,6 +201,10 @@ impl FrameCodec for AndroidCodec {
 
     fn spec(&self) -> AudioSpec {
         self.spec
+    }
+
+    fn media_time_rebase(&self) -> Option<Duration> {
+        Some(self.media_time_rebase)
     }
 
     fn track_info(&self) -> DecoderTrackInfo {

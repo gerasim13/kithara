@@ -223,18 +223,20 @@ where
         self.events.extend(self.tracks.drain_events());
         let snapshot = self.queue_snapshot();
         let previous = self.view.read();
+        let rate = snapshot.applied_rate();
+        let rate_changed = previous.applied_rate() != rate;
+        let previous_mix = previous.deck.mix;
         let mix = snapshot.deck.mix;
-        let rate = snapshot.rate();
         self.view.publish(snapshot);
-        if previous.rate() != rate {
+        if rate_changed {
             self.bus.publish(PlayerEvent::RateChanged { rate });
         }
-        if previous.deck.mix.volume() != mix.volume() {
+        if previous_mix.volume() != mix.volume() {
             self.bus.publish(PlayerEvent::VolumeChanged {
                 volume: f32::from(mix.volume()),
             });
         }
-        if previous.deck.mix.muted() != mix.muted() {
+        if previous_mix.muted() != mix.muted() {
             self.bus
                 .publish(PlayerEvent::MuteChanged { muted: mix.muted() });
         }

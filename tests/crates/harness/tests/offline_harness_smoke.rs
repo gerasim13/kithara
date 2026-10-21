@@ -4,20 +4,24 @@ use std::path::Path;
 
 use kithara::{
     self,
-    events::TrackId,
+    events::{EventBus, TrackId},
     platform::{
         flash::real_io,
         time::{self, Duration},
     },
     play::{PlayerEvent, ResourceConfig, ResourceSrc},
-    queue::TrackSource,
+    queue::{QueueEvent, TrackSource, TrackStatus},
     warp::{StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
     disk_asset_store,
-    offline::{OfflinePlayer, OfflinePlayerOptions},
+    event::TestEvent,
+    offline::{OfflinePlayer, OfflinePlayerOptions, offline_queue_fixture},
     test_defaults::consts,
-    waits::wait_for_loader_done_event,
+    waits::{
+        wait_for_event, wait_for_loader_done_event, wait_for_position_event,
+        wait_for_position_near_event,
+    },
 };
 use kithara_test_fixtures::{assets, integration_fixtures::drain_tone};
 use kithara_test_utils::{TestTempDir, temp_dir};
@@ -196,6 +200,107 @@ async fn offline_harness_glide_varispeed(drain_tone: &'static [u8], temp_dir: Te
         "at rate {GLIDE_RATE} the {SOURCE_FRAMES}-frame source must play out in \
          {MIN_SHARE_NUM}/{SHARE_DEN}..={MAX_SHARE_NUM}/{SHARE_DEN} of its length, got \
          {audible} audible frames"
+    );
+    harness.close().await;
+}
+
+#[kithara::test(tokio)]
+#[case::loaded(TrackStatus::Loaded, Ok(()))]
+#[case::consumed(TrackStatus::Consumed, Ok(()))]
+#[case::failed(TrackStatus::Failed("decode rejected".to_owned()), Err("track entered Failed: decode rejected".to_owned()))]
+async fn loader_wait_returns_the_matching_terminal_outcome(
+    #[case] status: TrackStatus,
+    #[case] expected: Result<(), String>,
+) {
+    let (harness, queue) = offline_queue_fixture(consts::SAMPLE_RATE).await;
+    let mut events = queue.subscribe();
+    let id = TrackId::allocate();
+    queue.bus().publish(QueueEvent::TrackStatusChanged {
+        id: TrackId::allocate(),
+        status: TrackStatus::Loaded,
+    });
+    queue
+        .bus()
+        .publish(QueueEvent::TrackStatusChanged { id, status });
+    assert_eq!(
+        wait_for_loader_done_event(&mut events, &queue, id, Duration::from_secs(1)).await,
+        expected,
+    );
+    harness.close().await;
+}
+
+#[kithara::test(tokio)]
+async fn event_waits_keep_the_callers_deadline_during_unrelated_events() {
+    let (harness, queue) = offline_queue_fixture(consts::SAMPLE_RATE).await;
+    let mut loader_events = queue.subscribe();
+    let mut position_events = queue.subscribe();
+    let mut near_events = queue.subscribe();
+    let mut matching_events = queue.subscribe();
+    let id = TrackId::allocate();
+    let other = TrackId::allocate();
+    let deadline = Duration::from_millis(50);
+    let unrelated = async {
+        for _ in 0..100 {
+            queue.bus().publish(QueueEvent::TrackStatusChanged {
+                id: other,
+                status: TrackStatus::Loaded,
+            });
+            time::sleep(Duration::from_millis(1)).await;
+        }
+    };
+    let waits = async {
+        let (loader, position, near, matching) = kithara::platform::tokio::join!(
+            wait_for_loader_done_event(&mut loader_events, &queue, id, deadline),
+            wait_for_position_event(&mut position_events, &queue, 1.0, deadline),
+            wait_for_position_near_event(&mut near_events, &queue, 1.0, 0.001, deadline),
+            wait_for_event(
+                &mut matching_events,
+                "requested admission",
+                |event| matches!(event,
+                    TestEvent::Queue(QueueEvent::TrackStatusChanged { id: found, status: TrackStatus::Loaded })
+                        if *found == id),
+                deadline,
+            ),
+        );
+        [loader, position.map(|_| ()), near.map(|_| ()), matching]
+    };
+    let results = kithara::platform::tokio::select! {
+        results = waits => results,
+        () = unrelated => panic!("event waits outlived their caller deadline"),
+    };
+    for result in results {
+        assert!(result.expect_err("no requested milestone").contains("50ms"));
+    }
+    harness.close().await;
+}
+
+#[kithara::test(tokio)]
+async fn event_waits_report_a_closed_stream() {
+    let (harness, queue) = offline_queue_fixture(consts::SAMPLE_RATE).await;
+    let bus = EventBus::new(8);
+    let mut loader_events = bus.subscribe();
+    let mut position_events = bus.subscribe();
+    let mut near_events = bus.subscribe();
+    let mut matching_events = bus.subscribe();
+    drop(bus);
+    let deadline = Duration::from_secs(1);
+    let (loader, position, near, matching) = kithara::platform::tokio::join!(
+        wait_for_loader_done_event(&mut loader_events, &queue, TrackId::allocate(), deadline),
+        wait_for_position_event(&mut position_events, &queue, 1.0, deadline),
+        wait_for_position_near_event(&mut near_events, &queue, 1.0, 0.001, deadline),
+        wait_for_event(
+            &mut matching_events,
+            "requested admission",
+            |_| true,
+            deadline
+        ),
+    );
+    for result in [loader, position.map(|_| ()), near.map(|_| ())] {
+        assert_eq!(result, Err("event stream closed".to_owned()));
+    }
+    assert_eq!(
+        matching,
+        Err("event bus closed before requested admission".to_owned())
     );
     harness.close().await;
 }

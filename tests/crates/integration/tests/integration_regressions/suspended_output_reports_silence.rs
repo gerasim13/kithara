@@ -1,11 +1,14 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use kithara::{events::TrackId, platform::time::Duration, play::InterruptionKind};
-use kithara_integration_tests::offline::{OfflinePlayer, OfflinePlayerOptions};
+use kithara::play::InterruptionKind;
+use kithara_integration_tests::offline::{
+    OfflinePlayer, OfflinePlayerOptions, append_source_loaded,
+};
 use kithara_test_fixtures::assets;
 
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
+const WARMUP_BLOCKS: usize = 8;
 
 /// A platform interruption stops the output below the engine: the audio
 /// callback is no longer invoked, so the RT processor cannot observe the
@@ -75,8 +78,6 @@ async fn a_suspended_output_reports_silence_until_the_rt_processor_runs_again() 
     harness.close().await;
 }
 
-#[kithara::flash(io)]
-#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn loaded_harness() -> OfflinePlayer {
     let harness =
         OfflinePlayer::with_sample_rate(OfflinePlayerOptions::builder().build(), SAMPLE_RATE).await;
@@ -86,12 +87,9 @@ async fn loaded_harness() -> OfflinePlayer {
         .to_str()
         .expect("UTF-8 fixture path")
         .to_owned();
+    let deck_id = append_source_loaded(&harness, harness.player(), deck_source).await;
     harness
         .with_queue(move |player| {
-            let deck_id = TrackId::allocate();
-            player
-                .append_with_id(deck_id, deck_source)
-                .expect("append PCM deck");
             player
                 .select(deck_id, kithara::queue::Transition::None)
                 .expect("select the item");
@@ -99,8 +97,7 @@ async fn loaded_harness() -> OfflinePlayer {
         })
         .await;
 
-    while harness.player().rate() != 1.0 || !harness.player().is_playing() {
-        hang_tick!();
+    for _ in 0..WARMUP_BLOCKS {
         let _ = harness.render(BLOCK_FRAMES).await;
         let _ = harness.tick_and_drain().await;
     }
