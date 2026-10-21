@@ -368,7 +368,6 @@ async fn build_queue(
 /// `deadline` as a hard safety cap. Returns the matched event, or `None` on
 /// timeout / bus closure. Lagged is non-fatal (the per-test bus has ample
 /// capacity); we re-loop to keep draining, mirroring the sibling-test idiom.
-#[kithara::flash(io)]
 #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn next_queue_event<F>(
     rx: &mut EventReceiver<TestEvent>,
@@ -765,6 +764,25 @@ fn drain_event_backlog(rx: &mut EventReceiver<TestEvent>) {
             Err(_) => break,
         }
     }
+}
+
+#[cfg(feature = "flash")]
+#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+async fn an_idle_queue_event_wait_uses_virtual_time() {
+    let bus = EventBus::new(16);
+    let mut events = bus.subscribe::<TestEvent>();
+    let budget = Duration::from_secs(5);
+    let virtual_start = time::Instant::now();
+    let wall_start = time::WallInstant::now();
+    let event = next_queue_event(&mut events, budget, |_| true).await;
+    let wall_elapsed = wall_start.elapsed();
+    assert!(event.is_none());
+    assert!(virtual_start.elapsed() >= budget);
+    assert!(
+        wall_elapsed < Duration::from_secs(1),
+        "an idle event bus pinned virtual time for {wall_elapsed:?}",
+    );
+    drop(bus);
 }
 
 #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
