@@ -19,6 +19,7 @@ android {
         jniLibs.directories.add(providers.gradleProperty("kithara.nativeTestLibraries").get())
     }
     packaging {
+        jniLibs.useLegacyPackaging = true
         // Size only: the test process loads its test image alone, never the FFI library or JNA.
         jniLibs.excludes += listOf("**/libkithara_ffi.so", "**/libjnidispatch.so")
     }
