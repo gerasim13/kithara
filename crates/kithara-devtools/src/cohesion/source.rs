@@ -180,8 +180,9 @@ impl Source {
     }
 
     fn resolve(&self, module: &str, path: &str, visited: &mut BTreeSet<String>) -> Option<String> {
-        if !visited.insert(format!("{module}|{path}")) {
-            return None;
+        let local = join(module, path);
+        if self.definitions.contains_key(&local) {
+            return Some(local);
         }
         let mut parts = path.split("::").collect::<Vec<_>>();
         let first = *parts.first()?;
@@ -210,7 +211,7 @@ impl Source {
             .get(module)
             .and_then(|imports| imports.get(first))
         {
-            if paths.len() != 1 || !visited.insert(format!("binding:{module}|{first}")) {
+            if paths.len() != 1 || !visited.insert(format!("{module}|{first}")) {
                 return None;
             }
             let imported = paths.first()?;
@@ -225,7 +226,7 @@ impl Source {
         }
         let (module, name) = path.rsplit_once("::").unwrap_or(("", path));
         let paths = self.imports.get(module)?.get(name)?;
-        if paths.len() != 1 {
+        if paths.len() != 1 || !visited.insert(format!("{module}|{name}")) {
             return None;
         }
         self.resolve(module, paths.first()?, visited)
@@ -341,4 +342,78 @@ pub(super) fn methods(item: &ItemImpl, tests: bool) -> impl Iterator<Item = &syn
         }
         _ => None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_module_aliases_resolve_beside_same_named_value_imports() {
+        let mut source = Source::default();
+        source.definition("channel", "Sender", String::new(), false);
+        source.modules.insert("channel".to_owned());
+        source.imports.insert(
+            String::new(),
+            BTreeMap::from([(
+                "channel".to_owned(),
+                BTreeSet::from(["external::channel".to_owned()]),
+            )]),
+        );
+        source.imports.insert(
+            "channel".to_owned(),
+            BTreeMap::from([(
+                "Alias".to_owned(),
+                BTreeSet::from(["crate::channel::Sender".to_owned()]),
+            )]),
+        );
+        assert_eq!(
+            source.resolve("", "channel::Alias", &mut BTreeSet::new()),
+            Some("channel::Sender".to_owned()),
+        );
+    }
+
+    #[test]
+    fn expanding_import_cycles_leave_local_owners_resolvable() {
+        let mut source = Source::default();
+        source.definition("channel", "Sender", String::new(), false);
+        source.imports.insert(
+            String::new(),
+            BTreeMap::from([
+                (
+                    "channel".to_owned(),
+                    BTreeSet::from(["channel::channel".to_owned()]),
+                ),
+                (
+                    "Alias".to_owned(),
+                    BTreeSet::from(["channel::Sender".to_owned()]),
+                ),
+                (
+                    "Left".to_owned(),
+                    BTreeSet::from(["Right::Member".to_owned()]),
+                ),
+                (
+                    "Right".to_owned(),
+                    BTreeSet::from(["Left::Member".to_owned()]),
+                ),
+                (
+                    "Absolute".to_owned(),
+                    BTreeSet::from(["crate::Absolute".to_owned()]),
+                ),
+                (
+                    "Relative".to_owned(),
+                    BTreeSet::from(["self::Relative".to_owned()]),
+                ),
+            ]),
+        );
+        for path in ["channel::Sender", "Alias", "crate::Alias", "self::Alias"] {
+            assert_eq!(
+                source.resolve("", path, &mut BTreeSet::new()),
+                Some("channel::Sender".to_owned()),
+            );
+        }
+        for path in ["channel::Unknown", "Left::Unknown", "Absolute", "Relative"] {
+            assert_eq!(source.resolve("", path, &mut BTreeSet::new()), None);
+        }
+    }
 }

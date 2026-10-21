@@ -197,31 +197,26 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         resident: &super::residency::SourceResidency,
         span: SourceSpan,
         offset: i64,
-        cursor: &mut super::super::trajectory::Trajectory,
+        nominal: Option<SourceSpan>,
+        frame: u64,
     ) -> Result<(Option<Fraction>, Option<Fraction>), ElasticError> {
-        let nominal = if offset < 0 {
-            None
-        } else {
-            Some(cursor.span(span.start(), self.spec.sample_rate, 1)?)
-        };
         let position = match nominal {
             None => resident.history_position(offset.unsigned_abs()),
             Some(nominal) => Some(
                 self.map_nominal_position(
                     span.start(),
                     nominal
-                        .source_ratio_at(0)
+                        .source_ratio_at(frame)
                         .ok_or(ElasticError::SampleCountOverflow)?,
                 )?,
             ),
         };
         let next = if let Some(nominal) = nominal {
-            cursor.advance(nominal)?;
             Some(
                 self.map_nominal_position(
                     span.start(),
                     nominal
-                        .source_ratio_at(1)
+                        .source_ratio_at(frame + 1)
                         .ok_or(ElasticError::SampleCountOverflow)?,
                 )?,
             )
@@ -235,12 +230,45 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         Ok((position.map(fraction), next.map(fraction)))
     }
 
-    fn project_source(
+    fn project_source_segment(
         &mut self,
         span: SourceSpan,
-        from: i64,
-        frames: usize,
+        offset: i64,
+        output: std::ops::Range<usize>,
+        nominal: Option<SourceSpan>,
     ) -> Result<(), ElasticError> {
+        let channels = usize::from(self.spec.channels);
+        let resident = self.residency.as_ref().ok_or(ElasticError::PoolCapacity)?;
+        for (frame, output) in output.enumerate() {
+            let frame_offset =
+                i64::try_from(frame).map_err(|_| ElasticError::SampleCountOverflow)?;
+            let (position, next) = self.projection_positions(
+                resident,
+                span,
+                offset
+                    .checked_add(frame_offset)
+                    .ok_or(ElasticError::SampleCountOverflow)?,
+                nominal,
+                u64::try_from(frame).map_err(|_| ElasticError::SampleCountOverflow)?,
+            )?;
+            let pending = self
+                .pending_source
+                .as_mut()
+                .ok_or(ElasticError::PoolCapacity)?;
+            let output = output * channels;
+            sample_projected_frame(
+                resident,
+                position,
+                next,
+                span,
+                self.terminal_source_end,
+                &mut pending[output..output + channels],
+            )?;
+        }
+        Ok(())
+    }
+
+    fn prepare_projection_buffer(&mut self, frames: usize) -> Result<(), ElasticError> {
         let channels = usize::from(self.spec.channels);
         let count = frames
             .checked_mul(channels)
@@ -255,31 +283,45 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         pending
             .ensure_len(count)
             .map_err(|_| ElasticError::PoolCapacity)?;
+        Ok(())
+    }
+
+    fn project_source(
+        &mut self,
+        span: SourceSpan,
+        from: i64,
+        frames: usize,
+    ) -> Result<(), ElasticError> {
+        self.prepare_projection_buffer(frames)?;
         let mut cursor = self.trajectory.clone();
         cursor.advance_by(
             span.start(),
             self.spec.sample_rate,
             from.max(0).unsigned_abs(),
         )?;
-        let resident = self.residency.as_ref().ok_or(ElasticError::PoolCapacity)?;
-        for frame in 0..frames {
+        self.residency.as_ref().ok_or(ElasticError::PoolCapacity)?;
+        let mut first = 0;
+        while first < frames {
             let offset = from
-                .checked_add(i64::try_from(frame).map_err(|_| ElasticError::SampleCountOverflow)?)
+                .checked_add(i64::try_from(first).map_err(|_| ElasticError::SampleCountOverflow)?)
                 .ok_or(ElasticError::SampleCountOverflow)?;
-            let (position, next) =
-                self.projection_positions(resident, span, offset, &mut cursor)?;
-            let pending = self
-                .pending_source
-                .as_mut()
-                .ok_or(ElasticError::PoolCapacity)?;
-            sample_projected_frame(
-                resident,
-                position,
-                next,
-                span,
-                self.terminal_source_end,
-                &mut pending[frame * channels..(frame + 1) * channels],
-            )?;
+            let count = if offset < 0 {
+                usize::try_from(offset.unsigned_abs())
+                    .map_err(|_| ElasticError::SampleCountOverflow)?
+                    .min(frames - first)
+            } else {
+                cursor.output_limit(frames - first)
+            };
+            let nominal = if offset < 0 {
+                None
+            } else {
+                Some(cursor.span(span.start(), self.spec.sample_rate, count)?)
+            };
+            self.project_source_segment(span, offset, first..first + count, nominal)?;
+            if let Some(nominal) = nominal {
+                cursor.advance(nominal)?;
+            }
+            first += count;
         }
         Ok(())
     }
