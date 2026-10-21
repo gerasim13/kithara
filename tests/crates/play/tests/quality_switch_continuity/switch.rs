@@ -114,13 +114,14 @@ impl Consumer {
     }
 }
 
-/// Playback clock of one consumer: when its first block was taken and how
-/// much audio it has taken since, so every block is due at a fixed audio time
-/// however long rendering it took.
+/// Playback clock of one consumer: when its next block is due. A block taken
+/// on time is due one period after the previous one however long rendering it
+/// took; a block taken late is due one period after it was taken, because a
+/// device callback that missed its deadline is not followed by a burst of
+/// callbacks making up for it.
 #[derive(Debug, Default)]
 pub(super) struct Pacer {
-    started: Option<Instant>,
-    frames: usize,
+    due: Option<Instant>,
 }
 
 pub(super) struct PreparedPlayer {
@@ -491,19 +492,43 @@ pub(super) async fn render_paced(
     pacer: &mut Pacer,
     frames: usize,
 ) -> Vec<f32> {
-    let started = *pacer.started.get_or_insert_with(Instant::now);
+    let taken = Instant::now();
     let block = player.render(frames).await;
-    pacer.frames = pacer.frames.saturating_add(frames);
-    let due = started
-        + Duration::from_secs_f64(
-            pacer
-                .frames
-                .to_f64()
-                .expect("rendered frame count fits f64")
-                / f64::from(SAMPLE_RATE),
-        );
+    let period = Duration::from_secs_f64(
+        frames.to_f64().expect("block frame count fits f64") / f64::from(SAMPLE_RATE),
+    );
+    let due = pacer.due.map_or(taken, |due| due.max(taken)) + period;
+    pacer.due = Some(due);
     sleep(due.saturating_duration_since(Instant::now())).await;
     block
+}
+
+#[kithara_test_utils::kithara::test(tokio, native)]
+async fn a_late_paced_render_still_waits_one_callback_period() {
+    let mut player = OfflinePlayer::new(
+        HostConfig::offline(pools())
+            .settings(
+                HostSettings::builder()
+                    .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"))
+                    .build(),
+            )
+            .build(),
+    )
+    .await;
+    let mut pacer = Pacer::default();
+    let period = Duration::from_secs_f64(
+        BLOCK_FRAMES.to_f64().expect("block frame count fits f64") / f64::from(SAMPLE_RATE),
+    );
+    render_paced(&mut player, &mut pacer, BLOCK_FRAMES).await;
+    sleep(Duration::from_millis(100)).await;
+    let taken = Instant::now();
+    let output = render_paced(&mut player, &mut pacer, BLOCK_FRAMES).await;
+    assert_eq!(output.len(), BLOCK_FRAMES * usize::from(CHANNELS));
+    assert!(
+        Instant::now().duration_since(taken) >= period,
+        "a missed callback must not be followed by an immediate catch-up callback"
+    );
+    player.close().await;
 }
 
 #[kithara::flash(io)]
