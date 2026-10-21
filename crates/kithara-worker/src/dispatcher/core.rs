@@ -359,7 +359,6 @@ pub(super) fn park_after_outcome(
 }
 
 #[kithara::measure(label = "worker.backpressure.wait")]
-#[kithara::hang_watchdog]
 fn wait_for_backpressure(
     wake: &Wake,
     budgets: &DispatcherConfig,
@@ -382,11 +381,7 @@ fn wait_for_backpressure(
     let mut remaining = deadline;
     loop {
         let wait = poll_interval.min(remaining);
-        let mut woken = false;
-        hang_park!(|watchdog_remaining| {
-            woken = wake.wait_poll_timeout(wait.min(watchdog_remaining));
-        });
-        if woken {
+        if wake.wait_poll_timeout(wait) {
             return;
         }
         remaining = deadline.saturating_sub(started.elapsed());
