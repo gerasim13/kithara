@@ -248,6 +248,7 @@ impl SeekTally {
             channels,
             source_span,
             signal::Wave::SawtoothDescending,
+            None,
             Some(Duration::from_secs_f64(pos_secs)),
         ) {
             self.continuity_errors += 1;
