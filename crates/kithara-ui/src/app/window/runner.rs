@@ -34,7 +34,7 @@ use crate::{
     backends::paint_color,
     draw::{Pt, TRANSPARENT},
     interact::{Input, InputMethod, Key, MOUSE, Modifiers, PointerInput, PointerPhase, Scroll},
-    masonry::{shader::ShaderPass, vis::VisPass},
+    masonry::{external::Placeholders, shader::ShaderPass, vis::VisPass},
     render::{WindowCommand, WindowEdge},
 };
 
@@ -75,6 +75,7 @@ struct Live<'config, Application> {
     idle: IdleClock,
     modifiers: Modifiers,
     pointer: PhysicalPosition<f64>,
+    placeholders: Placeholders,
     context: RenderContext,
     surface: RenderSurface<'static>,
     renderer: Renderer,
@@ -362,6 +363,7 @@ where
             frames: FrameClock::new(WallInstant::now()),
             idle: IdleClock::new(WallInstant::now()),
             modifiers: Modifiers::default(),
+            placeholders: Placeholders::default(),
             pointer: PhysicalPosition::new(0.0, 0.0),
             recovery_redraw_latched: false,
         };
@@ -499,6 +501,8 @@ where
             &mut self.renderer,
             frame.shaders(),
         );
+        self.placeholders
+            .bind(&handle.device, &mut self.renderer, frame.external_images());
         if let Err(error) = self.renderer.render_to_texture(
             &handle.device,
             &handle.queue,

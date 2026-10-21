@@ -109,7 +109,9 @@ pub(in crate::ci::host) fn provision(
     for image in required_builds(&host) {
         image::build_pinned(process, image, &pins)?;
     }
-    provision.as_root("linux", "install-services")?;
+    for step in consts::LINUX_PROVISION_STEPS {
+        provision.as_root("linux", step)?;
+    }
     info!(platform = "linux", "host provisioned from this commit");
     Ok(())
 }
@@ -225,6 +227,27 @@ mod tests {
                 .iter()
                 .any(|image| matches!(image, ImageCommand::AndroidRunner)),
             "{builds:?}"
+        );
+    }
+
+    /// A runner that starts on a mount nobody handed over cannot write its
+    /// cache: the start creates the directory as root, and the job is not
+    /// root. Provisioning is what brings a machine to this commit, so it
+    /// prepares every mount this commit's runners use before it installs
+    /// the services that start them.
+    #[test]
+    fn provisioning_hands_every_cache_mount_over_before_runners_start() {
+        let steps = consts::LINUX_PROVISION_STEPS;
+        for step in steps {
+            assert!(parse(&[step]).is_ok(), "{step} must be a machine command");
+        }
+        let position = |step: &str| steps.iter().position(|named| *named == step);
+        assert!(
+            matches!(
+                (position("bootstrap"), position("install-services")),
+                (Some(prepare), Some(start)) if prepare < start
+            ),
+            "{steps:?}"
         );
     }
 

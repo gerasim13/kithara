@@ -38,6 +38,20 @@ pub trait CustomWidget: 'static {
         false
     }
 
+    /// Looks up a device picture painted by this component.
+    ///
+    /// The retained Vello host borrows this declaration while replaying the
+    /// component's draw list. CPU pictures require no declaration. The host that
+    /// submits the resulting scene owns texture readiness, binding and lifetime;
+    /// returning a declaration does not establish that its pixels are ready.
+    #[cfg(feature = "masonry")]
+    fn external_image(
+        &self,
+        _id: &crate::draw::ImageId,
+    ) -> Option<&crate::masonry::external::ExternalImageDeclaration> {
+        None
+    }
+
     /// Advances retained component state and returns at most one typed action.
     ///
     /// This hook is the egress for actions recognised while drawing or by a
@@ -95,6 +109,11 @@ where
     delegate::delegate! {
         to self.widget {
             fn accepts_text_input(&self) -> bool;
+            #[cfg(feature = "masonry")]
+            fn external_image(
+                &self,
+                id: &crate::draw::ImageId,
+            ) -> Option<&crate::masonry::external::ExternalImageDeclaration>;
             fn measure(&mut self, text: &mut TextMeasurer<'_>, limits: SizeLimits) -> Size2;
             #[expr($.map(&self.map))]
             fn input(&mut self, input: Input<'_>, hit: Hit) -> Outcome<Action>;

@@ -130,6 +130,7 @@ ron = { workspace = true }
 serde_yaml_ng = { workspace = true }
 # The emitter is measured against the renderer it was written from.
 velato = { workspace = true }
+vello_encoding = { workspace = true }
 wgpu-vello = { workspace = true }
 
 [lints]

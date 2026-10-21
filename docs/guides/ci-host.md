@@ -47,7 +47,8 @@ and privileged fleet provisioning.
 reading everything from the commit it runs on. The macOS host reinstalls its
 services, rewrites its runner configuration, makes sure the pinned Linux image
 is present and reloads its agents; a Linux host builds the images its profile
-asks for and installs its units. Every step is idempotent — an image that is
+asks for, creates every cache mount its runners use and hands it to the job
+user, and installs its units. Every step is idempotent — an image that is
 already there is only retagged — so a run costs seconds when nothing moved.
 
 Neither pipeline runs it on a push. On GitLab it is `host:provision`, reached
