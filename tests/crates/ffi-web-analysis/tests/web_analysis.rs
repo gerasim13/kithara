@@ -28,14 +28,52 @@ type Events = Rc<RefCell<Vec<JsValue>>>;
 #[wasm_bindgen::prelude::wasm_bindgen(inline_js = r#"
 const workerStartup = [];
 let observingWorkers = false;
+function observeBootstrap(id) {
+    const report = (phase, detail) => self.postMessage({
+        __kithara_worker_boot: { id, phase, detail }
+    });
+    report('script', { agent: navigator.userAgent,
+        waitAsync: typeof Atomics.waitAsync });
+    self.addEventListener('unhandledrejection', event => {
+        report('unhandledrejection', String(event.reason));
+    });
+    const request = navigator.locks.request.bind(navigator.locks);
+    navigator.locks.request = (name, ...args) => {
+        const callback = args.pop();
+        report('lock-request', name);
+        return request(name, ...args, async lock => {
+            report('lock-held', name);
+            const result = await callback(lock);
+            report('lock-released', name);
+            return result;
+        });
+    };
+}
 export function observeWorkerStartup() {
     if (observingWorkers) return;
     observingWorkers = true;
     const BrowserWorker = globalThis.Worker;
+    const blobs = new Map();
+    const createUrl = URL.createObjectURL.bind(URL);
+    const revokeUrl = URL.revokeObjectURL.bind(URL);
+    URL.createObjectURL = blob => {
+        const url = createUrl(blob);
+        blobs.set(url, blob);
+        return url;
+    };
+    URL.revokeObjectURL = url => {
+        blobs.delete(url);
+        revokeUrl(url);
+    };
     globalThis.Worker = class extends BrowserWorker {
         constructor(...args) {
-            super(...args);
             const id = workerStartup.length;
+            const blob = blobs.get(String(args[0]));
+            const prelude = '(' + observeBootstrap.toString() + ')(' + id + ');\n';
+            const source = blob ? createUrl(new Blob([prelude, blob],
+                { type: 'text/javascript' })) : args[0];
+            super(source, ...args.slice(1));
+            if (blob) revokeUrl(source);
             workerStartup.push({ id, created: String(args[0]) });
             this.addEventListener('error', event => {
                 workerStartup.push({ id, error: event.message,
@@ -43,6 +81,9 @@ export function observeWorkerStartup() {
             });
             this.addEventListener('message', event => {
                 const data = event.data;
+                if (data && data.__kithara_worker_boot) {
+                    workerStartup.push(data.__kithara_worker_boot);
+                }
                 if (data && data.__wasm_safe_thread_error) {
                     workerStartup.push({ id, workerError: data.__wasm_safe_thread_error });
                 }
