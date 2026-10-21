@@ -751,6 +751,33 @@ mod native {
         report
     }
 
+    #[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(2))]
+    async fn an_idle_backpressure_poll_can_resume_after_an_unrelated_timer() {
+        let owner = kithara_test_utils::off_thread::OffThread::spawn("idle-backpressure", || {
+            Ok::<_, ()>(())
+        })
+        .await
+        .expect("wait owner starts");
+        let (elapsed, ()) = join!(
+            owner.call(|_| {
+                let recheck = Duration::from_millis(10);
+                let mut configured = budgets();
+                configured.wait_timeout = recheck;
+                let started = Instant::now();
+                park_after_outcome(
+                    &Wake::default(),
+                    &configured,
+                    backpressured_report(recheck),
+                    &mut 0,
+                );
+                started.elapsed()
+            }),
+            time::sleep(Duration::from_secs(6)),
+        );
+        assert!(elapsed >= Duration::from_millis(10));
+        owner.close().await;
+    }
+
     struct RecheckTask(Option<Duration>);
 
     impl Task for RecheckTask {

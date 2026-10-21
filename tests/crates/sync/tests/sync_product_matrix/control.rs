@@ -1271,8 +1271,6 @@ impl DecodedCapture {
         let last = i64::try_from(domain.end - 1).map_err(|error| error.to_string())?;
         let source =
             i64::try_from(position.0 / position.1.get()).map_err(|error| error.to_string())?;
-        // Every tap of one output sample reads the same few frames, so the
-        // covering chunk is looked up once and reused while it still covers.
         let covering = std::cell::Cell::new(None::<(&DecodedChunk, u64)>);
         mapped_sample((position.0, position.1.get()), speed, |offset| {
             let frame = source

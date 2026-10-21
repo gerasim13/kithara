@@ -14,6 +14,7 @@ mod fixture {
     use kithara_test_utils::{
         bufpool::{TestPools, pools},
         kithara,
+        off_thread::OffThread,
     };
     use kithara_warp::BeatGridId;
 
@@ -259,61 +260,70 @@ mod fixture {
 
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     pub(crate) async fn play_fixture(
-        state: &mut TestState,
+        owner: &OffThread<(TestState, u64)>,
         id: BeatGridId,
         path: &std::path::Path,
-        clock: &mut u64,
         expected_slots: usize,
     ) {
-        fixture_pass(state, clock);
-        let item = kithara_events::TrackId::allocate();
-        let config =
-            kithara_play::ResourceConfig::for_src(kithara_play::ResourceSrc::Path(path.to_owned()))
-                .store(
-                    kithara_assets::AssetStore::builder(pools())
-                        .backend(kithara_assets::StorageBackend::Memory)
-                        .build(),
-                )
-                .build();
-        fixture_command(
-            state,
-            id,
-            kithara_queue::QueueCommand::Append {
-                position: kithara_play::Position::ZERO,
-                id: item,
-                source: kithara_queue::TrackSource::Config(Box::new(config)),
-            },
-        );
-        let transition = if expected_slots == 1 {
-            kithara_queue::Transition::None
-        } else {
-            kithara_queue::Transition::Crossfade
-        };
-        fixture_command(
-            state,
-            id,
-            kithara_queue::QueueCommand::Select {
-                id: item,
-                transition,
-            },
-        );
-        fixture_command(
-            state,
-            id,
-            kithara_queue::QueueCommand::Play { at: When::Next },
-        );
+        let path = path.to_owned();
+        owner
+            .call(move |(state, clock)| {
+                fixture_pass(state, clock);
+                let item = kithara_events::TrackId::allocate();
+                let config =
+                    kithara_play::ResourceConfig::for_src(kithara_play::ResourceSrc::Path(path))
+                        .store(
+                            kithara_assets::AssetStore::builder(pools())
+                                .backend(kithara_assets::StorageBackend::Memory)
+                                .build(),
+                        )
+                        .build();
+                fixture_command(
+                    state,
+                    id,
+                    kithara_queue::QueueCommand::Append {
+                        position: kithara_play::Position::ZERO,
+                        id: item,
+                        source: kithara_queue::TrackSource::Config(Box::new(config)),
+                    },
+                );
+                let transition = if expected_slots == 1 {
+                    kithara_queue::Transition::None
+                } else {
+                    kithara_queue::Transition::Crossfade
+                };
+                fixture_command(
+                    state,
+                    id,
+                    kithara_queue::QueueCommand::Select {
+                        id: item,
+                        transition,
+                    },
+                );
+                fixture_command(
+                    state,
+                    id,
+                    kithara_queue::QueueCommand::Play { at: When::Next },
+                );
+            })
+            .await;
 
         let deadline = kithara_platform::time::WallInstant::now() + Duration::from_secs(2);
         let mut previous = 0;
         loop {
             hang_tick!();
-            fixture_pass(state, clock);
-            let occupied = occupied_slots(state, id).len();
-            let reached = occupied == expected_slots
-                && deck_snapshot(state, id)
-                    .slots
-                    .iter()
-                    .any(|slot| slot.state == kithara_render::bridge::SlotState::Playing);
+            let (occupied, reached) = owner
+                .call(move |(state, clock)| {
+                    fixture_pass(state, clock);
+                    let occupied = occupied_slots(state, id).len();
+                    let reached = occupied == expected_slots
+                        && deck_snapshot(state, id)
+                            .slots
+                            .iter()
+                            .any(|slot| slot.state == kithara_render::bridge::SlotState::Playing);
+                    (occupied, reached)
+                })
+                .await;
             hang_tick!();
             assert!(
                 kithara_platform::time::WallInstant::now() < deadline,

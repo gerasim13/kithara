@@ -147,10 +147,7 @@ impl ReaderControl {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use kithara_platform::{
-        thread,
-        time::{Duration, Instant},
-    };
+    use kithara_platform::{thread, time::Duration};
     use kithara_test_utils::{kithara, wait_until_blocking};
 
     use super::*;
@@ -184,8 +181,8 @@ mod tests {
             .expect("cancellation lands after the live predicate, before parking");
             assert!(control.is_cancelled());
 
-            let deadline = Instant::now() + Duration::from_secs(1);
-            while readiness.revision == revision && Instant::now() < deadline {
+            let deadline = control.state.readiness.instant() + Duration::from_secs(1);
+            while readiness.revision == revision && control.state.readiness.instant() < deadline {
                 readiness = control.state.readiness.wait_until(readiness, deadline);
             }
             let published = readiness.revision != revision;

@@ -6,7 +6,6 @@ use kithara_platform::{
     CancelToken,
     sync::Arc,
     thread::{JoinHandle, spawn_named},
-    time::Instant,
 };
 
 use super::{FlushHub, FlushPolicy, flush::HubWait};
@@ -69,7 +68,7 @@ fn run(weak: &Weak<FlushHub>, wait: &HubWait, cancel: &CancelToken, policy: &Flu
         }
         drop(guard);
 
-        let debounce_deadline = Instant::now() + policy.debounce;
+        let debounce_deadline = wait.cv.instant() + policy.debounce;
         loop {
             let guard = wait.state.lock();
             if guard.op_count >= policy.force_every_n_ops.get() {
@@ -80,7 +79,7 @@ fn run(weak: &Weak<FlushHub>, wait: &HubWait, cancel: &CancelToken, policy: &Flu
                 final_flush(weak);
                 return;
             }
-            if Instant::now() >= debounce_deadline {
+            if wait.cv.instant() >= debounce_deadline {
                 break;
             }
             let _ = wait.cv.wait_timeout(guard, debounce_deadline);

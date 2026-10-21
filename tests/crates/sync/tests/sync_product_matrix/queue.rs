@@ -1917,6 +1917,31 @@ fn pull_frames(
     (frames, boundary)
 }
 
+fn assert_entry_boundaries(o: &LinkObservation, voices: &[Voice]) {
+    for placement in &o.placements {
+        let voice = voices
+            .iter()
+            .find(|voice| voice.item == placement.item)
+            .expect("every placement belongs to a supplied voice");
+        assert_eq!(
+            placement.to,
+            entry_boundary(voice),
+            "placement uses the supplied entry boundary: {placement:#?}"
+        );
+    }
+    for cue in &o.cue_curves {
+        let voice = voices
+            .iter()
+            .find(|voice| voice.item == cue.item)
+            .expect("every cue belongs to a supplied voice");
+        assert_eq!(
+            cue.position,
+            entry_boundary(voice),
+            "cue uses the supplied entry boundary: {cue:#?}"
+        );
+    }
+}
+
 fn assert_transport(
     o: &LinkObservation,
     voices: &[Voice],
@@ -1942,18 +1967,7 @@ fn assert_transport(
         o.seeks.is_empty(),
         "Queue transitions never reopen a source to seek"
     );
-    assert!(
-        o.placements.iter().all(|placement| {
-            voices
-                .iter()
-                .any(|voice| voice.item == placement.item && placement.to == entry_boundary(voice))
-        }) && o.cue_curves.iter().all(|cue| {
-            voices
-                .iter()
-                .any(|voice| voice.item == cue.item && cue.position == entry_boundary(voice))
-        }),
-        "every initial or reprepared cue uses the supplied boundary at or after its entry"
-    );
+    assert_entry_boundaries(o, voices);
     for voice in voices {
         let loaded = o
             .source_clocks
