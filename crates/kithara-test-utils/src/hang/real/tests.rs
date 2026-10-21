@@ -85,6 +85,66 @@ mod native_detector_tests {
         assert_eq!(parse_timeout_secs("7"), Some(Duration::from_secs(7)));
     }
 
+    #[kithara::test(native, flash(false))]
+    fn deadline_observation_precedes_slow_context_serialization() {
+        use std::cell::Cell;
+
+        use kithara_platform::time::Instant;
+
+        struct SlowContext<'a> {
+            started: Instant,
+            first_dump: &'a Cell<Option<Duration>>,
+        }
+
+        impl super::HangDump for SlowContext<'_> {
+            fn dump_json(&self) -> String {
+                if self.first_dump.get().is_none() {
+                    self.first_dump.set(Some(self.started.elapsed()));
+                }
+                sleep(Duration::from_millis(50));
+                "null".to_owned()
+            }
+        }
+
+        let dir = env::temp_dir().join(format!("kithara-hang-observation-{}", std::process::id()));
+        let first_dump = Cell::new(None);
+        let started = Instant::now();
+        let mut detector = HangDetector::new("tests.observation", Duration::from_millis(1))
+            .with_dump_dir(dir.clone());
+        detector.tick_with(|| SlowContext {
+            started,
+            first_dump: &first_dump,
+        });
+        sleep(Duration::from_millis(10));
+        let panic =
+            catch_unwind(AssertUnwindSafe(|| detector.tick())).expect_err("the deadline must fire");
+        let reason = panic.downcast_ref::<String>().expect("watchdog panic text");
+        let elapsed = reason
+            .split_whitespace()
+            .find_map(|field| field.strip_prefix("elapsed_ns="))
+            .expect("the watchdog must report its observation time")
+            .parse::<u128>()
+            .expect("elapsed nanoseconds");
+        let before_serialization = first_dump.get().expect("context was serialized");
+        assert!(elapsed <= before_serialization.as_nanos(), "{reason}");
+        assert!(started.elapsed() >= before_serialization + Duration::from_millis(50));
+        let path = std::fs::read_dir(&dir)
+            .expect("dump directory")
+            .next()
+            .expect("watchdog dump")
+            .expect("dump entry")
+            .path();
+        let body = std::fs::read_to_string(path).expect("dump content");
+        let dump: serde_json::Value = serde_json::from_str(&body).expect("dump JSON");
+        assert!(
+            dump["diagnostic"]
+                .as_str()
+                .expect("diagnostic")
+                .contains(&format!("elapsed_ns={elapsed}"))
+        );
+        std::fs::remove_dir_all(dir).expect("remove test dump");
+    }
+
     /// Real-clock contract test (see `detector_tests` above).
     #[kithara::test(native, flash(false))]
     fn tick_with_stores_context_for_dump() {
