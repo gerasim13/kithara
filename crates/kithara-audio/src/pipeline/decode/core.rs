@@ -1348,7 +1348,7 @@ mod tests {
     ) {
         let pools = pools();
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
-        let incoming = generation(spec);
+        let mut incoming = generation(spec);
         let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
         abr.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
         let claim = abr
@@ -1376,6 +1376,16 @@ mod tests {
             .cycle()
             .take(samples)
             .collect::<Vec<_>>();
+        incoming
+            .stage(AudioChunk::new(
+                AudioChunkInfo {
+                    spec,
+                    frames,
+                    ..Default::default()
+                },
+                sample_buffer(&pools, &active_samples),
+            ))
+            .expect("the follow-up transition already has join PCM");
         decode
             .active
             .stage(AudioChunk::new(
@@ -1408,6 +1418,32 @@ mod tests {
         });
         let mut cursor = ResumeCursor::default();
 
+        let frontier = OutgoingFrontier::Exact {
+            frame: 0,
+            rate: spec.sample_rate.get(),
+        };
+        let target = decode
+            .incoming_preparation(frontier)
+            .expect("the follow-up transition has a preparation target");
+        let Some(IncomingDecode::Priming { generation, .. }) = decode.incoming.as_ref() else {
+            panic!("the follow-up transition must remain owned by the decoder");
+        };
+        assert!(matches!(
+            crate::pipeline::decode::transition::incoming_readiness(generation, target, 0),
+            crate::pipeline::decode::transition::PromotionReadiness::Ready(_)
+        ));
+        for _ in 0..3 {
+            assert_eq!(
+                decode.prime_incoming(frontier),
+                IncomingPrime::Pending,
+                "the active join needs consumption, not repeated incoming preparation"
+            );
+            assert!(matches!(
+                decode.incoming,
+                Some(IncomingDecode::Priming { .. })
+            ));
+            assert!(decode.prepare_promotion().is_none());
+        }
         assert!(
             !decode.transition_holds_output(),
             "the follow-up transition must not freeze an active join"
@@ -1418,6 +1454,18 @@ mod tests {
 
         assert!(output.is_some(), "the prior join must keep consuming PCM");
         assert!(decode.blender.is_steady(), "the prior join must finish");
+        decode.mark_source_exhausted();
+        decode.finish_active().expect("finish the outgoing source");
+        assert_eq!(decode.prime_incoming(frontier), IncomingPrime::Ready);
+        let prepared = decode
+            .prepare_promotion()
+            .expect("the follow-up transition can promote after the prior join");
+        let _retired = decode.commit_prepared_promotion(prepared);
+        let promoted = decode
+            .next_output(&mut cursor, None, false)
+            .expect("promoted PCM remains valid")
+            .expect("the follow-up transition produces its staged PCM");
+        assert_eq!(promoted.samples.as_ref(), active_samples.as_slice());
     }
 
     #[kithara::test]

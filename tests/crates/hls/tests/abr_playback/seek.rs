@@ -489,11 +489,11 @@ impl SeekPressure {
                             progressed |= self.pending_warm.remove(&request_id);
                         }
                         TestEvent::Downloader(
-                            DownloaderEvent::RequestFailed { request_id, .. }
-                            | DownloaderEvent::RequestCancelled { request_id, .. },
+                            event @ (DownloaderEvent::RequestFailed { request_id, .. }
+                            | DownloaderEvent::RequestCancelled { request_id, .. }),
                         ) => assert!(
                             !self.pending_warm.contains(&request_id),
-                            "warm body request {request_id:?} did not complete"
+                            "warm body request {request_id:?} did not complete: {event:?}"
                         ),
                         TestEvent::Abr(AbrEvent::BandwidthEstimate { bps }) => {
                             progressed |= self.estimate != Some(bps);
@@ -521,7 +521,10 @@ impl SeekPressure {
 /// the seek stayed pending — not on ABR.
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(3))]
 pub(crate) async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
-    use kithara::{audio::AudioRead, signal::AudioChunk};
+    use kithara::{
+        audio::{AudioRead, AudioSession},
+        signal::AudioChunk,
+    };
 
     const INITIAL_VARIANT: usize = TOP_VARIANT;
     const TOP_VARIANT: usize = 3;
@@ -571,6 +574,12 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) 
             mixed_codec_ladder()
                 .variant_bandwidths(vec![1_056_080, 2_145_712, 4_318_880, 15_820_128])
                 .delay_rules(vec![
+                    DelayRule {
+                        variant: Some(TOP_VARIANT - 1),
+                        segment_gte: Some(SEEK_SEGMENT),
+                        delay_ms: 750,
+                        ..Default::default()
+                    },
                     DelayRule {
                         variant: Some(TOP_VARIANT),
                         segment_gte: Some(SLOW_FROM_SEGMENT),
@@ -625,7 +634,7 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) 
                 .build(),
         )
         .pools(pools.clone())
-        .initial_abr_mode(auto(INITIAL_VARIANT))
+        .initial_abr_mode(AbrMode::manual(INITIAL_VARIANT))
         .cancel(cancel)
         .downloader(downloader)
         .events(bus)
@@ -677,6 +686,9 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) 
         hang_reset!();
     }
 
+    let abr = audio
+        .abr_handle()
+        .expect("HLS seek fixture exposes ABR control");
     let mut pressure = SeekPressure {
         warm_urls: (0..SEEK_SEGMENT)
             .map(|segment| created.segment_url(TOP_VARIANT, segment))
@@ -690,7 +702,9 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) 
     {
         let _real_io = kithara::platform::flash::real_io();
         let mut pressure_deadline = None;
-        while seek_segment.requested() == 0
+        let mut auto_enabled = false;
+        while !auto_enabled
+            || seek_segment.requested() == 0
             || !pressure.pending_warm.is_empty()
             || pressure.estimate.is_none_or(|bps| bps >= top_bandwidth)
         {
@@ -704,6 +718,16 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) 
                 ),
                 "the gated seek target must not produce PCM before release"
             );
+            if !auto_enabled && seek_segment.requested() > 0 {
+                assert_eq!(
+                    abr.current_variant_index(),
+                    Some(TOP_VARIANT),
+                    "automatic selection starts only while the top-variant seek is gated"
+                );
+                abr.set_mode(auto(INITIAL_VARIANT))
+                    .expect("enable automatic selection during the pending seek");
+                auto_enabled = true;
+            }
             if pressure.drain(&mut events) {
                 hang_reset!();
             }
@@ -749,6 +773,12 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) 
             "the seek must land on the variant that played before it, although the \
          estimate fell below it while the seek was pending"
         );
+        pace(
+            landing
+                .spec()
+                .duration_for(landing.frames() as u64)
+                .expect("seek landing has a valid duration"),
+        );
         let mut decisions = Vec::new();
         loop {
             hang_tick!();
@@ -770,6 +800,12 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) 
                 assert!(variant < TOP_VARIANT, "ABR must switch down");
                 break;
             }
+            pace(
+                chunk
+                    .spec()
+                    .duration_for(chunk.frames() as u64)
+                    .expect("post-seek chunk has a valid duration"),
+            );
         }
         decisions
     }
