@@ -300,21 +300,6 @@ where
 
     #[kithara::hang_watchdog]
     fn recycle(&mut self) {
-        tracing::trace!(
-            target: "render_refill",
-            probe = "recycle_enter",
-            thread = ?kithara_platform::thread::current().id(),
-            segment = self.source.cursor().segment.get(),
-            lane_frame = self.source.cursor().frame,
-            forward_full = self.port.forward.is_full(),
-            pending_frames = self.pending.as_ref().map(|pending| match &pending.packet {
-                PcmPacket::Chunk(chunk) => chunk.frames(),
-                PcmPacket::Failed { .. } => 0,
-            }),
-            last_source_start = self.last_output.source_span.map(SourceSpan::start),
-            last_source_end = self.last_output.source_span.map(SourceSpan::end),
-            last_frames = self.last_output.frames,
-        );
         while let Some(packet) = self.port.reverse.try_pop() {
             hang_tick!();
             self.retire(packet);
@@ -324,21 +309,6 @@ where
         let _ = self.source.prepare_deferred();
         self.source.finish_deferred();
         self.port.flush();
-        tracing::trace!(
-            target: "render_refill",
-            probe = "recycle_exit",
-            thread = ?kithara_platform::thread::current().id(),
-            segment = self.source.cursor().segment.get(),
-            lane_frame = self.source.cursor().frame,
-            forward_full = self.port.forward.is_full(),
-            pending_frames = self.pending.as_ref().map(|pending| match &pending.packet {
-                PcmPacket::Chunk(chunk) => chunk.frames(),
-                PcmPacket::Failed { .. } => 0,
-            }),
-            last_source_start = self.last_output.source_span.map(SourceSpan::start),
-            last_source_end = self.last_output.source_span.map(SourceSpan::end),
-            last_frames = self.last_output.frames,
-        );
     }
 
     #[kithara::measure(label = "play.decoder.tick")]
