@@ -489,6 +489,7 @@ async fn stress_seek_and_read(#[future(awt)] stress_source: (TestServerHelper, U
     let mut position_errors = 0u64;
     let mut channel_mismatches = 0u64;
     let mut continuity_errors = 0u64;
+    let mut first_breaks = Vec::new();
 
     for (i, &frac) in seek_positions.iter().enumerate() {
         hang_tick!();
@@ -503,7 +504,7 @@ async fn stress_seek_and_read(#[future(awt)] stress_source: (TestServerHelper, U
 
         let mut post_seek_samples = 0;
         let mut position_checked = false;
-        for _ in 0..10 {
+        for read_idx in 0..10 {
             hang_tick!();
             let n = read_with_yield(&mut audio, &mut buf).await.unwrap_or(0);
             if n == 0 {
@@ -536,6 +537,14 @@ async fn stress_seek_and_read(#[future(awt)] stress_source: (TestServerHelper, U
                     let curr = signal::phase::units(buf[f * channels]);
                     if curr != (prev + 1) % signal::SAW_PERIOD {
                         continuity_errors += 1;
+                        if first_breaks.len() < 8 {
+                            first_breaks.push(format!(
+                                "seek={i} target={seek_to:?} read={read_idx} frame={f}/{frames} previous_sample={} current_sample={} previous_phase={prev} current_phase={curr} position={:?}",
+                                buf[(f - 1) * channels],
+                                buf[f * channels],
+                                audio.position(),
+                            ));
+                        }
                     }
                 }
             }
@@ -572,7 +581,7 @@ async fn stress_seek_and_read(#[future(awt)] stress_source: (TestServerHelper, U
     );
     assert!(
         continuity_errors <= 5,
-        "{continuity_errors} continuity breaks (>5 tolerance)"
+        "{continuity_errors} continuity breaks (>5 tolerance); first={first_breaks:?}"
     );
     assert!(
         position_errors <= 1,
