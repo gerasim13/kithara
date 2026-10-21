@@ -199,16 +199,23 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         offset: i64,
         cursor: &mut super::super::trajectory::Trajectory,
     ) -> Result<(Option<Fraction>, Option<Fraction>), ElasticError> {
-        let position = if offset < 0 {
-            resident.history_position(offset.unsigned_abs())
+        let nominal = if offset < 0 {
+            None
         } else {
-            Some(self.map_nominal_position(
-                span.start(),
-                cursor.at_offset(span.start(), self.spec.sample_rate, 0)?,
-            )?)
+            Some(cursor.span(span.start(), self.spec.sample_rate, 1)?)
         };
-        let next = if offset >= 0 {
-            let nominal = cursor.span(span.start(), self.spec.sample_rate, 1)?;
+        let position = match nominal {
+            None => resident.history_position(offset.unsigned_abs()),
+            Some(nominal) => Some(
+                self.map_nominal_position(
+                    span.start(),
+                    nominal
+                        .source_ratio_at(0)
+                        .ok_or(ElasticError::SampleCountOverflow)?,
+                )?,
+            ),
+        };
+        let next = if let Some(nominal) = nominal {
             cursor.advance(nominal)?;
             Some(
                 self.map_nominal_position(
