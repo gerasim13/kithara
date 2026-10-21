@@ -301,6 +301,23 @@ impl<'a> RunnerManager<'a> {
         let concurrency = self.config.host.job_concurrency;
         let cargo_build_jobs = self.cargo_build_jobs_env();
         let root = self.config.host.host_root.display();
+        let preflight = toml::Value::String(
+            [
+                format!("{root}/toolchains/shared-bin/kithara-ci"),
+                "ci".to_owned(),
+                "host".to_owned(),
+                "mac".to_owned(),
+                "--config".to_owned(),
+                format!("{root}/services/mac-host.toml"),
+                "--pins".to_owned(),
+                format!("{root}/services/pins.toml"),
+                "preflight".to_owned(),
+            ]
+            .into_iter()
+            .map(|argument| format!("'{}'", argument.replace('\'', "'\\''")))
+            .collect::<Vec<_>>()
+            .join(" "),
+        );
         let builds = self.config.host.build_root().display();
         let container_builds = self.config.host.build_root().join(consts::CONTAINER_BUILDS);
         let container_builds = container_builds.display();
@@ -343,7 +360,7 @@ impl<'a> RunnerManager<'a> {
             .zip(1..)
             .map(|(token, number)| {
                 format!(
-                    "[[runners]]\n  name = \"kithara-mac-mini-macos-{number}\"\n  url = \"{url}\"\n  token = \"{token}\"\n  limit = 1\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"SCCACHE_SERVER_UDS=/tmp/kithara-mac-mini-macos-{number}-sccache.sock\", \"{cargo_build_jobs}\"{sccache_s3}]\n\n"
+                    "[[runners]]\n  name = \"kithara-mac-mini-macos-{number}\"\n  url = \"{url}\"\n  token = \"{token}\"\n  limit = 1\n  executor = \"shell\"\n  shell = \"bash\"\n  pre_get_sources_script = {preflight}\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"SCCACHE_SERVER_UDS=/tmp/kithara-mac-mini-macos-{number}-sccache.sock\", \"{cargo_build_jobs}\"{sccache_s3}]\n\n"
                 )
             })
             .collect::<String>();
@@ -352,8 +369,8 @@ impl<'a> RunnerManager<'a> {
              [[runners]]\n  name = \"kithara-mac-mini-linux\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"docker\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={cache}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={cache}\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"RUSTUP_HOME=/usr/local/rustup\", \"{cargo_build_jobs}\"{docker_sccache_s3}]\n\
              [runners.docker]\n    host = \"{}\"\n    image = \"{image}\"\n    pull_policy = \"never\"\n    allowed_pull_policies = [\"never\"]\n    allowed_images = [\"{image}\"]\n    cpus = \"5\"\n    memory = \"6500m\"\n    privileged = false\n    disable_cache = true\n    shm_size = 1073741824\n    volumes = [\"{root}/cache:{cache}:rw\", \"{root}/cache/gitlab-runner:/cache:rw\", \"{root}/services/mac-host.toml:{lane_config}:ro\", \"{container_builds}:{builds}/workspaces/gitlab:rw\"]\n\n\
              {macos}\
-             [[runners]]\n  name = \"kithara-mac-mini-android\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"SCCACHE_SERVER_UDS=/tmp/kithara-mac-mini-android-sccache.sock\", \"{cargo_build_jobs}\"{sccache_s3}]\n\n\
-             [[runners]]\n  name = \"kithara-mac-mini-release\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"SCCACHE_SERVER_UDS=/tmp/kithara-mac-mini-release-sccache.sock\", \"{cargo_build_jobs}\"{sccache_s3}]\n",
+             [[runners]]\n  name = \"kithara-mac-mini-android\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  pre_get_sources_script = {preflight}\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"SCCACHE_SERVER_UDS=/tmp/kithara-mac-mini-android-sccache.sock\", \"{cargo_build_jobs}\"{sccache_s3}]\n\n\
+             [[runners]]\n  name = \"kithara-mac-mini-release\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  pre_get_sources_script = {preflight}\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"SCCACHE_SERVER_UDS=/tmp/kithara-mac-mini-release-sccache.sock\", \"{cargo_build_jobs}\"{sccache_s3}]\n",
             tokens.linux,
             docker_host(home, &self.config.host.colima_profile),
             tokens.android,
@@ -747,6 +764,58 @@ mod tests {
             linux: "glrt-linux".into(),
             android: "glrt-android".into(),
             release: "glrt-release".into(),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shell_jobs_stop_before_sources_when_host_preflight_rejects() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = fixture();
+        config.host.host_root = directory.path().join("host root");
+        let bin = config.host.host_root.join("toolchains/shared-bin");
+        fs::create_dir_all(&bin).unwrap();
+        install_double(&bin, "kithara-ci");
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let manager = RunnerManager::new(&config, &process);
+        let rendered: toml::Value = toml::from_str(
+            &manager
+                .runner_config(&manager.ci_home(), &tokens(&config))
+                .unwrap(),
+        )
+        .unwrap();
+        for runner in rendered["runners"].as_array().unwrap() {
+            if runner["executor"].as_str() != Some("shell") {
+                continue;
+            }
+            let hook = runner
+                .get("pre_get_sources_script")
+                .and_then(toml::Value::as_str)
+                .expect("native jobs must check host admission before fetching sources");
+            for code in [0, 73] {
+                let trace = directory.path().join("preflight-arguments");
+                let output = std::process::Command::new("bash")
+                    .args(["-e", "-c", &format!("{hook}\nprintf 'admitted\\n'")])
+                    .env("KITHARA_TEST_RULES", format!("kithara-ci:ci:*={code}"))
+                    .env("KITHARA_TEST_TRACE", &trace)
+                    .output()
+                    .unwrap();
+                assert_eq!(output.status.code(), Some(code), "{output:?}");
+                assert_eq!(
+                    output.stdout,
+                    if code == 0 {
+                        b"admitted\n".as_slice()
+                    } else {
+                        b""
+                    },
+                    "a rejected host must not start the source step"
+                );
+                assert!(
+                    fs::read_to_string(&trace)
+                        .unwrap()
+                        .ends_with(" preflight\n")
+                );
+            }
         }
     }
 
