@@ -194,7 +194,7 @@ fn cold_target_fixture(target: usize) -> HlsFixtureBuilder {
     }])
 }
 
-#[kithara::flash(io)]
+#[kithara::flash(true)]
 #[kithara_test_utils::kithara::hang_watchdog]
 async fn prepare_tiny_ring_player(
     master_url: &url::Url,
@@ -301,7 +301,7 @@ async fn prepare_tiny_ring_player(
     }
 }
 
-#[kithara::flash(io)]
+#[kithara::flash(true)]
 #[kithara_test_utils::kithara::hang_watchdog]
 async fn render_to_capture_frame(player: &mut OfflinePlayer, pacer: &mut Pacer, label: &str) {
     loop {
@@ -324,7 +324,7 @@ async fn render_to_capture_frame(player: &mut OfflinePlayer, pacer: &mut Pacer, 
     }
 }
 
-#[kithara::flash(io)]
+#[kithara::flash(true)]
 #[kithara_test_utils::kithara::hang_watchdog]
 async fn capture_tiny_ring(
     prepared: &mut PreparedPlayer,
