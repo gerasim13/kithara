@@ -2,7 +2,7 @@ use std::sync::atomic::Ordering;
 
 use kithara_platform::{sync::Arc, time::Instant};
 
-use super::{AbrDecision, AbrState, AbrTicket, PendingAbrDecision, pending::pending_decision};
+use super::{AbrState, AbrTicket, PendingAbrDecision, pending::pending_decision};
 
 /// Publication authority retained by the owner of an [`AbrState`].
 ///
@@ -47,36 +47,6 @@ impl AbrState {
         }
         state.pending = None;
         true
-    }
-
-    /// Publish the switch: a [`AbrDecision::Stay`] is a no-op; otherwise
-    /// atomically clear the pending slot **iff** it still references the
-    /// same target as `decision`, then store `current_variant :=
-    /// decision.target()` and record the switch timestamp.
-    ///
-    /// The "iff" rule preserves the replace-pending semantic: if an
-    /// external `request_target` overwrote the slot with a different
-    /// target between [`peek_pending_decision`](Self::peek_pending_decision)
-    /// and this call, the new pending stays untouched and the next
-    /// boundary commits it. The captured `decision` still publishes —
-    /// the caller has already prepared `v_new` for that target.
-    pub fn apply_decision(&self, decision: &AbrDecision, now: Instant) {
-        if !decision.changed() {
-            return;
-        }
-        let target = decision.target();
-        let mut state = self.pending.lock();
-        if state
-            .pending
-            .as_ref()
-            .is_some_and(|pending| pending.target == target)
-        {
-            state.pending = None;
-        }
-        self.clear_escape();
-        self.current_variant.store(target.get(), Ordering::Release);
-        self.record_switch(now);
-        drop(state);
     }
 
     /// Publish `claim` only when it still identifies the pending request.
