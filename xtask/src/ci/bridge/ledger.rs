@@ -191,7 +191,7 @@ impl Ledger {
         pipeline_id: u64,
     ) -> Result<()> {
         self.update(head_sha, base_sha, |data, key| {
-            let entry = testing_pipeline(data, key, attempt, pipeline_id)?;
+            let entry = owned_pipeline(data, key, attempt, pipeline_id)?;
             if entry.announced {
                 return Ok(false);
             }
@@ -230,14 +230,8 @@ impl Ledger {
     ) -> Result<()> {
         self.with_locked_data(|data| {
             let key = ledger_key(head_sha, base_sha);
-            let Some(entry) = data.verifications.get_mut(&key) else {
-                bail!("verification {key} has not been reserved");
-            };
-            require_attempt(entry, &key, attempt)?;
-            if entry.pipeline_id != Some(pipeline_id) {
-                bail!("verification {key} attempt {attempt} does not own pipeline {pipeline_id}");
-            }
-            if entry.state != VerificationState::Testing {
+            let entry = owned_pipeline(data, &key, attempt, pipeline_id)?;
+            if entry.state == state && entry.detail == detail {
                 return Ok(());
             }
             entry.state = state;
@@ -303,7 +297,7 @@ impl Ledger {
     ) -> Result<()> {
         self.with_locked_data(|data| {
             let key = ledger_key(head_sha, base_sha);
-            let entry = testing_pipeline(data, &key, attempt, pipeline_id)?;
+            let entry = owned_pipeline(data, &key, attempt, pipeline_id)?;
             reopen(entry)?;
             self.write(data)
         })
@@ -422,13 +416,16 @@ fn require_attempt(entry: &LedgerEntry, key: &str, attempt: u64) -> Result<()> {
     Ok(())
 }
 
-fn testing_pipeline<'a>(
+fn owned_pipeline<'a>(
     data: &'a mut LedgerData,
     key: &str,
     attempt: u64,
     pipeline_id: u64,
 ) -> Result<&'a mut LedgerEntry> {
-    let entry = testing_attempt(data, key, attempt)?;
+    let Some(entry) = data.verifications.get_mut(key) else {
+        bail!("verification {key} has not been reserved");
+    };
+    require_attempt(entry, key, attempt)?;
     if entry.pipeline_id != Some(pipeline_id) {
         bail!("verification {key} attempt {attempt} does not own pipeline {pipeline_id}");
     }
@@ -676,37 +673,39 @@ mod tests {
     }
 
     #[test]
-    fn terminal_entries_and_pipeline_ids_are_immutable() {
+    fn job_retries_refresh_the_owned_pipeline_without_changing_its_identity() {
         let directory = tempfile::tempdir().unwrap();
         let ledger = Ledger::new(directory.path()).unwrap();
         ledger.reserve("head", "base", Scope::Full).unwrap();
         ledger.attach("head", "base", 1, 42).unwrap();
-        ledger
-            .finish(
-                "head",
-                "base",
-                1,
-                42,
-                VerificationState::Verified,
-                Some("passed".into()),
-            )
-            .unwrap();
-        ledger
-            .finish(
-                "head",
-                "base",
-                1,
-                42,
-                VerificationState::Rejected,
-                Some("late failure".into()),
-            )
-            .unwrap();
-
-        let entry = ledger.get("head", "base").unwrap().unwrap();
-        assert_eq!(entry.state, VerificationState::Verified);
-        assert_eq!(entry.pipeline_id, Some(42));
-        assert_eq!(entry.detail.as_deref(), Some("passed"));
+        ledger.announce("head", "base", 1, 42).unwrap();
+        for state in [
+            VerificationState::Rejected,
+            VerificationState::Testing,
+            VerificationState::Verified,
+            VerificationState::Testing,
+            VerificationState::Rejected,
+        ] {
+            ledger.finish("head", "base", 1, 42, state, None).unwrap();
+            let entry = ledger.get("head", "base").unwrap().unwrap();
+            assert_eq!(entry.state, state);
+            assert_eq!(entry.attempt, 1);
+            assert_eq!(entry.pipeline_id, Some(42));
+            assert!(entry.announced);
+        }
+        assert!(
+            ledger
+                .finish("head", "base", 1, 43, VerificationState::Verified, None)
+                .is_err()
+        );
+        assert!(
+            ledger
+                .finish("head", "base", 2, 42, VerificationState::Verified, None)
+                .is_err()
+        );
         assert!(ledger.attach("head", "base", 1, 43).is_err());
+        ledger.release("head", "base", 1, 42).unwrap();
+        assert_eq!(ledger.get("head", "base").unwrap().unwrap().attempt, 2);
     }
 
     #[test]
