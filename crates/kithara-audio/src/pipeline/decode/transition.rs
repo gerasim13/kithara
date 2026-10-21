@@ -548,7 +548,7 @@ pub(super) fn promotion_readiness(
     incoming_origin: u64,
 ) -> PromotionReadiness {
     if !blender.is_steady() {
-        return PromotionReadiness::NeedIncoming;
+        return PromotionReadiness::AwaitingOutgoingFrontier;
     }
     let readiness = incoming_readiness(generation, target, incoming_origin);
     let PromotionReadiness::Ready(mut span) = readiness else {
