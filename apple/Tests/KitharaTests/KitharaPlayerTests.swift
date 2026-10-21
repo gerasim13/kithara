@@ -4,7 +4,7 @@ import KitharaFFI
 import Testing
 @testable import Kithara
 
-@Suite("KitharaPlayer")
+@Suite("KitharaPlayer", .serialized)
 struct KitharaPlayerTests {
     final class LegacyItem {}
 
