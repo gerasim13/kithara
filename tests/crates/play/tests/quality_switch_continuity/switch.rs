@@ -492,15 +492,28 @@ pub(super) async fn render_paced(
     pacer: &mut Pacer,
     frames: usize,
 ) -> Vec<f32> {
+    render_paced_observing(player, pacer, frames, |_, _| ())
+        .await
+        .0
+}
+
+#[kithara::flash(true)]
+pub(super) async fn render_paced_observing<T>(
+    player: &mut OfflinePlayer,
+    pacer: &mut Pacer,
+    frames: usize,
+    observe: impl FnOnce(&OfflinePlayer, &[f32]) -> T,
+) -> (Vec<f32>, T) {
     let taken = Instant::now();
     let block = player.render(frames).await;
+    let observation = observe(player, &block);
     let period = Duration::from_secs_f64(
         frames.to_f64().expect("block frame count fits f64") / f64::from(SAMPLE_RATE),
     );
     let due = pacer.due.map_or(taken, |due| due.max(taken)) + period;
     pacer.due = Some(due);
     sleep(due.saturating_duration_since(Instant::now())).await;
-    block
+    (block, observation)
 }
 
 #[kithara_test_utils::kithara::test(tokio, native)]

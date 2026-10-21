@@ -11,7 +11,7 @@ use kithara_integration_tests::{CreatedHls, TestServerHelper, fixture_protocol::
 use kithara_render::bridge::DeckSnapshot;
 use num_traits::ToPrimitive;
 
-use super::*;
+use super::{switch::render_paced_observing, *};
 use crate::bufpool_ext::pools;
 
 const OUTPUT_RING_CHUNKS: usize = 1;
@@ -334,84 +334,81 @@ async fn capture_tiny_ring(
             .ok()
             .map(|duration| duration.as_micros());
         let snapshot_before = prepared.player.deck_snapshot();
-        let block = render_paced(&mut prepared.player, &mut prepared.pacer, frames).await;
-        let snapshot_after = prepared.player.deck_snapshot();
-        let output_end = prepared.player.host().position();
-        let short =
-            snapshot_before
-                .slots
-                .iter()
-                .zip(&snapshot_after.slots)
-                .any(|(before, after)| {
-                    before.mark.zip(after.mark).is_some_and(|(before, after)| {
-                        before.lane.segment == after.lane.segment
-                            && after.lane.frame.checked_sub(before.lane.frame).is_some_and(
-                                |served| served < u64::try_from(frames).unwrap_or(u64::MAX),
-                            )
-                    })
-                });
-        let capture_refill =
-            (short || longest_silent_run(&block) > MAX_EXTRA_SILENT_FRAMES) && refill_snapshots < 3;
-        let (flight_events, flight_probes) = if capture_refill {
-            let mut events = kithara_test_utils::flight::tail();
-            let mut probes = kithara_test_utils::flight::probes_tail();
-            events.reverse();
-            probes.reverse();
-            (events, probes)
-        } else {
-            (Vec::new(), Vec::new())
-        };
-        let refill_probes = if capture_refill {
-            refill_snapshots += 1;
-            kithara_test_utils::test::usdt::events_of("feeder_refill_unavailable")
-                .into_iter()
-                .rev()
-                .filter(|event| {
-                    snapshot_before
-                        .slots
-                        .iter()
-                        .zip(&snapshot_after.slots)
-                        .filter_map(|(before, after)| Some((before.mark?, after.mark?)))
-                        .any(|(before, after)| {
-                            before.lane.segment == after.lane.segment
-                                && event.field("segment") == Some(after.lane.segment.get())
-                                && event.field("lane_frame").is_some_and(|frame| {
-                                    (before.lane.frame..=after.lane.frame).contains(&frame)
+        let (block, captured) = render_paced_observing(
+            &mut prepared.player,
+            &mut prepared.pacer,
+            frames,
+            |player, block| {
+                let snapshot_after = player.deck_snapshot();
+                let output_end = player.host().position();
+                let capture_refill =
+                    longest_silent_run(block) > MAX_EXTRA_SILENT_FRAMES && refill_snapshots < 3;
+                let (flight_events, flight_probes) = if capture_refill {
+                    let mut events = kithara_test_utils::flight::tail();
+                    let mut probes = kithara_test_utils::flight::probes_tail();
+                    events.reverse();
+                    probes.reverse();
+                    (events, probes)
+                } else {
+                    (Vec::new(), Vec::new())
+                };
+                let refill_probes = if capture_refill {
+                    refill_snapshots += 1;
+                    kithara_test_utils::test::usdt::events_of("feeder_refill_unavailable")
+                        .into_iter()
+                        .rev()
+                        .filter(|event| {
+                            snapshot_before
+                                .slots
+                                .iter()
+                                .zip(&snapshot_after.slots)
+                                .filter_map(|(before, after)| Some((before.mark?, after.mark?)))
+                                .any(|(before, after)| {
+                                    before.lane.segment == after.lane.segment
+                                        && event.field("segment") == Some(after.lane.segment.get())
+                                        && event.field("lane_frame").is_some_and(|frame| {
+                                            (before.lane.frame..=after.lane.frame).contains(&frame)
+                                        })
                                 })
                         })
-                })
-                .take(8)
-                .collect()
-        } else {
-            Vec::new()
-        };
-        let mut observed_events = Vec::new();
-        let mut event_error = None;
-        for _ in 0..32 {
-            match item_events.try_recv() {
-                Ok(envelope) => observed_events.push(envelope.event),
-                Err(kithara::platform::tokio::sync::broadcast::error::TryRecvError::Empty) => break,
-                Err(error) => {
-                    event_error = Some(error.to_string());
-                    break;
+                        .take(8)
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                let mut observed_events = Vec::new();
+                let mut event_error = None;
+                for _ in 0..32 {
+                    match item_events.try_recv() {
+                        Ok(envelope) => observed_events.push(envelope.event),
+                        Err(
+                            kithara::platform::tokio::sync::broadcast::error::TryRecvError::Empty,
+                        ) => break,
+                        Err(error) => {
+                            event_error = Some(error.to_string());
+                            break;
+                        }
+                    }
                 }
-            }
-        }
-        if observed_events.len() == 32 {
-            event_error = Some("per-block ItemEvent capture reached 32 events".into());
-        }
-        blocks.push(CaptureBlock {
-            capture: capture_start..capture_start + frames,
-            output: output_start..output_end,
-            started_unix_micros,
-            before: snapshot_before,
-            after: snapshot_after,
-            item_events: observed_events,
-            event_error,
-            refill_probes,
-            flight_events,
-            flight_probes,
-        });
+                if observed_events.len() == 32 {
+                    event_error = Some("per-block ItemEvent capture reached 32 events".into());
+                }
+                CaptureBlock {
+                    capture: capture_start..capture_start + frames,
+                    output: output_start..output_end,
+                    started_unix_micros,
+                    before: snapshot_before,
+                    after: snapshot_after,
+                    item_events: observed_events,
+                    event_error,
+                    refill_probes,
+                    flight_events,
+                    flight_probes,
+                }
+            },
+        )
+        .await;
+        blocks.push(captured);
         samples.extend_from_slice(&block);
         if prepared.player.position() > before {
             hang_reset!();
