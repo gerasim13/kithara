@@ -25,6 +25,42 @@ const RESTART_SAMPLE: usize = 3;
 
 type Events = Rc<RefCell<Vec<JsValue>>>;
 
+#[wasm_bindgen::prelude::wasm_bindgen(inline_js = r#"
+const workerStartup = [];
+let observingWorkers = false;
+export function observeWorkerStartup() {
+    if (observingWorkers) return;
+    observingWorkers = true;
+    const BrowserWorker = globalThis.Worker;
+    globalThis.Worker = class extends BrowserWorker {
+        constructor(...args) {
+            super(...args);
+            const id = workerStartup.length;
+            workerStartup.push({ id, created: String(args[0]) });
+            this.addEventListener('error', event => {
+                workerStartup.push({ id, error: event.message,
+                    filename: event.filename, line: event.lineno });
+            });
+            this.addEventListener('message', event => {
+                const data = event.data;
+                if (data && data.__wasm_safe_thread_error) {
+                    workerStartup.push({ id, workerError: data.__wasm_safe_thread_error });
+                }
+            });
+        }
+    };
+}
+export function workerStartupReport() {
+    return JSON.stringify(workerStartup);
+}
+"#)]
+extern "C" {
+    #[wasm_bindgen::prelude::wasm_bindgen(js_name = observeWorkerStartup)]
+    fn observe_worker_startup();
+    #[wasm_bindgen::prelude::wasm_bindgen(js_name = workerStartupReport)]
+    fn worker_startup_report() -> String;
+}
+
 struct BroadcastObservation {
     channel: BroadcastChannel,
     _listener: Closure<dyn FnMut(MessageEvent)>,
@@ -109,9 +145,10 @@ fn progress_report(events: &Events, diagnostics: &[BroadcastObservation; 2]) -> 
         None => "no publication at all".to_string(),
     };
     format!(
-        "{publications}; kithara-reply={}; kithara-events (analysis arrays are lengths)={}",
+        "{publications}; kithara-reply={}; kithara-events (analysis arrays are lengths)={}; workers={}",
         diagnostics[0].report(),
         diagnostics[1].report(),
+        worker_startup_report(),
     )
 }
 
@@ -124,6 +161,7 @@ fn revisions(events: &Events) -> Vec<f64> {
 }
 
 fn observed_player() -> (AudioPlayer, Events, [BroadcastObservation; 2]) {
+    observe_worker_startup();
     static BINDINGS: Once = Once::new();
     BINDINGS.call_once(|| {
         kithara_ffi::web::bindings::setup().expect("browser bindings initialized");
