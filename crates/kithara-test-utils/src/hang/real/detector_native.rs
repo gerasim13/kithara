@@ -111,15 +111,14 @@ impl<C: HangDump> HangDetector<C> {
         )
     }
 
-    fn fire_dump(&mut self) {
+    fn fire_dump(&mut self, diagnostic: &str) {
         if self.fired {
             return;
         }
         self.fired = true;
-        let diag = self.diagnostic();
         match self.ctx.as_ref() {
-            Some(ctx) => write_dump(self.label, ctx, self.dump_dir.as_deref(), &diag),
-            None => write_dump(self.label, &NoContext, self.dump_dir.as_deref(), &diag),
+            Some(ctx) => write_dump(self.label, ctx, self.dump_dir.as_deref(), diagnostic),
+            None => write_dump(self.label, &NoContext, self.dump_dir.as_deref(), diagnostic),
         }
         // The imminent watchdog panic is already documented by this dump.
         super::panic_dump::suppress_next_panic_dump();
@@ -190,16 +189,22 @@ impl<C: HangDump> HangDetector<C> {
     /// Panics when no progress is observed before the configured timeout.
     pub fn tick_from(&mut self, file: &'static str, line: u32) {
         self.last_tick = Some((file, line));
-        if Instant::now() < self.deadline() {
+        let observed = Instant::now();
+        let deadline = self.deadline();
+        if observed < deadline {
             self.spins_since_progress = self.spins_since_progress.saturating_add(1);
             return;
         }
-        self.fire_dump();
+        let elapsed = self
+            .timeout
+            .saturating_add(observed.saturating_duration_since(deadline));
+        let diagnostic = format!("{} | elapsed_ns={}", self.diagnostic(), elapsed.as_nanos());
+        self.fire_dump(&diagnostic);
         panic!(
             "[HangDetector] `{label}` no progress for {timeout:?} — {diag}{ctx}",
             label = self.label,
             timeout = self.timeout,
-            diag = self.diagnostic(),
+            diag = diagnostic,
             ctx = self
                 .ctx
                 .as_ref()

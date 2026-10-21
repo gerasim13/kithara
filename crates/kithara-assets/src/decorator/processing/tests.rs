@@ -248,7 +248,7 @@ fn wait_range_aborts_on_cancellation() {
         .build();
     let reader = writer.reader();
 
-    let handle = std::thread::spawn(move || reader.wait_range(0..16));
+    let handle = thread::spawn(move || reader.wait_range(0..16));
 
     thread::sleep(Duration::from_millis(50));
     cancel.cancel();
@@ -439,7 +439,7 @@ fn ending_a_writer_without_commit_interrupts_its_readers(#[case] abandon: bool) 
     let reader = writer.reader();
     let reader_probe = reader.clone();
 
-    let handle = std::thread::spawn(move || reader.wait_range(0..16));
+    let handle = thread::spawn(move || reader.wait_range(0..16));
     thread::sleep(Duration::from_millis(50));
     if abandon {
         writer.abandon();

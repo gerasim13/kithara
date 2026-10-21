@@ -5558,6 +5558,7 @@ dependencies = [
  "kithara-stream",
  "kithara-test-utils",
  "kithara-workspace-hack",
+ "portable-atomic",
  "serde",
  "tempfile",
  "thiserror 2.0.21",

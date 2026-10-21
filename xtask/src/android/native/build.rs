@@ -451,6 +451,8 @@ fn configure(
         .open(cache.join("run.lock"))?;
     let lease = FileLock::try_exclusive(lock)
         .context("another Android baseline owns this native build cache")?;
+    let linker = cache.join("linker.sh");
+    fs::copy(source.join("native/linker.sh"), &linker)?;
     let cargo_target = cache.join("cargo");
     let mut metadata_command = Command::new("cargo");
     metadata_command
@@ -505,7 +507,7 @@ fn configure(
     environment.remove(&format!("CARGO_TARGET_{target_key}_RUNNER"));
     environment.insert(
         format!("CARGO_TARGET_{target_key}_LINKER"),
-        source.join("native/linker.sh").display().to_string(),
+        linker.display().to_string(),
     );
     environment.insert(
         "KITHARA_ANDROID_LINK_CONFIG".into(),

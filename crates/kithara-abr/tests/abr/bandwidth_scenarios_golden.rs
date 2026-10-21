@@ -1,11 +1,14 @@
 use kithara_abr::{AbrMode, AbrState, AbrView, VariantIndex};
-use kithara_platform::time::{Duration as StdDuration, Instant};
+use kithara_platform::{
+    sync::Arc,
+    time::{Duration as StdDuration, Instant},
+};
 use kithara_test_utils::kithara;
 
-use super::common::{fast_settings, variants};
+use super::common::{fast_settings, publish, variants};
 
 fn run_profile(profile: &[u64]) -> usize {
-    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     let settings = fast_settings();
     let variants = variants(&[300_000, 900_000, 3_000_000]);
     let base = Instant::now();
@@ -18,10 +21,7 @@ fn run_profile(profile: &[u64]) -> usize {
             settings: &settings,
         };
         let now = base + StdDuration::from_millis((i as u64) + 1);
-        let d = state.decide(&view, now);
-        if d.changed() {
-            state.apply_decision(&d, now);
-        }
+        publish(&state, state.decide(&view, now), now);
     }
     state.current_variant_index().get()
 }
