@@ -47,7 +47,7 @@ pub use gapless::{
 };
 pub use traits::{
     Decoder, DecoderChunkOutcome, DecoderInput, DecoderSeekOutcome, InputReadOutcome, InputState,
-    LandingClock, PrepareWait,
+    PrepareWait,
 };
 pub use types::{
     BlenderProfile, DecoderDuration, DecoderTrackInfo, GaplessProfile, PcmOrigin, TrackMetadata,

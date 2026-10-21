@@ -396,7 +396,6 @@ impl Decoder for ByteEofDecoder {
             landed_frame: 0,
             landed_byte: None,
             preroll: PrerollHint::NotNeeded,
-            clock: kithara_decode::LandingClock::Kept,
         })
     }
     fn spec(&self) -> AudioSpec {

@@ -94,7 +94,6 @@ impl Decoder for TestDecoder {
             landed_frame: 0,
             landed_byte: None,
             preroll: PrerollHint::NotNeeded,
-            clock: kithara_decode::LandingClock::Kept,
         })
     }
 
@@ -146,7 +145,6 @@ impl Decoder for FailingDecoder {
             landed_frame: 0,
             landed_byte: None,
             preroll: PrerollHint::NotNeeded,
-            clock: kithara_decode::LandingClock::Kept,
         })
     }
 
@@ -183,7 +181,6 @@ impl Decoder for ProfileCountingDecoder {
             landed_frame: 0,
             landed_byte: None,
             preroll: PrerollHint::NotNeeded,
-            clock: kithara_decode::LandingClock::Kept,
         })
     }
 
@@ -333,7 +330,6 @@ impl Decoder for RouteSignalDecoder {
             landed_frame: frame,
             landed_byte: None,
             preroll: PrerollHint::NotNeeded,
-            clock: kithara_decode::LandingClock::Kept,
         })
     }
 

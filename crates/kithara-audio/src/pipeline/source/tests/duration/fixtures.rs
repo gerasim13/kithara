@@ -148,7 +148,6 @@ impl Decoder for PhysicalDecoder {
             landed_frame: frame,
             landed_byte: None,
             preroll: PrerollHint::NotNeeded,
-            clock: kithara_decode::LandingClock::Kept,
         })
     }
     fn spec(&self) -> AudioSpec {

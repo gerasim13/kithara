@@ -90,7 +90,6 @@ impl Decoder for OriginDecoder {
             landed_frame: self.spec.frame_at(position)?,
             landed_byte: None,
             preroll: PrerollHint::NotNeeded,
-            clock: kithara_decode::LandingClock::Kept,
         })
     }
 

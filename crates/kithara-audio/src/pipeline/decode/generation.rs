@@ -491,7 +491,6 @@ mod tests {
                 landed_frame: self.spec.frame_at(position).expect("valid seek frame"),
                 landed_byte: None,
                 preroll: PrerollHint::NotNeeded,
-                clock: kithara_decode::LandingClock::Kept,
             })
         }
 
@@ -1092,7 +1091,6 @@ mod tests {
                 landed_frame: self.landed_frame,
                 landed_byte: None,
                 preroll: PrerollHint::NotNeeded,
-                clock: kithara_decode::LandingClock::Kept,
             })
         }
 
@@ -1106,7 +1104,6 @@ mod tests {
                 landed_frame: self.landed_frame,
                 landed_byte: None,
                 preroll: PrerollHint::NotNeeded,
-                clock: kithara_decode::LandingClock::Kept,
             }))
         }
 
