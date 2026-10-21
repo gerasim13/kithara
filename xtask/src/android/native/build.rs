@@ -69,6 +69,7 @@ pub(super) fn prepare(
     fs::write(
         evidence.join("package-selection.json"),
         serde_json::to_vec_pretty(&serde_json::json!({
+            "scope": "component-coverage",
             "lane": android.test_lane,
             "packages": super::command_packages(&command)?,
         }))?,
