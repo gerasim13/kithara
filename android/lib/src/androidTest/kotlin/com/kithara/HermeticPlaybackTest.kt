@@ -55,57 +55,57 @@ class HermeticPlaybackTest {
             deleteRecursively()
             mkdirs()
         }
-        val player = KitharaPlayer(
+        KitharaPlayer(
             config = KitharaPlayer.Config(store = AssetStore(root = cacheDir.absolutePath)),
-        )
-
-        val loaded = CountDownLatch(1)
-        val failure = AtomicReference<String?>(null)
-        val subscribed = CountDownLatch(1)
-        val scope = CoroutineScope(Dispatchers.Default)
-        val collectJob: Job = scope.launch {
-            player.events.onSubscription { subscribed.countDown() }.collect { event ->
-                if (event is KitharaPlayerEvent.TrackStatusChanged) {
-                    Log.i(TAG, "status: ${event.itemId} -> ${event.status}")
-                    when (val status = event.status) {
-                        is TrackStatus.Loaded -> loaded.countDown()
-                        is TrackStatus.Failed -> {
-                            failure.compareAndSet(null, "load failed: ${status.reason}")
-                            loaded.countDown()
+        ).use { player ->
+            val loaded = CountDownLatch(1)
+            val failure = AtomicReference<String?>(null)
+            val subscribed = CountDownLatch(1)
+            val scope = CoroutineScope(Dispatchers.Default)
+            val collectJob: Job = scope.launch {
+                player.events.onSubscription { subscribed.countDown() }.collect { event ->
+                    if (event is KitharaPlayerEvent.TrackStatusChanged) {
+                        Log.i(TAG, "status: ${event.itemId} -> ${event.status}")
+                        when (val status = event.status) {
+                            is TrackStatus.Loaded -> loaded.countDown()
+                            is TrackStatus.Failed -> {
+                                failure.compareAndSet(null, "load failed: ${status.reason}")
+                                loaded.countDown()
+                            }
+                            else -> Unit
                         }
-                        else -> Unit
                     }
                 }
             }
-        }
 
-        try {
-            assertTrue(
-                "the collector must be registered on the event flow before insert(); " +
-                    "a status published while loading is otherwise dropped",
-                subscribed.await(SUBSCRIBE_TIMEOUT_SECONDS, TimeUnit.SECONDS),
-            )
+            try {
+                assertTrue(
+                    "the collector must be registered on the event flow before insert(); " +
+                        "a status published while loading is otherwise dropped",
+                    subscribed.await(SUBSCRIBE_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                )
 
-            player.insert(KitharaPlayerItem(HermeticFixtures.mp3()))
-            assertTrue(
-                "track must reach a terminal status within ${LOADED_TIMEOUT_SECONDS}s",
-                loaded.await(LOADED_TIMEOUT_SECONDS, TimeUnit.SECONDS),
-            )
-            assertNull(failure.get(), failure.get())
+                player.insert(KitharaPlayerItem(HermeticFixtures.mp3()))
+                assertTrue(
+                    "track must reach a terminal status within ${LOADED_TIMEOUT_SECONDS}s",
+                    loaded.await(LOADED_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                )
+                assertNull(failure.get(), failure.get())
 
-            player.play()
-            val advanced = awaitAdvance(player)
-            assertNull("player reported ${player.error}", player.error)
-            assertNull(failure.get(), failure.get())
-            assertTrue(
-                "position must move after play(); it stayed at ${player.currentTime}s",
-                advanced,
-            )
-        } finally {
-            player.pause()
-            collectJob.cancel()
-            scope.cancel()
-            player.removeAllItems()
+                player.play()
+                val advanced = awaitAdvance(player)
+                assertNull("player reported ${player.error}", player.error)
+                assertNull(failure.get(), failure.get())
+                assertTrue(
+                    "position must move after play(); it stayed at ${player.currentTime}s",
+                    advanced,
+                )
+            } finally {
+                collectJob.cancel()
+                scope.cancel()
+                player.pause()
+                player.removeAllItems()
+            }
         }
     }
 
