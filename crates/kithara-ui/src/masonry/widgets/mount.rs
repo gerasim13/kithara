@@ -595,6 +595,15 @@ where
     output
 }
 
+impl NodeControl for mount::panel::context_bar::host::ContextBar<'_> {
+    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
+    where
+        A: std::fmt::Debug + Send + 'static,
+    {
+        painted(self, host, cx)
+    }
+}
+
 /// Which controls this host lets answer the pointer themselves.
 #[cfg(test)]
 mod owns {
@@ -633,14 +642,5 @@ mod owns {
             pointer_owner(InputOwner::Engine, &ControlSpec::Knob { label: None }),
             InputOwner::Engine
         );
-    }
-}
-
-impl NodeControl for mount::panel::context_bar::host::ContextBar<'_> {
-    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
-    where
-        A: std::fmt::Debug + Send + 'static,
-    {
-        painted(self, host, cx)
     }
 }

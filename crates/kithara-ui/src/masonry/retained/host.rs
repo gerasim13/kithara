@@ -202,6 +202,7 @@ where
                 widget,
                 skin: kind.map_or_else(CustomSkin::default, |kind| self.skin.custom(kind).clone()),
                 text: Box::new(TextContext::from(self.skin.text_resources.as_ref())),
+                pictures: Vec::new(),
             }),
             declared,
             Vec::new(),
@@ -559,12 +560,12 @@ where
         if owns_pointer == InputOwner::Leaf {
             return output;
         }
-        mount::controls!(
+        output = mount::controls!(
             host: spec,
             Wire {
                 host: &*self,
                 cx: &cx,
-                output: &mut output
+                output
             }
         );
         if let Some(plan) = plan {
@@ -915,21 +916,24 @@ where
 }
 
 /// Asks whichever control the document named to attach whatever it still needs
-/// beyond its own leaf.
-struct Wire<'out, 'host, 'cx, 'a, Action> {
+/// beyond its own leaf, and hands the mounted node back.
+struct Wire<'host, 'cx, 'a, Action> {
     cx: &'cx Cx<'cx>,
     host: &'host MasonryHost<'a, Action>,
-    output: &'out mut MasonryNode<Action>,
+    output: MasonryNode<Action>,
 }
 
-impl<Action> Wire<'_, '_, '_, '_, Action>
+impl<Action> Wire<'_, '_, '_, Action>
 where
     Action: std::fmt::Debug + Send + 'static,
 {
-    fn apply<C: NodeControl>(self, control: &C) {
-        control.wire(self.host, self.cx, self.output);
+    fn apply<C: NodeControl>(mut self, control: &C) -> MasonryNode<Action> {
+        control.wire(self.host, self.cx, &mut self.output);
+        self.output
     }
 
     /// A control that draws itself attaches nothing beyond its leaf.
-    fn painted<C>(self, _control: &C) {}
+    fn painted<C>(self, _control: &C) -> MasonryNode<Action> {
+        self.output
+    }
 }

@@ -188,11 +188,7 @@ impl CiHost {
                 self.job_concurrency
             );
         }
-        let whole_gigabytes = self.sccache_size.strip_suffix('G').is_some_and(|digits| {
-            digits.bytes().all(|byte| byte.is_ascii_digit())
-                && digits.bytes().any(|byte| byte != b'0')
-        });
-        if !whole_gigabytes {
+        if !is_whole_gigabytes(&self.sccache_size) {
             bail!("CI host profile sccache_size must be a positive whole number followed by G");
         }
         if self.build_cache_size.trim().is_empty() {
@@ -380,6 +376,14 @@ pub(crate) struct BuildCacheSizeError {
 /// from `unicode-ident` — seven minutes of build in front of two minutes of
 /// tests. A profile that serves a fleet sets `build_cache_size` from what the
 /// fleet actually builds and what its volume can spare.
+/// A compiler-cache budget as kache and sccache both read it: a positive
+/// whole number of gigabytes followed by `G`.
+pub(crate) fn is_whole_gigabytes(size: &str) -> bool {
+    size.strip_suffix('G').is_some_and(|digits| {
+        digits.bytes().all(|byte| byte.is_ascii_digit()) && digits.bytes().any(|byte| byte != b'0')
+    })
+}
+
 pub(crate) fn default_build_cache_size() -> String {
     "25GB".to_owned()
 }
@@ -437,6 +441,7 @@ fn default_cache_namespaces() -> Vec<String> {
     [
         consts::CARGO_HOME_DIR,
         "gitlab-runner",
+        consts::KACHE_DIR,
         "quarantine",
         "review",
         "trusted",
@@ -800,6 +805,12 @@ mod tests {
                 .any(|namespace| namespace == consts::CARGO_HOME_DIR),
             "an operator profile that omits the container's Cargo home loses it to cleanup"
         );
+        assert!(
+            host.cache_namespaces
+                .iter()
+                .any(|namespace| namespace == consts::KACHE_DIR),
+            "an operator profile that omits kache's directory loses its host files and store to cleanup"
+        );
     }
 
     /// An installed profile predating the fields must still load: the binary
@@ -871,6 +882,7 @@ mod tests {
             [
                 consts::CARGO_HOME_DIR,
                 "gitlab-runner",
+                consts::KACHE_DIR,
                 "quarantine",
                 "review",
                 "trusted"

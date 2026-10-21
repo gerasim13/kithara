@@ -269,7 +269,9 @@ fn ramp_runs_outward(rgba: &[u8]) -> bool {
 
 /// Nothing at all reached the pixels.
 fn surface_is_untouched(rgba: &[u8]) -> bool {
-    rgba.chunks_exact(4)
+    rgba.as_chunks::<4>()
+        .0
+        .iter()
         .all(|pixel| pixel[..3].iter().all(|channel| *channel == 0))
 }
 
