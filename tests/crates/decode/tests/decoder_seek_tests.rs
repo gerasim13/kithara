@@ -1559,21 +1559,33 @@ async fn read_until_decoded(
 /// sample-exact) or decodes them under a new revision (decoder-side
 /// resampling restarts its output clock on a fractional source phase).
 #[kithara::test(tokio, native, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
-#[case(SignalAsset::MP3_SAW_6S, DecoderBackend::Symphonia, None)]
-#[case(
-    SignalAsset::PROFILE_WAV_PCM_S16LE_44100_2CH_16BIT,
-    DecoderBackend::Symphonia,
-    None
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(SignalAsset::MP3_SAW_6S, DecoderBackend::Symphonia, None)
 )]
-#[case(
-    SignalAsset::MP3_SAW_6S,
-    DecoderBackend::Symphonia,
-    NonZeroU32::new(48_000)
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(
+        SignalAsset::PROFILE_WAV_PCM_S16LE_44100_2CH_16BIT,
+        DecoderBackend::Symphonia,
+        None
+    )
 )]
-#[case(
-    SignalAsset::PROFILE_WAV_PCM_S16LE_44100_2CH_16BIT,
-    DecoderBackend::Symphonia,
-    NonZeroU32::new(48_000)
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(
+        SignalAsset::MP3_SAW_6S,
+        DecoderBackend::Symphonia,
+        NonZeroU32::new(48_000)
+    )
+)]
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(
+        SignalAsset::PROFILE_WAV_PCM_S16LE_44100_2CH_16BIT,
+        DecoderBackend::Symphonia,
+        NonZeroU32::new(48_000)
+    )
 )]
 #[case(
     SignalAsset::MP3_SAW_6S,
