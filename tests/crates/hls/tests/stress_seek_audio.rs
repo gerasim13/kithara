@@ -388,6 +388,7 @@ impl SeekCheck {
             self.channels,
             source_span,
             signal::Wave::Sawtooth,
+            None,
             Some(requested),
         ) {
             self.content_errors += 1;
