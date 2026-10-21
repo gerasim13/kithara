@@ -345,3 +345,74 @@ fn append_pcm_float(bytes: &[u8], out: &mut SampleBuffer) -> DecodeResult<()> {
     out.truncate(end);
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use kithara_android::media::sys::PCM_ENCODING_FLOAT;
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::android::extractor::AndroidMediaExtractor;
+
+    #[kithara::test(native, flash(false))]
+    fn native_float_wave_extraction_keeps_float_encoding() {
+        let bytes =
+            kithara_test_fixtures::assets::signal_profile_wav_pcm_f32le_192000_2ch_32bit().bytes();
+        let mut extractor = AndroidMediaExtractor::open(Box::new(Cursor::new(bytes)), None, None)
+            .expect("open immutable float WAV");
+        let (_, format) = extractor.select_audio_track().expect("select PCM track");
+        let output = OutputFormat::read(&format).expect("extracted PCM format");
+        assert_eq!(output.pcm_encoding, AndroidPcmEncoding::Float);
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn native_raw_float_codec_keeps_every_sample_bit() {
+        let mut format = OwnedFormat::new().expect("raw float format");
+        format.set_str(KEY_MIME, MIME_RAW);
+        format.set_i32(KEY_SAMPLE_RATE, 44_100);
+        format.set_i32(KEY_CHANNEL_COUNT, 2);
+        format.set_i32(KEY_PCM_ENCODING, PCM_ENCODING_FLOAT);
+        let mut codec = OwnedCodec::create_with_format(&format).expect("raw float codec");
+        let samples = [0.123_456_79_f32, -0.234_567_9, 0.345_678_93, -0.456_789_1];
+        let bytes: Vec<u8> = samples
+            .into_iter()
+            .cycle()
+            .take(1024)
+            .flat_map(f32::to_le_bytes)
+            .collect();
+        let mut input = codec
+            .dequeue_input_buffer(1_000_000)
+            .expect("dequeue raw input")
+            .expect("raw input is available");
+        input.data_mut()[..bytes.len()].copy_from_slice(&bytes);
+        codec
+            .queue_input_buffer(QueueInput {
+                index: input.index,
+                size: bytes.len(),
+                presentation_time_us: 0,
+                flags: MEDIA_CODEC_BUFFER_FLAG_END_OF_STREAM,
+            })
+            .expect("queue raw float PCM");
+        let mut encoding = OutputFormat::read(&codec.output_format().expect("output format"))
+            .expect("initial output PCM format")
+            .pcm_encoding;
+        for _ in 0..4 {
+            match codec.dequeue_output_buffer(1_000_000).expect("raw output") {
+                DequeueOutput::OutputFormatChanged(format) => encoding = format.pcm_encoding,
+                DequeueOutput::Output(output) => {
+                    let actual = output.data().to_vec();
+                    codec
+                        .release_output_buffer(output.index)
+                        .expect("release output");
+                    assert_eq!(encoding, AndroidPcmEncoding::Float);
+                    assert_eq!(actual, bytes, "raw float PCM retains all sample bits");
+                    return;
+                }
+                DequeueOutput::TryAgainLater => {}
+            }
+        }
+        panic!("raw float codec produced no PCM");
+    }
+}
