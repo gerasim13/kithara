@@ -477,6 +477,7 @@ impl SeekPressure {
                         TestEvent::Downloader(DownloaderEvent::RequestEnqueued {
                             request_id,
                             url,
+                            method: kithara::download::RequestMethod::Get,
                             ..
                         }) if self.warm_urls.contains(&url) => {
                             self.pending_warm.insert(request_id);
@@ -814,4 +815,75 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) 
         ),
         "the first ABR decision after the seek lock ended must leave the top variant, got {decided:?}"
     );
+}
+
+#[kithara_test_utils::kithara::test]
+fn seek_pressure_tracks_bodies_independently_of_cancelled_metadata() {
+    use std::num::NonZeroU64;
+
+    use kithara::download::{CancelReason, RequestMethod, RequestPriority};
+
+    let url = Url::parse("https://fixture.invalid/segment.m4s").expect("segment URL");
+    let metadata = RequestId::new(NonZeroU64::MIN);
+    let body = RequestId::new(NonZeroU64::new(2).expect("body request id"));
+    let bus = EventBus::new(8);
+    let mut events = bus.subscribe();
+    let mut pressure = SeekPressure {
+        warm_urls: HashSet::from([url.clone()]),
+        pending_warm: HashSet::new(),
+        estimate: None,
+    };
+    for (request_id, method) in [(metadata, RequestMethod::Head), (body, RequestMethod::Get)] {
+        bus.publish(DownloaderEvent::RequestEnqueued {
+            request_id,
+            url: url.clone(),
+            method,
+            priority: RequestPriority::Low,
+        });
+    }
+    bus.publish(DownloaderEvent::RequestCancelled {
+        request_id: metadata,
+        reason: CancelReason::EpochCancel,
+        bytes_transferred: 0,
+    });
+    pressure.drain(&mut events);
+    assert_eq!(pressure.pending_warm, HashSet::from([body]));
+    bus.publish(DownloaderEvent::RequestCompleted {
+        request_id: body,
+        bytes_transferred: 1_024,
+        duration: Duration::from_millis(10),
+        bandwidth_bps: 819_200,
+    });
+    assert!(pressure.drain(&mut events));
+    assert!(pressure.pending_warm.is_empty());
+}
+
+#[kithara_test_utils::kithara::test]
+#[should_panic(expected = "warm body request RequestId(1) did not complete")]
+fn seek_pressure_rejects_a_cancelled_warm_body() {
+    use std::num::NonZeroU64;
+
+    use kithara::download::{CancelReason, RequestMethod, RequestPriority};
+
+    let url = Url::parse("https://fixture.invalid/segment.m4s").expect("segment URL");
+    let request_id = RequestId::new(NonZeroU64::MIN);
+    let bus = EventBus::new(8);
+    let mut events = bus.subscribe();
+    let mut pressure = SeekPressure {
+        warm_urls: HashSet::from([url.clone()]),
+        pending_warm: HashSet::new(),
+        estimate: None,
+    };
+    bus.publish(DownloaderEvent::RequestEnqueued {
+        request_id,
+        url,
+        method: RequestMethod::Get,
+        priority: RequestPriority::Low,
+    });
+    bus.publish(DownloaderEvent::RequestCancelled {
+        request_id,
+        reason: CancelReason::EpochCancel,
+        bytes_transferred: 0,
+    });
+    pressure.drain(&mut events);
 }
