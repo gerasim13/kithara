@@ -24,7 +24,7 @@ use kithara::{
     abr::AbrMode,
     assets::AssetStore,
     download::{Downloader, DownloaderConfig},
-    events::{EventReceiver, TrackId},
+    events::{EventBus, EventReceiver, TrackId},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
@@ -767,6 +767,88 @@ fn drain_event_backlog(rx: &mut EventReceiver<TestEvent>) {
     }
 }
 
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
+async fn observe_completion_order(
+    rx: &mut EventReceiver<TestEvent>,
+    snapshot: Option<TrackId>,
+    fast: TrackId,
+    slow: TrackId,
+    budget: Duration,
+) -> Result<(), String> {
+    let watch = time::Instant::now();
+    let mut history = Vec::new();
+    let mut saw_fast = false;
+    loop {
+        let remaining = budget.saturating_sub(watch.elapsed());
+        hang_tick!(format!("completion-race history={history:?}"));
+        if remaining.is_zero() {
+            break;
+        }
+        let Some(QueueEvent::CurrentTrackChanged { id: current }) =
+            next_queue_event(rx, remaining, |event| {
+                matches!(event, QueueEvent::CurrentTrackChanged { .. })
+            })
+            .await
+        else {
+            break;
+        };
+        if current != history.last().copied().flatten() {
+            history.push(current);
+        }
+        if current == Some(fast) {
+            saw_fast = true;
+        }
+        if saw_fast && current == Some(slow) {
+            return Err(format!(
+                "slow became current after fast at {} ms (snapshot={snapshot:?}, history={history:?})",
+                watch.elapsed().as_millis(),
+            ));
+        }
+    }
+    if !saw_fast {
+        return Err(format!(
+            "fast was not observed (snapshot={snapshot:?}, history={history:?})"
+        ));
+    }
+    Ok(())
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[case::ordered_backlog(&[0, 1], None)]
+#[case::late_slow(&[0, 1, 0], Some("slow became current after fast"))]
+#[case::missing_fast(&[0], Some("fast was not observed"))]
+#[case::no_events(&[], Some("fast was not observed"))]
+async fn completion_observer_keeps_current_changes_in_bus_order(
+    #[case] changes: &[u64],
+    #[case] expected_error: Option<&str>,
+) {
+    let bus = EventBus::new(16);
+    let mut events = bus.subscribe::<TestEvent>();
+    for &id in changes {
+        bus.publish(TestEvent::Queue(QueueEvent::CurrentTrackChanged {
+            id: Some(TrackId(id)),
+        }));
+    }
+    drop(bus);
+    let result = observe_completion_order(
+        &mut events,
+        Some(TrackId(1)),
+        TrackId(1),
+        TrackId(0),
+        consts::RACE_OBSERVE,
+    )
+    .await;
+    match expected_error {
+        Some(expected) => assert!(
+            result
+                .as_ref()
+                .is_err_and(|error| error.starts_with(expected)),
+            "expected {expected:?}, got {result:?}",
+        ),
+        None => assert_eq!(result, Ok(())),
+    }
+}
+
 /// Concurrent completion-vs-select race (the `select_apply` regression gate).
 /// Both fixtures load near-simultaneously (construction is undelayed), so a
 /// short window after `select(slow)` lands `slow`'s loader completion right
@@ -804,7 +886,7 @@ async fn concurrent_completion_race_does_not_barge_in(
     let fast_url = fast.master_url();
     let slow_url = slow.master_url();
 
-    let mut barge_ins: Vec<String> = Vec::new();
+    let mut failures: Vec<String> = Vec::new();
 
     for iter in 0..consts::STRESS_ITERATIONS {
         hang_tick!(format!("completion-race iteration {iter}"));
@@ -816,13 +898,6 @@ async fn concurrent_completion_race_does_not_barge_in(
             .run(|q| q.set_action_at_item_end(ActionAtItemEnd::Pause))
             .await;
 
-        let fast_id = queue
-            .run({
-                let source = TrackSource::Config(Box::new(mk_cfg(&fast_url, &downloader, &store)));
-                move |q| q.append(source)
-            })
-            .await
-            .unwrap_or_else(|error| panic!("[iter {iter}] append fast: {error}"));
         let slow_id = queue
             .run({
                 let source = TrackSource::Config(Box::new(mk_cfg(&slow_url, &downloader, &store)));
@@ -831,6 +906,13 @@ async fn concurrent_completion_race_does_not_barge_in(
             .await
             .unwrap_or_else(|error| panic!("[iter {iter}] append slow: {error}"));
 
+        let fast_id = queue
+            .run({
+                let source = TrackSource::Config(Box::new(mk_cfg(&fast_url, &downloader, &store)));
+                move |q| q.append(source)
+            })
+            .await
+            .unwrap_or_else(|error| panic!("[iter {iter}] append fast: {error}"));
         let mut rx = queue.subscribe();
         drain_event_backlog(&mut rx);
 
@@ -846,56 +928,22 @@ async fn concurrent_completion_race_does_not_barge_in(
             .await
             .unwrap_or_else(|e| panic!("[iter {iter}] select fast: {e}"));
 
-        // Watch the bounded window by following `CurrentTrackChanged` on the
-        // bus instead of polling `current()`: once fast becomes current it must
-        // stay current (the queue pauses at its end), so slow
-        // appearing *after* fast is the barge-in. `RACE_OBSERVE` bounds the
-        // watch as a hard safety cap, not as a pacing wait — every step blocks
-        // on the next real current-track change. The initial `current()`
-        // snapshot catches a change that landed before we start consuming.
-        let watch = time::Instant::now();
-        let mut history: Vec<Option<TrackId>> = vec![queue.current().map(|e| e.id)];
-        let mut saw_fast = history.last().copied().flatten() == Some(fast_id);
-        loop {
-            let remaining = consts::RACE_OBSERVE.saturating_sub(watch.elapsed());
-            hang_tick!(format!(
-                "completion-race iteration {iter}; history={history:?}"
-            ));
-            if remaining.is_zero() {
-                break;
-            }
-            // Block until the next current-track change (or the safety cap).
-            let Some(QueueEvent::CurrentTrackChanged { id: cur }) =
-                next_queue_event(&mut rx, remaining, |ev| {
-                    matches!(ev, QueueEvent::CurrentTrackChanged { .. })
-                })
+        let snapshot = queue.current().map(|entry| entry.id);
+        if let Err(error) =
+            observe_completion_order(&mut rx, snapshot, fast_id, slow_id, consts::RACE_OBSERVE)
                 .await
-            else {
-                break;
-            };
-            if cur != history.last().copied().flatten() {
-                history.push(cur);
-            }
-            if cur == Some(fast_id) {
-                saw_fast = true;
-            }
-            if saw_fast && cur == Some(slow_id) {
-                barge_ins.push(format!(
-                    "[iter {iter}] slow stomped current fast after {} ms (history={history:?})",
-                    watch.elapsed().as_millis(),
-                ));
-                break;
-            }
+        {
+            failures.push(format!("[iter {iter}] {error}"));
         }
         queue.close().await;
         hang_reset!();
     }
 
     assert!(
-        barge_ins.is_empty(),
-        "concurrent completion race: {n}/{iters} iteration(s) saw slow barge in over current fast:\n{}",
-        barge_ins.join("\n"),
-        n = barge_ins.len(),
+        failures.is_empty(),
+        "concurrent completion race: {n}/{iters} iteration(s) violated selection event ordering:\n{}",
+        failures.join("\n"),
+        n = failures.len(),
         iters = consts::STRESS_ITERATIONS,
     );
 }
