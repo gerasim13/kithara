@@ -7,7 +7,7 @@ use std::{
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_stream::{AudioCodec, PendingReason, PrerollHint, ReaderControl};
 use kithara_test_utils::kithara;
-#[cfg(feature = "symphonia")]
+#[cfg(any(feature = "symphonia", feature = "android"))]
 use symphonia_core::codecs::audio::AudioCodecParameters;
 use symphonia_core::{
     codecs::CodecParameters,
@@ -28,11 +28,8 @@ use crate::{
 
 /// Demuxer adapter over Symphonia's [`FormatReader`].
 pub(crate) struct SymphoniaDemuxer {
-    /// Native Symphonia codec parameters for the audio track. Carried so
-    /// the matching [`SymphoniaCodec::open_native`] path can build a
-    /// decoder for codecs whose generic [`AudioCodec`] enum representation
-    /// loses information (PCM bit-depth/endianness, ADPCM dialect).
-    #[cfg(feature = "symphonia")]
+    /// Native parameters retain PCM storage width, endianness and ADPCM dialect.
+    #[cfg(any(feature = "symphonia", feature = "android"))]
     pub(crate) native_params: AudioCodecParameters,
     format_reader: Packets,
     prepared: Option<PreparedPacket>,
@@ -637,7 +634,7 @@ impl SymphoniaDemuxer {
         Ok(Self {
             track_id,
             track_info,
-            #[cfg(feature = "symphonia")]
+            #[cfg(any(feature = "symphonia", feature = "android"))]
             native_params,
             time_base,
             timestamp_origin,

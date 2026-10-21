@@ -15,6 +15,8 @@ mod probe;
 mod segment;
 #[cfg(feature = "symphonia")]
 mod software;
+#[cfg(any(android_backend, all(test, feature = "android", feature = "symphonia")))]
+mod wave;
 pub use config::{DecoderConfig, DecoderResamplerConfig};
 pub use inner::{DecoderBackend, DecoderFactory};
 #[cfg(apple_backend)]

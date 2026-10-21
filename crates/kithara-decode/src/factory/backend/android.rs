@@ -36,6 +36,10 @@ where
         return Err(DecodeError::UnsupportedCodec { codec });
     }
 
+    if codec == AudioCodec::Pcm && container == Some(ContainerFormat::Wav) {
+        return super::super::wave::build_wave_decoder(source, config);
+    }
+
     if android_standalone_supports(codec, container) {
         tracing::debug!(
             ?codec,
@@ -51,12 +55,10 @@ where
 fn android_standalone_supports(codec: AudioCodec, container: Option<ContainerFormat>) -> bool {
     matches!(
         (codec, container),
-        (AudioCodec::Pcm, Some(ContainerFormat::Wav))
-            | (
-                AudioCodec::Mp3,
-                Some(ContainerFormat::MpegAudio | ContainerFormat::Wav)
-            )
-            | (AudioCodec::Alac, Some(ContainerFormat::Mp4))
+        (
+            AudioCodec::Mp3,
+            Some(ContainerFormat::MpegAudio | ContainerFormat::Wav)
+        ) | (AudioCodec::Alac, Some(ContainerFormat::Mp4))
             | (
                 AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2,
                 Some(ContainerFormat::Adts | ContainerFormat::Mp4 | ContainerFormat::Fmp4)
@@ -99,17 +101,11 @@ where
     } else {
         None
     };
-    let init_end = (container == Some(ContainerFormat::Wav))
-        .then(|| config.byte_map.as_ref().map(|map| map.init_segment_range()))
-        .flatten()
-        .filter(|range| range.start == 0 && !range.is_empty())
-        .map(|range| range.end);
     let (demuxer, mut format) = AndroidMediaExtractorDemuxer::open(
         source,
         codec,
         config.byte_map.clone(),
         config.byte_len_handle.clone(),
-        init_end,
     )?;
     let mut track = demuxer.track_info().clone();
     track.gapless = gapless;

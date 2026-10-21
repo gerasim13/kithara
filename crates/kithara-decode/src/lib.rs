@@ -20,6 +20,8 @@ mod factory;
 mod fmp4;
 mod gapless;
 mod mp4;
+#[cfg(any(android_backend, all(test, feature = "android", feature = "symphonia")))]
+mod pcm;
 mod resampled;
 #[cfg(symphonia_demuxer)]
 mod symphonia;
