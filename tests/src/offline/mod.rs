@@ -5,7 +5,6 @@ mod disk_queue;
 pub mod host;
 #[cfg(feature = "link")]
 pub mod linked;
-#[cfg(not(target_arch = "wasm32"))]
 mod loader;
 mod owner;
 pub mod player;
@@ -25,8 +24,9 @@ pub use host::{
     OfflineHostHarness, OfflineQueue, OfflineResident, RENDER_PACE, TapProbe,
     assert_playhead_tracks_renderer, audio_clock_pace,
 };
+pub use loader::{LOCAL_LOAD_DEADLINE, append_source_loaded};
 #[cfg(not(target_arch = "wasm32"))]
-pub use loader::{LOCAL_LOAD_DEADLINE, append_loaded, append_source_loaded, asset_source};
+pub use loader::{append_loaded, asset_source};
 pub use player::{
     NotificationKind, OfflinePlayer, OfflinePlayerOptions, offline_queue_fixture,
     offline_queue_fixture_with_options, resource_from_reader, resource_from_reader_with_src,
