@@ -34,6 +34,8 @@ pub(super) struct Image {
     pub(super) library: String,
     /// Loading the library binds the host transport's install entry point.
     pub(super) transport: bool,
+    /// The packaged image carries an ELF interpreter and runs outside ART.
+    pub(super) executable: bool,
 }
 
 impl Session {
@@ -368,7 +370,7 @@ fn invoke(
             .iter()
             .flat_map(|(name, value)| [name.as_str(), value.as_str()])
             .collect();
-        let request = json!({"library": image.library, "transport": image.transport, "args": arguments, "log": remote, "directory": session.directory, "environment": environment});
+        let request = json!({"library": image.library, "transport": image.transport, "executable": image.executable, "args": arguments, "log": remote, "directory": session.directory, "environment": environment});
         fs::write(
             evidence.join("request.json"),
             serde_json::to_vec_pretty(&request)?,

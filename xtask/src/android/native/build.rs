@@ -367,10 +367,45 @@ fn loaded_images(
     binaries
         .into_iter()
         .map(|(binary, library)| {
-            let transport = binding.binds(&staged_library(libraries, &library))?;
-            Ok((binary, Image { library, transport }))
+            let staged = staged_library(libraries, &library);
+            let transport = binding.binds(&staged)?;
+            let executable = is_executable(tools, &staged, Some(cancel))?;
+            if executable && transport {
+                bail!(
+                    "{} needs host transport without an Android context",
+                    staged.display()
+                );
+            }
+            Ok((
+                binary,
+                Image {
+                    library,
+                    transport,
+                    executable,
+                },
+            ))
         })
         .collect()
+}
+
+fn is_executable(tools: &Path, image: &Path, cancel: Option<&child::Cancel>) -> Result<bool> {
+    let output = child::output(
+        Command::new(tools.join("llvm-readobj"))
+            .arg("--program-headers")
+            .arg(image),
+        cancel,
+        Duration::from_secs(60),
+    )?;
+    if !output.status.success() {
+        bail!(
+            "reading {} program headers failed: {}",
+            image.display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(String::from_utf8(output.stdout)?
+        .lines()
+        .any(|line| line.trim() == "Type: PT_INTERP (0x3)"))
 }
 
 struct Configured {
@@ -547,6 +582,15 @@ fn install(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn packaged_images_retain_their_elf_runtime() {
+        let tool = crate::sysroot::tool("llvm-readobj").expect("llvm-tools are installed");
+        let tools = tool.parent().expect("LLVM tool directory");
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/android-runtime");
+        assert!(is_executable(tools, &fixtures.join("executable.so"), None).unwrap());
+        assert!(!is_executable(tools, &fixtures.join("context.so"), None).unwrap());
+    }
 
     fn inventory(entries: &str) -> BinaryList {
         serde_json::from_str(&format!(r#"{{"rust-binaries": {{{entries}}}}}"#))
