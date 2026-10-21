@@ -488,7 +488,7 @@ pub async fn render_until_position(
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use kithara::events::EventBus;
+    use kithara::{events::EventBus, platform::time::WallInstant};
 
     use super::*;
     use crate::{HlsFixtureBuilder, TestServerHelper, offline::OfflinePlayerOptions};
@@ -535,6 +535,9 @@ mod tests {
             ));
             assert!(futures::poll!(waiting.as_mut()).is_pending());
             init.release();
+            harness
+                .render_until_current(id, 512, WallInstant::now() + Duration::from_secs(1))
+                .await;
             wait_for_loader_done(harness.player(), id, Duration::from_secs(1))
                 .await
                 .expect("the authoritative loader state completes");
