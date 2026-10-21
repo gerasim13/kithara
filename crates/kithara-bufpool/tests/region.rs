@@ -638,3 +638,36 @@ fn sample_reservation_is_additional_and_preserves_existing_samples_on_refusal() 
     ));
     assert_eq!(&*samples, &[0.25, -0.5]);
 }
+
+#[kithara::test]
+fn sample_capacity_shrinks_without_initializing_or_discarding_samples() {
+    let pools = pools(4096);
+    let mut samples = pools.get::<f32>();
+    samples
+        .try_reserve(64)
+        .expect("empty scratch capacity fits");
+    let before = pools.stats().allocated_bytes;
+
+    samples.shrink_to(16);
+    assert!(samples.is_empty());
+    assert!(samples.capacity() >= 16);
+    assert!(pools.stats().allocated_bytes < before);
+    assert_eq!(
+        pools.stats().allocated_bytes,
+        samples.capacity() * size_of::<f32>()
+    );
+
+    samples
+        .try_extend_from_slice(&[0.25, -0.5])
+        .expect("existing scratch holds two samples");
+    samples.shrink_to(0);
+    assert_eq!(&*samples, &[0.25, -0.5]);
+    assert_eq!(
+        pools.stats().allocated_bytes,
+        samples.capacity() * size_of::<f32>()
+    );
+    let capacity = samples.capacity();
+    samples.shrink_to(64);
+    assert_eq!(samples.capacity(), capacity);
+    assert_eq!(&*samples, &[0.25, -0.5]);
+}

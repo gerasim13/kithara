@@ -208,12 +208,11 @@ where
         samples: usize,
     ) -> Result<SampleBuffer, ElasticError> {
         let mut buffer = reusable.unwrap_or_else(|| pools.get::<f32>());
-        buffer
-            .ensure_len(samples)
-            .map_err(|_| ElasticError::PoolCapacity)?;
-        buffer.truncate(samples);
-        buffer.shrink_to_fit();
         buffer.clear();
+        buffer
+            .try_reserve(samples)
+            .map_err(|_| ElasticError::PoolCapacity)?;
+        buffer.shrink_to(samples);
         Ok(buffer)
     }
 
