@@ -686,6 +686,7 @@ async fn stress_seek_and_read(#[future(awt)] stress_source: (TestServerHelper, U
 async fn stress_rapid_seeks_must_not_stall(#[future(awt)] stress_source: (TestServerHelper, Url)) {
     let (_helper, url) = stress_source;
     info!("Starting stress_rapid_seeks_must_not_stall");
+    wasm_bindgen_test::console_log!("rapid seek body starts at {} ms", Date::now());
 
     let mut audio = create_pipeline_with_url(url).await;
     let spec = audio.spec();
@@ -700,6 +701,7 @@ async fn stress_rapid_seeks_must_not_stall(#[future(awt)] stress_source: (TestSe
     let warmup_samples = warm_up(&mut audio, &mut buf).await;
     assert!(warmup_samples > 0, "warmup must produce data");
     info!(warmup_samples, "Warmup complete");
+    wasm_bindgen_test::console_log!("rapid seek warmup done at {} ms", Date::now());
 
     let duration = audio.duration().unwrap_or(Duration::from_secs(60));
     let duration_secs = duration.as_secs_f64();
@@ -774,6 +776,14 @@ async fn stress_rapid_seeks_must_not_stall(#[future(awt)] stress_source: (TestSe
         total_samples += n as u64;
 
         if (i + 1) % 200 == 0 {
+            wasm_bindgen_test::console_log!(
+                "rapid seek progress iteration={} dead={} seek_errors={} samples={} at={} ms",
+                i + 1,
+                dead_seeks,
+                seek_errors,
+                total_samples,
+                Date::now(),
+            );
             info!(
                 iteration = i + 1,
                 dead_seeks, seek_errors, position_mismatches, total_samples, "Progress"
@@ -830,6 +840,7 @@ async fn stress_rapid_seeks_must_not_stall(#[future(awt)] stress_source: (TestSe
 async fn stress_seek_to_zero_after_pressure(#[future(awt)] stress_source: (TestServerHelper, Url)) {
     let (_helper, url) = stress_source;
     info!("Starting stress_seek_to_zero_after_pressure");
+    wasm_bindgen_test::console_log!("seek-zero body starts at {} ms", Date::now());
 
     let mut audio = create_pipeline_with_url(url).await;
     let mut buf = vec![0.0f32; 4096];
@@ -855,9 +866,15 @@ async fn stress_seek_to_zero_after_pressure(#[future(awt)] stress_source: (TestS
         }
 
         if i % 100 == 99 {
+            wasm_bindgen_test::console_log!(
+                "seek-zero pressure iteration={} at={} ms",
+                i + 1,
+                Date::now()
+            );
             yield_ms(1).await;
         }
     }
+    wasm_bindgen_test::console_log!("seek-zero pressure done at={} ms", Date::now());
     info!("Stress phase done: 500 seeks");
 
     let channels = audio.spec().channels as usize;
