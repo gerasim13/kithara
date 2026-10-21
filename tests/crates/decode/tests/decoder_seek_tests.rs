@@ -26,7 +26,7 @@ use kithara_integration_tests::{
     mock::LaneAudio,
 };
 use kithara_test_fixtures::SignalAsset;
-use kithara_test_utils::{TestTempDir, temp_dir};
+use kithara_test_utils::{TestTempDir, temp_dir, wait_until};
 use url::Url;
 
 async fn source(asset: SignalAsset) -> (TestServerHelper, Url) {
@@ -1493,12 +1493,14 @@ struct Decoded {
 #[derive(Default)]
 struct Identities {
     seen: BTreeMap<(u64, u64), Decoded>,
+    observed: usize,
     revisited: usize,
     conflicts: Vec<String>,
 }
 
 impl Identities {
     fn record(&mut self, chunk: &AudioChunk) {
+        self.observed += 1;
         let key = (chunk.meta.source_revision, chunk.meta.frame_offset);
         let samples: &[f32] = chunk.as_ref();
         if let Some(decoded) = self.seen.get(&key) {
@@ -1529,18 +1531,17 @@ impl AudioObserver for IdentityObserver {
 
 #[kithara::flash(true)]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-async fn read_chunks(
+async fn read_until_decoded(
     audio: &mut LaneAudio<Stream<File<TestPools>>, TestPools>,
-    count: usize,
+    identities: &Mutex<Identities>,
+    target: usize,
     stage: &str,
 ) {
-    let mut read = 0;
-    while read < count {
+    while identities.lock().expect("identity ledger").observed < target {
         hang_tick!();
         match AudioRead::next_chunk(audio) {
             Ok(ChunkOutcome::Chunk(_)) => {
                 hang_reset!();
-                read += 1;
                 continue;
             }
             Ok(ChunkOutcome::Eof { .. }) => panic!("unexpected EOF while reading {stage}"),
@@ -1621,7 +1622,7 @@ async fn a_seek_onto_a_decoded_chunk_start_never_reuses_its_identity_for_other_p
         return;
     };
 
-    read_chunks(&mut audio, 60, "the linear pass").await;
+    read_until_decoded(&mut audio, &identities, 60, "the linear pass").await;
     let starts: Vec<(u64, u32)> = identities
         .lock()
         .expect("identity ledger")
@@ -1642,11 +1643,27 @@ async fn a_seek_onto_a_decoded_chunk_start_never_reuses_its_identity_for_other_p
         5,
         "the linear pass must decode the seek targets"
     );
+    let mut seek_revisits = Vec::new();
     for (frame, rate) in &starts {
+        let before = identities.lock().expect("identity ledger").revisited;
         let nanos = (u128::from(*frame) * 1_000_000_000).div_ceil(u128::from(*rate));
         let target = Duration::from_nanos(u64::try_from(nanos).expect("seek target"));
         audio.seek(target).expect("seek onto a decoded chunk start");
-        read_chunks(&mut audio, 4, &format!("after the seek to frame {frame}")).await;
+        wait_until(Duration::from_secs(1), "the seek segment is ready", || {
+            audio.current_segment_ready()
+        })
+        .await
+        .expect("seek segment preparation");
+        let target = identities.lock().expect("identity ledger").observed + 4;
+        read_until_decoded(
+            &mut audio,
+            &identities,
+            target,
+            &format!("after the seek to frame {frame}"),
+        )
+        .await;
+        let observed = identities.lock().expect("identity ledger");
+        seek_revisits.push((*frame, before, observed.revisited));
     }
 
     let identities = mem::take(&mut *identities.lock().expect("identity ledger"));
@@ -1658,8 +1675,8 @@ async fn a_seek_onto_a_decoded_chunk_start_never_reuses_its_identity_for_other_p
     if host_rate.is_none() {
         assert!(
             identities.revisited >= starts.len(),
-            "a native-rate seek must reproduce decoded chunks under their identity; revisited {}",
-            identities.revisited
+            "a native-rate seek must reproduce decoded chunks under their identity; revisited {}; seeks {seek_revisits:?}",
+            identities.revisited,
         );
     }
 }
