@@ -176,6 +176,8 @@ pub enum PrepareWait {
 pub enum InputState {
     /// A healthy parser has no operation using the input.
     Idle,
+    /// A healthy native operation still owns the input and can finish without retirement.
+    Busy,
     /// Cancellation is in flight; the source cursor is still owned by the parser.
     Retiring,
     /// The parser has dropped its input and cannot be resumed.
