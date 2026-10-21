@@ -379,6 +379,11 @@ soft floor, evicting past the cap. What its sweeps cannot show:
   and are pruned on age alone, an `lsof` walk per candidate costing hours over
   that backlog.
 
+Automatic cleanup preserves the shared Colima VM, its Docker data disk and the
+services running inside it. If safe cache reclamation cannot restore the free-space
+floor, cleanup reports failure and preflight refuses new jobs. Runtime deletion
+is an explicit maintenance operation, never a disk-pressure cleanup step.
+
 Health and cleanup run through launchd, and directly as `ci host mac health` /
 `ci host mac cleanup`. A `KeepAlive` agent that dies on startup stays loaded
 and is restarted forever, so health checks each `always_on_agents` process, not
