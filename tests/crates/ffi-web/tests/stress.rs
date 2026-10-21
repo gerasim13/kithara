@@ -19,7 +19,7 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, auto,
     bufpool_ext::{TestPools, pools},
     fixture_protocol::DataMode,
-    mock::LaneAudio,
+    mock::{LaneAudio, wait_for_preload},
 };
 use kithara_test_fixtures::signal;
 use kithara_test_utils::Xorshift64;
@@ -325,7 +325,17 @@ async fn read_outcome_with_yield_limit(
         if Date::now() >= deadline {
             return Some(pending);
         }
-        yield_macrotask().await;
+        if audio.current_segment_ready() {
+            yield_macrotask().await;
+        } else if kithara::platform::time::timeout(
+            Duration::from_secs_f64((deadline - Date::now()).max(0.0) / 1000.0),
+            wait_for_preload(audio, "browser read"),
+        )
+        .await
+        .is_err()
+        {
+            return Some(pending);
+        }
     }
 }
 
