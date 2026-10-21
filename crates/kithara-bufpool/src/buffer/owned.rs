@@ -95,9 +95,12 @@ impl<const SHARDS: usize, T, const OBSERVE: bool> OwnedBuffer<SHARDS, Vec<T>, OB
         self.value.retain(keep);
     }
 
+    pub(super) fn shrink_to(&mut self, min_capacity: usize) {
+        self.core.shrink_to(&mut self.value, min_capacity);
+    }
+
     pub(super) fn shrink_to_fit(&mut self) {
-        let len = self.value.len();
-        self.core.shrink_to(&mut self.value, len);
+        self.shrink_to(self.value.len());
     }
 
     pub(super) fn try_extend<I>(&mut self, values: I) -> Result<(), PoolError>
