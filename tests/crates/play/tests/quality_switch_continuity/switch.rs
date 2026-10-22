@@ -488,12 +488,11 @@ async fn prepare_player(
 /// rather than of the pipeline under test.
 #[kithara::flash(true)]
 pub(super) async fn render_paced(
-    player: &mut OfflinePlayer,
+    player: &OfflinePlayer,
     pacer: &mut Pacer,
     frames: usize,
 ) -> Vec<f32> {
-    let taken = Instant::now();
-    let block = player.render(frames).await;
+    let (taken, block) = player.render_timed(frames).await;
     let period = Duration::from_secs_f64(
         frames.to_f64().expect("block frame count fits f64") / f64::from(SAMPLE_RATE),
     );
@@ -501,6 +500,63 @@ pub(super) async fn render_paced(
     pacer.due = Some(due);
     sleep(due.saturating_duration_since(Instant::now())).await;
     block
+}
+
+#[kithara::test(tokio, native, flash(false))]
+async fn unpaced_render_preserves_empty_and_multi_callback_requests() {
+    let player = OfflinePlayer::new(HostConfig::offline(pools()).build()).await;
+    assert!(player.render(0).await.is_empty());
+    let frames = BLOCK_FRAMES * 2;
+    assert_eq!(
+        player.render(frames).await.len(),
+        frames * usize::from(CHANNELS)
+    );
+    player.close().await;
+}
+
+#[kithara::test(tokio, native, flash(false))]
+async fn a_queued_paced_render_keeps_a_full_callback_period() {
+    let player = OfflinePlayer::new(
+        HostConfig::offline(pools())
+            .settings(
+                HostSettings::builder()
+                    .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"))
+                    .build(),
+            )
+            .build(),
+    )
+    .await;
+    let mut pacer = Pacer::default();
+    let period = Duration::from_secs_f64(
+        BLOCK_FRAMES.to_f64().expect("block frame count fits f64") / f64::from(SAMPLE_RATE),
+    );
+    let (entered, started) = kithara::platform::tokio::sync::oneshot::channel();
+    let (release, blocked) = kithara::platform::sync::mpsc::channel();
+    let (released, ()) = kithara::platform::tokio::join!(
+        player.host().run(move || {
+            entered.send(()).expect("render caller is waiting");
+            blocked.recv().expect("caller releases the Host owner");
+            Instant::now()
+        }),
+        async {
+            started.await.expect("Host owner started its queued work");
+            let mut render = std::pin::pin!(render_paced(&player, &mut pacer, BLOCK_FRAMES));
+            std::future::poll_fn(|cx| {
+                assert!(Future::poll(render.as_mut(), cx).is_pending());
+                std::task::Poll::Ready(())
+            })
+            .await;
+            sleep(Duration::from_millis(100)).await;
+            release.send(()).expect("Host owner is waiting");
+            let output = render.await;
+            assert_eq!(output.len(), BLOCK_FRAMES * usize::from(CHANNELS));
+        },
+    );
+    player.close().await;
+    assert!(
+        pacer.due.expect("render sets its playback deadline") >= released + period,
+        "owner queue latency must not consume the following callback period"
+    );
 }
 
 #[kithara::flash(io)]
@@ -535,7 +591,7 @@ pub(super) async fn render_switch(
         let remaining_frames = observation_frames.saturating_sub(rendered_frames);
         let render_frames = remaining_frames.min(BLOCK_FRAMES);
         samples.extend_from_slice(
-            &render_paced(&mut prepared.player, &mut prepared.pacer, render_frames).await,
+            &render_paced(&prepared.player, &mut prepared.pacer, render_frames).await,
         );
         if prepared.player.position() > before {
             hang_reset!();
