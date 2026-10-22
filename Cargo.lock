@@ -5223,6 +5223,7 @@ dependencies = [
  "bon",
  "delegate",
  "derive-where",
+ "fearless_simd",
  "fieldwork",
  "firewheel",
  "kithara-bufpool",
