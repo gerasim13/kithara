@@ -2,7 +2,6 @@
 
 use std::{
     fs::{self, OpenOptions},
-    ops::Range,
     path::{Path, PathBuf},
 };
 
@@ -110,10 +109,6 @@ impl DriverIo for MmapDriver {
 
     fn committed_len(&self) -> Option<u64> {
         self.committed.load().as_ref().map(|m| m.len())
-    }
-
-    fn notify_write(&self, range: &Range<u64>) {
-        self.ready_ranges.push(range.clone());
     }
 
     fn path(&self) -> Option<&Path> {
@@ -224,11 +219,6 @@ impl DriverIo for MmapDriver {
     fn storage_len(&self) -> u64 {
         let mmap_guard = self.mmap.lock();
         mmap_guard.len()
-    }
-
-    fn try_fast_check(&self, range: &Range<u64>) -> bool {
-        std::iter::from_fn(|| self.ready_ranges.pop())
-            .any(|ready| ready.start <= range.start && ready.end >= range.end)
     }
 
     #[kithara::measure]
