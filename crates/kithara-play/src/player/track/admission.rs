@@ -51,6 +51,9 @@ impl<S> Track<S> for PlayerImpl<S> {
     }
 
     fn prepared_speed(&self) -> Option<&SpeedCurve> {
+        if self.pending_resume_command().is_some() {
+            return None;
+        }
         let consumed = self
             .resume
             .or(self.mark)
