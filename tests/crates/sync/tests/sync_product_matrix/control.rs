@@ -13,6 +13,7 @@ use super::{cases::*, imports::*};
 
 pub(super) const CONTROL_GAIN: f32 = 0.25;
 const CONTROL_CAPTURE_FRAMES: usize = 128;
+const SINC_RADIUS: i32 = 16;
 
 pub(super) struct ControlCapture {
     pub(super) pcm: Vec<f32>,
@@ -577,9 +578,10 @@ fn mapped_sample(
     let cutoff = speed.recip();
     let mut total = 0.0;
     let mut weights = 0.0;
-    for offset in -16_i32..=16 {
+    for offset in -SINC_RADIUS..=SINC_RADIUS {
         let distance = f64::from(offset) - fraction;
-        let weight = kithara::dsp::interp::sinc_hann_weight(distance, cutoff, 17.0);
+        let weight =
+            kithara::dsp::interp::sinc_hann_weight(distance, cutoff, f64::from(SINC_RADIUS + 1));
         total += f64::from(sample(i64::from(offset))?) * weight;
         weights += weight;
     }
@@ -660,9 +662,13 @@ fn check_content_guards(
         }
     }
     let window = frames.min(BLOCK_FRAMES);
-    for (name, source, cue_offset) in [
-        ("wrong cue", reference, rate.1),
-        ("wrong source", wrong_source, 0),
+    for (name, source, source_origin) in [
+        ("wrong cue", reference, origin + rate.1),
+        (
+            "wrong source",
+            wrong_source,
+            u128::from(SINC_RADIUS.unsigned_abs()) * rate.1,
+        ),
     ] {
         if source.sample_rate != reference.sample_rate || source.channels != reference.channels {
             return Err(format!(
@@ -671,7 +677,7 @@ fn check_content_guards(
         }
         let mut wrong = Vec::with_capacity(window * channels);
         for frame in 0..window {
-            let position = (origin + cue_offset + frame as u128 * rate.0, rate.1);
+            let position = (source_origin + frame as u128 * rate.0, rate.1);
             for channel in 0..channels {
                 wrong.push(source_sample(source, position, speed, channel)? * CONTROL_GAIN);
             }
