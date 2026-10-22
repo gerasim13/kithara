@@ -2441,7 +2441,7 @@ label = "Linux"
 os = "linux"
 tools = ["cargo", "just", "sccache", "kache"]
 program = "just"
-artifact = { name = "hang-dumps-real-clock", path = "target/hang", when = "failure" }
+artifact = { name = "pr731-queue-pacing", path = "target/nextest/ci", when = "always" }
 steps = [
   { args = [
     "test",
@@ -2450,6 +2450,8 @@ steps = [
     "--profile",
     "ci",
     "--timings",
+    "--narrow=package(kithara-sync-tests)&test(/one_queue_crossfades_five_real_tracks_through_four_public_next_requests_/)",
+    "--expected-tests=.config/ci/pr731-owner-queue.tsv",
   ], label = "real-clock suite", rebuild_check = true, args_by_kind = { branch = [
     "test",
     "run",
@@ -2458,7 +2460,7 @@ steps = [
     "--profile",
     "ci",
     "--timings",
-  ] }, env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", KITHARA_HANG_PREKILL_SECS = "110" } },
+  ] }, env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/target/nextest/ci/hang", KITHARA_HANG_PREKILL_SECS = "110", RUST_LOG = "kithara_test::sync::queue321::pacing=debug,render_refill=trace" } },
 ]
 role = "gate"
 kinds_github = ["main", "branch", "merge-request"]
@@ -2480,17 +2482,9 @@ label = "Linux"
 os = "linux"
 tools = ["cargo", "just", "sccache", "kache"]
 program = "just"
+artifact = { name = "pr731-self-cache-stage", path = "target/nextest/default", when = "always" }
 steps = [
-  { args = [
-    "test",
-    "run",
-    "--touched",
-    "--lane=tooling",
-    "--lane=harness",
-    "--lane=fixtures",
-    "--lane=net-host",
-    "--lane=broadcast",
-  ], label = "own-configuration suites this push touches", env = { CARGO_BUILD_JOBS = "2", RTEN_NUM_THREADS = "1" } },
+  { args = ["test", "run", "--lane=tooling", "--narrow=binary_id(=xtask::self_cache_runner)&test(=a_waiting_command_announces_on_stderr_and_keeps_stdout_for_its_answer)", "--expected-tests=.config/ci/pr731-owner-tooling.tsv"], label = "self-cache wait stage observation", env = { CARGO_BUILD_JOBS = "2", RTEN_NUM_THREADS = "1" } },
 ]
 role = "gate"
 kinds_github = ["branch", "merge-request"]

@@ -376,8 +376,12 @@ exec "$SELF_CACHE_TEST_XTASK" "$@"
 /// wait is announced on stderr.
 #[test]
 fn a_waiting_command_announces_on_stderr_and_keeps_stdout_for_its_answer() -> Result<()> {
+    eprintln!("PR731_OWNER stage=fixture_begin");
     let fixture = Fixture::new()?;
+    eprintln!("PR731_OWNER stage=fixture_ready");
+    eprintln!("PR731_OWNER stage=bootstrap_begin");
     assert_success(&fixture.bootstrap()?);
+    eprintln!("PR731_OWNER stage=bootstrap_complete");
     let lease = fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -394,13 +398,18 @@ fn a_waiting_command_announces_on_stderr_and_keeps_stdout_for_its_answer() -> Re
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
+    eprintln!("PR731_OWNER stage=child_spawned pid={}", child.id());
     let lines = stream_lines(&mut child)?;
 
     let (stream, waiting) = lines_until(&lines, "waiting for self-cache generation")?;
     assert_eq!(stream, Stream::Stderr, "{waiting}");
+    eprintln!("PR731_OWNER stage=wait_observed stream={stream:?} line={waiting}");
     drop(cleanup);
+    eprintln!("PR731_OWNER stage=lease_released");
     let rest = lines.iter().collect::<Vec<_>>();
+    eprintln!("PR731_OWNER stage=streams_closed lines={}", rest.len());
     assert!(child.wait()?.success());
+    eprintln!("PR731_OWNER stage=child_reaped");
 
     let answer = rest
         .iter()
@@ -1355,6 +1364,7 @@ fn forward<R: Read + Send + 'static>(
             .lines()
             .map_while(std::result::Result::ok)
         {
+            eprintln!("PR731_OWNER stream={stream:?} line={line}");
             if sender.send((stream, line)).is_err() {
                 break;
             }

@@ -69,6 +69,8 @@ retries = 1
 # profile's own keys silently swallows them.
 [profile.ci.junit]
 path = "junit.xml"
+store-success-output = true
+store-failure-output = true
 
 # Android runs a whole binary behind the first nextest request. The adapter
 # owns its one-hour process deadline and preserves partial libtest results.
@@ -187,3 +189,8 @@ filter = """
 ))
 """
 threads-required = "num-test-threads"
+
+[profile.default.junit]
+path = "junit.xml"
+store-success-output = true
+store-failure-output = true
