@@ -2458,7 +2458,7 @@ steps = [
     "--profile",
     "ci",
     "--timings",
-  ] }, env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", KITHARA_HANG_PREKILL_SECS = "110" } },
+  ] }, env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", KITHARA_HANG_PREKILL_SECS = "110", RUST_LOG = "warn,render_refill=trace,kithara_test::sync::queue321=info" } },
 ]
 role = "gate"
 kinds_github = ["main", "branch", "merge-request"]
