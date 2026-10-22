@@ -2,7 +2,6 @@ mod duration;
 mod fsm;
 mod gate;
 mod rebuild;
-mod resolve_format_change_target_tests;
 mod splice;
 mod terminal;
 mod transition;

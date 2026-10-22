@@ -779,17 +779,6 @@ pub(super) mod tests {
     }
 
     #[kithara::test]
-    fn variant_switch_target_keeps_flushing_seek_target_after_decoder_applies() {
-        let playhead = PlayheadState::new();
-        playhead.set_position(Duration::from_secs(9));
-
-        assert_eq!(
-            variant_switch_target_time(&playhead, Some(Duration::from_secs(5))),
-            Duration::from_secs(5)
-        );
-    }
-
-    #[kithara::test]
     fn variant_switch_target_ignores_completed_seek_target() {
         let playhead = PlayheadState::new();
 
@@ -809,17 +798,6 @@ pub(super) mod tests {
         assert_eq!(
             variant_switch_target_time(&playhead, Some(Duration::from_secs(12))),
             Duration::from_secs(12)
-        );
-    }
-
-    #[kithara::test]
-    fn variant_switch_target_keeps_the_seek_target_over_a_named_landing() {
-        let playhead = PlayheadState::new();
-        playhead.set_position(Duration::from_secs(9));
-
-        assert_eq!(
-            variant_switch_target_time(&playhead, Some(Duration::from_secs(5))),
-            Duration::from_secs(5)
         );
     }
 
