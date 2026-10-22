@@ -125,6 +125,16 @@ owns its checkout and compiler-cache slot, and the verdict journal locks its
 read-modify-write transaction. Raising the runner limit is a separate host-capacity
 change, not a prerequisite for removing idle time between pipelines.
 
+Native lint, tests and verdict jobs use the shared `kithara-macos` tag so either
+native registration can take them. Each registration retains its own checkout,
+build root and compiler-cache socket. Device builds retain `kithara-macos-2`;
+measured jobs still serialize through `kithara-suite`.
+
+Host-shell registrations run the installed host preflight before fetching sources.
+Critical disk pressure refuses the job before checkout or compilation can spend
+the remaining space. Provisioning installs the executable, host profile and pins
+together; the admission hook uses that installed set.
+
 Superseded branch and merge-request child pipelines cancel interruptible checks,
 including iOS and end-to-end review suites. Main, scheduled, release, and explicit
 platform runs retain their cancellation policy. Quarantine refs are unique per
@@ -213,6 +223,13 @@ unioning the last five recorded runs, so an intermittent failure is not read as
 a regression.
 
 ## Object cache service
+
+Linux CI containers leave compile admission to their CPU and memory limits.
+The root `justfile` disables kache's store-wide scheduler for configured Linux
+CI runners before bootstrapping xtask. Kache sizes that shared pool from the
+calling container's CPU count, so independent containers would otherwise
+compete for one container's slots. Other invocations retain their scheduler
+setting, enabled by default.
 
 Each host runs its own RustFS stack, the compose project `kithara-ci-cache`
 published on `127.0.0.1:19000`; the two hosts share no cache. Jobs reach it
@@ -371,6 +388,11 @@ soft floor, evicting past the cap. What its sweeps cannot show:
   binds, on storage the macOS guest can bind. Killed jobs leak there steadily
   and are pruned on age alone, an `lsof` walk per candidate costing hours over
   that backlog.
+
+Automatic cleanup preserves the shared Colima VM, its Docker data disk and the
+services running inside it. If safe cache reclamation cannot restore the free-space
+floor, cleanup reports failure and preflight refuses new jobs. Runtime deletion
+is an explicit maintenance operation, never a disk-pressure cleanup step.
 
 Health and cleanup run through launchd, and directly as `ci host mac health` /
 `ci host mac cleanup`. A `KeepAlive` agent that dies on startup stays loaded
