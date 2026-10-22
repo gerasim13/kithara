@@ -483,10 +483,7 @@ fn standalone_decoder_seek_rounds_timeline_frames_half_up(
 ) {
     const SOURCE_TARGET_FRAME: u64 = 1_441;
     const ROUNDING_TARGET_RATE: u32 = 44_085;
-    #[cfg(not(target_os = "android"))]
     const EXPECTED_LANDED_FRAME: u64 = 1_152;
-    #[cfg(target_os = "android")]
-    const EXPECTED_LANDED_FRAME: u64 = 1_440;
     const EXPECTED_OUTPUT_FRAME: u64 = 1_441;
 
     let target = test_duration(SOURCE_RATE, SOURCE_TARGET_FRAME);
