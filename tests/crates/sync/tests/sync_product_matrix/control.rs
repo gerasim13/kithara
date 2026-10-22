@@ -558,6 +558,17 @@ fn mapped_sample(
     speed: f64,
     mut sample: impl FnMut(i64) -> Result<f32, String>,
 ) -> Result<f32, String> {
+    mapped_samples(position, speed, |offset| {
+        sample(offset).map(|sample| [sample])
+    })
+    .map(|[sample]| sample)
+}
+
+fn mapped_samples<const N: usize>(
+    position: (u128, u128),
+    speed: f64,
+    mut sample: impl FnMut(i64) -> Result<[f32; N], String>,
+) -> Result<[f32; N], String> {
     let fraction = (position.0 % position.1)
         .to_f64()
         .zip(position.1.to_f64())
@@ -567,28 +578,39 @@ fn mapped_sample(
         if fraction == 0.0 {
             return sample(0);
         }
-        let current = f64::from(sample(0)?);
-        let next = f64::from(sample(1)?);
-        return (next - current)
-            .mul_add(fraction, current)
-            .to_f32()
-            .filter(|sample| sample.is_finite())
-            .ok_or_else(|| "control source sample is not finite f32".to_owned());
+        let current = sample(0)?;
+        let next = sample(1)?;
+        let mut output = [0.0; N];
+        for ((output, current), next) in output.iter_mut().zip(current).zip(next) {
+            let current = f64::from(current);
+            *output = (f64::from(next) - current)
+                .mul_add(fraction, current)
+                .to_f32()
+                .filter(|sample| sample.is_finite())
+                .ok_or_else(|| "control source sample is not finite f32".to_owned())?;
+        }
+        return Ok(output);
     }
     let cutoff = speed.recip();
-    let mut total = 0.0;
+    let mut total = [0.0; N];
     let mut weights = 0.0;
     for offset in -SINC_RADIUS..=SINC_RADIUS {
         let distance = f64::from(offset) - fraction;
         let weight =
             kithara::dsp::interp::sinc_hann_weight(distance, cutoff, f64::from(SINC_RADIUS + 1));
-        total += f64::from(sample(i64::from(offset))?) * weight;
+        for (total, value) in total.iter_mut().zip(sample(i64::from(offset))?) {
+            *total += f64::from(value) * weight;
+        }
         weights += weight;
     }
-    (total / weights)
-        .to_f32()
-        .filter(|sample| sample.is_finite())
-        .ok_or_else(|| "control source sample is not finite f32".to_owned())
+    let mut output = [0.0; N];
+    for (output, total) in output.iter_mut().zip(total) {
+        *output = (total / weights)
+            .to_f32()
+            .filter(|sample| sample.is_finite())
+            .ok_or_else(|| "control source sample is not finite f32".to_owned())?;
+    }
+    Ok(output)
 }
 
 pub(super) fn compare_pcm(actual: &[f32], expected: &[f32]) -> Result<(), String> {
@@ -1207,19 +1229,32 @@ impl DecodedCapture {
         speed: f64,
         channel: usize,
     ) -> Result<f32, String> {
+        self.samples_at(info, position, speed, [channel])
+            .map(|[sample]| sample)
+    }
+
+    fn samples_at<const N: usize>(
+        &self,
+        info: super::consumed::SourceIdentity,
+        position: (u128, std::num::NonZeroU128),
+        speed: f64,
+        channels: [usize; N],
+    ) -> Result<[f32; N], String> {
         if self.rejected {
             return Err("decoder observer rejected or conflicted while capturing PCM".to_owned());
         }
         let source =
             i64::try_from(position.0 / position.1.get()).map_err(|error| error.to_string())?;
         let mut read = self.sampler(info);
-        mapped_sample((position.0, position.1.get()), speed, |offset| {
-            read(
-                source
-                    .checked_add(offset)
-                    .ok_or_else(|| "physical sample coordinate overflows".to_owned())?,
-                channel,
-            )
+        mapped_samples((position.0, position.1.get()), speed, |offset| {
+            let frame = source
+                .checked_add(offset)
+                .ok_or_else(|| "physical sample coordinate overflows".to_owned())?;
+            let mut samples = [0.0; N];
+            for (sample, channel) in samples.iter_mut().zip(channels) {
+                *sample = read(frame, channel)?;
+            }
+            Ok(samples)
         })
     }
 
@@ -1436,59 +1471,45 @@ impl DecodedCapture {
                 .ok_or_else(|| "raw source endpoint has no physical PCM position".to_owned())?;
             next_position = Some((start, raw_next, physical_next));
             let speed = physical_source_speed((numerator, denominator), physical_next)?;
-            let mut read = self.sampler(info);
-            for channel in 0..usize::from(CHANNELS) {
-                let sample = self.sample_at(info, (numerator, denominator), speed, channel)?
-                    * gain
-                    * CONTROL_GAIN;
+            let expected = self.samples_at(info, (numerator, denominator), speed, [0, 1])?;
+            let wrong_position = numerator
+                .checked_add(denominator.get())
+                .ok_or_else(|| "wrong-cue negative coordinate overflows".to_owned())?;
+            let wrong_cue = self
+                .samples_at(info, (wrong_position, denominator), speed, [0, 1])
+                .map_err(|error| format!("wrong-cue negative: {error}"))?;
+            let wrong_denominator = denominator
+                .get()
+                .checked_mul(first.1.get())
+                .and_then(|value| value.checked_mul(2))
+                .and_then(std::num::NonZeroU128::new)
+                .ok_or_else(|| "wrong-tempo negative denominator overflows".to_owned())?;
+            let wrong_numerator = numerator
+                .checked_mul(first.1.get())
+                .and_then(|value| value.checked_add(first.0.checked_mul(denominator.get())?))
+                .ok_or_else(|| "wrong-tempo negative coordinate overflows".to_owned())?;
+            let wrong_tempo = self
+                .samples_at(
+                    info,
+                    (wrong_numerator, wrong_denominator),
+                    speed * 0.5,
+                    [0, 1],
+                )
+                .map_err(|error| format!("wrong-tempo negative: {error}"))?;
+            for (channel, sample) in expected.into_iter().enumerate() {
+                let sample = sample * gain * CONTROL_GAIN;
                 if !sample.is_finite() || sample.abs() >= LimiterConfig::default().ceiling() {
                     return Err(format!(
                         "physical reference has no limiter headroom at frame {session}"
                     ));
                 }
                 reference.expected.push(sample);
-                let wrong_position = numerator
-                    .checked_add(denominator.get())
-                    .ok_or_else(|| "wrong-cue negative coordinate overflows".to_owned())?;
-                let wrong_frame = i64::try_from(wrong_position / denominator.get())
-                    .map_err(|error| error.to_string())?;
-                reference.wrong_cue.push(
-                    mapped_sample((wrong_position, denominator.get()), speed, |offset| {
-                        read(
-                            wrong_frame
-                                .checked_add(offset)
-                                .ok_or_else(|| "wrong-cue negative overflows".to_owned())?,
-                            channel,
-                        )
-                    })? * gain
-                        * CONTROL_GAIN,
-                );
-                let wrong_denominator = denominator
-                    .get()
-                    .checked_mul(first.1.get())
-                    .and_then(|value| value.checked_mul(2))
-                    .ok_or_else(|| "wrong-tempo negative denominator overflows".to_owned())?;
-                let wrong_numerator = numerator
-                    .checked_mul(first.1.get())
-                    .and_then(|value| value.checked_add(first.0.checked_mul(denominator.get())?))
-                    .ok_or_else(|| "wrong-tempo negative coordinate overflows".to_owned())?;
-                let wrong_frame = i64::try_from(wrong_numerator / wrong_denominator)
-                    .map_err(|error| error.to_string())?;
-                reference.wrong_tempo.push(
-                    mapped_sample(
-                        (wrong_numerator, wrong_denominator),
-                        speed * 0.5,
-                        |offset| {
-                            read(
-                                wrong_frame
-                                    .checked_add(offset)
-                                    .ok_or_else(|| "wrong-tempo negative overflows".to_owned())?,
-                                channel,
-                            )
-                        },
-                    )? * gain
-                        * CONTROL_GAIN,
-                );
+                reference
+                    .wrong_cue
+                    .push(wrong_cue[channel] * gain * CONTROL_GAIN);
+                reference
+                    .wrong_tempo
+                    .push(wrong_tempo[channel] * gain * CONTROL_GAIN);
                 let wrong_frame = (frame as u128 * u128::from(wrong_source.sample_rate))
                     / u128::from(sample_rate);
                 reference.wrong_payload.push(
@@ -1813,7 +1834,16 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
                     .sample_at(identity, (numerator, denominator), speed, channel)
                     .expect("unbounded physical source lookup");
                 assert_eq!(physical.to_bits(), expected.to_bits());
+                let stereo = capture
+                    .samples_at(identity, (numerator, denominator), speed, [0, 1])
+                    .expect("physical stereo lookup");
+                assert_eq!(stereo[channel].to_bits(), expected.to_bits());
             } else {
+                assert!(
+                    capture
+                        .samples_at(identity, (numerator, denominator), speed, [0, 1])
+                        .is_err()
+                );
                 assert!(
                     capture
                         .sample_at(identity, (numerator, denominator), speed, channel)
@@ -1899,6 +1929,16 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
             .to_bits(),
         expected.to_bits(),
     );
+    for channel in 0..usize::from(reference.channels) {
+        let expected = mapped_sample((125, denominator.get()), 1.5, |offset| {
+            overlapping.sample(identity, 31 + offset, channel)
+        })
+        .expect("authoritative overlapping channel");
+        let stereo = overlapping
+            .samples_at(identity, (125, denominator), 1.5, [0, 1])
+            .expect("authoritative overlapping stereo");
+        assert_eq!(stereo[channel].to_bits(), expected.to_bits());
+    }
     overlapping
         .chunks
         .get_mut(&(7, 31))
@@ -1927,6 +1967,11 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
     };
     assert!(
         capture
+            .samples_at(wrong_identity, (125, denominator), 1.5, [0, 1])
+            .is_err()
+    );
+    assert!(
+        capture
             .sample_at_domain(wrong_identity, (125, denominator), 1.5, 0, &domain)
             .is_err()
     );
@@ -1941,6 +1986,11 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
     };
     assert!(
         capture
+            .samples_at(wrong_identity, (125, denominator), 1.5, [0, 1])
+            .is_err()
+    );
+    assert!(
+        capture
             .sample_at_domain(wrong_identity, (125, denominator), 1.5, 0, &domain)
             .is_err()
     );
@@ -1950,12 +2000,57 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
     };
     assert!(
         capture
+            .samples_at(wrong_identity, (125, denominator), 1.5, [0, 1])
+            .is_err()
+    );
+    assert!(
+        capture
             .sample_at_domain(wrong_identity, (125, denominator), 1.5, 0, &domain)
             .is_err()
     );
     assert!(
         capture
             .sample_at_domain(identity, (125, denominator), 1.5, 0, &(32..32))
+            .is_err()
+    );
+    for channel in [0, 1] {
+        for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let mut broken = capture.clone();
+            broken.chunks.get_mut(&(7, 32)).expect("middle chunk").1[channel] = invalid;
+            for speed in [0.5, 1.5] {
+                assert!(
+                    broken
+                        .sample_at(identity, (129, denominator), speed, channel)
+                        .is_err()
+                );
+                assert!(
+                    broken
+                        .samples_at(identity, (129, denominator), speed, [0, 1])
+                        .is_err()
+                );
+            }
+        }
+    }
+    let mut missing_right = capture.clone();
+    missing_right
+        .chunks
+        .get_mut(&(7, 64))
+        .expect("last chunk")
+        .1
+        .pop();
+    assert!(
+        missing_right
+            .sample_at(identity, (380, denominator), 1.0, 0)
+            .is_ok()
+    );
+    assert!(
+        missing_right
+            .sample_at(identity, (380, denominator), 1.0, 1)
+            .is_err()
+    );
+    assert!(
+        missing_right
+            .samples_at(identity, (380, denominator), 1.0, [0, 1])
             .is_err()
     );
 }
