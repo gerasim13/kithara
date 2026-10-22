@@ -394,6 +394,36 @@ mod tests {
         }
     }
 
+    #[kithara::test(native, flash(false), timeout(Duration::from_secs(5)))]
+    fn peer_activation_needs_no_background_executor() {
+        let fixture = Fixture::with_look_ahead(Fixture::SEGMENT_BYTES);
+        let peer = Arc::clone(fixture.source.hls_peer.as_ref().expect("fixture peer"));
+        let coord = Arc::clone(&fixture.source.coord);
+        let activating = Arc::clone(&peer);
+        let (_eviction_tx, eviction_rx) = kithara_platform::tokio::sync::mpsc::unbounded_channel();
+        std::thread::spawn(move || activating.activate(coord, eviction_rx))
+            .join()
+            .expect("peer activation must not require a thread-local executor");
+
+        let observer = Arc::new(RetainedPeerWake {
+            reader_advanced: Arc::clone(&fixture.wake),
+            reader_gate: Arc::new(ThreadGate::default()),
+            measuring: AtomicBool::new(false),
+            forwarded: AtomicUsize::new(0),
+        });
+        let waker = Waker::from(Arc::clone(&observer));
+        let opening_commands =
+            kithara_download::Peer::poll_next(peer.as_ref(), &mut Context::from_waker(&waker));
+        assert!(matches!(&opening_commands, Poll::Ready(Some(commands)) if !commands.is_empty()));
+
+        observer.measuring.store(true, Ordering::Release);
+        fixture.wake.arm();
+        assert_eq!(observer.forwarded.load(Ordering::SeqCst), 0);
+        assert!(fixture.wake.flush());
+        assert_eq!(observer.forwarded.load(Ordering::SeqCst), 2);
+        assert!(!fixture.wake.flush());
+    }
+
     #[kithara::test(native, flash(true), timeout(Duration::from_secs(10)))]
     async fn retained_reader_wake_precedes_an_unrelated_deadline() {
         let fixture = Fixture::with_look_ahead(Fixture::SEGMENT_BYTES);
