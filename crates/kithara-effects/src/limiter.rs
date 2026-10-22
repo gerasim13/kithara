@@ -4,6 +4,7 @@ use core::{
 };
 
 use bon::bon;
+use fearless_simd::{Level, Simd, dispatch};
 use kithara_config::Config;
 use kithara_signal::sanitize_sample;
 use num_traits::ToPrimitive;
@@ -74,6 +75,7 @@ impl Default for LimiterConfig {
 #[config_owner(config)]
 #[non_exhaustive]
 pub struct PeakLimiter {
+    level: Level,
     /// The last `DETECTOR_HALF_WIDTH` input samples of every channel, oldest first, so a
     /// detector window reaching before the block still reads the signal as it entered the
     /// limiter rather than as it left.
@@ -145,6 +147,7 @@ impl PeakLimiter {
         }
 
         Ok(Self {
+            level: Level::new(),
             config,
             release_coeff,
             taps,
@@ -160,6 +163,7 @@ impl PeakLimiter {
     /// by this gain as much as by the previous frame's, and only the smaller of the two
     /// keeps its crest under the ceiling. Within a block the previous frame already
     /// reconstructed that interval from the same untouched input, so it is reused.
+    #[inline(always)]
     fn advance_detector(&mut self, block: &[f32], channel: usize, frame: usize) -> f32 {
         let ahead = self.inter_sample_peak(block, channel, frame, frame as isize);
         let behind = if self.shared_valid {
@@ -191,6 +195,7 @@ impl PeakLimiter {
     /// detector chase itself; samples past the block end hold the last one, because the
     /// stream continues into the next block and reading silence there would modulate the
     /// gain at every block boundary.
+    #[inline(always)]
     fn inter_sample_peak(&self, block: &[f32], channel: usize, frame: usize, base: isize) -> f32 {
         let Some(history) = self.history.get(channel) else {
             return 0.0;
@@ -220,6 +225,7 @@ impl PeakLimiter {
     }
 
     /// The ordered positive FMA sum bounds every signed reconstruction of this block.
+    #[inline(always)]
     fn reconstruction_can_limit(&self, channels: &[&mut [f32]]) -> bool {
         let maximum = channels
             .iter()
@@ -249,6 +255,11 @@ impl PeakLimiter {
     /// guarded before the peak is taken, so the envelope only ever sees a finite peak. Allocates
     /// nothing, locks nothing, performs no I/O.
     pub fn process_planar(&mut self, channels: &mut [&mut [f32]]) {
+        dispatch!(self.level, simd => self.process_planar_with_simd(simd, channels));
+    }
+
+    #[inline(always)]
+    fn process_planar_with_simd<S: Simd>(&mut self, _simd: S, channels: &mut [&mut [f32]]) {
         debug_assert_eq!(channels.len(), self.channels);
         debug_assert!(self.channels <= Self::DETECTOR_CHANNELS);
 
@@ -419,7 +430,14 @@ mod tests {
                         assert_eq!(actual.to_bits(), expected.to_bits());
                     }
                     assert_eq!(actual.envelope.to_bits(), reference.envelope.to_bits());
-                    assert_eq!(actual.history, reference.history);
+                    for (actual, expected) in actual
+                        .history
+                        .iter()
+                        .flatten()
+                        .zip(reference.history.iter().flatten())
+                    {
+                        assert_eq!(actual.to_bits(), expected.to_bits());
+                    }
                 }
             }
         }
@@ -447,7 +465,14 @@ mod tests {
                 assert_eq!(actual.to_bits(), expected.to_bits());
             }
             assert_eq!(actual.envelope.to_bits(), reference.envelope.to_bits());
-            assert_eq!(actual.history, reference.history);
+            for (actual, expected) in actual
+                .history
+                .iter()
+                .flatten()
+                .zip(reference.history.iter().flatten())
+            {
+                assert_eq!(actual.to_bits(), expected.to_bits());
+            }
         }
     }
 
