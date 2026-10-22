@@ -87,7 +87,6 @@ where
 /// met. The bus event is the primary sink-truth signal; `position_seconds()` is
 /// re-checked on the same virtual poll cadence so a dropped / delayed broadcast
 /// receiver cannot turn already-reached playback state into a timeout.
-#[kithara::flash(io)]
 pub async fn wait_for_position_event<S>(
     rx: &mut EventReceiver<TestEvent>,
     queue: &QueueControl<S>,

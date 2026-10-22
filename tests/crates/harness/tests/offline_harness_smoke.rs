@@ -274,6 +274,34 @@ async fn event_waits_keep_the_callers_deadline_during_unrelated_events() {
     harness.close().await;
 }
 
+#[cfg(feature = "flash")]
+#[kithara::test(tokio)]
+async fn position_event_wait_keeps_a_virtual_deadline() {
+    let (harness, queue) = offline_queue_fixture(consts::SAMPLE_RATE).await;
+    let mut events = queue.subscribe();
+    let budget = Duration::from_secs(5);
+    let clock_start = time::Instant::now();
+    let wall_start = time::WallInstant::now();
+    let result = wait_for_position_event(&mut events, &queue, 1.0, budget).await;
+    let wall_elapsed = wall_start.elapsed();
+    let clock_elapsed = clock_start.elapsed();
+    harness.close().await;
+
+    assert!(
+        result
+            .expect_err("an empty queue cannot advance")
+            .contains("5s")
+    );
+    assert!(
+        clock_elapsed >= budget,
+        "the whole virtual deadline must elapse"
+    );
+    assert!(
+        wall_elapsed < Duration::from_secs(1),
+        "a position event wait is not real I/O: {wall_elapsed:?}",
+    );
+}
+
 #[kithara::test(tokio)]
 async fn event_waits_report_a_closed_stream() {
     let (harness, queue) = offline_queue_fixture(consts::SAMPLE_RATE).await;
