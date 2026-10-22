@@ -117,48 +117,17 @@ pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
     };
     let name = &input.ident;
     let ty = &field.ty;
-    let (config, read, write) = if spec.delegate {
+    let (config, read) = if spec.delegate {
         (
             quote!(<#ty as ::kithara_config::ConfigOwner>::Config),
             quote!(::kithara_config::ConfigOwner::config(&self.#first)),
-            quote!(::kithara_config::ConfigOwnerMut::config_mut(&mut self.#first)),
         )
     } else {
         let config = spec.config.as_ref().unwrap_or(ty);
-        let (read, write) = (spec.path.iter(), spec.path.iter());
-        (
-            quote!(#config),
-            quote!(&self.#(#read).*),
-            quote!(&mut self.#(#write).*),
-        )
+        let read = spec.path.iter();
+        (quote!(#config), quote!(&self.#(#read).*))
     };
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
-    let mutable: Vec<_> = input
-        .attrs
-        .iter()
-        .filter(|attr| attr.path().is_ident("config_owner_mut"))
-        .collect();
-    if mutable.len() > 1 {
-        return Err(syn::Error::new_spanned(
-            mutable[1],
-            "duplicate config_owner_mut attribute",
-        ));
-    }
-    let mutable_impl = mutable.first().map(|attribute| {
-        if !matches!(&attribute.meta, syn::Meta::Path(_)) {
-            return Err(syn::Error::new_spanned(
-                attribute,
-                "config_owner_mut takes no arguments",
-            ));
-        }
-        Ok(quote! {
-            impl #impl_generics ::kithara_config::ConfigOwnerMut for #name #ty_generics #where_clause {
-                fn config_mut(&mut self) -> &mut Self::Config {
-                    #write
-                }
-            }
-        })
-    }).transpose()?;
     Ok(quote! {
         impl #impl_generics ::kithara_config::ConfigOwner for #name #ty_generics #where_clause {
             type Config = #config;
@@ -167,7 +136,6 @@ pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
                 #read
             }
         }
-        #mutable_impl
     })
 }
 
