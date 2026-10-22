@@ -556,7 +556,7 @@ fn source_sample(
 fn mapped_sample(
     position: (u128, u128),
     speed: f64,
-    sample: impl Fn(i64) -> Result<f32, String>,
+    mut sample: impl FnMut(i64) -> Result<f32, String>,
 ) -> Result<f32, String> {
     let fraction = (position.0 % position.1)
         .to_f64()
@@ -976,6 +976,44 @@ impl kithara::audio::AudioObserver for DecodedObserver {
 }
 
 impl DecodedCapture {
+    fn sampler(
+        &self,
+        info: super::consumed::SourceIdentity,
+    ) -> impl FnMut(i64, usize) -> Result<f32, String> + '_ {
+        let mut covering = None::<(&DecodedChunk, u64)>;
+        move |frame, channel| {
+            let frame = u64::try_from(frame).map_err(|error| error.to_string())?;
+            let known = covering.filter(|(chunk, _)| chunk.0.frame_range().contains(&frame));
+            let known = if let Some((chunk, mut end)) = known {
+                if frame >= end {
+                    end = self
+                        .chunks
+                        .range((
+                            std::ops::Bound::Excluded((info.source_revision, end - 1)),
+                            std::ops::Bound::Unbounded,
+                        ))
+                        .next()
+                        .filter(|((revision, _), _)| *revision == info.source_revision)
+                        .map_or_else(
+                            || chunk.0.frame_range().end,
+                            |((_, start), _)| (*start).min(chunk.0.frame_range().end),
+                        );
+                }
+                (frame < end).then_some((chunk, end))
+            } else {
+                None
+            };
+            let (chunk, end) = if let Some(known) = known {
+                known
+            } else {
+                // A single read proves coverage only through its authoritative floor lookup.
+                (self.chunk(info, frame)?, frame + 1)
+            };
+            covering = Some((chunk, end));
+            Self::read(chunk, frame, channel)
+        }
+    }
+
     fn sample(
         &self,
         info: super::consumed::SourceIdentity,
@@ -1174,9 +1212,9 @@ impl DecodedCapture {
         }
         let source =
             i64::try_from(position.0 / position.1.get()).map_err(|error| error.to_string())?;
+        let mut read = self.sampler(info);
         mapped_sample((position.0, position.1.get()), speed, |offset| {
-            self.sample(
-                info,
+            read(
                 source
                     .checked_add(offset)
                     .ok_or_else(|| "physical sample coordinate overflows".to_owned())?,
@@ -1277,37 +1315,12 @@ impl DecodedCapture {
         let last = i64::try_from(domain.end - 1).map_err(|error| error.to_string())?;
         let source =
             i64::try_from(position.0 / position.1.get()).map_err(|error| error.to_string())?;
-        let covering = std::cell::Cell::new(None::<(&DecodedChunk, u64)>);
+        let mut read = self.sampler(info);
         mapped_sample((position.0, position.1.get()), speed, |offset| {
             let frame = source
                 .checked_add(offset)
                 .ok_or_else(|| "fixture sample coordinate overflows".to_owned())?;
-            let frame =
-                u64::try_from(frame.clamp(first, last)).map_err(|error| error.to_string())?;
-            let known = covering.get().filter(|((decoded, _), end)| {
-                decoded.frame_range().contains(&frame) && frame < *end
-            });
-            let chunk = if let Some(chunk) = known {
-                chunk.0
-            } else {
-                let chunk = self.chunk(info, frame)?;
-                // A later captured start supersedes even an overlapping chunk.
-                let next = self
-                    .chunks
-                    .range((
-                        std::ops::Bound::Excluded((info.source_revision, frame)),
-                        std::ops::Bound::Unbounded,
-                    ))
-                    .next()
-                    .filter(|((revision, _), _)| *revision == info.source_revision)
-                    .map_or_else(
-                        || chunk.0.frame_range().end,
-                        |((_, start), _)| (*start).min(chunk.0.frame_range().end),
-                    );
-                covering.set(Some((chunk, next)));
-                chunk
-            };
-            Self::read(chunk, frame, channel)
+            read(frame.clamp(first, last), channel)
         })
     }
 
@@ -1415,6 +1428,7 @@ impl DecodedCapture {
                 .output_ratio_at_source(origin, raw_next)
                 .ok_or_else(|| "raw source endpoint has no physical PCM position".to_owned())?;
             let speed = physical_source_speed((numerator, denominator), physical_next)?;
+            let mut read = self.sampler(info);
             for channel in 0..usize::from(CHANNELS) {
                 let sample = self.sample_at(info, (numerator, denominator), speed, channel)?
                     * gain
@@ -1432,8 +1446,7 @@ impl DecodedCapture {
                     .map_err(|error| error.to_string())?;
                 wrong_cue.push(
                     mapped_sample((wrong_position, denominator.get()), speed, |offset| {
-                        self.sample(
-                            info,
+                        read(
                             wrong_frame
                                 .checked_add(offset)
                                 .ok_or_else(|| "wrong-cue negative overflows".to_owned())?,
@@ -1458,8 +1471,7 @@ impl DecodedCapture {
                         (wrong_numerator, wrong_denominator),
                         speed * 0.5,
                         |offset| {
-                            self.sample(
-                                info,
+                            read(
                                 wrong_frame
                                     .checked_add(offset)
                                     .ok_or_else(|| "wrong-tempo negative overflows".to_owned())?,
@@ -1759,6 +1771,8 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
     let domain = 0..96;
     for (frame, speed) in [
         (0_i64, 1.25),
+        (30, 0.5),
+        (30, 1.0),
         (30, 1.5),
         (31, 1.75),
         (32, 1.25),
@@ -1775,6 +1789,32 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
                 .sample_at_domain(identity, (numerator, denominator), speed, channel, &domain)
                 .expect("covering chunk lookup");
             assert_eq!(actual.to_bits(), expected.to_bits());
+            if (16..80).contains(&frame) {
+                let physical = capture
+                    .sample_at(identity, (numerator, denominator), speed, channel)
+                    .expect("unbounded physical source lookup");
+                assert_eq!(physical.to_bits(), expected.to_bits());
+            } else {
+                assert!(
+                    capture
+                        .sample_at(identity, (numerator, denominator), speed, channel)
+                        .is_err()
+                );
+            }
+        }
+    }
+    let mut read = capture.sampler(identity);
+    for frame in [31, 31, 33, 32, 79, 64, 63, 0, 95] {
+        for channel in 0..usize::from(reference.channels) {
+            assert_eq!(
+                read(frame, channel)
+                    .expect("cached source sample")
+                    .to_bits(),
+                capture
+                    .sample(identity, frame, channel)
+                    .expect("independent source sample")
+                    .to_bits(),
+            );
         }
     }
     let mut overlapping = capture.clone();
@@ -1797,14 +1837,42 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
         (7, 31),
         (
             replacement,
-            reference.samples[31 * channels..63 * channels].to_vec(),
+            reference.samples[31 * channels..63 * channels]
+                .iter()
+                .map(|sample| sample * 0.5)
+                .collect(),
         ),
     );
     overlapping.samples += 64 * channels;
+    assert_ne!(
+        overlapping
+            .sample(identity, 31, 0)
+            .expect("superseding PCM"),
+        capture.sample(identity, 31, 0).expect("original PCM"),
+    );
     let expected = mapped_sample((125, denominator.get()), 1.5, |offset| {
         overlapping.sample(identity, 31 + offset, 0)
     })
     .expect("latest-start overlapping source");
+    assert_eq!(
+        overlapping
+            .sample_at(identity, (125, denominator), 1.5, 0)
+            .expect("physical overlapping source")
+            .to_bits(),
+        expected.to_bits(),
+    );
+    {
+        let mut read = overlapping.sampler(identity);
+        for frame in [30, 31, 32, 62, 63, 64, 32, 30] {
+            assert_eq!(
+                read(frame, 0).expect("overlapping cached source").to_bits(),
+                overlapping
+                    .sample(identity, frame, 0)
+                    .expect("latest authoritative source")
+                    .to_bits(),
+            );
+        }
+    }
     assert_eq!(
         overlapping
             .sample_at_domain(identity, (125, denominator), 1.5, 0, &domain)
@@ -1829,6 +1897,11 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
             .sample_at_domain(identity, (125, denominator), 1.5, 0, &domain)
             .is_err()
     );
+    assert!(
+        overlapping
+            .sample_at(identity, (125, denominator), 1.5, 0)
+            .is_err()
+    );
     let wrong_identity = super::consumed::SourceIdentity {
         source_revision: 8,
         ..identity
@@ -1836,6 +1909,11 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
     assert!(
         capture
             .sample_at_domain(wrong_identity, (125, denominator), 1.5, 0, &domain)
+            .is_err()
+    );
+    assert!(
+        capture
+            .sample_at(wrong_identity, (125, denominator), 1.5, 0)
             .is_err()
     );
     let wrong_identity = super::consumed::SourceIdentity {
