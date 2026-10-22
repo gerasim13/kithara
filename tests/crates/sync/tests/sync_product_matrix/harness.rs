@@ -800,6 +800,7 @@ impl ProductHarness {
     #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
     pub(crate) async fn seek_staggered(&mut self, case: SyncCase) {
         let stagger_seconds = 3.0 / 8.0 * 60.0 / case.start_bpm();
+        let mut requests = Vec::with_capacity(self.decks.len());
         for (index, deck) in self.decks.iter().enumerate() {
             hang_tick!(format!("{}: seeking deck {index}", case.id));
             let stagger: f64 = index.as_();
@@ -810,6 +811,16 @@ impl ProductHarness {
                 self.master_tap
                     .mark(&format!("seek deck {index} to {seconds:.9}"));
             }
+            let item = deck.current().expect("selected seek item").id;
+            let before = deck.track_snapshot(item).expect("seek track").track.mark;
+            let (seeks, placements) =
+                deck.observe(|observation| (observation.seeks.len(), observation.placements.len()));
+            requests.push((
+                item,
+                seeks,
+                placements,
+                before.map(|mark| mark.lane.segment),
+            ));
             let control = deck.control().clone();
             self.host
                 .run(move || control.seek(seconds))
@@ -817,7 +828,84 @@ impl ProductHarness {
                 .unwrap_or_else(|error| panic!("{}: seek deck {index}: {error}", case.id));
             hang_reset!();
         }
-        self.settle(case, 96).await;
+        self.wait_seeks(case, &requests).await;
+    }
+
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
+    async fn wait_seeks(
+        &mut self,
+        case: SyncCase,
+        requests: &[(TrackId, usize, usize, Option<SegmentId>)],
+    ) {
+        let deadline = Instant::now() + LOAD_TIMEOUT;
+        let rate = NonZeroU32::new(case.sample_rate).expect("seek sample rate");
+        let declick = i64::try_from(linked_mixer().declick_frames(rate).get())
+            .expect("declick fits the session axis");
+        loop {
+            hang_tick!(format!(
+                "{}: waiting for applied Seek at {}",
+                case.id, self.output_frames
+            ));
+            let ready = self.decks.iter().zip(requests).all(|(deck, &(item, seeks, placements, before))| {
+                if deck.current().map(|entry| entry.id) != Some(item) {
+                    return false;
+                }
+                let Some(snapshot) = deck.track_snapshot(item) else {
+                    return false;
+                };
+                if snapshot.track.pending_lane {
+                    return false;
+                }
+                deck.observe(|observation| {
+                    let consumed = observation.consumed.iter().find(|(owner, _)| *owner == item)
+                        .map(|(_, slot)| slot);
+                    let sounding = consumed.and_then(|slot| {
+                        let mark = slot.mark?;
+                        let source = slot.source?;
+                        (slot.state == kithara_render::bridge::SlotState::Playing
+                            && snapshot.track.mark == Some(mark)
+                            && source.segment == mark.lane.segment
+                            && matches!(snapshot.track.status, kithara::play::TrackStatus::Playing { .. }))
+                            .then_some(mark)
+                    });
+                    if let Some(placement) = observation.placements[placements..].iter()
+                        .find(|placement| placement.item == item)
+                    {
+                        return observation.placement_applied.contains(&(item, placement.seq, true))
+                            && sounding.is_some_and(|mark| {
+                                placement.before.mark.is_some_and(|before| before.lane.segment == mark.lane.segment)
+                                    && i64::from(mark.session) >= i64::from(placement.at) + declick
+                            });
+                    }
+                    let Some(&(_, origin, seq)) = observation.seeks[seeks..].iter()
+                        .find(|(owner, _, _)| *owner == item) else {
+                            return false;
+                        };
+                    let applied = match origin {
+                        LinkReceiptOrigin::Lane => observation.seek_applied.contains(&(item, seq, true)),
+                        LinkReceiptOrigin::Deck => observation.placement_receipts.iter().any(|(owner, origin, receipt)| {
+                            *owner == item && *origin == LinkReceiptOrigin::Deck
+                                && matches!(receipt, Settled::Applied { seq: answered, .. } if *answered == seq)
+                        }),
+                    };
+                    applied && (!matches!(snapshot.track.status, kithara::play::TrackStatus::Playing { .. })
+                        || sounding.is_some_and(|mark| Some(mark.lane.segment) != before))
+                })
+            });
+            if ready {
+                #[cfg(not(target_os = "android"))]
+                self.mark("seeks_applied");
+                hang_reset!();
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{}: Seek did not complete",
+                case.id
+            );
+            let _ = self.render(case, self.block_frames.min(128)).await;
+            hang_reset!();
+        }
     }
 
     pub(crate) async fn set_tempo(&mut self, case: SyncCase, bpm: f64, required: bool) {
@@ -1503,7 +1591,7 @@ impl ProductHarness {
             match operation {
                 Operation::Play => {
                     self.play_all().await;
-                    self.settle(case, 2).await;
+                    self.wait_playing(case, "play_ready").await;
                 }
                 Operation::Seek => self.seek_staggered(case).await,
                 Operation::Sync => self.request_sync(case).await,
@@ -1514,6 +1602,7 @@ impl ProductHarness {
 
     #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
     pub(crate) async fn ride_tempo(&mut self, case: SyncCase) {
+        self.wait_playing(case, "tempo_ride_ready").await;
         let steps_per_leg = (case.updates_hz / 2).max(1);
         let mut start = case.start_bpm();
         let mut rendered = 0_u64;
@@ -1543,7 +1632,7 @@ impl ProductHarness {
     }
 
     #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
-    async fn wait_capture_ready(&mut self, case: SyncCase) {
+    async fn wait_playing(&mut self, case: SyncCase, event: &str) {
         let deadline = Instant::now() + LOAD_TIMEOUT;
         let sample_rate = NonZeroU32::new(case.sample_rate).expect("capture sample rate");
         let declick = i64::try_from(linked_mixer().declick_frames(sample_rate).get())
@@ -1554,7 +1643,7 @@ impl ProductHarness {
         let mut sampled_live_after_second = false;
         loop {
             hang_tick!(format!(
-                "{}: waiting for actual Start and completed declick at {}",
+                "{}: {event} waiting for actual Start and completed declick at {}",
                 case.id, self.output_frames
             ));
             #[cfg(not(target_os = "android"))]
@@ -1600,8 +1689,7 @@ impl ProductHarness {
             }).collect();
             if let Some(_ready) = ready {
                 #[cfg(not(target_os = "android"))]
-                self.master_tap
-                    .evidence("capture_ready", serde_json::json!(_ready));
+                self.master_tap.evidence(event, serde_json::json!(_ready));
                 hang_reset!();
                 return;
             }
@@ -1652,7 +1740,7 @@ impl ProductHarness {
             }
             assert!(
                 within_deadline,
-                "{}: capture has no real Applied Start/current Segment with a completed configured declick",
+                "{}: {event} has no real Applied Start/current Segment with a completed configured declick",
                 case.id
             );
             let _ = self.render(case, self.block_frames.min(128)).await;
@@ -1742,8 +1830,7 @@ impl ProductHarness {
     }
 
     pub(super) async fn capture(&mut self, case: SyncCase) -> Vec<f32> {
-        self.play_all().await;
-        self.wait_capture_ready(case).await;
+        self.wait_playing(case, "capture_ready").await;
         let capture_frames: usize = (f64::from(case.sample_rate) * 60.0 / case.ride.final_bpm()
             * 6.0)
             .round()
