@@ -2717,21 +2717,32 @@ fn an_async_poll_cannot_join_a_child_waiting_on_virtual_time() {
         let _mode = crate::no_block::force_panic_mode();
         crate::no_block::watch_budget("async_native_join", 10_000, async {
             let (finished, completion) = tokio::sync::oneshot::channel();
+            let (release, released) = mpsc::channel();
             let child = crate::thread::spawn(move || {
                 crate::thread::sleep(Duration::from_secs(17));
                 finished
                     .send(())
                     .expect("detached child reports completion");
+                let _ = released.recv();
             });
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| child.join()));
             completion
                 .await
                 .expect("child finishes after rejected join");
-            kithara_test_utils::wait_until(Duration::from_secs(1), "child credit released", || {
-                super::system::FLASH.active_count() == 0
-            })
-            .await
-            .expect("detached child releases its credit");
+            assert_eq!(super::system::FLASH.active_count(), 1);
+            // The library used by test-utils owns a different Flash engine.
+            let mut waiting = std::pin::pin!(crate::time::timeout(Duration::from_secs(1), async {
+                while super::system::FLASH.active_count() != 0 {
+                    crate::time::sleep(kithara_test_utils::wait::POLL_TICK).await;
+                }
+            }));
+            assert!(
+                std::future::poll_fn(|cx| std::task::Poll::Ready(waiting.as_mut().poll(cx)))
+                    .await
+                    .is_pending()
+            );
+            release.send(()).expect("release the detached child");
+            waiting.await.expect("detached child releases its credit");
             result.expect_err("a blocking native join inside an async poll must be rejected")
         })
         .await
@@ -2870,10 +2881,14 @@ fn a_detached_platform_child_finishes_and_releases_its_credit() {
         });
         drop(child);
         assert_eq!(completion.recv().expect("detached child completes"), 7);
-        kithara_test_utils::wait_until_blocking(Duration::from_secs(1), "detached credit", || {
-            super::system::FLASH.active_count() == 1
-        })
-        .expect("only the synchronous driver remains");
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while super::system::FLASH.active_count() != 1 {
+            assert!(
+                Instant::now() < deadline,
+                "only the synchronous driver remains"
+            );
+            crate::thread::sleep(kithara_test_utils::wait::POLL_TICK);
+        }
     });
     assert_eq!(super::system::FLASH.active_count(), 0);
     assert_eq!(super::system::FLASH.timed_count(), 0);
