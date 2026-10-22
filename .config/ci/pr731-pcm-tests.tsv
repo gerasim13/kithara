@@ -1,0 +1,3 @@
+kithara-sync-tests::sync	sync_product_matrix::queue::one_queue_crossfades_five_music_tracks_and_retargets_host_during_overlap
+kithara-sync-tests::sync	sync_product_matrix::queue::one_queue_crossfades_five_real_tracks_through_four_public_next_requests_keylock_with_offsets
+kithara-sync-tests::sync	sync_product_matrix::queue::one_queue_crossfades_five_real_tracks_through_four_public_next_requests_rate_from_start

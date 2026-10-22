@@ -2441,7 +2441,7 @@ label = "Linux"
 os = "linux"
 tools = ["cargo", "just", "sccache", "kache"]
 program = "just"
-artifact = { name = "hang-dumps-real-clock", path = "target/hang", when = "failure" }
+artifact = { name = "pr731-pcm-evidence", path = "target/nextest/ci", when = "always" }
 steps = [
   { args = [
     "test",
@@ -2450,6 +2450,8 @@ steps = [
     "--profile",
     "ci",
     "--timings",
+    "--expected-tests",
+    ".config/ci/pr731-pcm-tests.tsv",
   ], label = "real-clock suite", rebuild_check = true, args_by_kind = { branch = [
     "test",
     "run",
@@ -2458,7 +2460,7 @@ steps = [
     "--profile",
     "ci",
     "--timings",
-  ] }, env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", KITHARA_HANG_PREKILL_SECS = "110" } },
+  ] }, env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/target/nextest/ci/hang", KITHARA_HANG_PREKILL_SECS = "110", RUST_LOG = "warn,render_refill=trace,kithara_test::sync::queue321=info" } },
 ]
 role = "gate"
 kinds_github = ["main", "branch", "merge-request"]
