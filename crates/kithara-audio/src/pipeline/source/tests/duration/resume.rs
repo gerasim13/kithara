@@ -134,8 +134,16 @@ async fn same_coordinate_promotion_retains_the_final_admitted_frontier() {
     assert!(last_outgoing.frame_range().end > admitted.frame());
     assert_eq!(source.resume.source_end(), Some(admitted));
     assert_eq!(
+        source.resume.decode_head(),
+        Some((
+            last_outgoing.frame_range().end,
+            last_outgoing.spec.sample_rate.get()
+        )),
+        "continuous promotion must preserve the decoded frontier ahead of admitted output"
+    );
+    assert_eq!(
         source.resume.decoded_end(last_outgoing.source_revision),
-        None
+        Some(last_outgoing.end_timestamp)
     );
     source.set_host_sample_rate(NonZeroU32::new(2_000).expect("new host rate"));
     let resumed = first_chunk(&mut source);
@@ -205,7 +213,7 @@ async fn empty_promoted_tail_keeps_its_own_resume_endpoint_without_refining_dura
         Some(Duration::from_millis(17))
     );
     assert_eq!(source.playhead.duration(), declared);
-    assert_eq!(source.media_end(), Some(Duration::from_millis(59_969)));
+    assert_eq!(source.media_end(), Some(Duration::from_millis(59_952)));
     assert_ne!(source.media_end(), Some(original.meta.end_timestamp));
 }
 

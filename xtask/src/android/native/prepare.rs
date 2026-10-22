@@ -190,6 +190,7 @@ impl Prepared {
         session
             .environment
             .extend(art_session_environment(&session.directory, device_url));
+        self.stage_beat_fixtures(&session, cancel)?;
         println!(
             "==> Native fixtures from {device_url} after {:.1}s (no store push)",
             started.elapsed().as_secs_f64()
@@ -225,6 +226,44 @@ impl Prepared {
             bail!("Android nextest run did not produce JUnit");
         }
         Ok(())
+    }
+
+    fn stage_beat_fixtures(&self, session: &runner::Session, cancel: &child::Cancel) -> Result<()> {
+        let archive = self.evidence.join("beat-fixtures.tar");
+        logged(
+            Command::new("tar")
+                .arg("-cf")
+                .arg(&archive)
+                .arg("-C")
+                .arg(self.root.join("crates/kithara-beat/tests/fixtures"))
+                .arg("."),
+            &self.evidence.join("beat-fixtures.stdout.log"),
+            &self.evidence.join("beat-fixtures.log"),
+            cancel,
+        )?;
+        let directory = format!("{}/beat-fixtures", session.directory);
+        session.control(
+            &["run-as", &session.package, "mkdir", "-p", &directory],
+            Some(cancel),
+        )?;
+        logged(
+            session
+                .adb()
+                .args([
+                    "exec-in",
+                    "run-as",
+                    &session.package,
+                    "tar",
+                    "-xf",
+                    "-",
+                    "-C",
+                    &directory,
+                ])
+                .stdin(fs::File::open(&archive)?),
+            &self.evidence.join("beat-fixtures-install.stdout.log"),
+            &self.evidence.join("beat-fixtures-install.log"),
+            cancel,
+        )
     }
 
     fn nextest(&self, action: NextestAction, filter: Option<&str>) -> Result<Command> {
@@ -324,6 +363,10 @@ pub(super) fn sha256(path: &Path) -> Result<String> {
 
 fn art_session_environment(directory: &str, device_url: &str) -> BTreeMap<String, String> {
     BTreeMap::from([
+        (
+            "KITHARA_BEAT_FIXTURE_DIR".into(),
+            format!("{directory}/beat-fixtures"),
+        ),
         (
             "KITHARA_FIXTURE_CACHE".into(),
             format!("{directory}/fixtures"),
@@ -426,6 +469,10 @@ mod tests {
         let env = art_session_environment(
             "/data/user/0/com.kithara.nativetest/files/run-1",
             "http://127.0.0.1:38833",
+        );
+        assert_eq!(
+            env.get("KITHARA_BEAT_FIXTURE_DIR").map(String::as_str),
+            Some("/data/user/0/com.kithara.nativetest/files/run-1/beat-fixtures")
         );
         assert_eq!(
             env.get("KITHARA_FIXTURE_CACHE").map(String::as_str),

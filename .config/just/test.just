@@ -297,6 +297,7 @@ coverage:
     test_rc=0
     cargo llvm-cov nextest --no-report \
       --workspace --exclude kithara-fuzz \
+      --features flash \
       --cargo-profile test-release || test_rc=$?
     cargo llvm-cov nextest --no-report \
       -p kithara-ui \

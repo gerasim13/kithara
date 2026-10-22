@@ -16,7 +16,7 @@ use super::{cases::*, harness::*, imports::*, providers::*};
 #[case::cross_style(source_cross_style_provider().await, CUE)]
 #[case::tunnel(tunnel_sources().await, TUNNEL_CUE)]
 #[case::newtechno(newtechno_sources().await, NEWTECHNO_PHRASE)]
-#[case::library(prepared_sources(Provider::Library(crate::providers::LIBRARY)).await, CUE)]
+#[case::library(prepared_sources(Provider::Library(crate::providers::LIBRARY)).await, Start::bar(0))]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn provider_tempo_controls_measure_without_sync(
     #[case] prepared: PreparedSources,

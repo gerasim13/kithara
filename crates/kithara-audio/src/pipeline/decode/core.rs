@@ -8,7 +8,7 @@ use std::{
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_decode::{
     BlenderProfile, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome,
-    DecoderFactory as BackendDecoderFactory, DecoderSeekOutcome, GaplessMode,
+    DecoderFactory as BackendDecoderFactory, DecoderSeekOutcome, GaplessMode, LandingClock,
 };
 use kithara_events::DeferredBus;
 use kithara_platform::{sync::Arc, time::Duration};
@@ -291,7 +291,7 @@ impl ActiveDecode {
         )?;
         self.active.observe_visible_origin(&chunk);
         chunk.meta.visible_origin = self.active.visible_origin();
-        chunk.meta.media_origin = self.active.media_origin();
+        chunk.meta.media_origin = self.media_origin();
         chunk.meta.media_end = self.active.media_end(
             self.gapless_mode,
             physical_duration,
@@ -328,7 +328,23 @@ impl ActiveDecode {
             .prepare_deferred(prepare_input, self.gapless_mode);
         self.active.decoder_mut().flush_reader_signals();
         self.flush_incoming_reader_signals();
+        if let Ok(Some(outcome)) = &result {
+            self.observe_landing(outcome);
+        }
         result
+    }
+
+    /// A landing that restarted the decoder's output clock re-decodes PCM no
+    /// earlier pass produced at the same output frame, so it opens a new
+    /// source revision.
+    fn observe_landing(&mut self, outcome: &DecoderSeekOutcome) {
+        if let DecoderSeekOutcome::Landed {
+            clock: LandingClock::Restarted,
+            ..
+        } = outcome
+        {
+            self.discontinuity_revision = self.discontinuity_revision.wrapping_add(1);
+        }
     }
 
     pub(crate) fn prepare_incoming_profile(&mut self, profile: BlenderProfile) {
@@ -394,6 +410,11 @@ impl ActiveDecode {
         self.reset();
         self.discard_incoming()
     }
+    /// Content zero of the active generation under this pipeline's gapless mode.
+    pub(crate) fn media_origin(&self) -> Option<Duration> {
+        self.active.content_origin(self.gapless_mode)
+    }
+
     pub(crate) fn seek(&mut self, position: Duration) -> DecodeResult<DecoderSeekOutcome> {
         self.seek_selected(position, false)
     }
@@ -417,6 +438,9 @@ impl ActiveDecode {
         } else {
             self.active.seek(position, self.gapless_mode)
         };
+        if let Ok(ref outcome) = outcome {
+            self.observe_landing(outcome);
+        }
         if let Ok(ref outcome) = outcome
             && matches!(
                 outcome,
@@ -1324,7 +1348,7 @@ mod tests {
     ) {
         let pools = pools();
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
-        let incoming = generation(spec);
+        let mut incoming = generation(spec);
         let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
         abr.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
         let claim = abr
@@ -1352,6 +1376,16 @@ mod tests {
             .cycle()
             .take(samples)
             .collect::<Vec<_>>();
+        incoming
+            .stage(AudioChunk::new(
+                AudioChunkInfo {
+                    spec,
+                    frames,
+                    ..Default::default()
+                },
+                sample_buffer(&pools, &active_samples),
+            ))
+            .expect("the follow-up transition already has join PCM");
         decode
             .active
             .stage(AudioChunk::new(
@@ -1384,6 +1418,32 @@ mod tests {
         });
         let mut cursor = ResumeCursor::default();
 
+        let frontier = OutgoingFrontier::Exact {
+            frame: 0,
+            rate: spec.sample_rate.get(),
+        };
+        let target = decode
+            .incoming_preparation(frontier)
+            .expect("the follow-up transition has a preparation target");
+        let Some(IncomingDecode::Priming { generation, .. }) = decode.incoming.as_ref() else {
+            panic!("the follow-up transition must remain owned by the decoder");
+        };
+        assert!(matches!(
+            crate::pipeline::decode::transition::incoming_readiness(generation, target, 0),
+            crate::pipeline::decode::transition::PromotionReadiness::Ready(_)
+        ));
+        for _ in 0..3 {
+            assert_eq!(
+                decode.prime_incoming(frontier),
+                IncomingPrime::Pending,
+                "the active join needs consumption, not repeated incoming preparation"
+            );
+            assert!(matches!(
+                decode.incoming,
+                Some(IncomingDecode::Priming { .. })
+            ));
+            assert!(decode.prepare_promotion().is_none());
+        }
         assert!(
             !decode.transition_holds_output(),
             "the follow-up transition must not freeze an active join"
@@ -1394,6 +1454,18 @@ mod tests {
 
         assert!(output.is_some(), "the prior join must keep consuming PCM");
         assert!(decode.blender.is_steady(), "the prior join must finish");
+        decode.mark_source_exhausted();
+        decode.finish_active().expect("finish the outgoing source");
+        assert_eq!(decode.prime_incoming(frontier), IncomingPrime::Ready);
+        let prepared = decode
+            .prepare_promotion()
+            .expect("the follow-up transition can promote after the prior join");
+        let _retired = decode.commit_prepared_promotion(prepared);
+        let promoted = decode
+            .next_output(&mut cursor, None, false)
+            .expect("promoted PCM remains valid")
+            .expect("the follow-up transition produces its staged PCM");
+        assert_eq!(promoted.samples.as_ref(), active_samples.as_slice());
     }
 
     #[kithara::test]
@@ -1543,6 +1615,7 @@ mod tests {
                 landed_frame: 0,
                 landed_byte: None,
                 preroll: PrerollHint::NotNeeded,
+                clock: LandingClock::Kept,
             })
         }
 

@@ -6,9 +6,8 @@ use std::fmt;
 use kithara::{
     audio::AudioEvent,
     events::EventReceiver,
-    platform::time::{Duration, Instant},
+    platform::time::{Duration, Instant, sleep},
 };
-use kithara_test_utils::pace;
 
 use crate::{event::TestEvent, offline::OfflinePlayer};
 
@@ -118,6 +117,7 @@ impl PlaybackProgressProbe {
 /// # Panics
 ///
 /// Panics when no block is audible within [`AUDIBLE_WARMUP_BLOCKS`].
+#[kithara_test_utils::kithara::flash(true)]
 pub async fn render_until_audible(
     player: &mut OfflinePlayer,
     label: &str,
@@ -135,12 +135,13 @@ pub async fn render_until_audible(
         {
             return;
         }
-        pace(block_budget.saturating_sub(elapsed));
+        sleep(block_budget.saturating_sub(elapsed)).await;
     }
     panic!("{label}: no audible block within {AUDIBLE_WARMUP_BLOCKS} rendered blocks");
 }
 
 #[must_use]
+#[kithara_test_utils::kithara::flash(true)]
 pub async fn render_offline_window(
     player: &mut OfflinePlayer,
     blocks: u32,
@@ -172,7 +173,7 @@ pub async fn render_offline_window(
             current_silence += 1;
         }
         // Let the decode worker fill the producer ring before the next render.
-        pace(block_budget.saturating_sub(elapsed));
+        sleep(block_budget.saturating_sub(elapsed)).await;
     }
 
     if current_silence > max_silence {

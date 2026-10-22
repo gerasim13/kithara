@@ -349,11 +349,6 @@ where
                 seq = ?resident.admission.as_ref().map(|(seq, _, _)| *seq),
             );
             let _entered = span.enter();
-            tracing::trace!(
-                target: "kithara_render_probe",
-                probe = "dispatcher_resident_poll",
-                "polling resident lane",
-            );
             let visited = catch_unwind(AssertUnwindSafe(|| {
                 let lane = &mut resident.task;
                 let _ = lane.poll_commands(cx);
@@ -371,12 +366,6 @@ where
                 progress = true;
                 continue;
             };
-            tracing::trace!(
-                target: "kithara_render_probe",
-                probe = "dispatcher_resident_tick",
-                ?result,
-                "resident lane tick",
-            );
             progress |= result == TickResult::Progress;
             waiting |= result == TickResult::Waiting;
             upstream |= result == TickResult::UpstreamPending;
@@ -421,6 +410,17 @@ where
             .iter()
             .filter_map(|resident| resident.task.priority())
             .max()
+    }
+
+    /// Soonest recheck of the resident lanes; a lane without its own keeps
+    /// the dispatcher's configured poll interval.
+    fn backpressure_recheck(&self) -> Option<Duration> {
+        let mut soonest: Option<Duration> = None;
+        for resident in &self.lanes {
+            let lane = resident.task.backpressure_recheck()?;
+            soonest = Some(soonest.map_or(lane, |soonest| soonest.min(lane)));
+        }
+        soonest
     }
 }
 
@@ -474,6 +474,7 @@ where
     delegate::delegate! {
         to self.dispatcher {
             fn priority(&self) -> Option<Priority>;
+            fn backpressure_recheck(&self) -> Option<Duration>;
             #[call(cancel_lanes)]
             fn on_cancel(&mut self);
         }

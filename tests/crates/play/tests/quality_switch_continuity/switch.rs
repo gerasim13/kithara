@@ -12,6 +12,7 @@ use kithara::{
         tokio::sync::broadcast::error::TryRecvError,
     },
     play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
+    signal::AudioSpec,
     stream::AudioCodec,
 };
 use kithara_integration_tests::{
@@ -113,13 +114,14 @@ impl Consumer {
     }
 }
 
-/// Playback clock of one consumer: when its first block was taken and how
-/// much audio it has taken since, so every block is due at a fixed audio time
-/// however long rendering it took.
+/// Playback clock of one consumer: when its next block is due. A block taken
+/// on time is due one period after the previous one however long rendering it
+/// took; a block taken late is due one period after it was taken, because a
+/// device callback that missed its deadline is not followed by a burst of
+/// callbacks making up for it.
 #[derive(Debug, Default)]
 pub(super) struct Pacer {
-    started: Option<Instant>,
-    frames: usize,
+    due: Option<Instant>,
 }
 
 pub(super) struct PreparedPlayer {
@@ -232,15 +234,17 @@ fn decoder_backend_kind(backend: DecoderBackend) -> DecoderBackendKind {
 
 pub(super) fn source_frame(position: f64, label: &str) -> i64 {
     let exact = position * f64::from(SAMPLE_RATE);
-    let rounded = exact.round();
+    let frame = exact
+        .round()
+        .to_u64()
+        .expect("source frame fits an unsigned frame coordinate");
+    let spec = AudioSpec::new(CHANNELS, NonZeroU32::new(SAMPLE_RATE).expect("sample rate"));
     assert_eq!(
         position,
-        Duration::from_secs_f64(rounded / f64::from(SAMPLE_RATE)).as_secs_f64(),
+        spec.duration_for(frame).expect("frame time").as_secs_f64(),
         "{label} capture position is not an integer source frame: position={position:.12}s, frame={exact:.9}",
     );
-    rounded
-        .to_i64()
-        .expect("validated source frame fits signed frame coordinates")
+    i64::try_from(frame).expect("validated source frame fits signed frame coordinates")
 }
 
 /// Source frame every render captures at: the first whole render block at or
@@ -484,23 +488,75 @@ async fn prepare_player(
 /// rather than of the pipeline under test.
 #[kithara::flash(true)]
 pub(super) async fn render_paced(
-    player: &mut OfflinePlayer,
+    player: &OfflinePlayer,
     pacer: &mut Pacer,
     frames: usize,
 ) -> Vec<f32> {
-    let started = *pacer.started.get_or_insert_with(Instant::now);
-    let block = player.render(frames).await;
-    pacer.frames = pacer.frames.saturating_add(frames);
-    let due = started
-        + Duration::from_secs_f64(
-            pacer
-                .frames
-                .to_f64()
-                .expect("rendered frame count fits f64")
-                / f64::from(SAMPLE_RATE),
-        );
+    let (taken, block) = player.render_timed(frames).await;
+    let period = Duration::from_secs_f64(
+        frames.to_f64().expect("block frame count fits f64") / f64::from(SAMPLE_RATE),
+    );
+    let due = pacer.due.map_or(taken, |due| due.max(taken)) + period;
+    pacer.due = Some(due);
     sleep(due.saturating_duration_since(Instant::now())).await;
     block
+}
+
+#[kithara::test(tokio, native, flash(false))]
+async fn unpaced_render_preserves_empty_and_multi_callback_requests() {
+    let player = OfflinePlayer::new(HostConfig::offline(pools()).build()).await;
+    assert!(player.render(0).await.is_empty());
+    let frames = BLOCK_FRAMES * 2;
+    assert_eq!(
+        player.render(frames).await.len(),
+        frames * usize::from(CHANNELS)
+    );
+    player.close().await;
+}
+
+#[kithara::test(tokio, native, flash(false))]
+async fn a_queued_paced_render_keeps_a_full_callback_period() {
+    let player = OfflinePlayer::new(
+        HostConfig::offline(pools())
+            .settings(
+                HostSettings::builder()
+                    .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"))
+                    .build(),
+            )
+            .build(),
+    )
+    .await;
+    let mut pacer = Pacer::default();
+    let period = Duration::from_secs_f64(
+        BLOCK_FRAMES.to_f64().expect("block frame count fits f64") / f64::from(SAMPLE_RATE),
+    );
+    let (entered, started) = kithara::platform::tokio::sync::oneshot::channel();
+    let (release, blocked) = kithara::platform::sync::mpsc::channel();
+    let (released, ()) = kithara::platform::tokio::join!(
+        player.host().run(move || {
+            entered.send(()).expect("render caller is waiting");
+            blocked.recv().expect("caller releases the Host owner");
+            Instant::now()
+        }),
+        async {
+            started.await.expect("Host owner started its queued work");
+            let mut render = std::pin::pin!(render_paced(&player, &mut pacer, BLOCK_FRAMES));
+            std::future::poll_fn(|cx| {
+                assert!(Future::poll(render.as_mut(), cx).is_pending());
+                std::task::Poll::Ready(())
+            })
+            .await;
+            sleep(Duration::from_millis(100)).await;
+            release.send(()).expect("Host owner is waiting");
+            let output = render.await;
+            assert_eq!(output.len(), BLOCK_FRAMES * usize::from(CHANNELS));
+        },
+    );
+    player.close().await;
+    assert!(
+        pacer.due.expect("render sets its playback deadline") >= released + period,
+        "owner queue latency must not consume the following callback period"
+    );
 }
 
 #[kithara::flash(io)]
@@ -527,6 +583,7 @@ pub(super) async fn render_switch(
     let mut samples = Vec::with_capacity(observation_frames * usize::from(CHANNELS));
     let mut applied_frame = None;
     let mut decoder_events = Vec::new();
+    let mut position_jumps = Vec::new();
     while samples.len() / usize::from(CHANNELS) < observation_frames {
         hang_tick!();
         let before = prepared.player.position();
@@ -534,10 +591,18 @@ pub(super) async fn render_switch(
         let remaining_frames = observation_frames.saturating_sub(rendered_frames);
         let render_frames = remaining_frames.min(BLOCK_FRAMES);
         samples.extend_from_slice(
-            &render_paced(&mut prepared.player, &mut prepared.pacer, render_frames).await,
+            &render_paced(&prepared.player, &mut prepared.pacer, render_frames).await,
         );
         if prepared.player.position() > before {
             hang_reset!();
+        }
+        // A switch must not move the play head by anything but the frames it
+        // played: one content timeline spans every variant of the stream.
+        let advanced = source_frame(prepared.player.position(), transition.label)
+            - source_frame(before, transition.label);
+        let render_limit = i64::try_from(render_frames).expect("render block fits i64");
+        if !(0..=render_limit).contains(&advanced) {
+            position_jumps.push((rendered_frames, advanced, render_frames));
         }
         let rendered_frames = samples.len() / usize::from(CHANNELS);
         decoder_events.extend(drain_decoder_events(&mut prepared.events, rendered_frames));
@@ -552,6 +617,11 @@ pub(super) async fn render_switch(
         transition.label,
     );
 
+    assert!(
+        position_jumps.is_empty(),
+        "{} position advanced by other than the rendered frames (window frame, advanced, rendered): {position_jumps:?}",
+        transition.label,
+    );
     let applied_frame = applied_frame.unwrap_or_else(|| {
         panic!(
             "{} did not apply inside the observation window: current={:?}, frames={}",
@@ -704,18 +774,20 @@ pub(super) async fn render_no_switch_control(
 }
 
 #[kithara::test]
+#[case::frame_1024(1_024, 0.023_219_954)]
 #[case::frame_2197(2_197, 0.049_818_594)]
+#[case::frame_22891(22_891, 0.519_070_294)]
 #[case::frame_44544(44_544, 1.010_068_027)]
-#[case::frame_44545(44_545, 1.010_090_703)]
+#[case::frame_44545(44_545, 1.010_090_702)]
 fn source_frame_preserves_the_public_nanosecond_position(
     #[case] frame: i64,
     #[case] position: f64,
 ) {
     assert_eq!(
-        Duration::from_secs_f64(
-            frame.to_f64().expect("fixture source frame fits f64") / f64::from(SAMPLE_RATE),
-        )
-        .as_secs_f64(),
+        AudioSpec::new(CHANNELS, NonZeroU32::new(SAMPLE_RATE).expect("sample rate"))
+            .duration_for(u64::try_from(frame).expect("fixture source frame fits u64"))
+            .expect("frame time")
+            .as_secs_f64(),
         position,
     );
     assert_eq!(source_frame(position, "quantised position"), frame);

@@ -6,22 +6,24 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{
         Audio, AudioConfig, AudioControl, AudioEvent, AudioRead, AudioSession, AudioSource,
-        ChunkOutcome, ReadOutcome, SeekLifecycleStage, SourceEnd,
+        ChunkOutcome, DecoderEvent, ReadOutcome, SeekLifecycleStage, SourceEnd,
     },
     events::EventBus,
     hls::{Hls, HlsConfig},
     platform::time::{Duration, Instant},
     play::{PlayWorker, PlayWorkerConfig},
+    signal::SourceSpan,
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, auto,
     bufpool_ext::{TestPools, pools},
     fixture_protocol::DataMode,
-    mock::LaneAudio,
+    mock::{LaneAudio, wait_for_preload},
 };
 use kithara_test_fixtures::signal;
 use kithara_test_utils::Xorshift64;
+use num_traits::ToPrimitive;
 use tracing::{info, warn};
 use url::Url;
 use wasm_bindgen::JsValue;
@@ -286,31 +288,54 @@ async fn warm_up(
 /// Read with a pending budget in wall-clock milliseconds. `None` is the end
 /// of the stream; `Some(0)` is a reader that stayed pending for the whole
 /// budget.
-#[kithara_test_utils::kithara::hang_watchdog]
 async fn read_with_yield_limit(
     audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>,
     buf: &mut [f32],
     budget_ms: u32,
 ) -> Option<usize> {
+    read_outcome_with_yield_limit(audio, buf, budget_ms)
+        .await
+        .map(|outcome| match outcome {
+            ReadOutcome::Frames { count, .. } => count.get(),
+            _ => 0,
+        })
+}
+
+#[kithara_test_utils::kithara::hang_watchdog]
+async fn read_outcome_with_yield_limit(
+    audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>,
+    buf: &mut [f32],
+    budget_ms: u32,
+) -> Option<ReadOutcome> {
     let deadline = Date::now() + f64::from(budget_ms);
     loop {
         hang_tick!();
-        match audio.read(buf) {
-            Ok(ReadOutcome::Frames { count, .. }) => {
+        let pending = match audio.read(buf) {
+            Ok(outcome @ ReadOutcome::Frames { .. }) => {
                 hang_reset!();
-                return Some(count.get());
+                return Some(outcome);
             }
             Ok(ReadOutcome::Eof { .. }) => return None,
-            Ok(ReadOutcome::Pending { .. }) => {}
+            Ok(outcome @ ReadOutcome::Pending { .. }) => outcome,
             Err(error) => {
                 warn!(%error, "read failed");
                 return None;
             }
-        }
+        };
         if Date::now() >= deadline {
-            return Some(0);
+            return Some(pending);
         }
-        yield_macrotask().await;
+        if audio.current_segment_ready() {
+            yield_macrotask().await;
+        } else if kithara::platform::time::timeout(
+            Duration::from_secs_f64((deadline - Date::now()).max(0.0) / 1000.0),
+            wait_for_preload(audio, "browser read"),
+        )
+        .await
+        .is_err()
+        {
+            return Some(pending);
+        }
     }
 }
 
@@ -467,6 +492,66 @@ async fn stress_read_samples_integrity(#[future(awt)] stress_source: (TestServer
     );
 }
 
+fn saw_phase_at(span: SourceSpan, frame: u64) -> usize {
+    let (numerator, denominator) = span.source_ratio_at(frame).expect("mapped saw frame");
+    let denominator = denominator.get();
+    let phase = usize::try_from((numerator / denominator) % signal::SAW_PERIOD as u128)
+        .expect("saw phase fits usize");
+    let tap = |phase| {
+        f64::from(signal::Wave::Sawtooth.sample(phase, span.sample_rate().get())) / 32_768.0
+    };
+    let current = tap(phase);
+    let next = tap((phase + 1) % signal::SAW_PERIOD);
+    let fraction = (numerator % denominator).to_f64().expect("source fraction")
+        / denominator.to_f64().expect("source denominator");
+    let expected = ((next - current) * fraction + current)
+        .to_f32()
+        .expect("finite interpolated saw sample");
+    signal::phase::units(expected)
+}
+
+fn saw_pair_continuous(span: SourceSpan, frame: u64, previous: usize, current: usize) -> bool {
+    previous == saw_phase_at(span, frame - 1) && current == saw_phase_at(span, frame)
+}
+
+#[kithara::test(wasm)]
+fn fractional_saw_wrap_oracle_rejects_repeated_dropped_and_zeroed_samples() {
+    let denominator = 2_500_000_u128;
+    let span = SourceSpan::try_from((
+        65_536 * denominator - 81,
+        denominator,
+        std::num::NonZeroU128::new(denominator).expect("source denominator"),
+        std::num::NonZeroU32::new(44_100).expect("source rate"),
+        4,
+    ))
+    .expect("fractional saw source span");
+    let samples = [-0.999_935_2_f32, -0.999_969_5, -0.999_938_96, -0.999_908_45];
+    let errors = |samples: &[f32]| {
+        samples
+            .windows(2)
+            .enumerate()
+            .filter(|(frame, pair)| {
+                !saw_pair_continuous(
+                    span,
+                    (*frame + 1) as u64,
+                    signal::phase::units(pair[0]),
+                    signal::phase::units(pair[1]),
+                )
+            })
+            .count()
+    };
+    assert_eq!(errors(&samples), 0, "fractional wrap is continuous");
+    for corrupted in [samples[0], samples[2], 0.0] {
+        let mut broken = samples;
+        broken[1] = corrupted;
+        assert_eq!(
+            errors(&broken),
+            2,
+            "both adjacent pairs must detect corruption"
+        );
+    }
+}
+
 #[kithara::test(wasm, serial, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 #[kithara_test_utils::kithara::hang_watchdog]
 async fn stress_seek_and_read(#[future(awt)] stress_source: (TestServerHelper, Url)) {
@@ -489,6 +574,7 @@ async fn stress_seek_and_read(#[future(awt)] stress_source: (TestServerHelper, U
     let mut position_errors = 0u64;
     let mut channel_mismatches = 0u64;
     let mut continuity_errors = 0u64;
+    let mut first_breaks = Vec::new();
 
     for (i, &frac) in seek_positions.iter().enumerate() {
         hang_tick!();
@@ -503,13 +589,19 @@ async fn stress_seek_and_read(#[future(awt)] stress_source: (TestServerHelper, U
 
         let mut post_seek_samples = 0;
         let mut position_checked = false;
-        for _ in 0..10 {
+        for read_idx in 0..10 {
             hang_tick!();
-            let n = read_with_yield(&mut audio, &mut buf).await.unwrap_or(0);
-            if n == 0 {
+            let Some(ReadOutcome::Frames {
+                count, source_span, ..
+            }) = read_outcome_with_yield_limit(&mut audio, &mut buf, 500).await
+            else {
                 break;
-            }
+            };
+            let n = count.get();
             let frames = n / channels;
+            let span = source_span.expect("rendered seek PCM has exact source geometry");
+            assert_eq!(span.output_frames(), frames as u64);
+            assert_eq!(span.sample_rate(), spec.sample_rate);
             hang_reset!();
             post_seek_samples += n;
 
@@ -534,8 +626,16 @@ async fn stress_seek_and_read(#[future(awt)] stress_source: (TestServerHelper, U
                 for f in 1..frames {
                     let prev = signal::phase::units(buf[(f - 1) * channels]);
                     let curr = signal::phase::units(buf[f * channels]);
-                    if curr != (prev + 1) % signal::SAW_PERIOD {
+                    if !saw_pair_continuous(span, f as u64, prev, curr) {
                         continuity_errors += 1;
+                        if first_breaks.len() < 8 {
+                            first_breaks.push(format!(
+                                "seek={i} target={seek_to:?} read={read_idx} frame={f}/{frames} previous_sample={} current_sample={} previous_phase={prev} current_phase={curr} position={:?}",
+                                buf[(f - 1) * channels],
+                                buf[f * channels],
+                                audio.position(),
+                            ));
+                        }
                     }
                 }
             }
@@ -572,7 +672,7 @@ async fn stress_seek_and_read(#[future(awt)] stress_source: (TestServerHelper, U
     );
     assert!(
         continuity_errors <= 5,
-        "{continuity_errors} continuity breaks (>5 tolerance)"
+        "{continuity_errors} continuity breaks (>5 tolerance); first={first_breaks:?}"
     );
     assert!(
         position_errors <= 1,
@@ -596,6 +696,7 @@ async fn stress_seek_and_read(#[future(awt)] stress_source: (TestServerHelper, U
 async fn stress_rapid_seeks_must_not_stall(#[future(awt)] stress_source: (TestServerHelper, Url)) {
     let (_helper, url) = stress_source;
     info!("Starting stress_rapid_seeks_must_not_stall");
+    wasm_bindgen_test::console_log!("rapid seek body starts at {} ms", Date::now());
 
     let mut audio = create_pipeline_with_url(url).await;
     let spec = audio.spec();
@@ -610,6 +711,7 @@ async fn stress_rapid_seeks_must_not_stall(#[future(awt)] stress_source: (TestSe
     let warmup_samples = warm_up(&mut audio, &mut buf).await;
     assert!(warmup_samples > 0, "warmup must produce data");
     info!(warmup_samples, "Warmup complete");
+    wasm_bindgen_test::console_log!("rapid seek warmup done at {} ms", Date::now());
 
     let duration = audio.duration().unwrap_or(Duration::from_secs(60));
     let duration_secs = duration.as_secs_f64();
@@ -626,6 +728,8 @@ async fn stress_rapid_seeks_must_not_stall(#[future(awt)] stress_source: (TestSe
     let mut position_mismatches = 0u64;
     let mut total_samples = 0u64;
 
+    let mut seek_events = audio.events::<AudioEvent>();
+    let mut decoder_events = audio.events::<DecoderEvent>();
     for i in 0..SEEK_COUNT {
         hang_tick!();
         let r = rng.next_f64();
@@ -646,11 +750,31 @@ async fn stress_rapid_seeks_must_not_stall(#[future(awt)] stress_source: (TestSe
             continue;
         }
 
-        let read = read_with_yield_limit(&mut audio, &mut buf, 200).await;
+        let outcome = read_outcome_with_yield_limit(&mut audio, &mut buf, 200).await;
+        let read = outcome.as_ref().map(|outcome| match outcome {
+            ReadOutcome::Frames { count, .. } => count.get(),
+            _ => 0,
+        });
         let n = read.unwrap_or(0);
         if n == 0 && read.is_some() {
             dead_seeks += 1;
             if dead_seeks <= 5 {
+                let stages: Vec<_> = std::iter::from_fn(|| seek_events.try_recv().ok())
+                    .take(16)
+                    .collect();
+                let decoders: Vec<_> = std::iter::from_fn(|| decoder_events.try_recv().ok())
+                    .take(16)
+                    .collect();
+                wasm_bindgen_test::console_log!(
+                    "rapid seek stalled iteration={} requested={} outcome={:?} segment={:?} committed={:?} stages={:?} decoders={:?}",
+                    i,
+                    pos_secs,
+                    outcome,
+                    audio.segment(),
+                    audio.committed_segment(),
+                    stages,
+                    decoders,
+                );
                 warn!(iteration = i, pos_secs, "STALL: read returned 0 after seek");
             }
             continue;
@@ -684,6 +808,14 @@ async fn stress_rapid_seeks_must_not_stall(#[future(awt)] stress_source: (TestSe
         total_samples += n as u64;
 
         if (i + 1) % 200 == 0 {
+            wasm_bindgen_test::console_log!(
+                "rapid seek progress iteration={} dead={} seek_errors={} samples={} at={} ms",
+                i + 1,
+                dead_seeks,
+                seek_errors,
+                total_samples,
+                Date::now(),
+            );
             info!(
                 iteration = i + 1,
                 dead_seeks, seek_errors, position_mismatches, total_samples, "Progress"
@@ -740,6 +872,7 @@ async fn stress_rapid_seeks_must_not_stall(#[future(awt)] stress_source: (TestSe
 async fn stress_seek_to_zero_after_pressure(#[future(awt)] stress_source: (TestServerHelper, Url)) {
     let (_helper, url) = stress_source;
     info!("Starting stress_seek_to_zero_after_pressure");
+    wasm_bindgen_test::console_log!("seek-zero body starts at {} ms", Date::now());
 
     let mut audio = create_pipeline_with_url(url).await;
     let mut buf = vec![0.0f32; 4096];
@@ -753,21 +886,49 @@ async fn stress_seek_to_zero_after_pressure(#[future(awt)] stress_source: (TestS
     info!(warmup, duration_secs, "Warmup done");
 
     let mut rng = Xorshift64::new(0xABCD_EF01_2345_6789);
+    let mut seek_events = audio.events::<AudioEvent>();
+    let mut decoder_events = audio.events::<DecoderEvent>();
     for i in 0..500 {
         hang_tick!();
         let pos = rng.range_f64(0.001, max_seek);
         let _ = audio.seek(Duration::from_secs_f64(pos));
-        let count = read_with_yield_limit(&mut audio, &mut buf, 50)
-            .await
-            .unwrap_or(0);
+        let outcome = read_outcome_with_yield_limit(&mut audio, &mut buf, 50).await;
+        let count = outcome.as_ref().map_or(0, |outcome| match outcome {
+            ReadOutcome::Frames { count, .. } => count.get(),
+            _ => 0,
+        });
+        if count == 0 && i < 5 {
+            let stages: Vec<_> = std::iter::from_fn(|| seek_events.try_recv().ok())
+                .take(16)
+                .collect();
+            let decoders: Vec<_> = std::iter::from_fn(|| decoder_events.try_recv().ok())
+                .take(16)
+                .collect();
+            wasm_bindgen_test::console_log!(
+                "seek-zero pressure stalled iteration={} requested={} outcome={:?} segment={:?} committed={:?} stages={:?} decoders={:?}",
+                i,
+                pos,
+                outcome,
+                audio.segment(),
+                audio.committed_segment(),
+                stages,
+                decoders,
+            );
+        }
         if count > 0 {
             hang_reset!();
         }
 
         if i % 100 == 99 {
+            wasm_bindgen_test::console_log!(
+                "seek-zero pressure iteration={} at={} ms",
+                i + 1,
+                Date::now()
+            );
             yield_ms(1).await;
         }
     }
+    wasm_bindgen_test::console_log!("seek-zero pressure done at={} ms", Date::now());
     info!("Stress phase done: 500 seeks");
 
     let channels = audio.spec().channels as usize;

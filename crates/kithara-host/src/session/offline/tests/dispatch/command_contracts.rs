@@ -2,6 +2,7 @@ use kithara_effects::GainDb;
 use kithara_play::{
     DeckEqChange, DeckMixSettings, DeckMixSettingsChange, DeckMixerConfig, HostedDeck,
 };
+use kithara_test_utils::off_thread::OffThread;
 
 use super::*;
 
@@ -70,40 +71,46 @@ fn an_idle_host_has_no_output_or_registered_decks() {
 
 #[kithara::test(tokio)]
 async fn a_default_deck_renders_at_unity_gain() {
-    let mut state = test_state(start_route_loss_stream);
-    let prep = ResourcePrep::builder()
-        .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
-        .block_on_underrun(true)
-        .build();
-    let deck = Queue::new(QueueConfig::builder().prep(prep).build());
-    assert_eq!(deck.mixer_config().mix().level(), 1.0);
-    assert!(state.stream.is_none());
-    let id = BeatGridId::allocate().expect("fixture deck id");
-    ask(
-        &mut state,
-        HostCommand::Register {
-            id,
-            deck: Box::new(deck),
-        },
-    )
-    .expect("default deck registration");
-    let directory = constant_fixture();
-    let mut clock = 0;
-    play_fixture(
-        &mut state,
-        id,
-        &directory.path().join("constant.wav"),
-        &mut clock,
-        1,
-    )
-    .await;
-    let mut output = Vec::new();
-    for _ in 0..40 {
-        output = fixture_pass(&mut state, &mut clock);
-    }
-    assert_eq!(mix_level(&mut state, id), 1.0);
-    assert_eq!(output.len(), 1024);
-    assert!(output.iter().all(|sample| *sample == 0.5));
+    let owner = OffThread::spawn("host-default-mix", || {
+        Ok::<_, ()>((test_state(start_route_loss_stream), 0_u64))
+    })
+    .await
+    .expect("fixture owner starts");
+    let id = owner
+        .call(|(state, _)| {
+            let prep = ResourcePrep::builder()
+                .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+                .block_on_underrun(true)
+                .build();
+            let deck = Queue::new(QueueConfig::builder().prep(prep).build());
+            assert_eq!(deck.mixer_config().mix().level(), 1.0);
+            assert!(state.stream.is_none());
+            let id = BeatGridId::allocate().expect("fixture deck id");
+            ask(
+                state,
+                HostCommand::Register {
+                    id,
+                    deck: Box::new(deck),
+                },
+            )
+            .expect("default deck registration");
+            id
+        })
+        .await;
+    let directory = owner.call(|_| constant_fixture()).await;
+    play_fixture(&owner, id, &directory.path().join("constant.wav"), 1).await;
+    owner
+        .call(move |(state, clock)| {
+            let mut output = Vec::new();
+            for _ in 0..40 {
+                output = fixture_pass(state, clock);
+            }
+            assert_eq!(mix_level(state, id), 1.0);
+            assert_eq!(output.len(), 1024);
+            assert!(output.iter().all(|sample| *sample == 0.5));
+        })
+        .await;
+    owner.close().await;
 }
 
 #[kithara::test]

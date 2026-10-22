@@ -573,22 +573,28 @@ fn reference(
         }
         let decoded = voice.decoded.lock();
         let span = interval.source;
+        // A frame's endpoint is the next frame's start, so each coordinate is
+        // projected once and carried into the following frame.
+        let mut carried = None;
         for session in active {
             let offset = u64::try_from(session - interval.start).expect("source offset");
-            let raw = span
-                .source_ratio_at(offset)
-                .expect("physical source coordinate");
+            let physical = carried.take().unwrap_or_else(|| {
+                let raw = span
+                    .source_ratio_at(offset)
+                    .expect("physical source coordinate");
+                interval
+                    .physical_basis
+                    .output_ratio_at_source(interval.physical_origin, raw)
+                    .expect("actual decoded physical coordinate")
+            });
             let next = span
                 .source_ratio_at(offset + 1)
                 .expect("physical source endpoint");
-            let physical = interval
-                .physical_basis
-                .output_ratio_at_source(interval.physical_origin, raw)
-                .expect("actual decoded physical coordinate");
             let endpoint = interval
                 .physical_basis
                 .output_ratio_at_source(interval.physical_origin, next)
                 .expect("actual decoded physical endpoint");
+            carried = Some(endpoint);
             let speed = super::control::physical_source_speed(physical, endpoint)
                 .expect("actual source speed");
             let position = if shift == Some(interval.voice) {
@@ -921,7 +927,6 @@ impl QueueMusic {
         let mut starts_seen = 0;
         let mut law_time = Duration::ZERO;
         let mut render_time = Duration::ZERO;
-        let mut history_visits = 0;
         let mut data = CapturedMusic::default();
         let mut cadence = self.start_clock(&mut data).await;
         hang_reset!();
@@ -932,8 +937,6 @@ impl QueueMusic {
         )
         .await;
         cadence = Instant::now();
-        let callback_frames: f64 = BLOCK.as_();
-        let callback_duration = Duration::from_secs_f64(callback_frames / f64::from(RATE));
         let source_count: f64 = self.kind.sources().len().as_();
         let max_frames: u64 = match self.kind {
             MusicCase::Natural => (((source_count * 4.0)
@@ -1016,18 +1019,15 @@ impl QueueMusic {
                 .iter()
                 .map(|(track, slot)| (track.track.item, *slot))
                 .collect();
-            let inspected_before = data.checks.len();
             let law_started = Instant::now();
             self.inspect_bindings(
                 &snapshot,
                 &grid,
-                &grids,
                 (now, next_beat == Some(frame(now))),
                 None,
                 &mut data,
             );
             law_time += law_started.elapsed();
-            history_visits += (data.checks.len() - inspected_before) * grids.len();
             self.retarget_overlap(&consumed, now, &mut data).await;
             let starts = self
                 .deck
@@ -1039,7 +1039,6 @@ impl QueueMusic {
                     grids.len(),
                     law_time.as_micros(),
                     render_time.as_micros(),
-                    history_visits,
                 );
                 starts_seen = starts;
                 reported = Instant::now();
@@ -1082,7 +1081,7 @@ impl QueueMusic {
                     debt_ns = elapsed.saturating_sub(deadline).as_nanos(),
                     lead_ns = deadline.saturating_sub(elapsed).as_nanos());
             }
-            self.render_block(frames, &mut data).await;
+            let callback_started = self.render_block(frames, &mut data).await;
             render_time += render_started.elapsed();
             if next_beat == Some(frame(now))
                 && snapshot.iter().any(|(_, slot)| {
@@ -1094,30 +1093,26 @@ impl QueueMusic {
             {
                 let copied = self.deck.read_snapshot().await;
                 let law_started = Instant::now();
-                let inspected_before = data.checks.len();
-                self.inspect_bindings(
-                    &snapshot,
-                    &grid,
-                    &grids,
-                    (now, true),
-                    Some(&copied),
-                    &mut data,
-                );
+                self.inspect_bindings(&snapshot, &grid, (now, true), Some(&copied), &mut data);
                 law_time += law_started.elapsed();
-                history_visits += (data.checks.len() - inspected_before) * grids.len();
             }
             next_beat = Some(boundary);
             hang_reset!();
             let block_frames: f64 = frames.as_();
-            let deadline = cadence + Duration::from_secs_f64(block_frames / f64::from(RATE));
-            let ready = Instant::now();
-            // Carry timer jitter, but do not replay missed Host callbacks.
-            cadence = if ready.saturating_duration_since(deadline) > callback_duration {
-                ready
-            } else {
-                deadline
-            };
-            time::sleep(cadence.saturating_duration_since(ready)).await;
+            cadence = cadence.max(callback_started)
+                + Duration::from_secs_f64(block_frames / f64::from(RATE));
+            time::sleep(cadence.saturating_duration_since(Instant::now())).await;
+        }
+        let history = self.deck.observe(|observation| {
+            super::binding::published_host_history(
+                observation,
+                &grids,
+                NonZeroU32::new(RATE).expect("Host history clock"),
+                &mut data.failures,
+            )
+        });
+        if let Err(error) = history {
+            data.failures.push(error);
         }
         self.trace_runtime(
             wall.elapsed().as_secs_f64(),
@@ -1125,7 +1120,6 @@ impl QueueMusic {
             grids.len(),
             law_time.as_micros(),
             render_time.as_micros(),
-            history_visits,
         );
         tracing::info!(target: "kithara_test::sync::queue321", phase = "render_complete",
             wall_s = wall.elapsed().as_secs_f64(), frame = self.host.position(), frames = data.pcm.len() / 2);
@@ -1213,7 +1207,6 @@ impl QueueMusic {
         grids: usize,
         law_us: u128,
         render_us: u128,
-        history_visits: usize,
     ) {
         let current = self
             .deck
@@ -1243,7 +1236,7 @@ impl QueueMusic {
                 answered = data.answered.len(), current = ?current, tracks = ?tracks,
                 native_starts = ?capture.starts, faded = ?capture.faded, ended = ?capture.ended,
                 consumed_points = capture.consumed.len(), grids, law_checks = data.checks.len(),
-                law_us, render_us, history_visits);
+                law_us, render_us);
         });
     }
 
@@ -1370,7 +1363,6 @@ impl QueueMusic {
         &mut self,
         snapshot: &[(LinkedSnapshot<TrackSnapshot>, SlotSnapshot)],
         grid: &BeatGridSnapshot,
-        grids: &[(SessionFrame, BeatGridSnapshot)],
         point: (SessionFrame, bool),
         copied: Option<&[(LinkedSnapshot<TrackSnapshot>, SlotSnapshot)]>,
         data: &mut CapturedMusic,
@@ -1436,17 +1428,9 @@ impl QueueMusic {
             }
             let result = self.deck.observe(|o| {
                 if self.forward_oracle {
-                    super::binding::queue_observation(
-                        &voice.model,
-                        grid,
-                        grids,
-                        o,
-                        linked,
-                        first,
-                        *slot,
-                    )
+                    super::binding::queue_observation(&voice.model, grid, o, linked, first, *slot)
                 } else {
-                    super::binding::executed_law(&voice.model, grid, grids, o, linked, first, *slot)
+                    super::binding::executed_law(&voice.model, grid, o, linked, first, *slot)
                 }
             });
             let (speed, failures, mut evidence, reference) = result.unwrap_or_else(|error| {
@@ -1528,8 +1512,7 @@ impl QueueMusic {
     }
 
     async fn render_block(&mut self, frames: usize, data: &mut CapturedMusic) -> Instant {
-        let started = Instant::now();
-        let output = self.host.render(frames).await;
+        let (started, output) = self.host.render_timed(frames).await;
         let block = self.master.drain();
         assert_eq!(self.master.drops(), 0, "Master tap retains every sample");
         assert_eq!(block.len(), frames * 2, "actual Master frame count");
@@ -1893,6 +1876,31 @@ fn pull_frames(
     (frames, boundary)
 }
 
+fn assert_entry_boundaries(o: &LinkObservation, voices: &[Voice]) {
+    for placement in &o.placements {
+        let voice = voices
+            .iter()
+            .find(|voice| voice.item == placement.item)
+            .expect("every placement belongs to a supplied voice");
+        assert_eq!(
+            placement.to,
+            entry_boundary(voice),
+            "placement uses the supplied entry boundary: {placement:#?}"
+        );
+    }
+    for cue in &o.cue_curves {
+        let voice = voices
+            .iter()
+            .find(|voice| voice.item == cue.item)
+            .expect("every cue belongs to a supplied voice");
+        assert_eq!(
+            cue.position,
+            entry_boundary(voice),
+            "cue uses the supplied entry boundary: {cue:#?}"
+        );
+    }
+}
+
 fn assert_transport(
     o: &LinkObservation,
     voices: &[Voice],
@@ -1918,18 +1926,7 @@ fn assert_transport(
         o.seeks.is_empty(),
         "Queue transitions never reopen a source to seek"
     );
-    assert!(
-        o.placements.iter().all(|placement| {
-            voices
-                .iter()
-                .any(|voice| voice.item == placement.item && placement.to == entry_boundary(voice))
-        }) && o.cue_curves.iter().all(|cue| {
-            voices
-                .iter()
-                .any(|voice| voice.item == cue.item && cue.position == entry_boundary(voice))
-        }),
-        "every initial or reprepared cue uses the supplied boundary at or after its entry"
-    );
+    assert_entry_boundaries(o, voices);
     for voice in voices {
         let loaded = o
             .source_clocks
@@ -3128,4 +3125,40 @@ async fn check_keylock_music(case: &mut QueueMusic, data: CapturedMusic) {
         "keylocked listening capture checks: {final_checks}"
     );
     hang_reset!();
+}
+
+#[kithara::test(tokio, multi_thread, native, flash(false))]
+async fn queued_music_render_reports_its_engine_callback_start() {
+    let mut case = QueueMusic::new(MusicCase::Natural, TrackSettings::default()).await;
+    let (entered, waiting) = kithara::platform::tokio::sync::oneshot::channel();
+    let (release, blocked) = kithara::platform::sync::mpsc::channel();
+    let (finished, released) = kithara::platform::tokio::sync::oneshot::channel();
+    {
+        let mut owner = std::pin::pin!(case.host.run(move || {
+            entered.send(()).expect("caller waits for the owner");
+            blocked.recv().expect("caller releases the owner");
+            finished
+                .send(Instant::now())
+                .expect("caller observes release");
+        }));
+        std::future::poll_fn(|cx| {
+            assert!(Future::poll(owner.as_mut(), cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        waiting.await.expect("owner entered the queued operation");
+    }
+    let mut data = CapturedMusic::default();
+    let (started, ()) =
+        kithara::platform::tokio::join!(case.render_block(BLOCK, &mut data), async {
+            time::sleep(Duration::from_millis(100)).await;
+            release.send(()).expect("owner waits for release");
+        },);
+    let released = released.await.expect("owner reported release");
+    assert_eq!(data.pcm.len(), BLOCK * 2);
+    case.host.close().await;
+    assert!(
+        started >= released,
+        "the reported callback start must follow queued owner work"
+    );
 }

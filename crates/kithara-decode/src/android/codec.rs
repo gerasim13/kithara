@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use kithara_android::{
     AndroidBackendError,
     media::{
@@ -30,6 +32,7 @@ mod consts {
     pub(super) const INPUT_WAIT_BUDGET_US: i64 = 1_000_000;
     pub(super) const NO_WAIT_US: i64 = 0;
     pub(super) const OUTPUT_DEQUEUE_TIMEOUT_US: i64 = 10_000;
+    pub(super) const MP3_REMOVED_HEAD_FRAMES: u64 = 529;
     pub(super) const PCM16_SCALE: f32 = 32_768.0;
 }
 
@@ -48,6 +51,7 @@ enum DrainState {
 /// encoding and codec delay/padding. Output timestamps and EOS come from the
 /// codec's output queue.
 pub(crate) struct AndroidCodec {
+    media_time_rebase: Duration,
     pcm_encoding: AndroidPcmEncoding,
     spec: AudioSpec,
     track_info: DecoderTrackInfo,
@@ -85,8 +89,20 @@ impl AndroidCodec {
         let output = OutputFormat::read(&codec.output_format()?)?;
         let spec = output_spec(&output)?;
         let pcm_encoding = output.pcm_encoding;
+        let media_time_rebase = if track.codec == AudioCodec::Mp3 {
+            let sample_rate =
+                NonZeroU32::new(track.sample_rate).ok_or(DecodeError::InvalidData {
+                    detail: "MP3 source sample rate is zero",
+                })?;
+            AudioSpec::new(track.channels, sample_rate)
+                .duration_for(consts::MP3_REMOVED_HEAD_FRAMES)
+                .map_err(DecodeError::backend)?
+        } else {
+            Duration::ZERO
+        };
 
         Ok(Self {
+            media_time_rebase,
             codec,
             spec,
             pcm_encoding,
@@ -117,7 +133,7 @@ impl FrameCodec for AndroidCodec {
     ) -> DecodeResult<crate::codec::DecodedPacket> {
         let crate::demuxer::Frame {
             data: frame_data,
-            pts: pts,
+            pts,
             packet_desc: _packet_desc,
             ..
         } = frame;
@@ -185,6 +201,10 @@ impl FrameCodec for AndroidCodec {
 
     fn spec(&self) -> AudioSpec {
         self.spec
+    }
+
+    fn media_time_rebase(&self) -> Option<Duration> {
+        Some(self.media_time_rebase)
     }
 
     fn track_info(&self) -> DecoderTrackInfo {
@@ -324,7 +344,7 @@ fn append_pcm16(bytes: &[u8], out: &mut SampleBuffer) -> DecodeResult<()> {
     let start = out.len();
     let end = start + bytes.len() / 2;
     out.ensure_len(end)?;
-    for (dst, chunk) in out[start..end].iter_mut().zip(bytes.chunks_exact(2)) {
+    for (dst, chunk) in out[start..end].iter_mut().zip(bytes.as_chunks::<2>().0) {
         let s = i16::from_le_bytes([chunk[0], chunk[1]]);
         *dst = f32::from(s) / consts::PCM16_SCALE;
     }
@@ -338,7 +358,7 @@ fn append_pcm_float(bytes: &[u8], out: &mut SampleBuffer) -> DecodeResult<()> {
     out.ensure_len(end)?;
     out[start..end]
         .iter_mut()
-        .zip(bytes.chunks_exact(4))
+        .zip(bytes.as_chunks::<4>().0)
         .for_each(|(dst, chunk)| {
             *dst = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
         });

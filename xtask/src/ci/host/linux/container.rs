@@ -152,6 +152,8 @@ impl Container<'_> {
             .map(|entry| (*entry).to_owned())
             .collect();
         environment.extend([
+            // Containers own CPU admission; their kache store is shared.
+            "KACHE_SCHEDULER=0".to_owned(),
             format!("CARGO_HOME={}", consts::CARGO_HOME_MOUNT),
             format!("CARGO_TARGET_DIR={}", root.display()),
             format!("{}={}", consts::BUILD_SLOTS_ENV, consts::BUILD_SLOTS_MOUNT),
@@ -397,6 +399,19 @@ pub(crate) mod tests {
                     .join(consts::KACHE_DIR)
                     .join(runner.cache_trust.as_str())
                     .to_string_lossy()
+            );
+        }
+    }
+
+    #[test]
+    fn containers_own_compiler_cpu_admission() {
+        for runner in &host_fixture().runners {
+            assert!(
+                Container::environment(runner)
+                    .iter()
+                    .any(|entry| entry == "KACHE_SCHEDULER=0"),
+                "{} shares kache's CPU scheduler with other containers",
+                runner.name
             );
         }
     }

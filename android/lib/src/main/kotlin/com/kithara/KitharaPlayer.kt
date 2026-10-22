@@ -30,6 +30,7 @@ import kotlinx.coroutines.flow.update
  *
  * Observe [state] for reactive updates, or read convenience accessors for the
  * latest snapshot. Call [Kithara.initialize] before creating any instance.
+ * Close the player when it is no longer needed, or manage its lifetime with `use`.
  *
  * ```kotlin
  * val player = KitharaPlayer()
@@ -38,7 +39,7 @@ import kotlinx.coroutines.flow.update
  * player.play()
  * ```
  */
-class KitharaPlayer(config: Config = Config()) {
+class KitharaPlayer(config: Config = Config()) : AutoCloseable {
     /**
      * A single DRM rule: a key processor bound to one or more domain
      * patterns (exact `"example.com"`, wildcard subdomain
@@ -77,12 +78,17 @@ class KitharaPlayer(config: Config = Config()) {
     private val inner: FfiAudioPlayer = FfiAudioPlayer(
         config.toFfi()
     )
-    private val observer = PlayerObserverBridge(this)
     private val eventsFlow = MutableSharedFlow<KitharaPlayerEvent>(extraBufferCapacity = 16)
     private val stateFlow = MutableStateFlow(PlayerState())
+    private val observer = PlayerObserverBridge(eventsFlow, stateFlow)
 
     init {
         inner.setObserver(observer)
+    }
+
+    /** Releases the native player and its Host slot. Safe to call more than once. */
+    override fun close() {
+        inner.close()
     }
 
     /**
@@ -369,92 +375,89 @@ class KitharaPlayer(config: Config = Config()) {
         }
     }
 
-    private fun updateState(update: (PlayerState) -> PlayerState) {
-        stateFlow.update(update)
-    }
+    private class PlayerObserverBridge(
+        private val eventsFlow: MutableSharedFlow<KitharaPlayerEvent>,
+        private val stateFlow: MutableStateFlow<PlayerState>,
+    ) : PlayerObserver {
+        private fun updateState(update: (PlayerState) -> PlayerState) {
+            stateFlow.update(update)
+        }
 
-    private fun handleEvent(event: FfiPlayerEvent) {
-        when (event) {
-            is FfiPlayerEvent.TimeChanged ->
-                updateState { it.copy(currentTime = event.seconds) }
+        override fun onEvent(event: FfiPlayerEvent) {
+            when (event) {
+                is FfiPlayerEvent.TimeChanged ->
+                    updateState { it.copy(currentTime = event.seconds) }
 
-            is FfiPlayerEvent.RateChanged ->
-                updateState { it.copy(rate = event.rate) }
+                is FfiPlayerEvent.RateChanged ->
+                    updateState { it.copy(rate = event.rate) }
 
-            is FfiPlayerEvent.DurationChanged ->
-                updateState { it.copy(duration = event.seconds) }
+                is FfiPlayerEvent.DurationChanged ->
+                    updateState { it.copy(duration = event.seconds) }
 
-            is FfiPlayerEvent.BufferedDurationChanged ->
-                updateState {
-                    it.copy(
-                        loadedRanges = listOf(
-                            ItemLoadedRange(start = 0.0, duration = event.seconds)
+                is FfiPlayerEvent.BufferedDurationChanged ->
+                    updateState {
+                        it.copy(
+                            loadedRanges = listOf(
+                                ItemLoadedRange(start = 0.0, duration = event.seconds)
+                            )
+                        )
+                    }
+
+                is FfiPlayerEvent.StatusChanged ->
+                    updateState { it.copy(status = event.status.toPlayerStatus()) }
+
+                is FfiPlayerEvent.Error ->
+                    updateState { it.copy(error = KitharaError.Internal(event.error)) }
+
+                is FfiPlayerEvent.CurrentItemChanged ->
+                    eventsFlow.tryEmit(KitharaPlayerEvent.CurrentItemChanged(event.itemId?.toString()))
+
+                is FfiPlayerEvent.TrackStatusChanged ->
+                    eventsFlow.tryEmit(
+                        KitharaPlayerEvent.TrackStatusChanged(
+                            event.itemId.toString(),
+                            event.status.toTrackStatus(),
                         )
                     )
-                }
 
-            is FfiPlayerEvent.StatusChanged ->
-                updateState { it.copy(status = event.status.toPlayerStatus()) }
+                is FfiPlayerEvent.QueueEnded ->
+                    eventsFlow.tryEmit(KitharaPlayerEvent.QueueEnded)
 
-            is FfiPlayerEvent.Error ->
-                updateState { it.copy(error = KitharaError.Internal(event.error)) }
+                is FfiPlayerEvent.CrossfadeSettingsChanged ->
+                    eventsFlow.tryEmit(KitharaPlayerEvent.CrossfadeSettingsChanged(event.settings.toPublic()))
 
-            is FfiPlayerEvent.CurrentItemChanged ->
-                eventsFlow.tryEmit(KitharaPlayerEvent.CurrentItemChanged(event.itemId?.toString()))
+                is FfiPlayerEvent.PlaybackOrderChanged ->
+                    eventsFlow.tryEmit(KitharaPlayerEvent.PlaybackOrderChanged(event.order.toPublic()))
 
-            is FfiPlayerEvent.TrackStatusChanged ->
-                eventsFlow.tryEmit(
-                    KitharaPlayerEvent.TrackStatusChanged(
-                        event.itemId.toString(),
-                        event.status.toTrackStatus(),
-                    )
-                )
+                is FfiPlayerEvent.ActionAtItemEndChanged ->
+                    eventsFlow.tryEmit(KitharaPlayerEvent.ActionAtItemEndChanged(event.action.toPublic()))
 
-            is FfiPlayerEvent.QueueEnded ->
-                eventsFlow.tryEmit(KitharaPlayerEvent.QueueEnded)
-
-            is FfiPlayerEvent.CrossfadeSettingsChanged ->
-                eventsFlow.tryEmit(KitharaPlayerEvent.CrossfadeSettingsChanged(event.settings.toPublic()))
-
-            is FfiPlayerEvent.PlaybackOrderChanged ->
-                eventsFlow.tryEmit(KitharaPlayerEvent.PlaybackOrderChanged(event.order.toPublic()))
-
-            is FfiPlayerEvent.ActionAtItemEndChanged ->
-                eventsFlow.tryEmit(KitharaPlayerEvent.ActionAtItemEndChanged(event.action.toPublic()))
-
-            // Per-track failure is surfaced via TrackStatusChanged(Failed) and item-side DidFail.
-            is FfiPlayerEvent.ItemDidFail,
-            is FfiPlayerEvent.TimeControlStatusChanged,
-            is FfiPlayerEvent.VolumeChanged,
-            is FfiPlayerEvent.MuteChanged,
-            is FfiPlayerEvent.ItemDidPlayToEnd,
-            is FfiPlayerEvent.CrossfadeStarted,
-            is FfiPlayerEvent.TrackAdded,
-            is FfiPlayerEvent.TrackRemoved,
-            is FfiPlayerEvent.TrackLoadFailed,
-            is FfiPlayerEvent.RepeatModeChanged,
-            is FfiPlayerEvent.NextTrackReady,
-            is FfiPlayerEvent.CurrentItemAdvanced,
-            is FfiPlayerEvent.EngineStarted,
-            is FfiPlayerEvent.EngineStopped,
-            is FfiPlayerEvent.CrossfadeCompleted,
-            is FfiPlayerEvent.CrossfadeCancelled,
-            is FfiPlayerEvent.MasterVolumeChanged,
-            is FfiPlayerEvent.AudioRouteChanged,
-            is FfiPlayerEvent.DjBpmDetected,
-            is FfiPlayerEvent.DjKeylockChanged,
-            is FfiPlayerEvent.DjStretchBackendChanged,
-            is FfiPlayerEvent.AssetCommitted,
-            is FfiPlayerEvent.AssetFailed,
-            is FfiPlayerEvent.AssetEvicted -> Unit
-        }
-    }
-
-    private class PlayerObserverBridge(
-        private val player: KitharaPlayer,
-    ) : PlayerObserver {
-        override fun onEvent(event: FfiPlayerEvent) {
-            player.handleEvent(event)
+                // Per-track failure is surfaced via TrackStatusChanged(Failed) and item-side DidFail.
+                is FfiPlayerEvent.ItemDidFail,
+                is FfiPlayerEvent.TimeControlStatusChanged,
+                is FfiPlayerEvent.VolumeChanged,
+                is FfiPlayerEvent.MuteChanged,
+                is FfiPlayerEvent.ItemDidPlayToEnd,
+                is FfiPlayerEvent.CrossfadeStarted,
+                is FfiPlayerEvent.TrackAdded,
+                is FfiPlayerEvent.TrackRemoved,
+                is FfiPlayerEvent.TrackLoadFailed,
+                is FfiPlayerEvent.RepeatModeChanged,
+                is FfiPlayerEvent.NextTrackReady,
+                is FfiPlayerEvent.CurrentItemAdvanced,
+                is FfiPlayerEvent.EngineStarted,
+                is FfiPlayerEvent.EngineStopped,
+                is FfiPlayerEvent.CrossfadeCompleted,
+                is FfiPlayerEvent.CrossfadeCancelled,
+                is FfiPlayerEvent.MasterVolumeChanged,
+                is FfiPlayerEvent.AudioRouteChanged,
+                is FfiPlayerEvent.DjBpmDetected,
+                is FfiPlayerEvent.DjKeylockChanged,
+                is FfiPlayerEvent.DjStretchBackendChanged,
+                is FfiPlayerEvent.AssetCommitted,
+                is FfiPlayerEvent.AssetFailed,
+                is FfiPlayerEvent.AssetEvicted -> Unit
+            }
         }
     }
 

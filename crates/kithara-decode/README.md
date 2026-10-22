@@ -66,7 +66,7 @@ For HLS / cross-codec recreate paths, prefer `DecoderFactory::create_from_media_
 
 <tr><td><code>apple</code></td><td>Apple AudioToolbox</td><td>Hardware-accelerated; fMP4, ADTS, MP3, FLAC, CAF</td><td>macOS / iOS</td></tr>
 
-<tr><td><code>android</code></td><td>Android MediaCodec</td><td>Hardware path for fMP4 AAC-LC/FLAC plus standalone WAV, MP3, and ALAC through <code>AMediaExtractor</code>; no runtime Symphonia fallback</td><td>Android</td></tr>
+<tr><td><code>android</code></td><td>Android MediaCodec</td><td>Hardware frame decoding with native container readers; PCM WAV uses the RIFF parser and PCM converter to preserve its original sample precision; no runtime backend fallback</td><td>Android</td></tr>
 
 </table>
 

@@ -87,7 +87,7 @@ impl<S> Audio<S> {
 
     delegate::delegate! {
         to self.source {
-            /// Original raw coordinate of track-media zero.
+            /// Raw decoded-source coordinate of content zero: track-media zero past the codec's leading frames, so every variant of one stream shares it.
             #[must_use]
             pub fn media_origin(&self) -> Option<Duration>;
             /// Logical media endpoint owned by the current source generation.

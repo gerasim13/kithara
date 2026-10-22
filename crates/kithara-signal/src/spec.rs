@@ -50,6 +50,22 @@ impl AudioSpec {
         time::frame_at(self.sample_rate, timestamp)
     }
 
+    /// Elapsed time on this spec's frame grid, saturating at zero.
+    /// Endpoints within nanosecond precision of whole frames use their frame difference.
+    /// Fractional or unrepresentable endpoints retain their time difference.
+    #[must_use]
+    pub fn elapsed_since(self, origin: Duration, time: Duration) -> Duration {
+        let frame_on_grid = |timestamp| {
+            let frame = self.frame_at(timestamp).ok()?;
+            let frame_time = self.duration_for(frame).ok()?;
+            (timestamp.abs_diff(frame_time) <= Duration::from_nanos(1)).then_some(frame)
+        };
+        frame_on_grid(origin)
+            .zip(frame_on_grid(time))
+            .and_then(|(origin, time)| self.duration_for(time.saturating_sub(origin)).ok())
+            .unwrap_or_else(|| time.saturating_sub(origin))
+    }
+
     /// Convert an exact interleaved sample count to complete frames.
     ///
     /// # Errors
@@ -133,6 +149,91 @@ mod tests {
                 Some(expected),
             );
         }
+    }
+
+    #[kithara::test]
+    fn elapsed_frame_time_matches_the_frame_difference() {
+        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("sample rate"));
+        let time = |frame| spec.duration_for(frame).expect("frame time");
+        for (origin, frame) in [(1_024, 1_025), (1_024, 1_536), (0, 512), (1_105, 45_000)] {
+            assert_eq!(
+                spec.elapsed_since(time(origin), time(frame)),
+                time(frame - origin),
+                "frame {frame} after origin {origin}",
+            );
+        }
+        assert_eq!(
+            spec.elapsed_since(time(1_024), time(1_536) - Duration::from_nanos(1)),
+            time(512),
+            "a time one nanosecond short of a frame is that frame's time",
+        );
+        let between = time(1_536) + Duration::from_nanos(10_000);
+        assert_eq!(
+            spec.elapsed_since(time(1_024), between),
+            between - time(1_024),
+            "a time between frames keeps its nanoseconds",
+        );
+        assert_eq!(spec.elapsed_since(time(512), time(256)), Duration::ZERO);
+    }
+
+    #[kithara::test]
+    fn elapsed_frame_time_normalizes_endpoints_before_subtracting() {
+        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("sample rate"));
+        let origin = spec.duration_for(1_024).expect("content origin");
+        let raw = Duration::from_secs_f64(2_560.0 / 44_100.0);
+        assert_eq!(raw - origin, Duration::from_nanos(34_829_933));
+        assert_eq!(
+            spec.elapsed_since(origin, raw),
+            spec.duration_for(1_536).expect("content frame time")
+        );
+        for offset in [Duration::from_nanos(5_669), Duration::from_nanos(11_338)] {
+            assert_eq!(
+                spec.elapsed_since(origin, raw + offset),
+                raw + offset - origin,
+                "fractional-frame positions must retain their source phase"
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn elapsed_frame_time_accepts_floor_and_rounded_endpoints() {
+        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("sample rate"));
+        let floor = |frame| spec.duration_for(frame).expect("frame time");
+        let rounded = |frame: u32| Duration::from_secs_f64(f64::from(frame) / 44_100.0);
+        for (origin, end) in [(0, 512), (1_024, 2_560), (1_105, 45_000)] {
+            for origin_time in [floor(u64::from(origin)), rounded(origin)] {
+                for end_time in [floor(u64::from(end)), rounded(end)] {
+                    assert_eq!(
+                        spec.elapsed_since(origin_time, end_time),
+                        floor(u64::from(end - origin))
+                    );
+                }
+            }
+        }
+    }
+
+    #[kithara::test]
+    fn elapsed_frame_time_keeps_unrepresentable_endpoints_safe() {
+        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("sample rate"));
+        for (origin, end) in [
+            (Duration::ZERO, Duration::MAX),
+            (Duration::MAX, Duration::ZERO),
+            (Duration::MAX, Duration::MAX),
+            (Duration::from_nanos(u64::MAX), Duration::MAX),
+        ] {
+            assert_eq!(spec.elapsed_since(origin, end), end.saturating_sub(origin));
+        }
+        let end = spec
+            .frame_at(Duration::from_nanos(u64::MAX - 100_000))
+            .expect("representable endpoint");
+        let origin = end - 1_024;
+        assert_eq!(
+            spec.elapsed_since(
+                spec.duration_for(origin).expect("origin time"),
+                spec.duration_for(end).expect("end time")
+            ),
+            spec.duration_for(1_024).expect("elapsed frame time")
+        );
     }
 
     #[kithara::test]
