@@ -405,8 +405,12 @@ async fn a_cued_sync_installs_mapped_pcm_before_anything_sounds(
         assert!(matches!(operation, Operation::Cue { seq, .. } if seq == cues[0].1));
     });
     let snapshot = harness.decks[0]
-        .track_snapshot(item)
-        .expect("published linked track");
+        .read_snapshot()
+        .await
+        .into_iter()
+        .map(|(snapshot, _)| snapshot)
+        .find(|snapshot| snapshot.track.item == item)
+        .expect("owner reports the paused linked track");
     assert_eq!(snapshot.sync, SyncStatus::On);
     assert!(
         !snapshot.track.pending_lane,
