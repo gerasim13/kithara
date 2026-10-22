@@ -937,8 +937,6 @@ impl QueueMusic {
         )
         .await;
         cadence = Instant::now();
-        let callback_frames: f64 = BLOCK.as_();
-        let callback_duration = Duration::from_secs_f64(callback_frames / f64::from(RATE));
         let source_count: f64 = self.kind.sources().len().as_();
         let max_frames: u64 = match self.kind {
             MusicCase::Natural => (((source_count * 4.0)
@@ -1083,7 +1081,7 @@ impl QueueMusic {
                     debt_ns = elapsed.saturating_sub(deadline).as_nanos(),
                     lead_ns = deadline.saturating_sub(elapsed).as_nanos());
             }
-            self.render_block(frames, &mut data).await;
+            let callback_started = self.render_block(frames, &mut data).await;
             render_time += render_started.elapsed();
             if next_beat == Some(frame(now))
                 && snapshot.iter().any(|(_, slot)| {
@@ -1101,15 +1099,9 @@ impl QueueMusic {
             next_beat = Some(boundary);
             hang_reset!();
             let block_frames: f64 = frames.as_();
-            let deadline = cadence + Duration::from_secs_f64(block_frames / f64::from(RATE));
-            let ready = Instant::now();
-            // Carry timer jitter, but do not replay missed Host callbacks.
-            cadence = if ready.saturating_duration_since(deadline) > callback_duration {
-                ready
-            } else {
-                deadline
-            };
-            time::sleep(cadence.saturating_duration_since(ready)).await;
+            cadence = cadence.max(callback_started)
+                + Duration::from_secs_f64(block_frames / f64::from(RATE));
+            time::sleep(cadence.saturating_duration_since(Instant::now())).await;
         }
         let history = self.deck.observe(|observation| {
             super::binding::published_host_history(
@@ -1520,8 +1512,7 @@ impl QueueMusic {
     }
 
     async fn render_block(&mut self, frames: usize, data: &mut CapturedMusic) -> Instant {
-        let started = Instant::now();
-        let output = self.host.render(frames).await;
+        let (started, output) = self.host.render_timed(frames).await;
         let block = self.master.drain();
         assert_eq!(self.master.drops(), 0, "Master tap retains every sample");
         assert_eq!(block.len(), frames * 2, "actual Master frame count");
@@ -3134,4 +3125,40 @@ async fn check_keylock_music(case: &mut QueueMusic, data: CapturedMusic) {
         "keylocked listening capture checks: {final_checks}"
     );
     hang_reset!();
+}
+
+#[kithara::test(tokio, multi_thread, native, flash(false))]
+async fn queued_music_render_reports_its_engine_callback_start() {
+    let mut case = QueueMusic::new(MusicCase::Natural, TrackSettings::default()).await;
+    let (entered, waiting) = kithara::platform::tokio::sync::oneshot::channel();
+    let (release, blocked) = kithara::platform::sync::mpsc::channel();
+    let (finished, released) = kithara::platform::tokio::sync::oneshot::channel();
+    {
+        let mut owner = std::pin::pin!(case.host.run(move || {
+            entered.send(()).expect("caller waits for the owner");
+            blocked.recv().expect("caller releases the owner");
+            finished
+                .send(Instant::now())
+                .expect("caller observes release");
+        }));
+        std::future::poll_fn(|cx| {
+            assert!(Future::poll(owner.as_mut(), cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        waiting.await.expect("owner entered the queued operation");
+    }
+    let mut data = CapturedMusic::default();
+    let (started, ()) =
+        kithara::platform::tokio::join!(case.render_block(BLOCK, &mut data), async {
+            time::sleep(Duration::from_millis(100)).await;
+            release.send(()).expect("owner waits for release");
+        },);
+    let released = released.await.expect("owner reported release");
+    assert_eq!(data.pcm.len(), BLOCK * 2);
+    case.host.close().await;
+    assert!(
+        started >= released,
+        "the reported callback start must follow queued owner work"
+    );
 }
