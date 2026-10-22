@@ -184,7 +184,10 @@ where
         };
         let at_ns = self.started.elapsed().as_nanos();
         let thread = std::thread::current();
-        let mut text = EventText::default();
+        let mut text = EventText {
+            line: String::with_capacity(consts::MAX_EVENT_BYTES + '\u{2026}'.len_utf8()),
+            ..EventText::default()
+        };
         let _ = write!(
             text,
             "{level} {target}: thread={id:?} thread_name={name:?}",
