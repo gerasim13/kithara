@@ -510,7 +510,7 @@ fn observe(common: &Common, aliases: &BTreeMap<String, String>) -> Result<Observ
     Ok(Observed {
         tests: cases
             .iter()
-            .filter(|case| case.failed)
+            .filter(|case| case.failing())
             .map(|case| case_id(case, aliases))
             .collect(),
         jobs,
@@ -683,6 +683,47 @@ mod tests {
             failed_markers(&directory.path().join(consts::REPORT_DIR)).unwrap(),
             BTreeSet::from(["web-chromium".to_owned()])
         );
+    }
+
+    #[test]
+    fn a_retried_pass_cannot_hide_behind_a_known_lane_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        let common = Common {
+            reports: directory.path().join(consts::REPORT_DIR),
+            journal: directory.path().join("journal.json"),
+            base: Some("base".to_owned()),
+        };
+        let mut journal = Journal::default();
+        journal.record(run_of("base", &[], &["apple-test"]));
+        journal.store(&common.journal).unwrap();
+        let report = directory
+            .path()
+            .join(produced_report("apple-test").unwrap());
+        fs::create_dir_all(report.parent().unwrap()).unwrap();
+        fs::write(
+            &report,
+            "<testsuites><testsuite name=\"suite\"><testcase classname=\"suite\" name=\"retry\" time=\"0.1\"/></testsuite></testsuites>",
+        )
+        .unwrap();
+        gather(directory.path(), "apple-test", false).unwrap();
+        check(&common, &BTreeMap::new()).unwrap();
+
+        for outcome in ["failure", "error", "flakyFailure", "flakyError"] {
+            fs::write(
+                &report,
+                format!(
+                    "<testsuites><testsuite name=\"suite\"><testcase classname=\"suite\" name=\"retry\" time=\"0.1\"><{outcome} message=\"failed attempt\"/></testcase></testsuite></testsuites>"
+                ),
+            )
+            .unwrap();
+            gather(directory.path(), "apple-test", true).unwrap();
+            let error = check(&common, &BTreeMap::new()).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "1 test(s) and 0 lane(s) fail here and not on the default branch",
+                "{outcome} must preserve the test identity despite a known lane marker"
+            );
+        }
     }
 
     #[test]
