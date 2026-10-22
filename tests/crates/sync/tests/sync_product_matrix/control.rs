@@ -151,16 +151,6 @@ impl ControlCapture {
         let consumed = super::consumed::Capture::for_track(self.item, first.deck.sample_rate)?;
         let decoded = self.decoded.lock();
         decoded.check_physical(&self.pcm, &marks, &consumed, grid, wrong_source, None)?;
-        let mut shifted = self.pcm.clone();
-        shifted.rotate_left(usize::from(CHANNELS));
-        if decoded
-            .check_physical(&shifted, &marks, &consumed, grid, wrong_source, None)
-            .is_ok()
-        {
-            return Err(
-                "physical oracle accepted shifted PCM with unchanged native metadata".to_owned(),
-            );
-        }
         drop(decoded);
         let retained = i64::from(marks.first().expect("capture has an initial mark").0)
             ..i64::from(marks.last().expect("capture has a final mark").0);
@@ -1767,6 +1757,13 @@ impl PhysicalReference {
                     "physical capture cannot reject removed supplied beat {ordinal}"
                 ));
             }
+        }
+        let mut shifted = pcm.to_vec();
+        shifted.rotate_left(usize::from(CHANNELS));
+        if compare_pcm(&shifted, &expected).is_ok() {
+            return Err(
+                "physical oracle accepted shifted PCM with unchanged native metadata".to_owned(),
+            );
         }
         Ok(())
     }
