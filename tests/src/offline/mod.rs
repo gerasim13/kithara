@@ -8,6 +8,7 @@ pub mod linked;
 mod loader;
 mod owner;
 pub mod player;
+mod render_clock;
 #[cfg(not(target_arch = "wasm32"))]
 mod ticker;
 mod window;

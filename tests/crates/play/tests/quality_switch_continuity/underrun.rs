@@ -261,7 +261,7 @@ async fn prepare_tiny_ring_player(
     loop {
         hang_tick!();
         let before = player.position();
-        let block = render_paced(&mut player, &mut pacer, BLOCK_FRAMES).await;
+        let block = render_paced(&player, &mut pacer, BLOCK_FRAMES).await;
         if player.position() > before {
             hang_reset!();
         }
@@ -345,7 +345,7 @@ async fn capture_tiny_ring(
             .ok()
             .map(|duration| duration.as_micros());
         let snapshot_before = prepared.player.deck_snapshot();
-        let block = render_paced(&mut prepared.player, &mut prepared.pacer, frames).await;
+        let block = render_paced(&prepared.player, &mut prepared.pacer, frames).await;
         let admitted_count = kithara_test_utils::test::usdt::count("chunk_admitted");
         let snapshot_after = prepared.player.deck_snapshot();
         let output_end = prepared.player.host().position();
