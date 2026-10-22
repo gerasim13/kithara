@@ -76,6 +76,27 @@ fn decode_visible(bytes: Vec<u8>) -> Vec<f32> {
 #[kithara::test(native, timeout(Duration::from_secs(2)), hang_timeout_secs(1))]
 #[case::one_small_v23("one_small_v23", id3(3, false, &sync_payload(64)))]
 #[case::oversized_v23("oversized_v23", id3(3, false, &sync_payload(32 * 1024)))]
+#[case::footer_then_oversized("footer_then_oversized", [
+    id3(4, true, &[0; 64]),
+    id3(3, false, &sync_payload(32 * 1024)),
+].concat())]
+#[case::three_small_false_sync("three_small_false_sync", [
+    id3(3, false, &[0; 64]),
+    id3(4, false, &[0; 64]),
+    id3(3, false, &sync_payload(64)),
+].concat())]
+#[case::two_oversized_tags("two_oversized_tags", [
+    id3(3, false, &[0; 32 * 1024]),
+    id3(3, false, &[0; 32 * 1024]),
+].concat())]
+#[case::chain_ends_near_16k("chain_ends_near_16k", [
+    id3(3, false, &[0; 64]),
+    id3(3, false, &[0; 16_260]),
+].concat())]
+#[case::header_across_16k("header_across_16k", [
+    id3(3, false, &[0; 16_369]),
+    id3(3, false, &sync_payload(64)),
+].concat())]
 fn mp3_visible_pcm_ignores_leading_id3_tags(#[case] label: &str, #[case] mut tagged: Vec<u8>) {
     let asset = kithara_test_fixtures::assets::signal_mp3_sine1k_48k_1s();
     let mut body = asset.bytes();
