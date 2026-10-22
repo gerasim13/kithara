@@ -1,5 +1,6 @@
 use cochlea_features::{
-    Audio, ProbeOpts, SegmentOpts, TempoOpts, TempoReport, estimate_tempo, probe, segment_timeline,
+    Audio, ProbeOpts, SegmentOpts, TempoOpts, TempoReport, analyze_clipping, analyze_loudness,
+    analyze_silence, count_silent_segments, detect_onsets, estimate_tempo,
 };
 use serde::Serialize;
 
@@ -60,25 +61,28 @@ impl CochleaReport {
             channels,
             sample_rate,
         };
-        let report = probe(&audio, &ProbeOpts::default());
+        let loudness = analyze_loudness(&audio);
+        let onsets = detect_onsets(&audio);
+        let silence = analyze_silence(
+            &audio.mono(),
+            sample_rate,
+            ProbeOpts::default().silence_floor_dbfs,
+        );
+        let clipping = analyze_clipping(&audio, loudness.true_peak_dbtp);
         let silent_segments =
-            segment_timeline(&audio, &SegmentOpts::default().with_window_ms(WINDOW_MS))
-                .segments
-                .iter()
-                .filter(|segment| segment.silent)
-                .count();
+            count_silent_segments(&audio, &SegmentOpts::default().with_window_ms(WINDOW_MS));
 
         Self {
-            integrated_lufs: report.loudness.integrated_lufs,
-            momentary_max_lufs: report.loudness.momentary_max_lufs,
-            sample_peak_dbfs: report.loudness.sample_peak_dbfs,
-            true_peak_dbtp: report.loudness.true_peak_dbtp,
+            integrated_lufs: loudness.integrated_lufs,
+            momentary_max_lufs: loudness.momentary_max_lufs,
+            sample_peak_dbfs: loudness.sample_peak_dbfs,
+            true_peak_dbtp: loudness.true_peak_dbtp,
             silent_segments,
-            onset_times_ms: report.onsets.times_ms,
-            clipped_samples: report.clipping.clipped_samples,
-            true_peak_over_0dbtp: report.clipping.true_peak_over_0dbtp,
-            leading_silence_ms: report.silence.leading_ms,
-            trailing_silence_ms: report.silence.trailing_ms,
+            onset_times_ms: onsets.times_ms,
+            clipped_samples: clipping.clipped_samples,
+            true_peak_over_0dbtp: clipping.true_peak_over_0dbtp,
+            leading_silence_ms: silence.leading_ms,
+            trailing_silence_ms: silence.trailing_ms,
         }
     }
 
@@ -402,7 +406,7 @@ fn estimated_rhythm(
     sample_rate: u32,
 ) -> Option<(f64, TempoReport)> {
     let audio = onset_audio(samples, channels, sample_rate);
-    let onsets = probe(&audio, &ProbeOpts::default()).onsets.times_ms;
+    let onsets = detect_onsets(&audio).times_ms;
     if onsets.len() < 2 {
         return None;
     }
@@ -549,17 +553,14 @@ fn lead_in_has_silence(samples: &[f32], channels: usize, sample_rate: u32, frame
     if lead_in.is_empty() {
         return false;
     }
-    segment_timeline(
+    count_silent_segments(
         &Audio {
             samples: lead_in.to_vec(),
             channels: channel_count,
             sample_rate,
         },
         &SegmentOpts::default().with_window_ms(WINDOW_MS),
-    )
-    .segments
-    .iter()
-    .any(|segment| segment.silent)
+    ) > 0
 }
 
 struct RhythmCluster {
@@ -1039,26 +1040,54 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn loudness_fields_match_the_cochlea_probe(cochlea_loudness: Vec<f32>) {
-        let sample_rate = 48_000;
-        let channels = 2;
-        let samples = cochlea_loudness;
-        let actual = CochleaReport::measure(&samples, channels, sample_rate);
-        let expected = probe(
-            &Audio {
-                samples,
+    fn report_fields_match_the_cochlea_probe(
+        cochlea_loudness: Vec<f32>,
+        cochlea_control: Vec<f32>,
+        cochlea_silence: Vec<f32>,
+    ) {
+        use cochlea_features::{probe, segment_timeline};
+
+        let pulses = pulse_train(44_100, 127.0);
+        let clipped = vec![1.0; 1_025];
+        for (label, samples, channels, sample_rate) in [
+            ("empty", &[][..], 1, 44_100),
+            ("loudness", cochlea_loudness.as_slice(), 2, 48_000),
+            ("control", cochlea_control.as_slice(), 2, 48_000),
+            ("silence", cochlea_silence.as_slice(), 2, 48_000),
+            ("pulses", pulses.as_slice(), 1, 44_100),
+            ("clipped partial", clipped.as_slice(), 1, 48_000),
+        ] {
+            let actual = CochleaReport::measure(samples, channels, sample_rate);
+            let audio = Audio {
+                samples: samples.to_vec(),
                 channels,
                 sample_rate,
-            },
-            &ProbeOpts::default(),
-        );
-
-        assert_eq!(actual.integrated_lufs, expected.loudness.integrated_lufs);
-        assert_eq!(
-            actual.momentary_max_lufs,
-            expected.loudness.momentary_max_lufs
-        );
-        assert_eq!(actual.sample_peak_dbfs, expected.loudness.sample_peak_dbfs);
-        assert_eq!(actual.true_peak_dbtp, expected.loudness.true_peak_dbtp);
+            };
+            let full = probe(&audio, &ProbeOpts::default());
+            let expected = CochleaReport {
+                integrated_lufs: full.loudness.integrated_lufs,
+                momentary_max_lufs: full.loudness.momentary_max_lufs,
+                sample_peak_dbfs: full.loudness.sample_peak_dbfs,
+                true_peak_dbtp: full.loudness.true_peak_dbtp,
+                silent_segments: segment_timeline(
+                    &audio,
+                    &SegmentOpts::default().with_window_ms(WINDOW_MS),
+                )
+                .segments
+                .iter()
+                .filter(|segment| segment.silent)
+                .count(),
+                onset_times_ms: full.onsets.times_ms,
+                clipped_samples: full.clipping.clipped_samples,
+                true_peak_over_0dbtp: full.clipping.true_peak_over_0dbtp,
+                leading_silence_ms: full.silence.leading_ms,
+                trailing_silence_ms: full.silence.trailing_ms,
+            };
+            assert_eq!(
+                serde_json::to_string(&actual).expect("serialize focused report"),
+                serde_json::to_string(&expected).expect("serialize full report"),
+                "{label}"
+            );
+        }
     }
 }

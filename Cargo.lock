@@ -1470,8 +1470,7 @@ dependencies = [
 [[package]]
 name = "cochlea-features"
 version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "795aca1c0e2aafba56811f86fb3a79ed450263104504dea6fe2e28322630d356"
+source = "git+https://github.com/gerasim13/cochlea.git?rev=a088af3343910e1284c598090258e6804b7fc5cb#a088af3343910e1284c598090258e6804b7fc5cb"
 dependencies = [
  "ebur128",
  "hound",
