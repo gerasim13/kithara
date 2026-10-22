@@ -1098,9 +1098,7 @@ impl QueueMusic {
             }
             next_beat = Some(boundary);
             hang_reset!();
-            let block_frames: f64 = frames.as_();
-            cadence = cadence.max(callback_started)
-                + Duration::from_secs_f64(block_frames / f64::from(RATE));
+            cadence = render_deadline(cadence, callback_started, frames);
             time::sleep(cadence.saturating_duration_since(Instant::now())).await;
         }
         let history = self.deck.observe(|observation| {
@@ -1843,6 +1841,19 @@ fn boundary_negative_controls(
         "trace_error": trace.err(),
         "outcomes": outcomes.into_iter().collect::<BTreeMap<_, _>>()
     })
+}
+
+fn render_deadline(cadence: Instant, callback_started: Instant, frames: usize) -> Instant {
+    let callback_frames: f64 = BLOCK.as_();
+    let callback_duration = Duration::from_secs_f64(callback_frames / f64::from(RATE));
+    // Carry packet-boundary timer jitter without replaying a missed Host callback.
+    let cadence = if callback_started.saturating_duration_since(cadence) > callback_duration {
+        callback_started
+    } else {
+        cadence
+    };
+    let frames: f64 = frames.as_();
+    cadence + Duration::from_secs_f64(frames / f64::from(RATE))
 }
 
 fn pull_frames(
@@ -3160,5 +3171,35 @@ async fn queued_music_render_reports_its_engine_callback_start() {
     assert!(
         started >= released,
         "the reported callback start must follow queued owner work"
+    );
+}
+
+#[kithara::test]
+fn queued_music_pacing_carries_timer_jitter_across_packet_boundaries() {
+    let origin = Instant::now();
+    let jitter = Duration::from_millis(1);
+    let interior = Duration::from_secs_f64(511.0 / f64::from(RATE));
+    let final_frame = Duration::from_secs_f64(1.0 / f64::from(RATE));
+    let mut cadence = origin;
+    for _ in 0..100 {
+        cadence = render_deadline(cadence, cadence + jitter, BLOCK - 1);
+        cadence = render_deadline(cadence, cadence + jitter, 1);
+    }
+    assert_eq!(
+        cadence,
+        origin + (interior + final_frame) * 100,
+        "packet splits retain rendered duration without accumulating timer jitter"
+    );
+}
+
+#[kithara::test]
+fn queued_music_pacing_rebases_after_a_missed_host_callback() {
+    let origin = Instant::now();
+    let callback_started = origin + Duration::from_millis(100);
+    let rendered = Duration::from_secs_f64(511.0 / f64::from(RATE));
+    assert_eq!(
+        render_deadline(origin, callback_started, BLOCK - 1),
+        callback_started + rendered,
+        "a missed Host callback starts a new deadline instead of replaying missed audio"
     );
 }
