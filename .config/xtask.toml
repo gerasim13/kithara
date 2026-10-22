@@ -398,6 +398,7 @@ KITHARA_HANG_DUMP_DIR = "hang"
 flash = false
 
 [stress.modes.reproduction-flash-off.set_env]
+RUST_LOG = "warn,render_refill=trace,kithara_test::sync::queue321=info"
 KITHARA_FLASH_SYNC_TRACE = "1"
 KITHARA_HANG_PREKILL_SECS = "630"
 NEXTEST_FINAL_STATUS_LEVEL = "fail"
