@@ -707,14 +707,12 @@ impl ProductHarness {
         self.output_frames = end;
         #[cfg(not(target_os = "android"))]
         self.tap.push(&samples);
-        let delay = if self.paced {
+        if self.paced {
             let frames: f64 = frames.as_();
-            Duration::from_secs_f64(frames / f64::from(case.sample_rate))
-                .saturating_sub(started.elapsed())
-        } else {
-            Duration::from_millis(1)
-        };
-        time::sleep(delay).await;
+            let delay = Duration::from_secs_f64(frames / f64::from(case.sample_rate))
+                .saturating_sub(started.elapsed());
+            time::sleep(delay).await;
+        }
         let master = self.master.drain();
         assert_eq!(self.master.drops(), 0, "the master tap keeps every frame");
         assert_eq!(
