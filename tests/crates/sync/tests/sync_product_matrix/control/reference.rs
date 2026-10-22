@@ -9,14 +9,16 @@ use kithara_integration_tests::{
 use kithara_render::bridge::DeckSnapshot;
 use num_traits::ToPrimitive;
 
-use super::{cases::*, imports::*};
+use super::{
+    super::{cases::*, consumed, imports::*},
+    sampling::{self, SINC_RADIUS},
+};
 
-pub(super) const CONTROL_GAIN: f32 = 0.25;
+pub(in super::super) const CONTROL_GAIN: f32 = 0.25;
 const CONTROL_CAPTURE_FRAMES: usize = 128;
-const SINC_RADIUS: i32 = 16;
 
-pub(super) struct ControlCapture {
-    pub(super) pcm: Vec<f32>,
+pub(in super::super) struct ControlCapture {
+    pub(in super::super) pcm: Vec<f32>,
     item: u64,
     rate: f32,
     points: Vec<ControlPoint>,
@@ -35,7 +37,7 @@ struct ControlPoint {
 }
 
 impl ControlCapture {
-    pub(super) fn evidence(&self) -> serde_json::Value {
+    pub(in super::super) fn evidence(&self) -> serde_json::Value {
         serde_json::json!({
             "rate": self.rate,
             "requested_mix_gain": CONTROL_GAIN,
@@ -97,7 +99,7 @@ impl ControlCapture {
         })
     }
 
-    pub(super) fn source_content_failures(
+    pub(in super::super) fn source_content_failures(
         &self,
         reference: &Audio,
         wrong_source: &Audio,
@@ -109,7 +111,7 @@ impl ControlCapture {
             .collect()
     }
 
-    pub(super) fn observed_content_failures(
+    pub(in super::super) fn observed_content_failures(
         &self,
         wrong_source: &Audio,
         grid: &BeatGridModel,
@@ -148,13 +150,13 @@ impl ControlCapture {
                 Ok((SessionFrame::new(session), playing_slot(point)?))
             })
             .collect::<Result<Vec<_>, String>>()?;
-        let consumed = super::consumed::Capture::for_track(self.item, first.deck.sample_rate)?;
+        let consumed = consumed::Capture::for_track(self.item, first.deck.sample_rate)?;
         let decoded = self.decoded.lock();
         decoded.check_physical(&self.pcm, &marks, &consumed, grid, wrong_source, None)?;
         drop(decoded);
         let retained = i64::from(marks.first().expect("capture has an initial mark").0)
             ..i64::from(marks.last().expect("capture has a final mark").0);
-        super::consumed::check_trace_negatives(self.item, first.deck.sample_rate, retained)
+        consumed::check_trace_negatives(self.item, first.deck.sample_rate, retained)
     }
 
     fn source_law(
@@ -554,56 +556,15 @@ fn mapped_sample(
     .map(|[sample]| sample)
 }
 
-fn mapped_samples<const N: usize>(
+pub(super) fn mapped_samples<const N: usize>(
     position: (u128, u128),
     speed: f64,
-    mut sample: impl FnMut(i64) -> Result<[f32; N], String>,
+    sample: impl FnMut(i64) -> Result<[f32; N], String>,
 ) -> Result<[f32; N], String> {
-    let fraction = (position.0 % position.1)
-        .to_f64()
-        .zip(position.1.to_f64())
-        .map(|(remainder, denominator)| remainder / denominator)
-        .ok_or_else(|| "source fraction is not representable".to_owned())?;
-    if speed <= 1.0 {
-        if fraction == 0.0 {
-            return sample(0);
-        }
-        let current = sample(0)?;
-        let next = sample(1)?;
-        let mut output = [0.0; N];
-        for ((output, current), next) in output.iter_mut().zip(current).zip(next) {
-            let current = f64::from(current);
-            *output = (f64::from(next) - current)
-                .mul_add(fraction, current)
-                .to_f32()
-                .filter(|sample| sample.is_finite())
-                .ok_or_else(|| "control source sample is not finite f32".to_owned())?;
-        }
-        return Ok(output);
-    }
-    let cutoff = speed.recip();
-    let mut total = [0.0; N];
-    let mut weights = 0.0;
-    for offset in -SINC_RADIUS..=SINC_RADIUS {
-        let distance = f64::from(offset) - fraction;
-        let weight =
-            kithara::dsp::interp::sinc_hann_weight(distance, cutoff, f64::from(SINC_RADIUS + 1));
-        for (total, value) in total.iter_mut().zip(sample(i64::from(offset))?) {
-            *total += f64::from(value) * weight;
-        }
-        weights += weight;
-    }
-    let mut output = [0.0; N];
-    for (output, total) in output.iter_mut().zip(total) {
-        *output = (total / weights)
-            .to_f32()
-            .filter(|sample| sample.is_finite())
-            .ok_or_else(|| "control source sample is not finite f32".to_owned())?;
-    }
-    Ok(output)
+    sampling::SampleKernel::new(position, speed)?.samples(sample)
 }
 
-pub(super) fn compare_pcm(actual: &[f32], expected: &[f32]) -> Result<(), String> {
+pub(in super::super) fn compare_pcm(actual: &[f32], expected: &[f32]) -> Result<(), String> {
     if actual.len() != expected.len() || actual.is_empty() {
         return Err(format!(
             "control PCM domain differs: actual {}, expected {}",
@@ -744,7 +705,7 @@ fn check_content_guards(
 }
 
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
-pub(super) async fn capture(
+pub(in super::super) async fn capture(
     source: String,
     sample_rate: u32,
     native_bpm: f64,
@@ -946,13 +907,13 @@ pub(super) async fn capture(
 type DecodedChunk = (kithara::signal::AudioChunkInfo, Vec<f32>);
 
 #[derive(Clone, Default)]
-pub(super) struct DecodedCapture {
+pub(in super::super) struct DecodedCapture {
     chunks: std::collections::BTreeMap<(u64, u64), DecodedChunk>,
     samples: usize,
     rejected: bool,
 }
 
-pub(super) struct DecodedObserver(pub(super) Arc<Mutex<DecodedCapture>>);
+pub(in super::super) struct DecodedObserver(pub(in super::super) Arc<Mutex<DecodedCapture>>);
 
 impl kithara::audio::AudioObserver for DecodedObserver {
     fn try_observe(
@@ -990,7 +951,7 @@ impl kithara::audio::AudioObserver for DecodedObserver {
 impl DecodedCapture {
     fn sampler(
         &self,
-        info: super::consumed::SourceIdentity,
+        info: consumed::SourceIdentity,
     ) -> impl FnMut(i64, usize) -> Result<f32, String> + '_ {
         let mut covering = None::<(&DecodedChunk, u64)>;
         move |frame, channel| {
@@ -1028,7 +989,7 @@ impl DecodedCapture {
 
     fn sample(
         &self,
-        info: super::consumed::SourceIdentity,
+        info: consumed::SourceIdentity,
         frame: i64,
         channel: usize,
     ) -> Result<f32, String> {
@@ -1037,11 +998,7 @@ impl DecodedCapture {
     }
 
     /// The accepted decoded chunk covering `frame` of the identified source.
-    fn chunk(
-        &self,
-        info: super::consumed::SourceIdentity,
-        frame: u64,
-    ) -> Result<&DecodedChunk, String> {
+    fn chunk(&self, info: consumed::SourceIdentity, frame: u64) -> Result<&DecodedChunk, String> {
         let (_, chunk) = self
             .chunks
             .range(..=(info.source_revision, frame))
@@ -1097,11 +1054,11 @@ impl DecodedCapture {
             })
     }
 
-    pub(super) fn physical_failures(
+    pub(in super::super) fn physical_failures(
         &self,
         pcm: &[f32],
         marks: &[(SessionFrame, kithara_render::bridge::SlotSnapshot)],
-        consumed: &super::consumed::Capture,
+        consumed: &consumed::Capture,
         grid: &BeatGridModel,
         wrong_source: &Audio,
         jump: Option<(SessionFrame, SessionFrame)>,
@@ -1112,9 +1069,9 @@ impl DecodedCapture {
             .collect()
     }
 
-    pub(super) fn physical_frame_basis(
+    pub(in super::super) fn physical_frame_basis(
         &self,
-        info: impl Into<super::consumed::SourceIdentity>,
+        info: impl Into<consumed::SourceIdentity>,
         frame: u64,
     ) -> Result<(u64, kithara::signal::SourceSpan), String> {
         let info = info.into();
@@ -1147,9 +1104,9 @@ impl DecodedCapture {
         self.physical_basis(info, position)
     }
 
-    pub(super) fn physical_basis(
+    pub(in super::super) fn physical_basis(
         &self,
-        info: impl Into<super::consumed::SourceIdentity>,
+        info: impl Into<consumed::SourceIdentity>,
         position: (u128, std::num::NonZeroU128),
     ) -> Result<(u64, kithara::signal::SourceSpan), String> {
         let info = info.into();
@@ -1212,9 +1169,9 @@ impl DecodedCapture {
         ))
     }
 
-    pub(super) fn sample_at(
+    pub(in super::super) fn sample_at(
         &self,
-        info: super::consumed::SourceIdentity,
+        info: consumed::SourceIdentity,
         position: (u128, std::num::NonZeroU128),
         speed: f64,
         channel: usize,
@@ -1225,9 +1182,20 @@ impl DecodedCapture {
 
     fn samples_at<const N: usize>(
         &self,
-        info: super::consumed::SourceIdentity,
+        info: consumed::SourceIdentity,
         position: (u128, std::num::NonZeroU128),
         speed: f64,
+        channels: [usize; N],
+    ) -> Result<[f32; N], String> {
+        let kernel = sampling::SampleKernel::new((position.0, position.1.get()), speed)?;
+        self.samples_with_kernel(info, position, &kernel, channels)
+    }
+
+    fn samples_with_kernel<const N: usize>(
+        &self,
+        info: consumed::SourceIdentity,
+        position: (u128, std::num::NonZeroU128),
+        kernel: &sampling::SampleKernel,
         channels: [usize; N],
     ) -> Result<[f32; N], String> {
         if self.rejected {
@@ -1236,7 +1204,7 @@ impl DecodedCapture {
         let source =
             i64::try_from(position.0 / position.1.get()).map_err(|error| error.to_string())?;
         let mut read = self.sampler(info);
-        mapped_samples((position.0, position.1.get()), speed, |offset| {
+        kernel.samples(|offset| {
             let frame = source
                 .checked_add(offset)
                 .ok_or_else(|| "physical sample coordinate overflows".to_owned())?;
@@ -1248,7 +1216,7 @@ impl DecodedCapture {
         })
     }
 
-    pub(super) fn fixture_domain(
+    pub(in super::super) fn fixture_domain(
         &self,
         info: kithara::signal::AudioChunkInfo,
         reference: &Audio,
@@ -1325,9 +1293,9 @@ impl DecodedCapture {
         Ok(witnessed_first..end)
     }
 
-    pub(super) fn sample_at_domain(
+    pub(in super::super) fn sample_at_domain(
         &self,
-        info: super::consumed::SourceIdentity,
+        info: consumed::SourceIdentity,
         position: (u128, std::num::NonZeroU128),
         speed: f64,
         channel: usize,
@@ -1378,7 +1346,7 @@ impl DecodedCapture {
         &self,
         pcm: &[f32],
         marks: &[(SessionFrame, kithara_render::bridge::SlotSnapshot)],
-        consumed: &super::consumed::Capture,
+        consumed: &consumed::Capture,
         grid: &BeatGridModel,
         wrong_source: &Audio,
         jump: Option<(SessionFrame, SessionFrame)>,
@@ -1461,12 +1429,14 @@ impl DecodedCapture {
                 .ok_or_else(|| "raw source endpoint has no physical PCM position".to_owned())?;
             next_position = Some((start, raw_next, physical_next));
             let speed = physical_source_speed((numerator, denominator), physical_next)?;
-            let expected = self.samples_at(info, (numerator, denominator), speed, [0, 1])?;
+            let kernel = sampling::SampleKernel::new((numerator, denominator.get()), speed)?;
+            let expected =
+                self.samples_with_kernel(info, (numerator, denominator), &kernel, [0, 1])?;
             let wrong_position = numerator
                 .checked_add(denominator.get())
                 .ok_or_else(|| "wrong-cue negative coordinate overflows".to_owned())?;
             let wrong_cue = self
-                .samples_at(info, (wrong_position, denominator), speed, [0, 1])
+                .samples_with_kernel(info, (wrong_position, denominator), &kernel, [0, 1])
                 .map_err(|error| format!("wrong-cue negative: {error}"))?;
             let wrong_denominator = denominator
                 .get()
@@ -1525,9 +1495,9 @@ impl DecodedCapture {
 fn physical_intervals(
     capture_start: SessionFrame,
     frames: usize,
-    consumed: &super::consumed::Capture,
+    consumed: &consumed::Capture,
     jump: Option<(SessionFrame, SessionFrame)>,
-) -> Result<std::collections::BTreeMap<i64, super::consumed::Interval>, String> {
+) -> Result<std::collections::BTreeMap<i64, consumed::Interval>, String> {
     let capture_end = i64::from(capture_start)
         .checked_add(i64::try_from(frames).map_err(|error| error.to_string())?)
         .ok_or_else(|| "physical capture endpoint overflows".to_owned())?;
@@ -1542,7 +1512,7 @@ fn physical_intervals(
 
 fn physical_supplied_beats(
     supplied_beats: &mut Vec<(i64, usize)>,
-    info: super::consumed::SourceIdentity,
+    info: consumed::SourceIdentity,
     raw_position: (u128, std::num::NonZeroU128),
     raw_next: (u128, std::num::NonZeroU128),
     grid: &BeatGridModel,
@@ -1596,7 +1566,7 @@ fn physical_jump_gain(frame: SessionFrame, jump: Option<(SessionFrame, SessionFr
     }
 }
 
-pub(super) fn physical_source_speed(
+pub(in super::super) fn physical_source_speed(
     (numerator, denominator): (u128, std::num::NonZeroU128),
     (next, next_denominator): (u128, std::num::NonZeroU128),
 ) -> Result<f64, String> {
@@ -1799,7 +1769,7 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
             .chunks
             .insert((7, info.frame_offset), (info, samples));
     }
-    let identity = super::consumed::SourceIdentity {
+    let identity = consumed::SourceIdentity {
         spec,
         source_revision: 7,
         media_origin: Some(Duration::ZERO),
@@ -1958,7 +1928,7 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
             .sample_at(identity, (125, denominator), 1.5, 0)
             .is_err()
     );
-    let wrong_identity = super::consumed::SourceIdentity {
+    let wrong_identity = consumed::SourceIdentity {
         source_revision: 8,
         ..identity
     };
@@ -1977,7 +1947,7 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
             .sample_at(wrong_identity, (125, denominator), 1.5, 0)
             .is_err()
     );
-    let wrong_identity = super::consumed::SourceIdentity {
+    let wrong_identity = consumed::SourceIdentity {
         media_origin: Some(Duration::from_millis(1)),
         ..identity
     };
@@ -1991,7 +1961,7 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
             .sample_at_domain(wrong_identity, (125, denominator), 1.5, 0, &domain)
             .is_err()
     );
-    let wrong_identity = super::consumed::SourceIdentity {
+    let wrong_identity = consumed::SourceIdentity {
         spec: AudioSpec::new(1, spec.sample_rate),
         ..identity
     };
