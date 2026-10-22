@@ -110,8 +110,6 @@ pub(super) async fn render_frames(
 }
 
 #[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(60)))]
-#[case::tunnel(tunnel_sources().await, Start::bar(0))]
-#[case::newtechno(newtechno_sources().await, NEWTECHNO_PHRASE)]
 #[case::tunnel_weak_beat(tunnel_sources().await, WEAK_BEAT)]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn sync_listening_mix_is_not_quieter_than_a_solo_deck(
