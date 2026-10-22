@@ -171,19 +171,6 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn finds_the_frame_when_the_id3_tag_fits_the_buffer() {
-        let mut data = vec![0u8; 10 + 64];
-        data[..3].copy_from_slice(b"ID3");
-        data[3] = 3;
-        data[9] = 64;
-        data.extend_from_slice(&build_mpeg1_stereo_xing(576, 960));
-
-        let lame = read_lame_trim(&data).expect("BUG: LAME behind an ID3v2 tag");
-
-        assert_eq!(lame.enc_delay, 576);
-    }
-
-    #[kithara::test(native, flash(false))]
     fn extracts_lame_trim_from_xing_frame() {
         let buf = build_mpeg1_stereo_xing(576, 960);
         let lame = read_lame_trim(&buf).expect("BUG: lame");

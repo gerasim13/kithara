@@ -151,16 +151,6 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn probe_window_starts_at_the_audio_behind_an_oversized_id3_tag() {
-        let mut source = Cursor::new(mp3_behind_id3(32 * 1024));
-
-        let buffer = read_mp3_probe_prefix(&mut source, &pools()).expect("BUG: read probe prefix");
-
-        assert_eq!(buffer.first().copied(), Some(0xFF));
-        assert_eq!(buffer.get(1).copied(), Some(0xFB));
-    }
-
-    #[kithara::test(native, flash(false))]
     fn probe_window_stays_put_when_the_source_ends_inside_the_tag() {
         let mut data = mp3_behind_id3(32 * 1024);
         data.truncate(4 * 1024);
@@ -175,7 +165,9 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn probe_window_keeps_a_tag_that_fits_it() {
         let tag_bytes = 10 + 1024;
-        let mut source = Cursor::new(mp3_behind_id3(1024));
+        let mut data = mp3_behind_id3(1024);
+        data.resize(consts::WINDOW_BYTES + 1024, 0);
+        let mut source = Cursor::new(data);
 
         let buffer = read_mp3_probe_prefix(&mut source, &pools()).expect("BUG: read probe prefix");
 

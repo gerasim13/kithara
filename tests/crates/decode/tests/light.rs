@@ -14,4 +14,5 @@ mod aac_he_v2_hls_decode;
 mod aac_priming_regression;
 mod apple_mp3_priming_probe;
 mod decoder_seek_tests;
+mod mp3_id3_gapless;
 mod timeline_tests;
