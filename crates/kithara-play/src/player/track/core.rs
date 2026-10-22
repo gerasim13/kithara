@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, marker::PhantomData};
+use std::{cell::RefCell, collections::VecDeque, marker::PhantomData};
 
 use kithara_abr::AbrHandle;
 use kithara_command::{Live, Sender, Seq, Target, When};
@@ -56,6 +56,7 @@ pub struct PlayerImpl<S> {
     pub(super) segment_origin: Option<Position>,
     pub(super) source_basis: Option<AudioChunkInfo>,
     pub(super) observed_source: Option<AudioChunkInfo>,
+    pub(super) projected_end: RefCell<Option<ProjectedEnd>>,
     pub(super) duration: Option<Duration>,
     pub(super) visible_origin: Option<Duration>,
     pub(super) media_origin: Option<Duration>,
@@ -103,6 +104,7 @@ impl<S> PlayerImpl<S> {
             segment_origin: None,
             source_basis: None,
             observed_source: None,
+            projected_end: RefCell::new(None),
             duration: None,
             visible_origin: None,
             media_origin: None,
@@ -125,6 +127,25 @@ impl<S> PlayerImpl<S> {
     #[must_use]
     pub fn attached(&self) -> bool {
         self.attaching.is_some() || self.attach_at.is_some()
+    }
+
+    /// Content position of a raw source time. A raw time read from the
+    /// source keeps the observed source's frame grid across the subtraction.
+    pub(super) fn content_position(&self, raw: Position) -> Option<Position> {
+        let origin = self.media_origin?;
+        Some(self.observed_source.map_or_else(
+            || raw.saturating_sub(origin),
+            |source| source.spec.elapsed_since(origin, raw),
+        ))
+    }
+
+    pub(super) fn content_mark_position(&self, mark: SlotMark) -> Option<Position> {
+        if mark.lane.frame == 0 {
+            self.media_origin
+                .map(|origin| mark.position.saturating_sub(origin))
+        } else {
+            self.content_position(mark.position)
+        }
     }
 
     pub(super) fn raw_position(&self, position: Position) -> Result<Position, PlayError> {
@@ -165,14 +186,12 @@ impl<S> PlayerImpl<S> {
                 self.media_origin = source.media_origin;
                 self.duration = source.media_end;
             }
-            if slot
-                .mark
-                .is_some_and(|mark| mark.lane.segment == self.segment)
+            if let Some(mark) = slot.mark.filter(|mark| mark.lane.segment == self.segment)
                 && slot.position.is_finite()
                 && slot.position >= 0.0
-                && let Some(origin) = self.media_origin
+                && let Some(position) = self.content_mark_position(mark)
             {
-                self.position = Position::from_secs_f64(slot.position).saturating_sub(origin);
+                self.position = position;
             }
         }
     }

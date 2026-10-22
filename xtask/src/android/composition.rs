@@ -16,27 +16,34 @@ type Features = BTreeMap<String, BTreeSet<String>>;
 /// escapes, and the marker then reads as a feature name.
 fn tree(root: &Path) -> Command {
     let mut command = Command::new("cargo");
-    command.current_dir(root).args(["tree", "--color", "never"]);
+    command
+        .current_dir(root)
+        .args(["tree", "--color", "never", "--locked"]);
     command
 }
 
-fn product(root: &Path, target: &str) -> Result<Features> {
-    let output = tree(root)
-        .args([
-            "-p",
-            "kithara-ffi",
-            "--no-default-features",
-            "--features",
-            &device_features(BuildProfile::Release).replace("kithara-ffi/", ""),
-            "--target",
-            target,
-            "--edges",
-            "normal",
-            "--prefix",
-            "none",
-            "--format",
-            "{p}|{f}",
-        ])
+fn artifact_command(root: &Path, target: &str, profile: BuildProfile) -> Command {
+    let mut command = tree(root);
+    command.args([
+        "-p",
+        "kithara-ffi",
+        "--no-default-features",
+        "--features",
+        &device_features(profile).replace("kithara-ffi/", ""),
+        "--target",
+        target,
+        "--edges",
+        "normal",
+        "--prefix",
+        "none",
+        "--format",
+        "{p}|{f}",
+    ]);
+    command
+}
+
+fn artifact(root: &Path, target: &str, profile: BuildProfile) -> Result<Features> {
+    let output = artifact_command(root, target, profile)
         .output()
         .context("resolving the Android artifact composition")?;
     if !output.status.success() {
@@ -75,13 +82,54 @@ pub(super) fn verify(
     inventory: &Command,
     evidence: &Path,
 ) -> Result<()> {
+    let parity = evidence.join("artifact-parity.json");
+    if parity.exists() {
+        std::fs::remove_file(&parity)?;
+    }
     if !inventory
         .get_args()
         .any(|arg| arg == "--no-default-features")
     {
         bail!("Android test inventory must disable package defaults");
     }
-    let expected = product(root, target)?;
+    let expected = artifact(root, target, BuildProfile::Release)?;
+    let debug = artifact(root, target, BuildProfile::Debug)?;
+    std::fs::write(
+        evidence.join("product-composition.json"),
+        serde_json::to_vec_pretty(&expected)?,
+    )?;
+    std::fs::write(
+        evidence.join("artifact-composition.json"),
+        serde_json::to_vec_pretty(&debug)?,
+    )?;
+    compare(&expected, &debug)?;
+    std::fs::write(
+        parity,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "scope": "debug-ffi-artifact",
+            "release": "product-composition.json",
+            "debug": "artifact-composition.json",
+            "status": "passed",
+        }))?,
+    )?;
+    let output = component_command(root, inventory)?
+        .output()
+        .context("resolving the Android component coverage composition")?;
+    if !output.status.success() {
+        bail!(
+            "Android component coverage resolution failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let actual = parse(&String::from_utf8(output.stdout)?)?;
+    std::fs::write(
+        evidence.join("component-composition.json"),
+        serde_json::to_vec_pretty(&actual)?,
+    )?;
+    compare_component_backends(&expected, &actual)
+}
+
+fn component_command(root: &Path, inventory: &Command) -> Result<Command> {
     let mut tree = tree(root);
     tree.args([
         "--edges",
@@ -104,28 +152,10 @@ pub(super) fn verify(
             _ => {}
         }
     }
-    let output = tree
-        .output()
-        .context("resolving the Android test composition")?;
-    if !output.status.success() {
-        bail!(
-            "Android test resolution failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-    let actual = parse(&String::from_utf8(output.stdout)?)?;
-    std::fs::write(
-        evidence.join("product-composition.json"),
-        serde_json::to_vec_pretty(&expected)?,
-    )?;
-    std::fs::write(
-        evidence.join("test-composition.json"),
-        serde_json::to_vec_pretty(&actual)?,
-    )?;
-    compare(&expected, &actual)
+    Ok(tree)
 }
 
-fn compare(expected: &Features, actual: &Features) -> Result<()> {
+fn compare_software_codecs(expected: &Features, actual: &Features) -> Result<()> {
     for package in actual.keys() {
         if (package.starts_with("symphonia")
             || package.starts_with("fdk-aac")
@@ -138,7 +168,11 @@ fn compare(expected: &Features, actual: &Features) -> Result<()> {
             );
         }
     }
+    Ok(())
+}
 
+fn compare(expected: &Features, actual: &Features) -> Result<()> {
+    compare_software_codecs(expected, actual)?;
     for (package, features) in actual
         .iter()
         .filter(|(name, _)| name.starts_with("kithara"))
@@ -172,6 +206,26 @@ fn compare(expected: &Features, actual: &Features) -> Result<()> {
         if !actual.contains_key(package) {
             bail!(
                 "Android composition mismatch: {package} is in the artifact but absent from tests"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn compare_component_backends(expected: &Features, actual: &Features) -> Result<()> {
+    compare_software_codecs(expected, actual)?;
+    for package in ["kithara-decode", "kithara-net"] {
+        let artifact = expected
+            .get(package)
+            .with_context(|| format!("Android artifact is missing {package}"))?;
+        let component = actual
+            .get(package)
+            .with_context(|| format!("Android component coverage is missing {package}"))?;
+        let artifact = relevant(package, artifact, expected);
+        let component = relevant(package, component, expected);
+        if artifact != component {
+            bail!(
+                "Android component backend mismatch for {package}: artifact={artifact:?}, components={component:?}"
             );
         }
     }
@@ -220,7 +274,201 @@ fn relevant<'a>(
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
+
+    fn ffi_manifest(debug: &[&str]) -> String {
+        let mut features: BTreeMap<_, Vec<&str>> = device_features(BuildProfile::Debug)
+            .split(',')
+            .map(|feature| {
+                (
+                    feature.trim_start_matches("kithara-ffi/").to_owned(),
+                    Vec::new(),
+                )
+            })
+            .collect();
+        features.insert("android".into(), vec!["kithara/android"]);
+        features.insert("test".into(), debug.to_vec());
+        let features = features
+            .iter()
+            .map(|(name, edges)| format!("{name:?} = {edges:?}\n"))
+            .collect::<String>();
+        format!(
+            "[dependencies]\nkithara = {{ path = \"../facade\" }}\nkithara-decode = {{ path = \"../decode\" }}\n[features]\n{features}"
+        )
+    }
+
+    fn cargo_fixture() -> tempfile::TempDir {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        fs::create_dir(root.join(".cargo")).unwrap();
+        fs::write(root.join(".cargo/config.toml"), "[net]\noffline = true\n").unwrap();
+        fs::write(root.join("Cargo.toml"), "[workspace]\nresolver = \"2\"\nmembers = [\"ffi\", \"facade\", \"decode\", \"net\", \"link\", \"component\", \"software\"]\n").unwrap();
+        for (path, name, body) in [
+            ("ffi", "kithara-ffi", ffi_manifest(&[])),
+            ("facade", "kithara", "[dependencies]\nkithara-decode = { path = \"../decode\" }\nkithara-net = { path = \"../net\" }\nkithara-link = { path = \"../link\", optional = true }\n[features]\nandroid = [\"kithara-decode/android\", \"kithara-net/client-host\"]\nlink = [\"dep:kithara-link\"]\n".into()),
+            ("decode", "kithara-decode", "[dependencies]\nsymphonia-bundle-mp3 = { path = \"../software\", optional = true }\n[features]\nandroid = []\nsymphonia = [\"dep:symphonia-bundle-mp3\"]\n".into()),
+            ("net", "kithara-net", "[features]\nclient-host = []\n".into()),
+            ("link", "kithara-link", String::new()),
+            ("component", "kithara-host-tests", "[dependencies]\nkithara = { path = \"../facade\", features = [\"link\"] }\n".into()),
+            ("software", "symphonia-bundle-mp3", String::new()),
+        ] {
+            let package = root.join(path);
+            fs::create_dir_all(package.join("src")).unwrap();
+            fs::write(package.join("src/lib.rs"), "").unwrap();
+            fs::write(
+                package.join("Cargo.toml"),
+                format!("[package]\nname = {name:?}\nversion = \"0.0.0\"\nedition = \"2024\"\n{body}"),
+            )
+            .unwrap();
+        }
+        let output = Command::new("cargo")
+            .current_dir(root)
+            .args(["generate-lockfile", "--offline"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        directory
+    }
+
+    fn component_inventory() -> Command {
+        let mut inventory = Command::new("cargo");
+        inventory.args([
+            "nextest",
+            "list",
+            "--no-default-features",
+            "--features",
+            &device_features(BuildProfile::Debug),
+            "--target",
+            "aarch64-linux-android",
+            "-p",
+            "kithara-ffi",
+            "-p",
+            "kithara-host-tests",
+        ]);
+        inventory
+    }
+
+    #[test]
+    fn resolved_component_link_does_not_contaminate_the_debug_artifact() {
+        let directory = cargo_fixture();
+        let root = directory.path();
+        let evidence = root.join("evidence");
+        fs::create_dir(&evidence).unwrap();
+        let inventory = component_inventory();
+
+        let release = artifact(root, "aarch64-linux-android", BuildProfile::Release).unwrap();
+        let output = component_command(root, &inventory)
+            .unwrap()
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let components = parse(&String::from_utf8(output.stdout).unwrap()).unwrap();
+        assert!(components.contains_key("kithara-link"));
+        assert!(components["kithara"].contains("link"));
+        assert!(compare(&release, &components).is_err());
+
+        verify(root, "aarch64-linux-android", &inventory, &evidence).unwrap();
+        let debug: Features =
+            serde_json::from_slice(&fs::read(evidence.join("artifact-composition.json")).unwrap())
+                .unwrap();
+        assert!(!debug.contains_key("kithara-link"));
+        assert!(!debug["kithara"].contains("link"));
+        compare(&release, &debug).unwrap();
+        let recorded: Features =
+            serde_json::from_slice(&fs::read(evidence.join("component-composition.json")).unwrap())
+                .unwrap();
+        assert_eq!(recorded, components);
+        let parity: serde_json::Value =
+            serde_json::from_slice(&fs::read(evidence.join("artifact-parity.json")).unwrap())
+                .unwrap();
+        assert_eq!(parity["scope"], "debug-ffi-artifact");
+        assert_eq!(parity["status"], "passed");
+
+        fs::write(
+            root.join("ffi/Cargo.toml"),
+            format!(
+                "[package]\nname = \"kithara-ffi\"\nversion = \"0.0.0\"\nedition = \"2024\"\n{}",
+                ffi_manifest(&["kithara/link"])
+            ),
+        )
+        .unwrap();
+        let error = verify(root, "aarch64-linux-android", &inventory, &evidence)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Android composition mismatch"), "{error}");
+        let leaked: Features =
+            serde_json::from_slice(&fs::read(evidence.join("artifact-composition.json")).unwrap())
+                .unwrap();
+        assert!(leaked.contains_key("kithara-link"));
+        assert!(leaked["kithara"].contains("link"));
+        assert!(!evidence.join("artifact-parity.json").exists());
+    }
+
+    #[test]
+    fn a_resolved_debug_artifact_cannot_add_a_software_decoder() {
+        let directory = cargo_fixture();
+        let root = directory.path();
+        let evidence = root.join("evidence");
+        fs::create_dir(&evidence).unwrap();
+        fs::write(
+            root.join("ffi/Cargo.toml"),
+            format!(
+                "[package]\nname = \"kithara-ffi\"\nversion = \"0.0.0\"\nedition = \"2024\"\n{}",
+                ffi_manifest(&["kithara-decode/symphonia"])
+            ),
+        )
+        .unwrap();
+
+        let error = verify(
+            root,
+            "aarch64-linux-android",
+            &component_inventory(),
+            &evidence,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("backend dependency symphonia-bundle-mp3"),
+            "{error}"
+        );
+        assert!(!evidence.join("artifact-parity.json").exists());
+    }
+
+    #[test]
+    fn component_contracts_do_not_redefine_artifact_parity() {
+        let artifact = parse("kithara v1|android\nkithara-ffi v1|android,uniffi\nkithara-decode v1|android\nkithara-net v1|client-host\nkithara-beat v1|\nkithara-dsp v1|\nkithara-platform v1|\nkithara-stretch v1|stretch-signalsmith\nkithara-warp v1|render,stretch-signalsmith\n").unwrap();
+        let components = parse("kithara v1|android,link\nkithara-ffi v1|android,dev,test,uniffi\nkithara-decode v1|android,mock,usdt\nkithara-net v1|client-host,mock\nkithara-link v1|stretch-signalsmith\nkithara-beat v1|dsp\nkithara-dsp v1|spectrum\nkithara-platform v1|tokio-process\nkithara-stretch v1|stretch-identity,stretch-signalsmith\nkithara-warp v1|render,stretch-identity,stretch-signalsmith\n").unwrap();
+
+        assert!(compare(&artifact, &components).is_err());
+        compare_component_backends(&artifact, &components).unwrap();
+        compare(&artifact, &artifact).unwrap();
+    }
+
+    #[test]
+    fn component_coverage_keeps_the_artifact_decoder_and_transport() {
+        let artifact = parse("kithara-decode v1|android\nkithara-net v1|client-host\n").unwrap();
+        for components in [
+            "kithara-decode v1|\nkithara-net v1|client-host\n",
+            "kithara-decode v1|android,symphonia\nkithara-net v1|client-host\n",
+            "kithara-decode v1|android\nkithara-net v1|client-host,client-reqwest\n",
+            "kithara-decode v1|android\nkithara-net v1|client-reqwest\n",
+            "kithara-decode v1|android\n",
+            "kithara-net v1|client-host\n",
+            "kithara-decode v1|android\nkithara-net v1|client-host\nsymphonia-bundle-mp3 v1|\n",
+        ] {
+            assert!(compare_component_backends(&artifact, &parse(components).unwrap()).is_err());
+        }
+    }
 
     #[test]
     fn debug_entry_points_are_checked_against_release_backends() {

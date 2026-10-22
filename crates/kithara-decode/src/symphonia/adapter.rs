@@ -91,7 +91,7 @@ impl<R: Seek> ReadSeekAdapter<R> {
         Some(end)
     }
 
-    #[cfg(feature = "symphonia")]
+    #[cfg(any(feature = "symphonia", feature = "android"))]
     pub(crate) fn seek_enabled_handle(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.seek_enabled)
     }

@@ -28,6 +28,16 @@ pub struct Condvar {
 }
 
 impl Condvar {
+    /// Current time in this condition variable's construction-latched clock.
+    #[inline]
+    #[must_use]
+    pub fn instant(&self) -> Instant {
+        match self.backend {
+            Backend::Engine(_) => Instant::now_virtual(),
+            Backend::Native => Instant::now_real(),
+        }
+    }
+
     #[inline]
     pub fn notify_all(&self) {
         match self.backend {
@@ -84,7 +94,8 @@ impl Condvar {
         }
     }
 
-    /// Timed wait. Flash: register a timed engine waiter (deadline = `deadline`'s
+    /// Timed wait using a deadline from [`Self::instant`]. Flash: register an engine waiter
+    /// (deadline = `deadline`'s
     /// absolute virtual nanos) BEFORE releasing the domain guard, fire any
     /// advance-due tokens, then block off-lock until the engine crosses the
     /// deadline OR a `notify_*` signals our cvid. Native: wait out the
@@ -119,7 +130,7 @@ impl Condvar {
                 if let Some(m) = guard.meta() {
                     m.released();
                 }
-                let remaining = deadline.saturating_duration_since(Instant::now());
+                let remaining = deadline.saturating_duration_since(self.instant());
                 self.native
                     .wait_timeout_ref(guard.native_mut(), RealInstant::now() + remaining);
                 if let Some(m) = guard.meta() {

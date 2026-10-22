@@ -3709,6 +3709,7 @@ mod engine_selection_tests {
                 .env_remove("RUSTFLAGS")
                 .env_remove("CARGO_ENCODED_RUSTFLAGS")
                 .env("CARGO_TARGET_DIR", fixture.path().join("target"))
+                .env("CARGO_HOME", fixture.path().join("cargo-home"))
                 .current_dir(fixture.path())
                 .output()
                 .expect("nextest inventory");

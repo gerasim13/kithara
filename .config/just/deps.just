@@ -35,6 +35,9 @@ hack-invariants:
 
 [private]
 _hack-context:
+    cargo check -p kithara-analysis --lib --no-default-features --features symphonia,client-reqwest,tls-rustls,beat-cuda,beat-nn-small
+    cargo check -p kithara-analysis --lib --no-default-features --features symphonia,client-reqwest,tls-rustls,beat-cuda,beat-nn-full
+    cargo check -p kithara-warp --lib --no-default-features
     cargo check -p kithara-warp --lib --no-default-features --features stretch-identity
     cargo check -p kithara-warp --lib --no-default-features --features stretch-signalsmith
     cargo check -p kithara-warp --lib --no-default-features --features stretch-bungee

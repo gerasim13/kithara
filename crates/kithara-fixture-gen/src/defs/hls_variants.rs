@@ -125,6 +125,7 @@ fn encode(input: &VariantInput) -> Fmp4Package {
 #[kithara::asset(
     ext = "toml",
     content_type = "application/x-kithara-hls-variants",
+    format = catalog_format,
     context
 )]
 #[case::catalog_with_native_gapless()]
@@ -166,6 +167,15 @@ fn hls_variants(context: &BuildContext<'_>) -> Vec<u8> {
     }
     toml::to_string(&catalog)
         .expect("serialize HLS variant catalog")
+        .into_bytes()
+}
+
+fn catalog_format() -> Vec<u8> {
+    inputs()
+        .iter()
+        .map(VariantInput::key)
+        .collect::<Vec<_>>()
+        .join("\n")
         .into_bytes()
 }
 
@@ -331,6 +341,7 @@ fn inputs() -> Vec<VariantInput> {
     }
     for (codecs, bit_rate) in [
         (vec![AudioCodec::AacLc], 320_000),
+        (vec![AudioCodec::AacHe], 64_000),
         (vec![AudioCodec::AacHeV2], 32_000),
         (vec![AudioCodec::Flac], 512_000),
         (vec![AudioCodec::AacLc, AudioCodec::Flac], 128_000),

@@ -134,6 +134,7 @@ async fn slow_body_endpoint() -> impl IntoResponse {
 
     Response::builder()
         .status(StatusCode::OK)
+        .header("Content-Type", "application/octet-stream")
         .body(Body::from_stream(stream))
         .unwrap()
 }

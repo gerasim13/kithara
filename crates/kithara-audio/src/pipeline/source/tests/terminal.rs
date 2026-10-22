@@ -173,9 +173,10 @@ async fn terminal_failure_reentry_defers_one_full_diagnostic(
 }
 
 fn failure_log_output() -> Vec<String> {
+    let thread = format!("thread={:?} ", std::thread::current().id());
     flight::tail()
         .into_iter()
-        .filter(|line| line.contains("track failed:"))
+        .filter(|line| line.contains(&thread) && line.contains("track failed:"))
         .collect()
 }
 
@@ -396,6 +397,7 @@ impl Decoder for ByteEofDecoder {
             landed_frame: 0,
             landed_byte: None,
             preroll: PrerollHint::NotNeeded,
+            clock: kithara_decode::LandingClock::Kept,
         })
     }
     fn spec(&self) -> AudioSpec {

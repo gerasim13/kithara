@@ -274,7 +274,7 @@ impl Bridge {
         )? {
             return Ok(());
         }
-        if entry.state != VerificationState::Testing {
+        if entry.state != VerificationState::Testing && entry.pipeline_id.is_none() {
             return Ok(());
         }
 
@@ -348,6 +348,7 @@ impl Bridge {
         observe_verification(
             &attempt,
             pipeline_id,
+            entry.state,
             |id| self.gitlab.pipeline_observation(id, entry.scope.kind()),
             |sha, state, detail, url| self.github.report_status(sha, state, detail, url),
             |id, state, detail| {
@@ -695,6 +696,7 @@ fn reject_control_changes(
 fn observe_verification(
     attempt: &VerificationAttempt<'_>,
     pipeline_id: u64,
+    previous: VerificationState,
     observe: impl FnOnce(u64) -> Result<PipelineObservation>,
     mut report: impl FnMut(&str, &str, &str, Option<&str>) -> Result<()>,
     mut finish: impl FnMut(u64, VerificationState, Option<String>) -> Result<()>,
@@ -703,8 +705,27 @@ fn observe_verification(
     let url = attempt.config.gitlab_pipeline_url(pipeline_id);
     let branch = &attempt.config.github_branch;
     let base = abbreviate(attempt.base_sha);
-    match observe(pipeline_id)? {
-        PipelineObservation::Running => Ok(()),
+    let observation = observe(pipeline_id)?;
+    let state = match &observation {
+        PipelineObservation::Running => Some(VerificationState::Testing),
+        PipelineObservation::Succeeded => Some(VerificationState::Verified),
+        PipelineObservation::Failed(_) | PipelineObservation::Invalid(_) => {
+            Some(VerificationState::Rejected)
+        }
+        PipelineObservation::Cancelled => None,
+    };
+    if state == Some(previous) {
+        return Ok(());
+    }
+    match observation {
+        PipelineObservation::Running => {
+            let detail = scoped(
+                attempt.scope,
+                format!("GitLab pipeline {pipeline_id} retry running merged with {branch} {base}"),
+            );
+            report(attempt.head_sha, "pending", &detail, Some(&url))?;
+            finish(pipeline_id, VerificationState::Testing, Some(detail))
+        }
         PipelineObservation::Succeeded => {
             let detail = scoped(
                 attempt.scope,
@@ -934,6 +955,7 @@ mod tests {
                 config: &status_config(),
             },
             42,
+            VerificationState::Testing,
             |_| Ok(observation),
             |sha, state, description, url| {
                 reports.push((
@@ -1541,6 +1563,7 @@ mod tests {
                 config: &status_config(),
             },
             42,
+            VerificationState::Testing,
             |id| {
                 assert_eq!(id, 42);
                 *calls.borrow_mut() += 1;
@@ -1555,6 +1578,61 @@ mod tests {
     }
 
     #[test]
+    fn job_retry_statuses_follow_the_same_pipeline_and_do_not_repeat_reports() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = Ledger::new(directory.path()).unwrap();
+        let config = status_config();
+        ledger.reserve("head", "base", Scope::Full).unwrap();
+        ledger.attach("head", "base", 1, 42).unwrap();
+        ledger.announce("head", "base", 1, 42).unwrap();
+        let mut reports = Vec::new();
+        for observation in [
+            PipelineObservation::Failed("failed".into()),
+            PipelineObservation::Failed("failed".into()),
+            PipelineObservation::Running,
+            PipelineObservation::Running,
+            PipelineObservation::Succeeded,
+            PipelineObservation::Succeeded,
+            PipelineObservation::Running,
+            PipelineObservation::Failed("failed".into()),
+            PipelineObservation::Succeeded,
+        ] {
+            let entry = ledger.get("head", "base").unwrap().unwrap();
+            observe_verification(
+                &VerificationAttempt {
+                    head_sha: "head",
+                    base_sha: "base",
+                    attempt: entry.attempt,
+                    scope: entry.scope,
+                    config: &config,
+                },
+                42,
+                entry.state,
+                |_| Ok(observation),
+                |sha, state, _, url| {
+                    assert_eq!(sha, "head");
+                    assert_eq!(url, Some(config.gitlab_pipeline_url(42).as_str()));
+                    reports.push(state.to_owned());
+                    Ok(())
+                },
+                |id, state, detail| ledger.finish("head", "base", 1, id, state, detail),
+                |_| panic!("a job retry must keep its pipeline"),
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            reports,
+            [
+                "failure", "pending", "success", "pending", "failure", "success"
+            ]
+        );
+        let entry = ledger.get("head", "base").unwrap().unwrap();
+        assert_eq!(entry.state, VerificationState::Verified);
+        assert_eq!(entry.pipeline_id, Some(42));
+        assert_eq!(entry.attempt, 1);
+    }
+
+    #[test]
     fn success_is_posted_before_verified() {
         let actions = RefCell::new(Vec::new());
         observe_verification(
@@ -1566,6 +1644,7 @@ mod tests {
                 config: &status_config(),
             },
             42,
+            VerificationState::Testing,
             |id| {
                 actions.borrow_mut().push(VerificationAction::Observe(id));
                 Ok(PipelineObservation::Succeeded)
@@ -1613,6 +1692,7 @@ mod tests {
                     config: &status_config(),
                 },
                 42,
+                VerificationState::Testing,
                 |_| Ok(observation.clone()),
                 |_, state, _, _| {
                     actions
@@ -1653,6 +1733,7 @@ mod tests {
                 config: &status_config(),
             },
             42,
+            VerificationState::Testing,
             |id| {
                 actions.borrow_mut().push(VerificationAction::Observe(id));
                 Ok(PipelineObservation::Cancelled)
@@ -1692,6 +1773,7 @@ mod tests {
                 config: &status_config(),
             },
             42,
+            VerificationState::Testing,
             |_| bail!("temporary GitLab API failure"),
             |_, _, _, _| panic!("an API error is not a verdict"),
             |_, _, _| panic!("an API error must leave Testing unchanged"),

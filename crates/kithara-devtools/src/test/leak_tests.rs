@@ -69,6 +69,7 @@ fn leaked_output_fails_the_lane_and_stress_report() {
             .arg(&config)
             .args(["-E", "test(=leaks_output)"])
             .env("CARGO_TARGET_DIR", temp.path().join("build"))
+            .env("CARGO_HOME", temp.path().join("cargo-home"))
             .env("LEAK_RELEASE_PATH", &release)
             .env("LEAK_RELEASED_PATH", &released)
             .env("LEAK_STARTED_PATH", &started);

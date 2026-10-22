@@ -1,4 +1,4 @@
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroU64, NonZeroU128};
 
 use kithara_abr::AbrHandle;
 use kithara_audio::TrackFailureKind;
@@ -10,7 +10,7 @@ use kithara_render::{
     CrossfadeSettings, LaneCommand, LaneFrame,
     bridge::{FadeDir, PlaybackFault, Slot, SlotMark},
 };
-use kithara_signal::{FrameCount, SegmentId, SessionFrame};
+use kithara_signal::{AudioChunkInfo, FrameCount, SegmentId, SessionFrame};
 use kithara_sync::SpeedCurve;
 
 use super::super::settings::TrackSettingsChange;
@@ -106,7 +106,7 @@ pub struct TrackSnapshot {
     pub slot: Option<Slot>,
     pub status: TrackStatus,
     pub speed: f32,
-    /// Last known media position; retains the commanded position until its source basis is known.
+    /// Last known media position; an unconsumed segment retains its exact entry mark.
     pub position: Position,
     /// End of the track on the same media clock as its grid and cues.
     pub duration: Option<Duration>,
@@ -222,6 +222,25 @@ pub(super) enum Configuring {
     Apply(TrackSettingsChange),
     Unchanged,
     Send(When<LaneFrame>, TrackSettingsChange),
+}
+
+/// Every input of an end projection except the observation point: within one
+/// plan the exact source law reaches its endpoint at the same lane frame
+/// wherever the track last observed its source.
+#[derive(Clone, PartialEq)]
+pub(super) struct EndPlan {
+    pub(super) source: (u64, u64, Option<NonZeroU64>),
+    pub(super) basis: AudioChunkInfo,
+    pub(super) endpoint: (u128, NonZeroU128),
+    pub(super) speed: u32,
+    pub(super) sample_rate: NonZeroU32,
+    pub(super) commands: Vec<(u64, Seq)>,
+}
+
+/// The lane frame where the source reaches its endpoint under one plan.
+pub(super) struct ProjectedEnd {
+    pub(super) plan: EndPlan,
+    pub(super) frame: u64,
 }
 
 pub(super) enum PlannedChange<'a> {

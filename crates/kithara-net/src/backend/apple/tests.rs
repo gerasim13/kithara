@@ -89,14 +89,13 @@ fn stalled_head() -> Response {
     ))
 }
 
-fn fast_options(max_retries: u32) -> NetOptions {
+fn retry_options(max_retries: u32) -> NetOptions {
     NetOptions::builder()
         .retry_policy(RetryPolicy {
             max_retries,
             base_delay: Duration::from_millis(1),
             max_delay: Duration::from_millis(10),
         })
-        .inactivity_timeout(Duration::from_millis(30))
         .build()
 }
 
@@ -154,7 +153,7 @@ async fn apple_get_bytes_retries_503_until_ok() {
     .await;
     let url = server.url(PROBE);
 
-    let client = HttpClient::new(fast_options(3), pools(), CancelToken::never());
+    let client = HttpClient::new(retry_options(3), pools(), CancelToken::never());
     let body = client
         .get_bytes(url, None)
         .await
@@ -268,14 +267,15 @@ async fn apple_identity_stream_rejects_nonidentity_content_encoding() {
     })
     .await;
     let url = server.url(PROBE);
-    let client = HttpClient::new(fast_options(0), pools(), CancelToken::never());
+    let client = HttpClient::new(retry_options(0), pools(), CancelToken::never());
 
     let Err(error) = client.stream(url.clone(), None).await else {
         panic!("encoded bytes must not reach an identity stream");
     };
 
     assert!(
-        matches!(error, NetError::Decode(detail) if detail.contains(url.as_str()) && detail.contains("gzip"))
+        matches!(&error, NetError::Decode(detail) if detail.contains(url.as_str()) && detail.contains("gzip")),
+        "identity stream returned {error:?}"
     );
 }
 
@@ -290,7 +290,7 @@ async fn apple_head_backfills_content_length_from_content_range() {
     })
     .await;
 
-    let client = HttpClient::new(fast_options(0), pools(), CancelToken::never());
+    let client = HttpClient::new(retry_options(0), pools(), CancelToken::never());
     let headers = client.head(server.url(PROBE), None).await.expect("head");
 
     assert_eq!(headers.get("content-length"), Some("1234"));
@@ -300,7 +300,7 @@ async fn apple_head_backfills_content_length_from_content_range() {
 async fn apple_range_rejects_partial_without_content_range() {
     let server = serve(|| async { respond(StatusCode::PARTIAL_CONTENT, &[], "part") }).await;
     let url = server.url(PROBE);
-    let client = HttpClient::new(fast_options(0), pools(), CancelToken::never());
+    let client = HttpClient::new(retry_options(0), pools(), CancelToken::never());
 
     let Err(error) = client
         .get_range(url, RangeSpec::new(0, Some(3)), None)
@@ -323,7 +323,7 @@ async fn apple_range_rejects_partial_without_content_length() {
     })
     .await;
     let url = server.url(PROBE);
-    let client = HttpClient::new(fast_options(0), pools(), CancelToken::never());
+    let client = HttpClient::new(retry_options(0), pools(), CancelToken::never());
 
     let Err(error) = client
         .get_range(url, RangeSpec::new(0, Some(3)), None)
@@ -365,7 +365,7 @@ async fn apple_resume_rejects_a_different_content_range() {
         }
     })
     .await;
-    let client = HttpClient::new(fast_options(1), pools(), CancelToken::never());
+    let client = HttpClient::new(retry_options(1), pools(), CancelToken::never());
     let stream = client
         .stream(server.url(PROBE), None)
         .await
@@ -416,7 +416,7 @@ async fn apple_resume_rejects_a_conflicting_representation_total() {
         }
     })
     .await;
-    let client = HttpClient::new(fast_options(1), pools(), CancelToken::never());
+    let client = HttpClient::new(retry_options(1), pools(), CancelToken::never());
     let stream = client
         .stream(server.url(PROBE), None)
         .await
@@ -459,16 +459,22 @@ async fn apple_ignored_range_resume_continues_after_discovering_total() {
                     body.slice(start..end_exclusive),
                 )
             } else {
-                truncated(
-                    Response::builder(),
-                    body.slice(..FIRST_WRITE_LEN),
-                    Duration::from_millis(60),
+                let first = body.slice(..FIRST_WRITE_LEN);
+                respond(
+                    StatusCode::OK,
+                    &[("Content-Type", "application/octet-stream")],
+                    Body::from_stream(
+                        stream::once(async move { Ok::<_, io::Error>(first) })
+                            .chain(stream::pending()),
+                    ),
                 )
             }
         }
     })
     .await;
-    let client = HttpClient::new(fast_options(2), pools(), CancelToken::never());
+    let mut options = retry_options(2);
+    options.inactivity_timeout = Duration::from_millis(300);
+    let client = HttpClient::new(options, pools(), CancelToken::never());
     let stream = client
         .get_range(
             server.url(PROBE),
@@ -492,7 +498,7 @@ async fn apple_open_ended_stream_delivers_chunks() {
     let server =
         serve(|| async { respond(StatusCode::OK, &[], unsized_body(&[b"abc", b"def"])) }).await;
 
-    let client = HttpClient::new(fast_options(0), pools(), CancelToken::never());
+    let client = HttpClient::new(retry_options(0), pools(), CancelToken::never());
     let stream = client
         .stream(server.url(PROBE), None)
         .await
@@ -551,7 +557,7 @@ async fn apple_short_body_yields_before_premature_eof_under_flash() {
     })
     .await;
 
-    let client = HttpClient::new(fast_options(1), pools(), CancelToken::never());
+    let client = HttpClient::new(retry_options(1), pools(), CancelToken::never());
     let stream = client
         .stream(server.url(PROBE), None)
         .await
@@ -639,7 +645,7 @@ impl NetObserver for AttemptLog {
 async fn apple_observed_handle_reports_every_attempt() {
     let server = serve(|| async { StatusCode::INTERNAL_SERVER_ERROR }).await;
     let url = server.url(PROBE);
-    let mut options = fast_options(2);
+    let mut options = retry_options(2);
     options.inactivity_timeout = Duration::from_secs(2);
     let client = HttpClient::new(options, pools(), CancelToken::never());
 

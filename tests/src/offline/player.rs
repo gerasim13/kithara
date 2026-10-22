@@ -9,7 +9,7 @@ use kithara::{
     platform::{
         maybe_send::MaybeSend,
         sync::{Arc, Mutex},
-        time::{Duration, WallInstant},
+        time::{Duration, Instant, WallInstant},
         tokio::sync::broadcast::error::TryRecvError,
     },
     play::{
@@ -393,9 +393,15 @@ where
     /// Render `frames` of interleaved stereo audio through the product Host.
     /// A resident player then publishes what the block produced, as the app
     /// update loop would.
-    #[kithara_test_utils::kithara::flash(io)]
     pub async fn render(&self, frames: usize) -> Vec<f32> {
         let output = self.host.render(frames).await;
+        self.tick_player().await;
+        output
+    }
+
+    /// Render and publish a block, retaining its actual owner-thread start time.
+    pub async fn render_timed(&self, frames: usize) -> (Instant, Vec<f32>) {
+        let output = self.host.render_timed(frames).await;
         self.tick_player().await;
         output
     }

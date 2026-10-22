@@ -67,7 +67,7 @@ fn image_data(image: &Image) -> Option<ImageData> {
 
 /// Where the picture lands: scaled from its natural size to the box, then
 /// turned about that box's centre.
-fn placed(image: &Image, rect: Rect, turn: f32) -> Affine {
+pub(in crate::backends) fn placed(image: &Image, rect: Rect, turn: f32) -> Affine {
     let centre = (
         f64::from(rect.x + rect.w / 2.0),
         f64::from(rect.y + rect.h / 2.0),

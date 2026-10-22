@@ -208,12 +208,11 @@ where
         samples: usize,
     ) -> Result<SampleBuffer, ElasticError> {
         let mut buffer = reusable.unwrap_or_else(|| pools.get::<f32>());
-        buffer
-            .ensure_len(samples)
-            .map_err(|_| ElasticError::PoolCapacity)?;
-        buffer.truncate(samples);
-        buffer.shrink_to_fit();
         buffer.clear();
+        buffer
+            .try_reserve(samples)
+            .map_err(|_| ElasticError::PoolCapacity)?;
+        buffer.shrink_to(samples);
         Ok(buffer)
     }
 
@@ -303,11 +302,11 @@ where
             .deferred_scratch
             .take()
             .unwrap_or_else(|| self.pools.get::<f32>());
-        if scratch.ensure_len(required.get()).is_err() {
+        scratch.clear();
+        if scratch.try_reserve(required.get()).is_err() {
             warn!("pool capacity exhausted while preparing time-stretch output scratch");
             return;
         }
-        scratch.clear();
         self.scratch = Some(scratch);
     }
 

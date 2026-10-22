@@ -643,11 +643,17 @@ mod apple_output_clock_tests {
     use kithara_platform::time::Duration;
     use kithara_signal::AudioChunkInfo;
     use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
-    use kithara_test_fixtures::assets::signal_profile_mp3_libmp3lame_44100_1ch;
+    use kithara_test_fixtures::assets::{
+        signal_flac_saw_1s, signal_profile_m4a_alac_44100_2ch_16bit,
+        signal_profile_mp3_libmp3lame_44100_1ch, signal_wav_saw_1s,
+    };
     use kithara_test_utils::kithara;
 
     use crate::{
         Decoder, DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory, PcmOrigin,
+        apple::{AppleAudioFileDemuxer, AppleCodec, SourceOpenMode},
+        composed::{ComposedDecoder, DecoderRuntime},
+        demuxer::Demuxer,
         test_pools::{TestPools, pools},
     };
 
@@ -673,14 +679,12 @@ mod apple_output_clock_tests {
     #[kithara::hang_watchdog]
     fn drain(decoder: &mut dyn Decoder) -> (Vec<AudioChunkInfo>, Vec<f32>) {
         let mut metadata = Vec::new();
-        let mut first_pcm = Vec::new();
+        let mut pcm = Vec::new();
         loop {
             hang_tick!();
-            match decoder.next_chunk().expect("decode native Apple MPEG") {
+            match decoder.next_chunk().expect("decode native Apple PCM") {
                 DecoderChunkOutcome::Chunk(chunk) => {
-                    if metadata.is_empty() {
-                        first_pcm = chunk.samples.to_vec();
-                    }
+                    pcm.extend_from_slice(&chunk.samples);
                     assert_eq!(chunk.frames(), chunk.meta.frames as usize);
                     assert_eq!(
                         chunk.samples.len(),
@@ -694,7 +698,80 @@ mod apple_output_clock_tests {
                 DecoderChunkOutcome::Eof => break,
             }
         }
-        (metadata, first_pcm)
+        (metadata, pcm)
+    }
+
+    #[kithara::test]
+    #[case::pcm_upsample(signal_wav_saw_1s().bytes(), AudioCodec::Pcm, ContainerFormat::Wav, 1, 48_000)]
+    #[case::pcm_downsample(signal_wav_saw_1s().bytes(), AudioCodec::Pcm, ContainerFormat::Wav, 1, 32_000)]
+    #[case::flac_upsample(signal_flac_saw_1s().bytes(), AudioCodec::Flac, ContainerFormat::Flac, 1, 48_000)]
+    #[case::flac_downsample(signal_flac_saw_1s().bytes(), AudioCodec::Flac, ContainerFormat::Flac, 1, 32_000)]
+    #[case::alac_upsample(signal_profile_m4a_alac_44100_2ch_16bit().bytes(), AudioCodec::Alac, ContainerFormat::Mp4, 6, 48_000)]
+    #[case::alac_downsample(signal_profile_m4a_alac_44100_2ch_16bit().bytes(), AudioCodec::Alac, ContainerFormat::Mp4, 6, 32_000)]
+    fn apple_lossless_rate_conversion_keeps_content_zero_and_rewinds_every_sample(
+        #[case] bytes: &'static [u8],
+        #[case] source_codec: AudioCodec,
+        #[case] container: ContainerFormat,
+        #[case] seconds: u64,
+        #[case] output_rate: u32,
+    ) {
+        let demuxer = AppleAudioFileDemuxer::open_for_with_mode(
+            Box::new(Cursor::new(bytes.to_vec())),
+            source_codec,
+            Some(container),
+            SourceOpenMode::Complete,
+        )
+        .expect("open native PCM ramp");
+        let track = demuxer.track_info().clone();
+        assert_eq!(track.sample_rate, 44_100);
+        let codec = AppleCodec::open_with_config(&track, true, Some(output_rate))
+            .expect("open native PCM rate converter");
+        let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
+        let (original, original_pcm) = drain(&mut decoder);
+        let frames: u64 = original.iter().map(|meta| u64::from(meta.frames)).sum();
+        assert_eq!(frames, seconds * u64::from(output_rate));
+        let channels = usize::from(track.channels);
+        let zero_frame =
+            u32::try_from(32_768_u64 * u64::from(output_rate) / 44_100).expect("ramp zero index");
+        let zero_index = usize::try_from(zero_frame).expect("ramp index") * channels;
+        for channel in 0..channels {
+            let crossing = |pcm: &[f32]| {
+                let before = f64::from(*pcm.get(zero_index + channel)?);
+                let after = f64::from(*pcm.get(zero_index + channels + channel)?);
+                if !(before <= 0.0 && after >= 0.0 && after > before) {
+                    return None;
+                }
+                let frame = f64::from(zero_frame) - before / (after - before);
+                Some(frame * 44_100.0 / f64::from(output_rate))
+            };
+            let actual = crossing(&original_pcm).expect("the nominal bracket contains ramp zero");
+            assert!(
+                (actual - 32_768.0).abs() < 0.5,
+                "the resampled ramp must cross zero at source frame 32768, got {actual}",
+            );
+            for shifted_frames in [1, 18] {
+                assert!(
+                    crossing(&original_pcm[shifted_frames * channels..]).is_none(),
+                    "the phase oracle must reject a shift of {shifted_frames} output frames",
+                );
+            }
+        }
+        assert_eq!(original[0].timestamp, Duration::ZERO);
+        assert_eq!(assert_clock(&original, Duration::ZERO), frames);
+        assert_eq!(
+            original.last().expect("PCM end").end_timestamp,
+            Duration::from_secs(seconds)
+        );
+        assert_eq!(
+            decoder.initial_pcm_origin().map(PcmOrigin::position),
+            Some(Duration::ZERO),
+        );
+        decoder
+            .seek_prefix(Duration::ZERO)
+            .expect("native PCM rewind");
+        let (replay, replay_pcm) = drain(&mut decoder);
+        assert_eq!(assert_clock(&replay, Duration::ZERO), frames);
+        assert_eq!(replay_pcm, original_pcm);
     }
 
     fn assert_clock(chunks: &[AudioChunkInfo], origin: Duration) -> u64 {

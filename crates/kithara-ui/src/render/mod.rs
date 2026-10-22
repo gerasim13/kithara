@@ -25,4 +25,4 @@ pub use zoom::{DEFAULT_ZOOM, Zoom, zoom_in, zoom_out};
 #[cfg(feature = "iced")]
 pub use crate::iced::{fonts, immediate::LayoutPreview, tree};
 #[cfg(feature = "masonry")]
-pub use crate::masonry::{retained as masonry, shader, vis};
+pub use crate::masonry::{external, retained as masonry, shader, vis};

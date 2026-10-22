@@ -220,10 +220,6 @@ impl DiskAssetStore {
             && path.metadata().is_ok_and(|meta| meta.len() > 0)
     }
 
-    fn lru_index_path(&self) -> PathBuf {
-        self.root_dir.join("_index").join("lru.bin")
-    }
-
     fn open_absolute_resource(&self, key: &ResourceKey) -> AssetsResult<Option<BaseReader>> {
         let Some(path) = key.as_absolute_path() else {
             return Ok(None);
@@ -263,18 +259,6 @@ impl DiskAssetStore {
         Ok(chunked)
     }
 
-    fn open_index_resource(&self, path: PathBuf) -> AssetsResult<MmapResource> {
-        /// Initial mmap file size for index resources (4 KB).
-        const INDEX_INITIAL_SIZE: u64 = 4096;
-        Ok(Resource::open(
-            self.cancel.clone(),
-            MmapOptions::for_path(path)
-                .initial_len(INDEX_INITIAL_SIZE)
-                .mode(OpenMode::ReadWrite)
-                .build(),
-        )?)
-    }
-
     fn open_storage_resource(
         &self,
         key: &ResourceKey,
@@ -293,10 +277,6 @@ impl DiskAssetStore {
             self.availability.record_commit(key, len);
         }
         Ok(resource)
-    }
-
-    fn pins_index_path(&self) -> PathBuf {
-        self.root_dir.join("_index").join("pins.bin")
     }
 
     fn resource_path(&self, key: &ResourceKey) -> AssetsResult<PathBuf> {
@@ -357,7 +337,6 @@ impl DiskAssetStore {
 impl Assets for DiskAssetStore {
     type ActiveRes = BaseWriter;
     type Context = ();
-    type IndexRes = StorageResource;
     type ReadyRes = BaseReader;
 
     /// Unconfirmed leftovers are indistinguishable from a torn write, so they are refetched rather
@@ -399,16 +378,6 @@ impl Assets for DiskAssetStore {
             return Err(StorageError::Cancelled.into());
         }
         self.deleter.delete_asset(asset_root)
-    }
-
-    fn open_lru_index_resource(&self) -> AssetsResult<StorageResource> {
-        let path = self.lru_index_path();
-        Ok(StorageResource::from(self.open_index_resource(path)?))
-    }
-
-    fn open_pins_index_resource(&self) -> AssetsResult<StorageResource> {
-        let path = self.pins_index_path();
-        Ok(StorageResource::from(self.open_index_resource(path)?))
     }
 
     fn open_resource_with_ctx(

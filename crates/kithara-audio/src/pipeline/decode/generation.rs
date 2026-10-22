@@ -136,6 +136,7 @@ impl DecoderGeneration {
             }
             _ => (physical, self.visible_origin),
         };
+        let content_shift = self.undeclared_priming(mode)?;
         crate::pipeline::gapless::media_end(
             declared,
             self.gapless_profile,
@@ -145,6 +146,7 @@ impl DecoderGeneration {
             self.media_origin,
             decoded_end,
         )
+        .map(|end| end.saturating_sub(content_shift))
     }
 
     pub(crate) fn new(
@@ -260,6 +262,32 @@ impl DecoderGeneration {
     pub(crate) fn comparison_origin(&self, mode: GaplessMode) -> Option<u64> {
         self.timeline_origin(mode)
             .checked_add(self.comparison_base_frames()?)
+    }
+
+    /// Raw PCM coordinate of content zero: media zero moved past the priming
+    /// it leaves undeclared, so every variant of one stream reports one
+    /// content time.
+    pub(crate) fn content_origin(&self, mode: GaplessMode) -> Option<Duration> {
+        self.media_origin?
+            .checked_add(self.undeclared_priming(mode)?)
+    }
+
+    /// Leading frames past media zero that only the timeline origin a variant
+    /// switch compares accounts for. A container that declares a nonzero
+    /// media zero covers its leading frames there; one that declares none
+    /// leaves the timeline origin to cover its priming.
+    fn undeclared_priming(&self, mode: GaplessMode) -> Option<Duration> {
+        match self.media_origin {
+            Some(media) if !media.is_zero() => Some(Duration::ZERO),
+            _ => self.timeline_origin_duration(mode),
+        }
+    }
+
+    fn timeline_origin_duration(&self, mode: GaplessMode) -> Option<Duration> {
+        self.decoder
+            .spec()
+            .duration_for(self.timeline_origin(mode))
+            .ok()
     }
 
     pub(crate) fn comparison_origin_with_gap(&self, mode: GaplessMode, gap: u64) -> Option<u64> {
@@ -491,6 +519,7 @@ mod tests {
                 landed_frame: self.spec.frame_at(position).expect("valid seek frame"),
                 landed_byte: None,
                 preroll: PrerollHint::NotNeeded,
+                clock: kithara_decode::LandingClock::Kept,
             })
         }
 
@@ -1091,6 +1120,7 @@ mod tests {
                 landed_frame: self.landed_frame,
                 landed_byte: None,
                 preroll: PrerollHint::NotNeeded,
+                clock: kithara_decode::LandingClock::Kept,
             })
         }
 
@@ -1104,6 +1134,7 @@ mod tests {
                 landed_frame: self.landed_frame,
                 landed_byte: None,
                 preroll: PrerollHint::NotNeeded,
+                clock: kithara_decode::LandingClock::Kept,
             }))
         }
 
@@ -1160,6 +1191,7 @@ mod tests {
             outgoing_gap: 0,
             outgoing_origin: 0,
             outgoing_exhausted: true,
+            outgoing_disposition: kithara_stream::OutgoingDisposition::Retained,
             join_frames: 0,
             gapless_mode: GaplessMode::Disabled,
         };

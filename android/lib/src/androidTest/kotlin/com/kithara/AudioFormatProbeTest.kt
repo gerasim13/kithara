@@ -4,7 +4,10 @@ import android.content.Context
 import android.util.Log
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.kithara.ffi.FfiException
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.BeforeClass
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -48,5 +51,46 @@ class AudioFormatProbeTest {
             Kithara.Test.SampleFormat.F32,
             code,
         )
+    }
+
+    @Test
+    fun closedPlayerReleasesItsHostSlotAtCapacity() {
+        val players = mutableListOf<KitharaPlayer>()
+        try {
+            repeat(8) { players += KitharaPlayer() }
+            val exhausted = assertThrows(FfiException.Internal::class.java) { KitharaPlayer() }
+            assertEquals("all scope slots are in use", exhausted.description)
+
+            val released = players.first()
+            released.close()
+            released.close()
+            val replacement = KitharaPlayer()
+            players += replacement
+
+            assertTrue(replacement.items.isEmpty())
+            assertEquals(1.0f, players[1].playingRate, 0.0f)
+            assertThrows(IllegalStateException::class.java) { released.items }
+        } finally {
+            players.forEach(KitharaPlayer::close)
+        }
+    }
+
+    @Test
+    fun closedPlayersDoNotConsumeHostSlots() {
+        val closedPlayers = mutableListOf<KitharaPlayer>()
+        try {
+            repeat(16) {
+                val player = KitharaPlayer()
+                closedPlayers += player
+                player.use { assertTrue(it.items.isEmpty()) }
+            }
+
+            assertEquals(16, closedPlayers.size)
+            closedPlayers.forEach { player ->
+                assertThrows(IllegalStateException::class.java) { player.items }
+            }
+        } finally {
+            closedPlayers.forEach(KitharaPlayer::close)
+        }
     }
 }

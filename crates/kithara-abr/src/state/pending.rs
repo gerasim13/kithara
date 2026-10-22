@@ -272,8 +272,8 @@ impl AbrState {
     delegate::delegate! {
         to self {
             /// Read-only peek at the pending decision. Returns the
-            /// [`AbrDecision`] that [`apply_decision`](Self::apply_decision)
-            /// would publish, or `None` when:
+            /// [`AbrDecision`] that [`commit_pending`](Self::commit_pending)
+            /// publishes with the claim of the same request, or `None` when:
             /// - pending slot is empty;
             /// - state is locked (the seek-no-switch / blender invariant);
             /// - pending target equals `current` (no-op switch).

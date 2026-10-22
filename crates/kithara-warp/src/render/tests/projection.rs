@@ -1136,7 +1136,8 @@ fn removing_a_projection_drains_only_its_admitted_interval_before_manual_pcm(
         .set_speed(SpeedCurve::Constant(1.0), 0)
         .expect("manual trajectory");
     renderer.prepare(spec());
-    let mut input = chunk(&renderer.pools, &[0.5; 128]);
+    // One whole 128-frame lane packet of manual PCM.
+    let mut input = chunk(&renderer.pools, &[0.5; 256]);
     input.meta.frame_offset = admitted;
     let frames = renderer
         .prepare_source_window(input.meta, input.frames(), usize::MAX)
@@ -1147,7 +1148,7 @@ fn removing_a_projection_drains_only_its_admitted_interval_before_manual_pcm(
         .continue_value()
         .expect("manual source is prepared")
         .expect("manual PCM");
-    assert_eq!(&*output.samples, &[0.5; 128]);
+    assert_eq!(&*output.samples, &[0.5; 256]);
     assert_eq!(output.meta.render_revision, 0);
     assert_eq!(output.meta.frame_offset, admitted);
 }

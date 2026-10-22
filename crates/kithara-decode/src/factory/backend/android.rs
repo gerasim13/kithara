@@ -36,6 +36,18 @@ where
         return Err(DecodeError::UnsupportedCodec { codec });
     }
 
+    if codec == AudioCodec::Pcm && container == Some(ContainerFormat::Wav) {
+        return super::super::wave::build_wave_decoder(source, config);
+    }
+
+    if matches!(
+        codec,
+        AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2
+    ) && container == Some(ContainerFormat::Adts)
+    {
+        return super::super::adts::build_adts_decoder(source, config);
+    }
+
     if android_standalone_supports(codec, container) {
         tracing::debug!(
             ?codec,
@@ -51,15 +63,13 @@ where
 fn android_standalone_supports(codec: AudioCodec, container: Option<ContainerFormat>) -> bool {
     matches!(
         (codec, container),
-        (AudioCodec::Pcm, Some(ContainerFormat::Wav))
-            | (
-                AudioCodec::Mp3,
-                Some(ContainerFormat::MpegAudio | ContainerFormat::Wav)
-            )
-            | (AudioCodec::Alac, Some(ContainerFormat::Mp4))
+        (
+            AudioCodec::Mp3,
+            Some(ContainerFormat::MpegAudio | ContainerFormat::Wav)
+        ) | (AudioCodec::Alac, Some(ContainerFormat::Mp4))
             | (
                 AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2,
-                Some(ContainerFormat::Adts | ContainerFormat::Mp4 | ContainerFormat::Fmp4)
+                Some(ContainerFormat::Mp4 | ContainerFormat::Fmp4)
             )
             | (
                 AudioCodec::Flac,
@@ -99,17 +109,11 @@ where
     } else {
         None
     };
-    let init_end = (container == Some(ContainerFormat::Wav))
-        .then(|| config.byte_map.as_ref().map(|map| map.init_segment_range()))
-        .flatten()
-        .filter(|range| range.start == 0 && !range.is_empty())
-        .map(|range| range.end);
     let (demuxer, mut format) = AndroidMediaExtractorDemuxer::open(
         source,
         codec,
         config.byte_map.clone(),
         config.byte_len_handle.clone(),
-        init_end,
     )?;
     let mut track = demuxer.track_info().clone();
     track.gapless = gapless;
@@ -119,4 +123,76 @@ where
     }
     let codec_impl = AndroidCodec::open_with_format(&track, &format)?;
     finish(demuxer, codec_impl, config)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use kithara_platform::time::Duration;
+    use kithara_resampler::NoResamplerBackend;
+    use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
+    use kithara_test_fixtures::{
+        assets::{
+            signal_profile_mp3_libmp3lame_11025_1ch, signal_profile_mp3_libmp3lame_44100_1ch,
+        },
+        without_xing_frame,
+    };
+    use kithara_test_utils::kithara;
+
+    use crate::{
+        DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory,
+        test_pools::{TestPools, pools},
+    };
+
+    #[kithara::test]
+    #[case::tagged_44100_gapless(signal_profile_mp3_libmp3lame_44100_1ch().bytes(), false, 576, true)]
+    #[case::tagged_44100_disabled(signal_profile_mp3_libmp3lame_44100_1ch().bytes(), false, 576, false)]
+    #[case::tagged_11025_gapless(signal_profile_mp3_libmp3lame_11025_1ch().bytes(), false, 576, true)]
+    #[case::tagged_11025_disabled(signal_profile_mp3_libmp3lame_11025_1ch().bytes(), false, 576, false)]
+    #[case::headerless_gapless(signal_profile_mp3_libmp3lame_44100_1ch().bytes(), true, 0, true)]
+    #[case::headerless_disabled(signal_profile_mp3_libmp3lame_44100_1ch().bytes(), true, 0, false)]
+    fn native_mpeg_origin_accounts_for_the_physically_removed_head(
+        #[case] bytes: &'static [u8],
+        #[case] headerless: bool,
+        #[case] origin_frames: u64,
+        #[case] gapless: bool,
+    ) {
+        let bytes = if headerless {
+            without_xing_frame(bytes)
+        } else {
+            bytes.to_vec()
+        };
+        let media = MediaInfo::builder()
+            .codec(AudioCodec::Mp3)
+            .container(ContainerFormat::MpegAudio)
+            .build();
+        let config: DecoderConfig<NoResamplerBackend, TestPools> = DecoderConfig::builder()
+            .backend(DecoderBackend::Android)
+            .gapless(gapless)
+            .pools(pools())
+            .build();
+        let mut decoder =
+            DecoderFactory::create_from_media_info(Cursor::new(bytes), &media, config)
+                .expect("native MPEG decoder");
+        let origin = decoder
+            .spec()
+            .duration_for(origin_frames)
+            .expect("media origin");
+        let actual = decoder.media_origin().expect("native media origin");
+        assert!(actual.abs_diff(origin) <= Duration::from_nanos(1));
+        for position in [None, Some(Duration::from_secs(1)), Some(Duration::ZERO)] {
+            if let Some(position) = position {
+                decoder.seek(position).expect("native MPEG seek");
+            }
+            let DecoderChunkOutcome::Chunk(chunk) = decoder.next_chunk().expect("native MPEG PCM")
+            else {
+                panic!("resident MPEG input produces PCM");
+            };
+            assert!(!chunk.samples.is_empty());
+            assert!(chunk.samples.iter().all(|sample| sample.is_finite()));
+            assert_eq!(chunk.meta.media_origin, Some(actual));
+            assert_eq!(decoder.media_origin(), Some(actual));
+        }
+    }
 }
