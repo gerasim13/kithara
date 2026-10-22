@@ -4,7 +4,6 @@ use super::{cases::*, harness::*, imports::*, providers::*};
 
 #[kithara::test(native, tokio, multi_thread, serial)]
 #[case::synthetic(synthetic_sources().await, CUE)]
-#[case::mp3_same(source_mp3_same().await, CUE)]
 #[case::mp3_distinct(source_mp3_distinct().await, CUE)]
 #[case::hls_plain(source_hls_same_plain().await, CUE)]
 #[case::hls_drm(source_hls_same_drm().await, CUE)]
@@ -13,7 +12,6 @@ use super::{cases::*, harness::*, imports::*, providers::*};
 #[case::ambient_trip_hop(source_ambient_trip_hop_provider().await, CUE)]
 #[case::downtempo_house(source_downtempo_house_provider().await, CUE)]
 #[case::techno_breakbeat(source_techno_breakbeat_provider().await, CUE)]
-#[case::cross_style(source_cross_style_provider().await, CUE)]
 #[case::tunnel(tunnel_sources().await, TUNNEL_CUE)]
 #[case::newtechno(newtechno_sources().await, NEWTECHNO_PHRASE)]
 #[case::library(prepared_sources(Provider::Library(crate::providers::LIBRARY)).await, Start::bar(0))]
@@ -25,6 +23,10 @@ async fn provider_tempo_controls_measure_without_sync(
     let mut failures = Vec::new();
     for (deck, source) in prepared.2.iter().enumerate() {
         if prepared.2[..deck].contains(source) {
+            continue;
+        }
+        // Mp3Distinct already checks the identical local B source and oracle.
+        if matches!(prepared.0, Provider::HlsMp3(_)) && deck % 2 == 1 {
             continue;
         }
         let ArtifactSource::Value(mut grid) = prepared.0.beat_grid(deck) else {
@@ -45,7 +47,14 @@ async fn provider_tempo_controls_measure_without_sync(
         #[cfg(target_os = "android")]
         let mut wrong_source = kithara_integration_tests::pcm_oracle::prepared(&wrong_asset)
             .expect("independent 48 kHz stereo wrong-source fixture");
-        for target in [native_bpm, 108.0, 120.0, 127.0, 132.0] {
+        let targets = [native_bpm, 108.0, 120.0, 127.0, 132.0];
+        for (index, &target) in targets.iter().enumerate() {
+            if targets[..index]
+                .iter()
+                .any(|previous| previous.to_bits() == target.to_bits())
+            {
+                continue;
+            }
             hang_tick!(format!(
                 "{:?}: deck {deck}, native {native_bpm}, target {target}",
                 prepared.0

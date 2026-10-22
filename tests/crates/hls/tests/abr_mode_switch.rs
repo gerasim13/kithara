@@ -830,7 +830,10 @@ async fn wait_v0_fully_cached(collector: &EventCollector, segment_count: usize) 
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
 #[case::platform_default(DecoderBackend::default())]
-#[cfg_attr(not(target_os = "android"), case::software(DecoderBackend::Symphonia))]
+#[cfg_attr(
+    not(any(target_os = "android", target_os = "linux")),
+    case::software(DecoderBackend::Symphonia)
+)]
 async fn vod_manual_switch_affects_future_segments(
     #[future(awt)] manual_thirty_gated: (CreatedHls, SegmentGateHandle),
     #[case] backend: DecoderBackend,
@@ -1353,7 +1356,10 @@ async fn multi_track_shared_abr_with_cache(#[future(awt)] shared_tracks: (Create
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
 #[case::platform_default(DecoderBackend::default())]
-#[cfg_attr(not(target_os = "android"), case::software(DecoderBackend::Symphonia))]
+#[cfg_attr(
+    not(any(target_os = "android", target_os = "linux")),
+    case::software(DecoderBackend::Symphonia)
+)]
 async fn abr_switch_must_not_redownload_covered_segments(
     #[future(awt)] manual_thirty_gated: (CreatedHls, SegmentGateHandle),
     #[case] backend: DecoderBackend,

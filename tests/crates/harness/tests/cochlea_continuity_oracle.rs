@@ -151,7 +151,22 @@ async fn tempo_oracle_distinguishes_a_decorated_capture(
         accepted,
         "{played_bpm} BPM at {sample_rate}: {failures:?}"
     );
-    if !accepted {
+    if accepted {
+        let shifted = [vec![0.0; usize::from(CHANNELS)], capture.clone()].concat();
+        let failures = synchronization_failures(
+            "one frame",
+            &[&capture, &shifted],
+            CHANNELS,
+            sample_rate,
+            127.0,
+        );
+        assert!(
+            failures
+                .iter()
+                .any(|failure| failure.contains("beat phase spread is 1 frame")),
+            "{failures:?}"
+        );
+    } else {
         assert!(
             failures.iter().any(|failure| failure.contains("tempo")),
             "wrong-rate decorated control must fail its tempo measurement: {failures:?}"
@@ -166,27 +181,6 @@ async fn tempo_oracle_preserves_the_live_rate_boundary(#[case] sample_rate: u32)
     let capture = render_tempo_control(sample_rate, 127.0, false, true).await;
     let failures = synchronization_failures("live rate", &[&capture], CHANNELS, sample_rate, 127.0);
     assert!(failures.is_empty(), "{failures:?}");
-}
-
-#[kithara::test(tokio, multi_thread)]
-#[case::cd_rate(44_100)]
-#[case::render_rate(48_000)]
-async fn decorated_render_rejects_a_one_frame_phase_error(#[case] sample_rate: u32) {
-    let capture = render_tempo_control(sample_rate, 127.0, true, false).await;
-    let shifted = [vec![0.0; usize::from(CHANNELS)], capture.clone()].concat();
-    let failures = synchronization_failures(
-        "one frame",
-        &[&capture, &shifted],
-        CHANNELS,
-        sample_rate,
-        127.0,
-    );
-    assert!(
-        failures
-            .iter()
-            .any(|failure| failure.contains("beat phase spread is 1 frame")),
-        "{failures:?}"
-    );
 }
 
 const SAMPLE_RATE: u32 = 48_000;
