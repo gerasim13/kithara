@@ -5,7 +5,7 @@ use kithara_stream::AudioCodec;
 
 use super::{
     GaplessInfo,
-    mp3::{read_lame_trim, skip_id3v2},
+    mp3::{consts as mp3_consts, read_lame_trim, skip_id3v2},
     mp4::probe_mp4_gapless_dyn,
 };
 use crate::traits::{DecoderInput, InputReadOutcome};
@@ -66,10 +66,8 @@ where
     }
 }
 
-/// Xing/Info and LAME live in the first audio frame, which an `ID3v2` tag can
-/// push past the probe window: cover art alone reaches hundreds of kilobytes.
-/// The tag declares its own length, so skip to the first audio byte and read
-/// the window there instead of widening it.
+/// Leading `ID3v2` tags can push the LAME fields past the probe window.
+/// Seek past tags until the window holds those fields without buffering cover art.
 fn read_mp3_probe_prefix<S>(
     source: &mut dyn DecoderInput,
     pools: &PoolRegion<S>,
@@ -77,21 +75,26 @@ fn read_mp3_probe_prefix<S>(
 where
     S: HasPool<u8>,
 {
-    let buffer = read_probe_window(source, pools)?;
-    let audio_start = skip_id3v2(&buffer);
-    if buffer.len() < consts::WINDOW_BYTES || audio_start < consts::WINDOW_BYTES {
-        return Ok(buffer);
-    }
-
-    let repositioned = u64::try_from(audio_start)
-        .ok()
-        .filter(|offset| source.seek(SeekFrom::Start(*offset)).is_ok());
-    match repositioned {
-        Some(_) => {
-            drop(buffer);
-            read_probe_window(source, pools)
+    let mut offset = 0_u64;
+    loop {
+        let buffer = read_probe_window(source, pools)?;
+        let audio_start = skip_id3v2(&buffer);
+        if buffer.len() < consts::WINDOW_BYTES
+            || buffer.len().saturating_sub(audio_start) >= mp3_consts::LAME_TRIM_SPAN
+        {
+            return Ok(buffer);
         }
-        None => Ok(buffer),
+
+        let Some(next_offset) = u64::try_from(audio_start)
+            .ok()
+            .and_then(|length| offset.checked_add(length))
+        else {
+            return Ok(buffer);
+        };
+        if source.seek(SeekFrom::Start(next_offset)).is_err() {
+            return Ok(buffer);
+        }
+        offset = next_offset;
     }
 }
 
