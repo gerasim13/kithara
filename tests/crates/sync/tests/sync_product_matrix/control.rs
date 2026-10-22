@@ -1361,15 +1361,7 @@ impl DecodedCapture {
         let (capture_start, frames) = self.physical_capture_clock(pcm, marks)?;
         let sample_rate = consumed.sample_rate;
         check_physical_marks(marks, sample_rate)?;
-        let capture_end = i64::from(capture_start)
-            .checked_add(i64::try_from(frames).map_err(|error| error.to_string())?)
-            .ok_or_else(|| "physical capture endpoint overflows".to_owned())?;
-        let intervals = consumed.covered(i64::from(capture_start)..capture_end)?;
-        if let Some((_, landing)) = jump
-            && !intervals.contains_key(&i64::from(landing))
-        {
-            return Err("commanded Jump landing has no actual source interval".to_owned());
-        }
+        let intervals = physical_intervals(capture_start, frames, consumed, jump)?;
         let physical_bases = intervals
             .iter()
             .map(|(&start, interval)| {
@@ -1385,11 +1377,14 @@ impl DecodedCapture {
                 Ok((start, (origin, basis, first)))
             })
             .collect::<Result<std::collections::BTreeMap<_, _>, String>>()?;
-        let mut expected = Vec::with_capacity(pcm.len());
-        let mut wrong_cue = Vec::with_capacity(pcm.len());
-        let mut wrong_tempo = Vec::with_capacity(pcm.len());
-        let mut wrong_payload = Vec::with_capacity(pcm.len());
-        let mut supplied_beats = Vec::new();
+        let mut reference = PhysicalReference {
+            expected: Vec::with_capacity(pcm.len()),
+            wrong_cue: Vec::with_capacity(pcm.len()),
+            wrong_tempo: Vec::with_capacity(pcm.len()),
+            wrong_payload: Vec::with_capacity(pcm.len()),
+            supplied_beats: Vec::new(),
+        };
+        let mut next_position = None;
         for frame in 0..frames {
             let session = i64::from(capture_start) + frame as i64;
             let gain = physical_jump_gain(SessionFrame::new(session), jump);
@@ -1412,21 +1407,34 @@ impl DecodedCapture {
                      interval={info:?}; nearby_points={nearby:?}"
                 ));
             }
-            let raw_position = span
-                .source_ratio_at(offset)
-                .ok_or_else(|| "physical capture has an unmapped source frame".to_owned())?;
             let raw_next = span
                 .source_ratio_at(offset + 1)
                 .ok_or_else(|| "physical capture has an unmapped source endpoint".to_owned())?;
             let &(origin, basis, first) = physical_bases
                 .get(&start)
                 .ok_or_else(|| "physical source interval lost its decoded basis".to_owned())?;
-            let (numerator, denominator) = basis
-                .output_ratio_at_source(origin, raw_position)
-                .ok_or_else(|| "raw source coordinate has no physical PCM position".to_owned())?;
+            let (raw_position, (numerator, denominator)) = if let Some((_, raw, physical)) =
+                next_position.filter(|(previous_start, _, _)| *previous_start == start)
+            {
+                (raw, physical)
+            } else {
+                let raw = span
+                    .source_ratio_at(offset)
+                    .ok_or_else(|| "physical capture has an unmapped source frame".to_owned())?;
+                let physical = basis.output_ratio_at_source(origin, raw).ok_or_else(|| {
+                    "raw source coordinate has no physical PCM position".to_owned()
+                })?;
+                (raw, physical)
+            };
+            if offset == 0 && (numerator, denominator) != first {
+                return Err(
+                    "physical source interval origin differs from its captured basis".to_owned(),
+                );
+            }
             let physical_next = basis
                 .output_ratio_at_source(origin, raw_next)
                 .ok_or_else(|| "raw source endpoint has no physical PCM position".to_owned())?;
+            next_position = Some((start, raw_next, physical_next));
             let speed = physical_source_speed((numerator, denominator), physical_next)?;
             let mut read = self.sampler(info);
             for channel in 0..usize::from(CHANNELS) {
@@ -1438,13 +1446,13 @@ impl DecodedCapture {
                         "physical reference has no limiter headroom at frame {session}"
                     ));
                 }
-                expected.push(sample);
+                reference.expected.push(sample);
                 let wrong_position = numerator
                     .checked_add(denominator.get())
                     .ok_or_else(|| "wrong-cue negative coordinate overflows".to_owned())?;
                 let wrong_frame = i64::try_from(wrong_position / denominator.get())
                     .map_err(|error| error.to_string())?;
-                wrong_cue.push(
+                reference.wrong_cue.push(
                     mapped_sample((wrong_position, denominator.get()), speed, |offset| {
                         read(
                             wrong_frame
@@ -1466,7 +1474,7 @@ impl DecodedCapture {
                     .ok_or_else(|| "wrong-tempo negative coordinate overflows".to_owned())?;
                 let wrong_frame = i64::try_from(wrong_numerator / wrong_denominator)
                     .map_err(|error| error.to_string())?;
-                wrong_tempo.push(
+                reference.wrong_tempo.push(
                     mapped_sample(
                         (wrong_numerator, wrong_denominator),
                         speed * 0.5,
@@ -1483,14 +1491,14 @@ impl DecodedCapture {
                 );
                 let wrong_frame = (frame as u128 * u128::from(wrong_source.sample_rate))
                     / u128::from(sample_rate);
-                wrong_payload.push(
+                reference.wrong_payload.push(
                     source_sample(wrong_source, (wrong_frame, 1), 1.0, channel)?
                         * gain
                         * CONTROL_GAIN,
                 );
             }
             physical_supplied_beats(
-                &mut supplied_beats,
+                &mut reference.supplied_beats,
                 info,
                 raw_position,
                 raw_next,
@@ -1499,15 +1507,26 @@ impl DecodedCapture {
                 frame,
             )?;
         }
-        PhysicalReference {
-            expected,
-            wrong_cue,
-            wrong_tempo,
-            wrong_payload,
-            supplied_beats,
-        }
-        .check(pcm, sample_rate, frames)
+        reference.check(pcm, sample_rate, frames)
     }
+}
+
+fn physical_intervals(
+    capture_start: SessionFrame,
+    frames: usize,
+    consumed: &super::consumed::Capture,
+    jump: Option<(SessionFrame, SessionFrame)>,
+) -> Result<std::collections::BTreeMap<i64, super::consumed::Interval>, String> {
+    let capture_end = i64::from(capture_start)
+        .checked_add(i64::try_from(frames).map_err(|error| error.to_string())?)
+        .ok_or_else(|| "physical capture endpoint overflows".to_owned())?;
+    let intervals = consumed.covered(i64::from(capture_start)..capture_end)?;
+    if let Some((_, landing)) = jump
+        && !intervals.contains_key(&i64::from(landing))
+    {
+        return Err("commanded Jump landing has no actual source interval".to_owned());
+    }
+    Ok(intervals)
 }
 
 fn physical_supplied_beats(
