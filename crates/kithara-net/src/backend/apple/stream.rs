@@ -266,7 +266,6 @@ impl Drop for AppleBodyStream {
 fn content_length(headers: &Headers) -> Option<u64> {
     headers
         .get("content-length")
-        .or_else(|| headers.get("Content-Length"))
         .and_then(|value| value.parse().ok())
 }
 

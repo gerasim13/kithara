@@ -48,13 +48,14 @@ impl RawHostNet {
         range: Option<RangeSpec>,
         headers: Option<Headers>,
         accept_partial: bool,
+        observer: Option<&Observer>,
     ) -> Result<ByteStream, NetError> {
         let base_start = range.as_ref().map_or(0, |range| range.start);
         let end = range.as_ref().and_then(|range| range.end);
         let first = self
-            .raw_body(&url, range, headers.as_ref(), accept_partial)
+            .raw_body(&url, range, headers.as_ref(), accept_partial, observer)
             .await?;
-        Ok(self.wrap_resumable(first, url, base_start, end, headers))
+        Ok(self.wrap_resumable(first, url, base_start, end, headers, observer))
     }
 
     #[kithara::flash(io)]
@@ -63,9 +64,9 @@ impl RawHostNet {
         method: HostMethod,
         url: Url,
         body: Option<Bytes>,
-        range: Option<RangeSpec>,
         headers: Option<Headers>,
         accept_partial: bool,
+        observer: Option<&Observer>,
     ) -> Result<HostDataResponse, NetError> {
         let started = Instant::now();
         let response = timeout(self.options.inactivity_timeout, async {
@@ -79,7 +80,7 @@ impl RawHostNet {
                     method,
                     accept_encoding: AcceptEncodingPolicy::from(method),
                     url: &url,
-                    range: range.as_ref(),
+                    range: None,
                     headers: headers.as_ref(),
                     body,
                 })
@@ -94,13 +95,13 @@ impl RawHostNet {
         .await
         .map_err(|_| NetError::Timeout)??;
 
-        self.observe_first_byte(started, response.status);
+        Self::observe_first_byte(observer, started, response.status);
         check_status(&url, response.status, &response.body, accept_partial)?;
         Ok(response)
     }
 
-    fn observe_first_byte(&self, started: Instant, status: u16) {
-        if let Some(observer) = self.options.observer.as_ref() {
+    fn observe_first_byte(observer: Option<&Observer>, started: Instant, status: u16) {
+        if let Some(observer) = observer {
             observer
                 .0
                 .first_byte(started.elapsed(), status, status == HTTP_PARTIAL_CONTENT);
@@ -114,6 +115,7 @@ impl RawHostNet {
         range: Option<RangeSpec>,
         headers: Option<&Headers>,
         accept_partial: bool,
+        observer: Option<&Observer>,
     ) -> Result<ByteStream, NetError> {
         let started = Instant::now();
         let opened = timeout(
@@ -130,7 +132,7 @@ impl RawHostNet {
         .await
         .map_err(|_| NetError::Timeout)??;
 
-        self.observe_first_byte(started, opened.status);
+        Self::observe_first_byte(observer, started, opened.status);
         let status = check_status(url, opened.status, &Bytes::new(), accept_partial)?;
         validate_range_response(status, range.as_ref(), &opened.headers, url)?;
 
@@ -147,11 +149,14 @@ impl RawHostNet {
         base_start: u64,
         end: Option<u64>,
         headers: Option<Headers>,
+        observer: Option<&Observer>,
     ) -> ByteStream {
         let out_headers = first.headers.clone();
         let partial = first.is_partial();
         let me = self.clone();
         let resource = url.clone();
+        let observer = observer.cloned();
+        let refetch_observer = observer.clone();
         let (resume_base, resume_end) = if partial {
             (base_start, end)
         } else {
@@ -161,11 +166,18 @@ impl RawHostNet {
             let me = me.clone();
             let url = url.clone();
             let headers = headers.clone();
+            let observer = refetch_observer.clone();
             let abs = resume_base.saturating_add(consumed);
             let resume = RangeSpec::new(abs, resume_end);
             Box::pin(async move {
                 let stream = me
-                    .raw_body(&url, Some(resume), headers.as_ref(), true)
+                    .raw_body(
+                        &url,
+                        Some(resume),
+                        headers.as_ref(),
+                        true,
+                        observer.as_ref(),
+                    )
                     .await?;
                 let skip = if stream.is_partial() { 0 } else { abs };
                 Ok(Resumed { stream, skip })
@@ -178,9 +190,63 @@ impl RawHostNet {
             self.options.inactivity_timeout,
             self.options.retry_policy,
             self.exchange.cancel.clone(),
-            self.options.observer.clone(),
+            observer,
         );
         ByteStream::with_partial(out_headers, body, partial)
+    }
+
+    async fn get_bytes(
+        &self,
+        url: Url,
+        headers: Option<Headers>,
+        observer: Option<&Observer>,
+    ) -> Result<Bytes, NetError> {
+        self.data(HostMethod::Get, url, None, headers, false, observer)
+            .await
+            .map(|response| response.body)
+    }
+
+    async fn get_range(
+        &self,
+        url: Url,
+        range: RangeSpec,
+        headers: Option<Headers>,
+        observer: Option<&Observer>,
+    ) -> Result<ByteStream, NetError> {
+        self.body_stream(url, Some(range), headers, true, observer)
+            .await
+    }
+
+    async fn head(
+        &self,
+        url: Url,
+        headers: Option<Headers>,
+        observer: Option<&Observer>,
+    ) -> Result<Headers, NetError> {
+        self.data(HostMethod::Head, url, None, headers, true, observer)
+            .await
+            .map(|response| normalize_head_headers(response.headers))
+    }
+
+    async fn post_bytes(
+        &self,
+        url: Url,
+        body: Bytes,
+        headers: Option<Headers>,
+        observer: Option<&Observer>,
+    ) -> Result<Bytes, NetError> {
+        self.data(HostMethod::Post, url, Some(body), headers, false, observer)
+            .await
+            .map(|response| response.body)
+    }
+
+    async fn stream(
+        &self,
+        url: Url,
+        headers: Option<Headers>,
+        observer: Option<&Observer>,
+    ) -> Result<ByteStream, NetError> {
+        self.body_stream(url, None, headers, false, observer).await
     }
 }
 
@@ -188,6 +254,7 @@ impl RawHostNet {
 #[derive(Clone)]
 pub struct HostNet {
     net: Arc<RetryNet<RawHostNet>>,
+    observer: Option<Observer>,
 }
 
 impl HostNet {
@@ -207,7 +274,10 @@ impl HostNet {
 
     #[must_use]
     pub fn with_observer(&self, observer: Option<Observer>) -> Self {
-        self.with_options(self.options().clone().with_observer(observer))
+        Self {
+            observer,
+            ..self.clone()
+        }
     }
 
     /// Returns a handle with a different retry policy, sharing the host transport.
@@ -219,10 +289,13 @@ impl HostNet {
     }
 
     fn with_options(&self, options: NetOptions) -> Self {
-        Self::from(RawHostNet {
-            options,
-            exchange: self.net.inner().exchange.clone(),
-        })
+        Self {
+            observer: self.observer.clone(),
+            ..Self::from(RawHostNet {
+                options,
+                exchange: self.net.inner().exchange.clone(),
+            })
+        }
     }
 
     delegate::delegate! {
@@ -231,38 +304,86 @@ impl HostNet {
             #[field(&options)]
             pub fn options(&self) -> &NetOptions;
         }
-        to self.net {
-            /// # Errors
-            ///
-            /// Returns [`NetError`] on HTTP failure, timeout, cancellation, or network error.
-            pub async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> NetResult<Bytes>;
-            /// # Errors
-            ///
-            /// Returns [`NetError`] on HTTP failure, cancellation, or network error.
-            pub async fn get_range(
-                &self,
-                url: Url,
-                range: RangeSpec,
-                headers: Option<Headers>,
-            ) -> NetResult<ByteStream>;
-            /// # Errors
-            ///
-            /// Returns [`NetError`] on HTTP failure, cancellation, or network error.
-            pub async fn head(&self, url: Url, headers: Option<Headers>) -> NetResult<Headers>;
-            /// # Errors
-            ///
-            /// Returns [`NetError`] on HTTP failure, timeout, cancellation, or network error.
-            pub async fn post_bytes(
-                &self,
-                url: Url,
-                body: Bytes,
-                headers: Option<Headers>,
-            ) -> NetResult<Bytes>;
-            /// # Errors
-            ///
-            /// Returns [`NetError`] on HTTP failure, cancellation, or network error.
-            pub async fn stream(&self, url: Url, headers: Option<Headers>) -> NetResult<ByteStream>;
-        }
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`NetError`] on HTTP failure, timeout, cancellation, or network error.
+    pub async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> NetResult<Bytes> {
+        let observer = self.observer.as_ref();
+        self.net
+            .retry_loop(observer, || {
+                self.net
+                    .inner()
+                    .get_bytes(url.clone(), headers.clone(), observer)
+            })
+            .await
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`NetError`] on HTTP failure, cancellation, or network error.
+    pub async fn get_range(
+        &self,
+        url: Url,
+        range: RangeSpec,
+        headers: Option<Headers>,
+    ) -> NetResult<ByteStream> {
+        let observer = self.observer.as_ref();
+        self.net
+            .retry_loop(observer, || {
+                self.net
+                    .inner()
+                    .get_range(url.clone(), range.clone(), headers.clone(), observer)
+            })
+            .await
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`NetError`] on HTTP failure, cancellation, or network error.
+    pub async fn head(&self, url: Url, headers: Option<Headers>) -> NetResult<Headers> {
+        let observer = self.observer.as_ref();
+        self.net
+            .retry_loop(observer, || {
+                self.net
+                    .inner()
+                    .head(url.clone(), headers.clone(), observer)
+            })
+            .await
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`NetError`] on HTTP failure, timeout, cancellation, or network error.
+    pub async fn post_bytes(
+        &self,
+        url: Url,
+        body: Bytes,
+        headers: Option<Headers>,
+    ) -> NetResult<Bytes> {
+        let observer = self.observer.as_ref();
+        self.net
+            .retry_loop(observer, || {
+                self.net
+                    .inner()
+                    .post_bytes(url.clone(), body.clone(), headers.clone(), observer)
+            })
+            .await
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`NetError`] on HTTP failure, cancellation, or network error.
+    pub async fn stream(&self, url: Url, headers: Option<Headers>) -> NetResult<ByteStream> {
+        let observer = self.observer.as_ref();
+        self.net
+            .retry_loop(observer, || {
+                self.net
+                    .inner()
+                    .stream(url.clone(), headers.clone(), observer)
+            })
+            .await
     }
 }
 
@@ -270,9 +391,11 @@ impl From<RawHostNet> for HostNet {
     fn from(raw: RawHostNet) -> Self {
         let retry_policy = raw.options.retry_policy;
         let cancel = raw.exchange.cancel.clone();
-        let observer = raw.options.observer.clone();
-        let net = Arc::new(RetryNet::new(raw, retry_policy, cancel, observer));
-        Self { net }
+        let net = Arc::new(RetryNet::new(raw, retry_policy, cancel));
+        Self {
+            net,
+            observer: None,
+        }
     }
 }
 
@@ -287,7 +410,7 @@ impl std::fmt::Debug for HostNet {
 #[async_trait]
 impl Net for HostNet {
     async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError> {
-        self.net.get_bytes(url, headers).await
+        Self::get_bytes(self, url, headers).await
     }
 
     async fn get_range(
@@ -296,11 +419,11 @@ impl Net for HostNet {
         range: RangeSpec,
         headers: Option<Headers>,
     ) -> Result<ByteStream, NetError> {
-        self.net.get_range(url, range, headers).await
+        Self::get_range(self, url, range, headers).await
     }
 
     async fn head(&self, url: Url, headers: Option<Headers>) -> Result<Headers, NetError> {
-        self.net.head(url, headers).await
+        Self::head(self, url, headers).await
     }
 
     async fn post_bytes(
@@ -309,49 +432,10 @@ impl Net for HostNet {
         body: Bytes,
         headers: Option<Headers>,
     ) -> Result<Bytes, NetError> {
-        self.net.post_bytes(url, body, headers).await
+        Self::post_bytes(self, url, body, headers).await
     }
 
     async fn stream(&self, url: Url, headers: Option<Headers>) -> Result<ByteStream, NetError> {
-        self.net.stream(url, headers).await
-    }
-}
-
-#[async_trait]
-impl Net for RawHostNet {
-    async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError> {
-        self.data(HostMethod::Get, url, None, None, headers, false)
-            .await
-            .map(|response| response.body)
-    }
-
-    async fn get_range(
-        &self,
-        url: Url,
-        range: RangeSpec,
-        headers: Option<Headers>,
-    ) -> Result<ByteStream, NetError> {
-        self.body_stream(url, Some(range), headers, true).await
-    }
-
-    async fn head(&self, url: Url, headers: Option<Headers>) -> Result<Headers, NetError> {
-        self.data(HostMethod::Head, url, None, None, headers, true)
-            .await
-            .map(|response| normalize_head_headers(response.headers))
-    }
-
-    async fn post_bytes(
-        &self,
-        url: Url,
-        body: Bytes,
-        headers: Option<Headers>,
-    ) -> Result<Bytes, NetError> {
-        self.data(HostMethod::Post, url, Some(body), None, headers, false)
-            .await
-            .map(|response| response.body)
-    }
-
-    async fn stream(&self, url: Url, headers: Option<Headers>) -> Result<ByteStream, NetError> {
-        self.body_stream(url, None, headers, false).await
+        Self::stream(self, url, headers).await
     }
 }

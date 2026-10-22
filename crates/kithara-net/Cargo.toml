@@ -9,6 +9,10 @@ description = "Streaming HTTP for audio: retry, timeout, byte ranges."
 keywords = ["http", "networking", "streaming", "audio", "download"]
 categories = ["network-programming", "asynchronous"]
 
+[package.metadata.cargo-machete]
+# `unimock` is reached only through the `kithara::mock` expansion on `Net`.
+ignored = ["unimock"]
+
 [features]
 default = ["client-reqwest", "tls-rustls"]
 # HTTP client backend. Pick exactly one per target. `client-reqwest` (pure-Rust) is the
@@ -96,7 +100,6 @@ kithara-net = { path = ".", default-features = false, features = ["mock"] }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang"] }
 
 futures = { workspace = true }
-unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

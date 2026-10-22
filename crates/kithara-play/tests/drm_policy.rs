@@ -86,12 +86,15 @@ fn drm_policy_routes_processors_by_exact_wildcard_and_all_domains() {
 }
 
 #[kithara::test]
-fn prepared_drm_request_merges_headers_rewrites_url_and_redacts_secrets() {
+#[case::same_case("X-Seed")]
+#[case::lower_case("x-seed")]
+#[case::upper_case("X-SEED")]
+fn prepared_drm_request_merges_headers_rewrites_url_and_redacts_secrets(#[case] name: &str) {
     let static_headers = HashMap::from([
         ("X-App".to_string(), "top-secret".to_string()),
         ("X-Seed".to_string(), "static".to_string()),
     ]);
-    let dynamic_headers = HashMap::from([("X-Seed".to_string(), "dynamic".to_string())]);
+    let dynamic_headers = HashMap::from([(name.to_string(), "dynamic".to_string())]);
     let query_params = HashMap::from([("auth".to_string(), "query-secret".to_string())]);
     let policy = DomainKeyPolicy::new([DomainKeyRule::for_domains(
         ["keys.example.com"],
@@ -109,12 +112,11 @@ fn prepared_drm_request_merges_headers_rewrites_url_and_redacts_secrets() {
     assert_eq!(pairs.get("existing").map(String::as_str), Some("1"));
     assert_eq!(pairs.get("auth").map(String::as_str), Some("query-secret"));
     assert_eq!(
-        request.headers.get("X-App").map(String::as_str),
-        Some("top-secret")
-    );
-    assert_eq!(
-        request.headers.get("X-Seed").map(String::as_str),
-        Some("dynamic")
+        request.headers,
+        HashMap::from([
+            ("X-App".to_string(), "top-secret".to_string()),
+            (name.to_string(), "dynamic".to_string()),
+        ])
     );
     assert_eq!(
         (request.processor)(Bytes::from_static(b"abcd")).expect("processor"),

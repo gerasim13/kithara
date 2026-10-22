@@ -290,7 +290,6 @@ fn content_length(stream: &ByteStream) -> Option<u64> {
     stream
         .headers
         .get("content-length")
-        .or_else(|| stream.headers.get("Content-Length"))
         .and_then(|value| value.parse().ok())
 }
 

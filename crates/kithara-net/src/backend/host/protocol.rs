@@ -57,8 +57,7 @@ pub(super) fn response_headers(
         )));
     }
     let mut headers = Headers::default();
-    for (mut name, value) in pairs {
-        name.make_ascii_lowercase();
+    for (name, value) in pairs {
         headers.insert(name, value);
     }
     Ok(headers)
@@ -136,16 +135,6 @@ mod tests {
         .into_iter()
         .collect();
         assert_eq!(sent, expected);
-    }
-
-    #[kithara::test(native, flash(false))]
-    fn response_headers_are_lowercased() {
-        let reported = pairs(&[("Content-Length", "12"), ("ETag", "\"a\"")]);
-
-        let headers = response_headers(reported, 200, &url()).expect("reported headers translate");
-
-        assert_eq!(headers.get("content-length"), Some("12"));
-        assert_eq!(headers.get("etag"), Some("\"a\""));
     }
 
     #[kithara::test(native, flash(false))]
