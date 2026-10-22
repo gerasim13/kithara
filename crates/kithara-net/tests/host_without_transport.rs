@@ -31,7 +31,7 @@ async fn a_request_without_a_transport_fails_at_once_without_retrying() {
         )
         .build();
     let client = HttpClient::new(options, pools(), CancelToken::never())
-        .with_observer(Some(Observer(retries.clone())));
+        .with_observer(Some(Observer(Arc::clone(&retries) as Arc<dyn NetObserver>)));
     let url = Url::parse("http://127.0.0.1/probe").expect("BUG: hard-coded test URL is valid");
 
     let error = client

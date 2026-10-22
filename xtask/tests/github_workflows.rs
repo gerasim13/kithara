@@ -12,7 +12,6 @@ use syn::{
 };
 
 const STRESS_RAW_DIR: &str = "${{ runner.temp }}/kithara-stress/raw";
-const HEAVY_LINUX_GROUP: &str = "heavy-linux-${{ github.repository }}";
 const STRESS_EXECUTE_COMMAND: &str = r#"args=(
   --subject-root "$GITHUB_WORKSPACE/subject"
   --output "$RUNNER_TEMP/kithara-stress/raw/shard-$SHARD_INDEX"
@@ -744,77 +743,38 @@ fn a_called_workflow_never_waits_on_the_group_its_caller_holds() {
 }
 
 #[test]
-fn the_heavy_lanes_queue_together_and_ordinary_ci_queues_per_branch() {
-    // One machine serves every lane, and the queue that protects it must not
-    // also stall the pushes. Measured on the Linux host before this split, when
-    // every Linux workflow named one group per repository: a nightly assessment
-    // held the only slot with three jobs while two pushes waited fourteen
-    // minutes with fifteen of eighteen runner slots and two thirds of the CPU
-    // idle. Coverage, the extra suites, Miri, mutation, and assessment ask for
-    // the whole fleet, so they take turns; a push does not wait behind them.
-    // `network.yml` holds the group itself. `dispatch.yml` holds it on the jobs
-    // that call the fan-out for the heavy roles, because a lane cannot: one
-    // `run.yml` serves every role, and a group declared there would serialise
-    // the light lanes with the heavy ones.
-    let network = github_workflow("network.yml");
-    let concurrency = workflow_concurrency(&network);
-    assert_eq!(
-        mapping_field(concurrency, "group").as_str(),
-        Some(HEAVY_LINUX_GROUP)
-    );
-    assert_eq!(mapping_field(concurrency, "queue").as_str(), Some("max"));
-
-    let dispatch = github_workflow("dispatch.yml");
-    let jobs = workflow_jobs(&dispatch);
-    for role in ["deep", "quality"] {
-        let job = workflow_job(jobs, role);
-        let group = mapping_field(job, "concurrency")
-            .as_mapping()
-            .unwrap_or_else(|| panic!("the {role} call names a concurrency group"));
-        assert_eq!(
-            mapping_field(group, "group").as_str(),
-            Some(HEAVY_LINUX_GROUP),
-            "{role}"
-        );
-        assert_eq!(
-            mapping_field(group, "queue").as_str(),
-            Some("max"),
-            "{role}"
-        );
-    }
-
-    // Every lane that says it wants the whole fleet must be scheduled by one of
-    // those two calls; a lane declaring the queue under a role nobody holds the
-    // group for would run beside the pushes it is meant to take turns with.
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask has a workspace root");
-    let config: toml::Value = toml::from_str(
-        &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
-    )
-    .expect("xtask config is valid TOML");
-    for (name, lane) in config["ext"]["ci"]["lanes"]
-        .as_table()
-        .expect("the catalog is a table")
-    {
-        if lane.get("queue").and_then(toml::Value::as_str) != Some("heavy-linux") {
-            continue;
+fn independent_roles_and_branches_do_not_share_admission() {
+    for (name, roles) in [
+        ("ci.yml", &["lanes", "deep", "quality"][..]),
+        ("dispatch.yml", &["gate", "deep", "mutants", "quality"][..]),
+    ] {
+        let workflow = github_workflow(name);
+        let group = mapping_field(workflow_concurrency(&workflow), "group")
+            .as_str()
+            .expect("workflow concurrency names a group");
+        assert!(group.contains("github.ref"), "{name}: {group}");
+        let jobs = workflow_jobs(&workflow);
+        for role in roles {
+            let job = workflow_job(jobs, role);
+            assert!(
+                !job.contains_key("concurrency"),
+                "{name}/{role}: runner capacity owns admission, not a fan-out lock"
+            );
         }
-        let role = lane["role"].as_str().expect("a lane names a role");
-        assert!(
-            matches!(role, "deep" | "mutants" | "quality"),
-            "lane `{name}` queues with the heavy lanes under role `{role}`, \
-             which holds no group"
-        );
     }
-
-    let ordinary = github_workflow("ci.yml");
-    let group = mapping_field(workflow_concurrency(&ordinary), "group")
+    for name in ["run.yml", "lane.yml"] {
+        let workflow = github_workflow(name);
+        assert!(workflow.get("concurrency").is_none(), "{name}");
+        for (name, job) in workflow_jobs(&workflow) {
+            assert!(job.get("concurrency").is_none(), "{name:?}");
+        }
+    }
+    let network = github_workflow("network.yml");
+    let group = mapping_field(workflow_concurrency(&network), "group")
         .as_str()
-        .expect("the CI group is a string")
-        .to_owned();
+        .expect("network concurrency names a group");
+    assert!(group.starts_with("network-"), "{group}");
     assert!(group.contains("github.ref"), "{group}");
-    assert_ne!(group_prefix(&group), group_prefix(HEAVY_LINUX_GROUP));
 }
 
 // The three lanes are separate so a red one names which playback path broke,

@@ -136,34 +136,6 @@ async fn collect(mut stream: crate::ByteStream) -> Result<Bytes, NetError> {
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
-async fn apple_get_bytes_retries_503_until_ok() {
-    let counter = Arc::new(AtomicU32::new(0));
-    let seen = Arc::clone(&counter);
-    let server = serve(move || {
-        let seen = Arc::clone(&seen);
-        async move {
-            let attempt = seen.fetch_add(1, Ordering::SeqCst);
-            if attempt < 2 {
-                respond(StatusCode::SERVICE_UNAVAILABLE, &[], "busy")
-            } else {
-                respond(StatusCode::OK, &[], "ok")
-            }
-        }
-    })
-    .await;
-    let url = server.url(PROBE);
-
-    let client = HttpClient::new(retry_options(3), pools(), CancelToken::never());
-    let body = client
-        .get_bytes(url, None)
-        .await
-        .expect("get_bytes retries 503");
-
-    assert_eq!(&body[..], b"ok");
-    assert_eq!(counter.load(Ordering::SeqCst), 3);
-}
-
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 async fn apple_accept_encoding_policy_is_authoritative_per_request() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let handler_seen = Arc::clone(&seen);

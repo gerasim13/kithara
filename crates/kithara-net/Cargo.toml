@@ -10,7 +10,7 @@ keywords = ["http", "networking", "streaming", "audio", "download"]
 categories = ["network-programming", "asynchronous"]
 
 [package.metadata.cargo-machete]
-# `unimock` is reached through the `kithara::mock` expansion on `Net`.
+# `unimock` is reached only through the `kithara::mock` expansion on `Net`.
 ignored = ["unimock"]
 
 [features]
@@ -100,7 +100,6 @@ kithara-net = { path = ".", default-features = false, features = ["mock"] }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang"] }
 
 futures = { workspace = true }
-unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

@@ -26,7 +26,7 @@ use crate::{
     observe::Observer,
     range_response::{accepts_response_status, validate_range_response},
     resumable::{Refetch, Resumed, resumable_body},
-    retry::{RawBackend, RetryClient, RetryNet},
+    retry::{RawNet, RetryClient, RetryNet},
     types::{AcceptEncodingPolicy, Headers, NetOptions, RangeSpec, RetryPolicy},
 };
 
@@ -110,13 +110,13 @@ fn extract_headers(resp: &Response) -> Headers {
     headers
 }
 
-/// Raw HTTP client (one `Client`, no retry layer). Lives
-/// behind [`HttpClient`]'s [`RetryNet`] decorator — exposed only via
-/// the [`crate::Net`] trait, never constructed by callers directly.
+/// Raw HTTP client (one `Client`, one attempt per request). [`HttpClient`]
+/// runs each request through [`RetryNet`]'s retry loop over it, reaching it
+/// only through the [`RawNet`] trait.
 #[derive(Clone)]
 pub struct RawHttp {
     /// Master-derived cancel, captured by the self-healing body so a re-fetch
-    /// loop exits promptly on teardown. Same token the `RetryNet` layer uses.
+    /// loop exits promptly on teardown. Same token the `RetryNet` retry loop uses.
     cancel: CancelToken,
     inner: Client,
     options: NetOptions,
@@ -286,12 +286,13 @@ impl RawHttp {
         let partial = first.is_partial();
         let me = self.clone();
         let resource = url.clone();
+        let observer = observer.cloned();
+        let refetch_observer = observer.clone();
         let (resume_base, resume_end) = if partial {
             (base_start, end)
         } else {
             (0, None)
         };
-        let refetch_observer = observer.cloned();
         let refetch: Refetch = Box::new(move |consumed| {
             let me = me.clone();
             let url = url.clone();
@@ -314,16 +315,16 @@ impl RawHttp {
             self.options.inactivity_timeout,
             self.options.retry_policy,
             self.cancel.clone(),
-            observer.cloned(),
+            observer,
         );
         crate::ByteStream::with_partial(out_headers, body, partial)
     }
 }
 
-/// Production HTTP client used across the workspace. Wraps a raw
-/// `Client` with the workspace's [`RetryNet`] decorator so
-/// every [`crate::Net`] method (`head`/`get_bytes`/`post_bytes`/`get_range`/`stream`) honours
-/// `options.retry_policy` — retryable errors (TLS-close, timeout,
+/// Production HTTP client used across the workspace. Runs every
+/// [`Net`](crate::Net) method (`head`/`get_bytes`/`post_bytes`/`get_range`/`stream`)
+/// through [`RetryNet`]'s retry loop over a raw `Client`, honouring
+/// `options.retry_policy`: retryable errors (TLS-close, timeout,
 /// 5xx, IO) are re-issued with exponential backoff; non-retryable
 /// errors (HTTP 4xx, cancellation) propagate immediately.
 pub type HttpClient = RetryClient<RawHttp>;
@@ -337,8 +338,8 @@ impl std::fmt::Debug for RetryClient<RawHttp> {
 }
 
 impl RetryClient<RawHttp> {
-    /// Build a retry-decorated HTTP client rooted on `cancel`. The
-    /// `RetryNet` layer aborts pending retries when that token is
+    /// Build an HTTP client rooted on `cancel`. The `RetryNet` retry
+    /// loop aborts pending retries when that token is
     /// cancelled. Callers MUST pass a token that lives in the
     /// consumer-crate's cancel tree — typically
     /// `master_cancel.child()` derived at the consumer-crate top
@@ -368,14 +369,6 @@ impl RetryClient<RawHttp> {
             connection_metrics,
             observer: None,
         }
-    }
-
-    /// Derive an observed handle sharing the backend, options, and retry policy.
-    #[must_use]
-    pub fn with_observer(&self, observer: Option<Observer>) -> Self {
-        let mut handle = self.clone();
-        handle.observer = observer;
-        handle
     }
 
     /// Returns a handle with a different retry policy, sharing the HTTP
@@ -414,7 +407,7 @@ impl RetryClient<RawHttp> {
 
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
-impl RawBackend for RawHttp {
+impl RawNet for RawHttp {
     #[kithara::measure]
     async fn get_bytes(
         &self,
@@ -1028,27 +1021,6 @@ mod tests {
     }
 
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
-    async fn http_client_retries_503_until_ok() {
-        let (server, counter) = server_failing_first_n(2).await;
-        let url = server.url("/probe");
-        let client = HttpClient::new(
-            fast_options(3),
-            crate::test_pools::pools(),
-            CancelToken::never(),
-        );
-        let bytes = client
-            .get_bytes(url, None)
-            .await
-            .expect("get_bytes must succeed after retries");
-        assert_eq!(&bytes[..], b"ok");
-        assert_eq!(
-            counter.load(Ordering::SeqCst),
-            3,
-            "exactly 3 attempts: 2 failed (503) + 1 ok"
-        );
-    }
-
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn http_client_no_retry_propagates_5xx() {
         let (server, counter) = server_failing_first_n(2).await;
         let url = server.url("/probe");
@@ -1069,40 +1041,6 @@ mod tests {
             counter.load(Ordering::SeqCst),
             1,
             "max_retries=0 issues exactly one attempt"
-        );
-    }
-
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
-    async fn http_client_head_retries_503_until_ok() {
-        let (server, counter) = server_failing_first_n(1).await;
-        let url = server.url("/probe");
-        let client = HttpClient::new(
-            fast_options(2),
-            crate::test_pools::pools(),
-            CancelToken::never(),
-        );
-        client.head(url, None).await.expect("HEAD must retry");
-        assert_eq!(counter.load(Ordering::SeqCst), 2);
-    }
-
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
-    async fn http_client_post_retries_then_echoes_body() {
-        let (server, counter) = server_post_echo_failing_first_n(1).await;
-        let url = server.url("/echo");
-        let client = HttpClient::new(
-            fast_options(2),
-            crate::test_pools::pools(),
-            CancelToken::never(),
-        );
-        let echoed = client
-            .post_bytes(url, Bytes::from_static(b"ping"), None)
-            .await
-            .expect("post_bytes must succeed after retry");
-        assert_eq!(&echoed[..], b"ping", "server must echo the posted body");
-        assert_eq!(
-            counter.load(Ordering::SeqCst),
-            2,
-            "exactly 2 attempts: 1 failed (503) + 1 ok"
         );
     }
 

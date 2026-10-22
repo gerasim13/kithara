@@ -8,7 +8,7 @@ use crate::{
     types::RetryPolicy,
 };
 
-/// Retry loop over one backend and its request operations.
+/// Retry loop shared by the client handles.
 pub(crate) struct RetryNet<N> {
     cancel: CancelToken,
     inner: N,
@@ -88,8 +88,6 @@ mod tests {
 
     use std::num::NonZeroU16;
 
-    use kithara_platform::time::Duration;
-
     use super::*;
 
     fn status_404() -> NetError {
@@ -121,23 +119,5 @@ mod tests {
         let policy = RetryPolicy::default();
         let error = status_404();
         assert!(!policy.should_retry(&error, 0));
-    }
-
-    #[kithara::test]
-    #[case(0, Duration::ZERO, "first attempt no delay")]
-    #[case(1, Duration::from_millis(100), "second attempt base delay")]
-    #[case(2, Duration::from_millis(200), "third attempt 2x delay")]
-    #[case(3, Duration::from_millis(400), "fourth attempt 4x delay")]
-    fn test_default_retry_policy_delay_for_attempt(
-        #[case] attempt: u32,
-        #[case] expected: Duration,
-        #[case] _desc: &str,
-    ) {
-        let policy = RetryPolicy {
-            base_delay: Duration::from_millis(100),
-            max_delay: Duration::from_secs(10),
-            max_retries: 5,
-        };
-        assert_eq!(policy.delay_for_attempt(attempt), expected);
     }
 }

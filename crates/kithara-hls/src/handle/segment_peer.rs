@@ -57,3 +57,25 @@ pub(crate) fn parse_size_headers(headers: &Headers) -> u64 {
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(0)
 }
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test(native, flash(false))]
+    #[case::range_total(&[("Content-Range", "bytes 0-0/1234"), ("Content-Length", "1")], 1234)]
+    #[case::length_only(&[("Content-Length", "1234")], 1234)]
+    fn parse_size_headers_reads_the_probe_total(
+        #[case] entries: &[(&str, &str)],
+        #[case] expected: u64,
+    ) {
+        let mut headers = Headers::default();
+        for (name, value) in entries {
+            headers.insert(*name, *value);
+        }
+
+        assert_eq!(parse_size_headers(&headers), expected);
+    }
+}

@@ -64,9 +64,9 @@ impl RawHostNet {
         method: HostMethod,
         url: Url,
         body: Option<Bytes>,
-        observer: Option<&Observer>,
         headers: Option<Headers>,
         accept_partial: bool,
+        observer: Option<&Observer>,
     ) -> Result<HostDataResponse, NetError> {
         let started = Instant::now();
         let response = timeout(self.options.inactivity_timeout, async {
@@ -155,12 +155,13 @@ impl RawHostNet {
         let partial = first.is_partial();
         let me = self.clone();
         let resource = url.clone();
+        let observer = observer.cloned();
+        let refetch_observer = observer.clone();
         let (resume_base, resume_end) = if partial {
             (base_start, end)
         } else {
             (0, None)
         };
-        let refetch_observer = observer.cloned();
         let refetch: Refetch = Box::new(move |consumed| {
             let me = me.clone();
             let url = url.clone();
@@ -189,7 +190,7 @@ impl RawHostNet {
             self.options.inactivity_timeout,
             self.options.retry_policy,
             self.exchange.cancel.clone(),
-            observer.cloned(),
+            observer,
         );
         ByteStream::with_partial(out_headers, body, partial)
     }
@@ -200,7 +201,7 @@ impl RawHostNet {
         headers: Option<Headers>,
         observer: Option<&Observer>,
     ) -> Result<Bytes, NetError> {
-        self.data(HostMethod::Get, url, None, observer, headers, false)
+        self.data(HostMethod::Get, url, None, headers, false, observer)
             .await
             .map(|response| response.body)
     }
@@ -222,7 +223,7 @@ impl RawHostNet {
         headers: Option<Headers>,
         observer: Option<&Observer>,
     ) -> Result<Headers, NetError> {
-        self.data(HostMethod::Head, url, None, observer, headers, true)
+        self.data(HostMethod::Head, url, None, headers, true, observer)
             .await
             .map(|response| normalize_head_headers(response.headers))
     }
@@ -234,7 +235,7 @@ impl RawHostNet {
         headers: Option<Headers>,
         observer: Option<&Observer>,
     ) -> Result<Bytes, NetError> {
-        self.data(HostMethod::Post, url, Some(body), observer, headers, false)
+        self.data(HostMethod::Post, url, Some(body), headers, false, observer)
             .await
             .map(|response| response.body)
     }
@@ -271,12 +272,12 @@ impl HostNet {
         })
     }
 
-    /// Derive an observed handle sharing the backend, options, and retry policy.
     #[must_use]
     pub fn with_observer(&self, observer: Option<Observer>) -> Self {
-        let mut handle = self.clone();
-        handle.observer = observer;
-        handle
+        Self {
+            observer,
+            ..self.clone()
+        }
     }
 
     /// Returns a handle with a different retry policy, sharing the host transport.
@@ -288,12 +289,13 @@ impl HostNet {
     }
 
     fn with_options(&self, options: NetOptions) -> Self {
-        let mut handle = Self::from(RawHostNet {
-            options,
-            exchange: self.net.inner().exchange.clone(),
-        });
-        handle.observer = self.observer.clone();
-        handle
+        Self {
+            observer: self.observer.clone(),
+            ..Self::from(RawHostNet {
+                options,
+                exchange: self.net.inner().exchange.clone(),
+            })
+        }
     }
 
     delegate::delegate! {
@@ -302,81 +304,84 @@ impl HostNet {
             #[field(&options)]
             pub fn options(&self) -> &NetOptions;
         }
-
     }
 
     /// # Errors
-    /// Returns [`NetError`] on HTTP failure, timeout, or network error.
+    ///
+    /// Returns [`NetError`] on HTTP failure, timeout, cancellation, or network error.
     pub async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> NetResult<Bytes> {
+        let observer = self.observer.as_ref();
         self.net
-            .retry_loop(self.observer.as_ref(), || {
+            .retry_loop(observer, || {
                 self.net
                     .inner()
-                    .get_bytes(url.clone(), headers.clone(), self.observer.as_ref())
+                    .get_bytes(url.clone(), headers.clone(), observer)
             })
             .await
     }
 
     /// # Errors
-    /// Returns [`NetError`] on HTTP failure or network error.
+    ///
+    /// Returns [`NetError`] on HTTP failure, cancellation, or network error.
     pub async fn get_range(
         &self,
         url: Url,
         range: RangeSpec,
         headers: Option<Headers>,
     ) -> NetResult<ByteStream> {
+        let observer = self.observer.as_ref();
         self.net
-            .retry_loop(self.observer.as_ref(), || {
-                self.net.inner().get_range(
-                    url.clone(),
-                    range.clone(),
-                    headers.clone(),
-                    self.observer.as_ref(),
-                )
-            })
-            .await
-    }
-
-    /// # Errors
-    /// Returns [`NetError`] on HTTP failure or network error.
-    pub async fn head(&self, url: Url, headers: Option<Headers>) -> NetResult<Headers> {
-        self.net
-            .retry_loop(self.observer.as_ref(), || {
+            .retry_loop(observer, || {
                 self.net
                     .inner()
-                    .head(url.clone(), headers.clone(), self.observer.as_ref())
+                    .get_range(url.clone(), range.clone(), headers.clone(), observer)
             })
             .await
     }
 
     /// # Errors
-    /// Returns [`NetError`] on HTTP failure, timeout, or network error.
+    ///
+    /// Returns [`NetError`] on HTTP failure, cancellation, or network error.
+    pub async fn head(&self, url: Url, headers: Option<Headers>) -> NetResult<Headers> {
+        let observer = self.observer.as_ref();
+        self.net
+            .retry_loop(observer, || {
+                self.net
+                    .inner()
+                    .head(url.clone(), headers.clone(), observer)
+            })
+            .await
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`NetError`] on HTTP failure, timeout, cancellation, or network error.
     pub async fn post_bytes(
         &self,
         url: Url,
         body: Bytes,
         headers: Option<Headers>,
     ) -> NetResult<Bytes> {
+        let observer = self.observer.as_ref();
         self.net
-            .retry_loop(self.observer.as_ref(), || {
-                self.net.inner().post_bytes(
-                    url.clone(),
-                    body.clone(),
-                    headers.clone(),
-                    self.observer.as_ref(),
-                )
+            .retry_loop(observer, || {
+                self.net
+                    .inner()
+                    .post_bytes(url.clone(), body.clone(), headers.clone(), observer)
             })
             .await
     }
 
     /// # Errors
-    /// Returns [`NetError`] on HTTP failure or network error.
+    ///
+    /// Returns [`NetError`] on HTTP failure, cancellation, or network error.
     pub async fn stream(&self, url: Url, headers: Option<Headers>) -> NetResult<ByteStream> {
+        let observer = self.observer.as_ref();
         self.net
-            .retry_loop(self.observer.as_ref(), || {
+            .retry_loop(observer, || {
                 self.net
                     .inner()
-                    .stream(url.clone(), headers.clone(), self.observer.as_ref())
+                    .stream(url.clone(), headers.clone(), observer)
             })
             .await
     }

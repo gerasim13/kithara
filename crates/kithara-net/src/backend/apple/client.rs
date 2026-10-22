@@ -21,7 +21,7 @@ use crate::{
     observe::Observer,
     range_response::{accepts_response_status, validate_range_response},
     resumable::{Refetch, Resumed, resumable_body},
-    retry::{RawBackend, RetryClient, RetryNet},
+    retry::{RawNet, RetryClient, RetryNet},
     types::{AcceptEncodingPolicy, Headers, NetOptions, RangeSpec, RetryPolicy},
 };
 
@@ -65,9 +65,9 @@ impl RawAppleNet {
         method: Method,
         url: Url,
         body: Option<Bytes>,
-        observer: Option<&Observer>,
         headers: Option<Headers>,
         accept_partial: bool,
+        observer: Option<&Observer>,
     ) -> Result<AppleDataResponse, NetError> {
         let started = Instant::now();
         let response = {
@@ -152,12 +152,13 @@ impl RawAppleNet {
         let partial = first.is_partial();
         let me = self.clone();
         let resource = url.clone();
+        let observer = observer.cloned();
+        let refetch_observer = observer.clone();
         let (resume_base, resume_end) = if partial {
             (base_start, end)
         } else {
             (0, None)
         };
-        let refetch_observer = observer.cloned();
         let refetch: Refetch = Box::new(move |consumed| {
             let me = me.clone();
             let url = url.clone();
@@ -180,7 +181,7 @@ impl RawAppleNet {
             self.options.inactivity_timeout,
             self.options.retry_policy,
             self.cancel.clone(),
-            observer.cloned(),
+            observer,
         );
         ByteStream::with_partial(out_headers, body, partial)
     }
@@ -218,14 +219,6 @@ impl RetryClient<RawAppleNet> {
         }
     }
 
-    /// Derive an observed handle sharing the backend, options, and retry policy.
-    #[must_use]
-    pub fn with_observer(&self, observer: Option<Observer>) -> Self {
-        let mut handle = self.clone();
-        handle.observer = observer;
-        handle
-    }
-
     /// Returns a handle with a different retry policy, sharing the HTTP session.
     #[must_use]
     pub fn with_retry_policy(&self, retry_policy: RetryPolicy) -> Self {
@@ -260,14 +253,14 @@ impl RetryClient<RawAppleNet> {
 }
 
 #[async_trait]
-impl RawBackend for RawAppleNet {
+impl RawNet for RawAppleNet {
     async fn get_bytes(
         &self,
         url: Url,
         headers: Option<Headers>,
         observer: Option<&Observer>,
     ) -> Result<Bytes, NetError> {
-        self.data(Method::Get, url, None, observer, headers, false)
+        self.data(Method::Get, url, None, headers, false, observer)
             .await
             .map(|response| response.body)
     }
@@ -289,7 +282,7 @@ impl RawBackend for RawAppleNet {
         headers: Option<Headers>,
         observer: Option<&Observer>,
     ) -> Result<Headers, NetError> {
-        self.data(Method::Head, url, None, observer, headers, true)
+        self.data(Method::Head, url, None, headers, true, observer)
             .await
             .map(|response| normalize_head_headers(response.headers))
     }
@@ -301,7 +294,7 @@ impl RawBackend for RawAppleNet {
         headers: Option<Headers>,
         observer: Option<&Observer>,
     ) -> Result<Bytes, NetError> {
-        self.data(Method::Post, url, Some(body), observer, headers, false)
+        self.data(Method::Post, url, Some(body), headers, false, observer)
             .await
             .map(|response| response.body)
     }

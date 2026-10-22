@@ -101,24 +101,23 @@ pub enum ImpersonatePreset {
     Chrome,
 }
 
-/// HTTP headers with case-insensitive names and the last inserted spelling.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Headers {
     inner: HashMap<String, (String, String)>,
 }
 
 impl Headers {
+    pub fn insert<K: Into<String>, V: Into<String>>(&mut self, key: K, value: V) {
+        let name = key.into();
+        self.inner
+            .insert(name.to_ascii_lowercase(), (name, value.into()));
+    }
+
     #[must_use]
     pub fn get(&self, key: &str) -> Option<&str> {
         self.inner
             .get(&key.to_ascii_lowercase())
             .map(|(_, value)| value.as_str())
-    }
-
-    pub fn insert<K: Into<String>, V: Into<String>>(&mut self, key: K, value: V) {
-        let key = key.into();
-        self.inner
-            .insert(key.to_ascii_lowercase(), (key, value.into()));
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
@@ -136,11 +135,9 @@ impl Headers {
 }
 
 impl From<HashMap<String, String>> for Headers {
-    fn from(entries: HashMap<String, String>) -> Self {
-        let mut headers = Self {
-            inner: HashMap::with_capacity(entries.len()),
-        };
-        for (name, value) in entries {
+    fn from(map: HashMap<String, String>) -> Self {
+        let mut headers = Self::default();
+        for (name, value) in map {
             headers.insert(name, value);
         }
         headers
@@ -278,6 +275,10 @@ mod tests {
     #[case::simple_key("key1", "value1")]
     #[case::content_type("Content-Type", "application/json")]
     #[case::custom_header("X-Custom-Header", "custom-value")]
+    #[case::with_spaces("X-Custom Header", "value with spaces")]
+    #[case::with_unicode("X-Emoji", "\u{1f389}")]
+    #[case::with_special_chars("X-Special", "a\tb\nc")]
+    #[case::empty_value("X-Empty", "")]
     async fn test_headers_insert_and_get(#[case] key: &str, #[case] value: &str) {
         let mut headers = Headers::default();
         headers.insert(key, value);
@@ -302,25 +303,6 @@ mod tests {
         assert_eq!(iterated.get("key1"), Some(&"value1".to_string()));
         assert_eq!(iterated.get("key2"), Some(&"value2".to_string()));
         assert_eq!(iterated.get("key3"), Some(&"value3".to_string()));
-    }
-
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
-    async fn test_headers_from_hashmap() {
-        let mut map = HashMap::new();
-        map.insert("key1".to_string(), "value1".to_string());
-        map.insert("key2".to_string(), "value2".to_string());
-
-        let headers: Headers = map.into();
-
-        assert!(!headers.is_empty());
-        assert_eq!(headers.get("key1"), Some("value1"));
-        assert_eq!(headers.get("key2"), Some("value2"));
-    }
-
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
-    async fn test_headers_default() {
-        let headers = Headers::default();
-        assert!(headers.is_empty());
     }
 
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
@@ -503,45 +485,32 @@ mod tests {
         assert!(delay >= Duration::ZERO);
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
-    #[case::with_spaces("X-Custom Header", "value with spaces")]
-    #[case::with_unicode("X-Emoji", "🎉")]
-    #[case::with_special_chars("X-Special", "a\tb\nc")]
-    #[case::empty_value("X-Empty", "")]
-    async fn test_headers_special_characters(#[case] key: &str, #[case] value: &str) {
-        let mut headers = Headers::default();
-        headers.insert(key, value);
-
-        assert_eq!(headers.get(key), Some(value));
-    }
-
     #[kithara::test(tokio, timeout(Duration::from_secs(2)))]
-    #[case::insert_then_lookup("insert_then_lookup")]
-    #[case::two_spellings_one_entry("two_spellings_one_entry")]
-    #[case::from_map("from_map")]
-    async fn a_header_name_matches_in_any_case(#[case] scenario: &str) {
-        match scenario {
-            "insert_then_lookup" => {
-                let mut headers = Headers::default();
-                headers.insert("content-length", "13");
-                assert_eq!(headers.get("Content-Length"), Some("13"));
-            }
-            "two_spellings_one_entry" => {
-                let mut headers = Headers::default();
-                headers.insert("content-type", "a");
-                headers.insert("Content-Type", "b");
-                assert_eq!(headers.get("CONTENT-TYPE"), Some("b"));
-                assert_eq!(headers.iter().collect::<Vec<_>>(), [("Content-Type", "b")]);
-            }
-            "from_map" => {
-                let headers = Headers::from(HashMap::from([(
-                    "Content-Length".to_owned(),
-                    "5".to_owned(),
-                )]));
-                assert_eq!(headers.get("content-length"), Some("5"));
-            }
-            _ => unreachable!(),
-        }
+    #[case::insert_then_lookup({
+        let mut h = Headers::default();
+        h.insert("content-length", "13");
+        h
+    }, "Content-Length", "13", &[("content-length", "13")])]
+    #[case::two_spellings_one_entry({
+        let mut h = Headers::default();
+        h.insert("content-type", "a");
+        h.insert("Content-Type", "b");
+        h
+    }, "CONTENT-TYPE", "b", &[("Content-Type", "b")])]
+    #[case::from_map(
+        Headers::from(HashMap::from([("Content-Length".to_owned(), "5".to_owned())])),
+        "content-length",
+        "5",
+        &[("Content-Length", "5")]
+    )]
+    async fn a_header_name_matches_in_any_case(
+        #[case] headers: Headers,
+        #[case] lookup: &str,
+        #[case] value: &str,
+        #[case] entries: &[(&str, &str)],
+    ) {
+        assert_eq!(headers.get(lookup), Some(value));
+        assert_eq!(headers.iter().collect::<Vec<_>>(), entries);
     }
 }
 

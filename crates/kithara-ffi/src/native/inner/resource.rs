@@ -8,6 +8,7 @@ use kithara::{
     drm::{KeyProcessor, KeyRequest, KeyRequestFactory},
     events::{EventBus, ScopeLabel},
     hls::{KeyOptions, KeyProcessorRegistry},
+    net::Headers,
     platform::sync::{Arc, Mutex},
     play::{
         ResourceSrc,
@@ -112,7 +113,7 @@ impl ResourceFactory {
         })?;
         let config = FfiResourceConfig::for_src(src)
             .preferred_peak_bitrate(item.preferred_peak_bitrate().max(0.0))
-            .maybe_headers(self.merged_headers(item).map(Into::into))
+            .maybe_headers(self.merged_headers(item))
             .events(scoped.clone())
             .downloader(self.downloader.clone())
             .store(self.store.handle().clone())
@@ -127,18 +128,19 @@ impl ResourceFactory {
     /// Merge player-wide auth and salt headers into the item's own headers.
     /// Item-supplied entries win on key collision so callers can override
     /// player defaults per-item.
-    fn merged_headers(&self, item: &AudioPlayerItem) -> Option<HashMap<String, String>> {
+    fn merged_headers(&self, item: &AudioPlayerItem) -> Option<Headers> {
         let item_headers = item.headers();
         if self.player_headers.is_empty() && item_headers.is_none() {
             return None;
         }
-        let mut merged: HashMap<String, String> = self
-            .player_headers
-            .iter()
-            .map(|r| (r.key().clone(), r.value().clone()))
-            .collect();
+        let mut merged = Headers::default();
+        for header in &self.player_headers {
+            merged.insert(header.key().clone(), header.value().clone());
+        }
         if let Some(item_h) = item_headers {
-            merged.extend(item_h);
+            for (name, value) in item_h {
+                merged.insert(name, value);
+            }
         }
         if merged.is_empty() {
             None
@@ -204,7 +206,7 @@ mod tests {
     use unimock::Unimock;
 
     use super::{super::NativeInner, *};
-    use crate::config::FfiPlayerConfig;
+    use crate::{config::FfiPlayerConfig, types::FfiItemConfig};
 
     struct TaggedProcessor(u8);
 
@@ -326,6 +328,44 @@ mod tests {
                 .map(|header| header.value().clone())
                 .as_deref(),
             Some("second-salt")
+        );
+    }
+
+    #[kithara::test]
+    #[case::same_case("X-Auth-Token")]
+    #[case::lower_case("x-auth-token")]
+    #[case::upper_case("X-AUTH-TOKEN")]
+    fn item_headers_override_player_headers(#[case] name: &str) {
+        crate::mock::offline();
+        let inner = NativeInner::new(FfiPlayerConfig::for_test()).expect("create player");
+        inner.setup_network("player-token".to_string());
+        inner
+            .resources
+            .player_headers
+            .insert("X-Player".to_string(), "player".to_string());
+        let item = AudioPlayerItem::new(FfiItemConfig {
+            headers: Some(HashMap::from([
+                (name.to_string(), "item-token".to_string()),
+                ("X-Item".to_string(), "item".to_string()),
+            ])),
+            ..FfiItemConfig::for_test("https://example.com/song.mp3")
+        });
+
+        let headers = inner
+            .resources
+            .merged_headers(&item)
+            .expect("merged headers");
+        let entries: HashMap<_, _> = headers
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect();
+        assert_eq!(
+            entries,
+            HashMap::from([
+                (name.to_string(), "item-token".to_string()),
+                ("X-Item".to_string(), "item".to_string()),
+                ("X-Player".to_string(), "player".to_string()),
+            ])
         );
     }
 
