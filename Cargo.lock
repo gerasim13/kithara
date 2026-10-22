@@ -11907,7 +11907,7 @@ dependencies = [
 [[package]]
 name = "wasm_safe_thread"
 version = "0.1.1"
-source = "git+https://github.com/gerasim13/wasm_safe_thread?rev=e9b92b93a23f1c6d802a6b4eb7a06f440507e0c9#e9b92b93a23f1c6d802a6b4eb7a06f440507e0c9"
+source = "git+https://github.com/gerasim13/wasm_safe_thread?rev=02470f5b4094773daba114639e0ff02951da5a62#02470f5b4094773daba114639e0ff02951da5a62"
 dependencies = [
  "continue",
  "js-sys",
