@@ -174,7 +174,14 @@ at_least_one_of = [
 
 [[health.feature_invariants]]
 when_feature = "stretch-signalsmith"
-at_least_one_of = [["stretch-signalsmith", "stretch-bungee"]]
+at_least_one_of = [
+  [
+    "stretch-signalsmith",
+    "stretch-bungee",
+    "stretch-glide",
+    "stretch-identity",
+  ],
+]
 
 # `ffmpeg` names only kithara-encode. Without an encode backend the crate
 # encodes nothing and says so with compile_error!, so the empty combination is
@@ -206,10 +213,11 @@ when_feature = "beat-backend"
 never = ["beat-backend"]
 
 # `beat-nn` scopes this rule to both crates and is invalid without model bytes.
-# Full-int8 is excluded because its model cannot be produced on CI runners.
+# Full-int8 cannot be produced on CI runners. CUDA needs a model and is checked
+# with each supported model by the product-context recipe.
 [[health.feature_invariants]]
 when_feature = "beat-nn"
-never = ["beat-nn", "beat-nn-full-int8"]
+never = ["beat-nn", "beat-nn-full-int8", "beat-cuda"]
 mutually_exclusive = [["beat-nn-small", "beat-nn-full"]]
 
 # kithara-beat embeds one model and says so with compile_error!.

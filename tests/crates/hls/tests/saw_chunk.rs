@@ -1,6 +1,6 @@
 //! Checks the HLS stress suites run over one decoded saw-tooth chunk.
 
-use std::num::{NonZeroU32, NonZeroU128};
+use std::num::{NonZeroU32, NonZeroU128, NonZeroUsize};
 
 use kithara::{platform::time::Duration, signal::SourceSpan};
 use kithara_test_fixtures::signal::{self, Wave};
@@ -45,6 +45,7 @@ pub(crate) fn check_fractional_saw(
     channels: usize,
     span: SourceSpan,
     wave: Wave,
+    source_frames: Option<NonZeroUsize>,
     requested: Option<Duration>,
 ) -> Result<(), String> {
     if channels == 0 || samples.is_empty() || !samples.len().is_multiple_of(channels) {
@@ -95,6 +96,11 @@ pub(crate) fn check_fractional_saw(
             break;
         }
         let native = usize::try_from(raw.0 / raw.1.get()).map_err(|error| error.to_string())?;
+        if source_frames.is_some_and(|frames| native >= frames.get()) {
+            return Err(format!(
+                "saw frame {frame} lies outside the source: raw={raw:?}"
+            ));
+        }
         let current = f64::from(wave.sample(native, span.sample_rate().get())) / 32_768.0;
         let fraction = (raw.0 % raw.1.get())
             .to_f64()
@@ -103,10 +109,9 @@ pub(crate) fn check_fractional_saw(
         let expected = if fraction == 0.0 {
             current
         } else {
-            let next = f64::from(wave.sample(
-                native.checked_add(1).ok_or("next saw frame overflows")?,
-                span.sample_rate().get(),
-            )) / 32_768.0;
+            let next = native.checked_add(1).ok_or("next saw frame overflows")?;
+            let next = source_frames.map_or(next, |frames| next.min(frames.get() - 1));
+            let next = f64::from(wave.sample(next, span.sample_rate().get())) / 32_768.0;
             (next - current).mul_add(fraction, current)
         }
         .to_f32()
@@ -138,7 +143,7 @@ pub(crate) fn check_fractional_saw_controls() {
         f32::from_bits(0x3d815bb2),
         f32::from_bits(0x3f7ffcf0),
     ];
-    check_fractional_saw(&expected, 1, span, Wave::SawtoothDescending, None)
+    check_fractional_saw(&expected, 1, span, Wave::SawtoothDescending, None, None)
         .expect("exact fractional saw wrap");
     assert_eq!(
         phase_steps(&expected, 1)
@@ -153,7 +158,7 @@ pub(crate) fn check_fractional_saw_controls() {
         [expected[0], expected[0], expected[1]],
     ] {
         assert!(
-            check_fractional_saw(&corrupt, 1, span, Wave::SawtoothDescending, None).is_err(),
+            check_fractional_saw(&corrupt, 1, span, Wave::SawtoothDescending, None, None).is_err(),
             "dropped or repeated PCM must be rejected",
         );
     }
@@ -164,17 +169,94 @@ pub(crate) fn check_fractional_saw_controls() {
             (1, NonZeroU128::MIN),
         )
         .expect("one-frame wrong phase");
-    assert!(check_fractional_saw(&expected, 1, shifted, Wave::SawtoothDescending, None).is_err());
-    assert!(check_fractional_saw(&expected, 1, span, Wave::Sawtooth, None).is_err());
+    assert!(
+        check_fractional_saw(&expected, 1, shifted, Wave::SawtoothDescending, None, None).is_err()
+    );
+    assert!(check_fractional_saw(&expected, 1, span, Wave::Sawtooth, None, None).is_err());
     assert!(
         check_fractional_saw(
             &expected,
             1,
             span,
             Wave::SawtoothDescending,
+            None,
             Some(Duration::ZERO),
         )
         .is_err(),
         "wrong requested origin must be rejected"
     );
+}
+
+#[kithara_test_utils::kithara::test]
+fn fractional_saw_retains_the_final_source_sample() {
+    let denominator = NonZeroU128::new(10_000_000).expect("seek phase clock");
+    let span = SourceSpan::try_from((
+        24_999_998_267_531,
+        denominator.get(),
+        denominator,
+        NonZeroU32::new(44_100).expect("fixture sample rate"),
+        1,
+    ))
+    .expect("last fractional source frame");
+    check_fractional_saw(
+        &[0.706_054_7],
+        1,
+        span,
+        Wave::SawtoothDescending,
+        NonZeroUsize::new(2_500_000),
+        None,
+    )
+    .expect("the terminal interpolation retains the last real sample");
+    let source_frames = NonZeroUsize::new(2_500_000);
+    assert!(
+        check_fractional_saw(
+            &[0.706_029_5],
+            1,
+            span,
+            Wave::SawtoothDescending,
+            source_frames,
+            None,
+        )
+        .is_err(),
+        "interpolation beyond the source is not terminal PCM",
+    );
+    let interior = span
+        .scaled_from(
+            (1, NonZeroU128::MIN),
+            (0, NonZeroU128::MIN),
+            (1, NonZeroU128::MIN),
+        )
+        .expect("preceding fractional source frame");
+    assert!(
+        check_fractional_saw(
+            &[0.706_085_2],
+            1,
+            interior,
+            Wave::SawtoothDescending,
+            source_frames,
+            None,
+        )
+        .is_err(),
+        "an interior sample must still interpolate",
+    );
+    let outside = span
+        .scaled_from(
+            (0, NonZeroU128::MIN),
+            (1, NonZeroU128::MIN),
+            (1, NonZeroU128::MIN),
+        )
+        .expect("source frame beyond EOF");
+    assert!(
+        check_fractional_saw(
+            &[0.706_054_7],
+            1,
+            outside,
+            Wave::SawtoothDescending,
+            source_frames,
+            None,
+        )
+        .is_err(),
+        "a raw origin beyond EOF must be rejected",
+    );
+    check_fractional_saw_controls();
 }

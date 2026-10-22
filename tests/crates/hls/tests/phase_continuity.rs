@@ -33,6 +33,8 @@ const TOP_VARIANT: usize = VARIANT_COUNT - 1;
 #[derive(Debug, Clone, Copy)]
 enum Codec {
     AacLc,
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    AacHe,
     AacHeV2,
     Flac,
 }
@@ -99,6 +101,12 @@ fn build_fixture(fixture: Fixture, bit_rate: Option<u64>, drm: bool) -> HlsFixtu
         Fixture::Single(Codec::AacLc) => {
             b.packaged_audio_sine_aac_lc(SAMPLE_RATE, CHANNELS, FREQ_HZ)
         }
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        Fixture::Single(Codec::AacHe) => b.packaged_audio_signal_aac_he(
+            SAMPLE_RATE,
+            CHANNELS,
+            PackagedSignal::Sine { freq_hz: FREQ_HZ },
+        ),
         Fixture::Single(Codec::AacHeV2) => b.packaged_audio_signal_aac_he_v2(
             SAMPLE_RATE,
             CHANNELS,
@@ -264,6 +272,18 @@ async fn run_case_paced(
     serial,
     timeout(Duration::from_secs(25)),
     hang_timeout_secs(1)
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::aac_he_v1_apple_eph_manual_multi(
+        Fixture::Single(Codec::AacHe),
+        DecoderBackend::Apple,
+        true,
+        false,
+        multi_switch(),
+        None,
+        he_v1_source().await,
+    )
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
@@ -698,6 +718,12 @@ async fn phase_continuity_hls_known_warmup_drift(
     #[case] server: (TestServerHelper, CreatedHls),
 ) {
     run_case(fixture, backend, true, drm, scenario, server).await;
+}
+
+#[kithara::fixture]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+async fn he_v1_source() -> (TestServerHelper, CreatedHls) {
+    phase_server(Fixture::Single(Codec::AacHe), None, false).await
 }
 
 #[kithara::fixture]

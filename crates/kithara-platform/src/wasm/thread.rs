@@ -67,7 +67,21 @@ pub(crate) enum GateBackend {
 
 impl GateBackend {
     #[inline]
-    pub(crate) fn park_timeout(&self, duration: Duration, _poll_deadline: bool) {
+    pub(crate) const fn posts(&self) -> u64 {
+        match self {
+            Self::Wasm => 0,
+        }
+    }
+
+    #[inline]
+    pub(crate) const fn post(&self) {
+        match self {
+            Self::Wasm => {}
+        }
+    }
+
+    #[inline]
+    pub(crate) fn park_timeout(&self, duration: Duration, _poll_posts: Option<u64>) {
         match self {
             Self::Wasm => park_timeout(duration),
         }

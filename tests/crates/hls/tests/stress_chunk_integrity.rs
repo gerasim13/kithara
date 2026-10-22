@@ -31,7 +31,7 @@ use num_traits::AsPrimitive;
 use tracing::info;
 
 use crate::{
-    common::test_defaults::SawWav,
+    common::test_defaults::{SawWav, frames_in_segments},
     saw_chunk::{
         channel_mismatches, check_fractional_saw, check_fractional_saw_controls,
         first_invalid_sample,
@@ -451,6 +451,11 @@ fn check_chunk_integrity(
                 channels,
                 span,
                 signal::Wave::SawtoothDescending,
+                NonZeroUsize::new(frames_in_segments(
+                    consts::SEGMENT_COUNT,
+                    consts::D.segment_size,
+                    consts::D.channels,
+                )),
                 (c == 0).then_some(position),
             ) {
                 intra_breaks += 1;

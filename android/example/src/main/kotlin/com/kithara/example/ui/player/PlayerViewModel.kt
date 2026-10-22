@@ -88,8 +88,10 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
         super.onCleared()
         itemSubscriptions.values.forEach { it.cancel() }
         itemSubscriptions.clear()
-        player.pause()
-        player.removeAllItems()
+        player.use {
+            it.pause()
+            it.removeAllItems()
+        }
     }
 
     private fun onUrlChanged(value: String) {

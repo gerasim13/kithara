@@ -1,3 +1,4 @@
+#[cfg(feature = "render")]
 use std::num::NonZeroUsize;
 
 pub(crate) const MODEL_SECONDS_PER_MINUTE: f64 = 60.0;
@@ -38,9 +39,12 @@ pub(crate) const FRAME_COUNT: u64 = 48_000;
 #[cfg(test)]
 pub(crate) const BLOCK_FRAMES: usize = 480;
 
+#[cfg(feature = "render")]
 pub(crate) const NATIVE_PACKET_FRAMES: usize = 480;
+#[cfg(feature = "render")]
 pub(crate) const MAX_NATIVE_STRETCH: f64 = 2.0;
 
+#[cfg(feature = "render")]
 pub(crate) const DEFAULT_SOURCE_BLOCK_FRAMES: NonZeroUsize = match NonZeroUsize::new(8192) {
     Some(frames) => frames,
     None => unreachable!(),
@@ -73,4 +77,5 @@ pub(crate) const N: usize = 1 << 14;
 #[cfg(test)]
 pub(crate) const SR: u32 = 44_100;
 
+#[cfg(feature = "render")]
 pub(crate) const SOURCE_RADIUS: usize = 16;

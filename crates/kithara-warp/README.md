@@ -46,7 +46,7 @@ not support region plans or keylock. DSP backends preserve decoded samples at
 unity. The complete-source-chunk `render` interface retains its unprimed engine
 contract for constant speeds; it returns the source unchanged for a curve that
 needs output-indexed quanta. Exact lane positions come only from prepared quanta.
-The `render` feature exposes the renderer; geometry and configuration remain
-available without it.
+The `render` feature exposes the resident decorator, renderer, and engine
+configuration; geometry and temporal controls remain available without it.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-warp) for ownership and dependency boundaries.

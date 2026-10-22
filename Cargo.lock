@@ -724,7 +724,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-time",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2546,7 +2546,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4324,7 +4324,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5046,7 +5046,10 @@ dependencies = [
  "serde",
  "smallvec",
  "symphonia",
+ "symphonia-codec-aac",
+ "symphonia-codec-pcm",
  "symphonia-core",
+ "symphonia-format-riff",
  "thiserror 2.0.21",
  "tracing",
  "unimock",
@@ -5369,6 +5372,7 @@ dependencies = [
  "kithara-integration-tests",
  "kithara-test-fixtures",
  "kithara-test-utils",
+ "num-traits",
  "reqwest",
  "serde",
  "serde_json",
@@ -5557,6 +5561,7 @@ dependencies = [
  "kithara-stream",
  "kithara-test-utils",
  "kithara-workspace-hack",
+ "portable-atomic",
  "serde",
  "tempfile",
  "thiserror 2.0.21",
@@ -5818,6 +5823,7 @@ dependencies = [
  "derive_more",
  "fieldwork",
  "futures",
+ "gloo-timers",
  "js-sys",
  "kithara-platform",
  "kithara-test-dylib",
@@ -7426,7 +7432,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -8677,7 +8683,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -9474,7 +9480,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -9531,7 +9537,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -10517,10 +10523,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.5",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -11906,7 +11912,7 @@ dependencies = [
 [[package]]
 name = "wasm_safe_thread"
 version = "0.1.1"
-source = "git+https://github.com/gerasim13/wasm_safe_thread?rev=e9b92b93a23f1c6d802a6b4eb7a06f440507e0c9#e9b92b93a23f1c6d802a6b4eb7a06f440507e0c9"
+source = "git+https://github.com/gerasim13/wasm_safe_thread?rev=02470f5b4094773daba114639e0ff02951da5a62#02470f5b4094773daba114639e0ff02951da5a62"
 dependencies = [
  "continue",
  "js-sys",
@@ -12501,7 +12507,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

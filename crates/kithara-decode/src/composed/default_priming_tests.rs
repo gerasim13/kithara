@@ -59,7 +59,6 @@ pub(super) fn build_mp3_decoder(
         AudioCodec::Mp3,
         None,
         None,
-        None,
     )
     .expect("MP3 extractor");
     let codec = crate::android::AndroidCodec::open_with_format(demuxer.track_info(), &format)

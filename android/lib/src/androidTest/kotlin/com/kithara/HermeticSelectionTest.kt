@@ -50,45 +50,46 @@ class HermeticSelectionTest {
             deleteRecursively()
             mkdirs()
         }
-        val player = KitharaPlayer(
+        KitharaPlayer(
             config = KitharaPlayer.Config(store = AssetStore(root = cacheDir.absolutePath)),
-        )
-        val first = KitharaPlayerItem(HermeticFixtures.mp3())
-        val second = KitharaPlayerItem(HermeticFixtures.hls())
+        ).use { player ->
+            val first = KitharaPlayerItem(HermeticFixtures.mp3())
+            val second = KitharaPlayerItem(HermeticFixtures.hls())
 
-        val loaded = ConcurrentHashMap.newKeySet<String>()
-        val bothLoaded = CountDownLatch(2)
-        val subscribed = CountDownLatch(1)
-        val scope = CoroutineScope(Dispatchers.Default)
-        scope.launch {
-            player.events.onSubscription { subscribed.countDown() }.collect { event ->
-                if (event is KitharaPlayerEvent.TrackStatusChanged &&
-                    event.status is TrackStatus.Loaded &&
-                    loaded.add(event.itemId)
-                ) {
-                    bothLoaded.countDown()
+            val loaded = ConcurrentHashMap.newKeySet<String>()
+            val bothLoaded = CountDownLatch(2)
+            val subscribed = CountDownLatch(1)
+            val scope = CoroutineScope(Dispatchers.Default)
+            scope.launch {
+                player.events.onSubscription { subscribed.countDown() }.collect { event ->
+                    if (event is KitharaPlayerEvent.TrackStatusChanged &&
+                        event.status is TrackStatus.Loaded &&
+                        loaded.add(event.itemId)
+                    ) {
+                        bothLoaded.countDown()
+                    }
                 }
             }
-        }
 
-        try {
-            assertTrue(subscribed.await(SUBSCRIBE_TIMEOUT_SECONDS, TimeUnit.SECONDS))
-            player.insert(first)
-            player.insert(second, after = first)
-            assertTrue(
-                "both tracks must load within ${LOADED_TIMEOUT_SECONDS}s; loaded: $loaded",
-                bothLoaded.await(LOADED_TIMEOUT_SECONDS, TimeUnit.SECONDS),
-            )
+            try {
+                assertTrue(subscribed.await(SUBSCRIBE_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+                player.insert(first)
+                player.insert(second, after = first)
+                assertTrue(
+                    "both tracks must load within ${LOADED_TIMEOUT_SECONDS}s; loaded: $loaded",
+                    bothLoaded.await(LOADED_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                )
 
-            player.selectItem(second)
-            assertEquals(second.id, awaitCurrent(player, second.id))
+                player.selectItem(second)
+                assertEquals(second.id, awaitCurrent(player, second.id))
 
-            assertThrows(KitharaError.InvalidArgument::class.java) {
-                player.selectItem(at = 99)
+                assertThrows(KitharaError.InvalidArgument::class.java) {
+                    player.selectItem(at = 99)
+                }
+            } finally {
+                scope.cancel()
+                player.removeAllItems()
             }
-        } finally {
-            scope.cancel()
-            player.removeAllItems()
         }
     }
 

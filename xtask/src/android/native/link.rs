@@ -27,20 +27,14 @@ pub(crate) fn run(args: &[OsString]) -> Result<()> {
         .context("Android linker configuration is missing")?;
     let config: Config = serde_json::from_slice(&fs::read(path)?)?;
     let test = args.iter().any(|arg| archive(arg, "libtest-"));
+    let context = test.then(|| context_metadata(args)).transpose()?.flatten();
     let mut command = Command::new(&config.compiler);
-    if !test {
-        command.args(args);
-    } else {
-        let context = context_metadata(args)?;
-        let object = context
-            .as_deref()
-            .map(|context| bootstrap(&config, context))
-            .transpose()?;
+    if let Some(context) = context {
+        let object = bootstrap(&config, &context)?;
         command.args(args.iter().filter(|arg| arg.as_os_str() != "-pie"));
-        command.arg("-shared").arg(&config.bridge);
-        if let Some(object) = object {
-            command.arg(object);
-        }
+        command.arg("-shared").arg(&config.bridge).arg(object);
+    } else {
+        command.args(args);
     }
     let status = child::run(&mut command, None)?;
     if !status.success() {

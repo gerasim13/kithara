@@ -137,7 +137,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                 ChangeWork::Releasing | ChangeWork::ReleasingReplacement => {
                     let reuse_idle = matches!(change.work, ChangeWork::Releasing);
                     match self.decode.release_input() {
-                        InputState::Retiring => {
+                        InputState::Busy | InputState::Retiring => {
                             self.phase = OwnerPhase::Changing(change);
                             return Ok(None);
                         }

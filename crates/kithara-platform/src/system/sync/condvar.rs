@@ -8,6 +8,13 @@ use crate::common::time::Instant;
 pub struct Condvar(ParkingLotCondvar);
 
 impl Condvar {
+    /// Current time in this condition variable's deadline clock.
+    #[inline]
+    #[must_use]
+    pub fn instant(&self) -> Instant {
+        Instant::now()
+    }
+
     #[inline]
     #[track_caller]
     pub fn wait<'a, T>(&self, mut guard: MutexGuard<'a, T>) -> MutexGuard<'a, T> {

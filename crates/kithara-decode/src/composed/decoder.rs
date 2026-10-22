@@ -359,6 +359,7 @@ where
                     landed_at,
                     preroll,
                     landed_frame: self.frame_offset,
+                    clock: crate::LandingClock::Kept,
                 }
             }
             DemuxSeekOutcome::PastEof { duration } => {

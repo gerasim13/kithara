@@ -112,6 +112,8 @@ impl<T> Receiver<T> {
     #[track_caller]
     pub fn recv_timeout(&self, deadline: Instant) -> Result<T, RecvTimeoutError> {
         crate::no_block::forbid("mpsc::recv_timeout");
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let deadline = self.0.cv.instant() + remaining;
         let mut q = self.0.queue.lock();
         loop {
             if let Some(v) = q.pop_front() {
@@ -120,7 +122,7 @@ impl<T> Receiver<T> {
             if self.0.senders.load(Ordering::Acquire) == 0 {
                 return Err(RecvTimeoutError::Disconnected);
             }
-            if Instant::now() >= deadline {
+            if self.0.cv.instant() >= deadline {
                 return Err(RecvTimeoutError::Timeout);
             }
             q = self.0.cv.wait_timeout(q, deadline);

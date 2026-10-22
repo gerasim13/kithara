@@ -1280,16 +1280,24 @@ impl ProductHarness {
                     continue;
                 }
             }
-            let law = deck.observe(|observation| {
-                super::binding::executed_law(
+            let law = deck.observe(|observation| -> Result<_, String> {
+                let mut history_failures = Vec::new();
+                super::binding::published_host_history(
+                    observation,
+                    &self.host_grids,
+                    evaluation_rate,
+                    &mut history_failures,
+                )?;
+                let (speed, mut law_failures, evidence, reference) = super::binding::executed_law(
                     &model,
                     &host_grid,
-                    &self.host_grids,
                     observation,
                     &snapshot,
                     capture_start,
                     slot,
-                )
+                )?;
+                law_failures.extend(history_failures);
+                Ok((speed, law_failures, evidence, reference))
             });
             let (actual_speed, reference) = match law {
                 Ok((speed, law_failures, law_evidence, reference)) => {

@@ -1,7 +1,7 @@
 use kithara_platform::{
     sync::{
         Arc, ThreadGate, WaitGate,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -13,12 +13,12 @@ pub struct Wake {
 }
 
 impl Wake {
-    fn wait(&self, timeout: Duration, poll_deadline: bool) -> bool {
-        if self.take_deferred() {
+    fn wait(&self, timeout: Duration, poll: bool) -> bool {
+        if self.inner.gate.take_posted() {
             return true;
         }
         let since = self.inner.seen.load(Ordering::Relaxed);
-        let woken = if poll_deadline {
+        let woken = if poll {
             self.inner.gate.wait_poll_timeout(since, timeout)
         } else {
             self.inner.gate.wait_timeout(since, timeout)
@@ -26,16 +26,17 @@ impl Wake {
         self.inner
             .seen
             .store(self.inner.gate.current(), Ordering::Relaxed);
-        woken || self.take_deferred()
+        woken
     }
 
     delegate::delegate! {
-        to self.inner.deferred {
+        to self.inner.gate {
             /// Coalesce a future dispatcher pass without unparking the thread.
-            #[call(store)]
-            pub fn defer(&self, [true], [Ordering::Release]);
-            #[call(swap)]
-            fn take_deferred(&self, [false], [Ordering::Acquire]) -> bool;
+            #[call(post)]
+            pub fn defer(&self);
+            /// Wake the dispatcher immediately from an off-real-time thread.
+            #[call(signal)]
+            pub fn wake(&self);
         }
         to self {
             #[call(wait)]
@@ -43,17 +44,11 @@ impl Wake {
             #[call(wait)]
             pub(crate) fn wait_poll_timeout(&self, timeout: Duration, [true]) -> bool;
         }
-        to self.inner.gate {
-            /// Wake the dispatcher immediately from an off-real-time thread.
-            #[call(signal)]
-            pub fn wake(&self);
-        }
     }
 }
 
 #[derive(Default)]
 struct WakeInner {
-    deferred: AtomicBool,
     seen: AtomicU64,
     gate: ThreadGate,
 }
@@ -62,10 +57,11 @@ struct WakeInner {
 #[cfg(any(test, feature = "mock"))]
 #[must_use]
 pub fn wake_state(wake: &Wake) -> (u64, bool) {
-    (
-        wake.inner.gate.current(),
-        wake.inner.deferred.load(Ordering::Acquire),
-    )
+    let posted = wake.inner.gate.take_posted();
+    if posted {
+        wake.inner.gate.post();
+    }
+    (wake.inner.gate.current(), posted)
 }
 
 #[cfg(test)]

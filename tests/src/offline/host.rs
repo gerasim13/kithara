@@ -19,6 +19,7 @@ use kithara::{
             atomic::{AtomicU64, Ordering},
         },
         time::{Duration, Instant},
+        tokio::sync::watch,
     },
     play::{DeckPass, HostedDeck, MixTapWriter, Outbox, PlayError, PlayWorker, TrackReceipt},
     queue::Queue,
@@ -36,6 +37,7 @@ use ringbuf::{
 };
 
 use super::owner::HostOwner;
+pub use super::render_clock::RenderClock;
 
 pub struct ObservedDeck<P: DeckControl> {
     pub(super) inner: P,
@@ -120,8 +122,9 @@ struct HostState<S, O: Owner<S>>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    host: Host<S, O>,
+    host: Host<S, RenderClock<O>>,
     position: Arc<AtomicU64>,
+    render_started: watch::Receiver<Option<(u64, Instant)>>,
 }
 
 /// Test owner for the product offline Host and its monotonic render cursor.
@@ -305,10 +308,14 @@ where
         let block = u64::from(max_block_frames.get());
         let position = Arc::new(AtomicU64::new(0));
         let owned = Arc::clone(&position);
+        let (started, render_started) = watch::channel(None);
         let start = move || {
-            Host::layered(config, layer).map(|host| HostState {
-                host,
-                position: owned,
+            Host::layered(config, move |core| RenderClock::new(layer(core), started)).map(|host| {
+                HostState {
+                    host,
+                    position: owned,
+                    render_started,
+                }
             })
         };
         hang_tick!("layered: awaiting Host owner initialization".to_owned());
@@ -357,7 +364,6 @@ where
         R: MaybeSend + 'static,
     {
         hang_tick!("Host call: awaiting owner-thread operation answer".to_owned());
-        let _real_io = kithara::platform::flash::real_io();
         let answer =
             kithara::platform::time::timeout(__hang_detector.remaining(), self.off.call(job)).await;
         hang_tick!("Host call: checking owner-thread operation answer".to_owned());
@@ -367,7 +373,10 @@ where
     }
 
     /// Runs an arbitrary Host operation on the owner thread.
-    pub async fn with<R>(&self, f: impl FnOnce(&mut Host<S, O>) -> R + MaybeSend + 'static) -> R
+    pub async fn with<R>(
+        &self,
+        f: impl FnOnce(&mut Host<S, RenderClock<O>>) -> R + MaybeSend + 'static,
+    ) -> R
     where
         R: MaybeSend + 'static,
     {
@@ -421,25 +430,22 @@ where
 
     /// Render the next finite block through the product offline protocol.
     pub async fn render(&self, frames: usize) -> Vec<f32> {
-        let frames = u64::try_from(frames).expect("offline render frame count fits u64");
+        self.call(move |state| render_on(state, frames)).await
+    }
+
+    /// Render one callback and return its engine-thread start time beside its samples.
+    pub async fn render_timed(&self, frames: usize) -> (Instant, Vec<f32>) {
+        assert!(frames > 0 && frames <= self.max_block_frames.get() as usize);
         self.call(move |state| {
-            let spec = output_spec(&state.host);
             let start = state.position.load(Ordering::Relaxed);
-            let end = start
-                .checked_add(frames)
-                .expect("offline render timeline fits u64");
-            let request = OfflineRenderRequest::builder()
-                .spec(spec)
-                .frames(start..end)
-                .build();
-            let cancel = CancelScope::new(None);
-            let mut sink = VecSink::default();
-            state
-                .host
-                .render(&request, &cancel.token(), &mut sink)
-                .unwrap_or_else(|error| panic!("render product offline Host: {error}"));
-            state.position.store(end, Ordering::Relaxed);
-            sink.samples
+            let samples = render_on(state, frames);
+            let (position, started) = (*state.render_started.borrow())
+                .expect("the engine observed the rendered callback");
+            assert_eq!(
+                position, start,
+                "timestamp belongs to the requested callback"
+            );
+            (started, samples)
         })
         .await
     }
@@ -520,6 +526,30 @@ where
         self.call(move |state| state.host.invalidate_audio_route(reason))
             .await
     }
+}
+
+fn render_on<S, O: Owner<S>>(state: &mut HostState<S, O>, frames: usize) -> Vec<f32>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    let frames = u64::try_from(frames).expect("offline render frame count fits u64");
+    let spec = output_spec(&state.host);
+    let start = state.position.load(Ordering::Relaxed);
+    let end = start
+        .checked_add(frames)
+        .expect("offline render timeline fits u64");
+    let request = OfflineRenderRequest::builder()
+        .spec(spec)
+        .frames(start..end)
+        .build();
+    let cancel = CancelScope::new(None);
+    let mut sink = VecSink::default();
+    state
+        .host
+        .render(&request, &cancel.token(), &mut sink)
+        .unwrap_or_else(|error| panic!("render product offline Host: {error}"));
+    state.position.store(end, Ordering::Relaxed);
+    sink.samples
 }
 
 /// Renders `frames` forward from the cursor the owner thread keeps, in `block`

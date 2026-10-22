@@ -151,17 +151,23 @@ mod tests {
             postbox,
             _mailbox: Mutex::new(mailbox),
         };
-        let started = kithara_platform::time::WallInstant::now();
         let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _ = ask(&dispatcher, HostCommand::Restart, "Restart");
         }))
         .expect_err("an unanswered ask must trip the watchdog");
-        assert!(started.elapsed() < kithara_platform::time::Duration::from_secs(2));
         let reason = panic
             .downcast_ref::<String>()
             .map(String::as_str)
             .or_else(|| panic.downcast_ref::<&str>().copied())
             .expect("watchdog panic text");
+        let elapsed_ns = reason
+            .split_whitespace()
+            .find_map(|field| field.strip_prefix("elapsed_ns="))
+            .expect("watchdog observation time")
+            .parse::<u128>()
+            .expect("elapsed nanoseconds");
+        assert!(elapsed_ns >= kithara_platform::time::Duration::from_secs(1).as_nanos());
+        assert!(elapsed_ns < kithara_platform::time::Duration::from_secs(2).as_nanos());
         assert!(reason.contains("host command Restart"), "{reason}");
         assert!(reason.contains("has no owner answer"), "{reason}");
     }

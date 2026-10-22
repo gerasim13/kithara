@@ -1,11 +1,12 @@
 use std::sync::{
     Weak,
-    atomic::{AtomicBool, AtomicU8, Ordering},
+    atomic::{AtomicBool, Ordering},
 };
 
 use bitflags::bitflags;
 use kithara_bufpool::HasPool;
 use kithara_platform::sync::Arc;
+use portable_atomic::AtomicU8;
 
 use crate::{
     segment::fetch::{FetchClaim, PlannedFetch},
@@ -81,7 +82,7 @@ impl SegmentSlotState {
     pub(crate) fn mark_loaded(&self) -> bool {
         let (Ok(prior) | Err(prior)) =
             self.flags
-                .try_update(Ordering::AcqRel, Ordering::Acquire, |bits| {
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |bits| {
                     let next = if SlotFlags::from_bits_truncate(bits).contains(SlotFlags::EVICTED) {
                         SlotFlags::empty()
                     } else {
@@ -99,7 +100,7 @@ impl SegmentSlotState {
     pub(crate) fn mark_evicted(&self) {
         let _ = self
             .flags
-            .try_update(Ordering::AcqRel, Ordering::Acquire, |bits| {
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |bits| {
                 let flags = SlotFlags::from_bits_truncate(bits);
                 let next = if flags.contains(SlotFlags::DOWNLOADING) {
                     flags | SlotFlags::EVICTED

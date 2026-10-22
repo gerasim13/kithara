@@ -1,7 +1,6 @@
 use kithara::{
     decode::DecoderBackend,
     platform::{time::Duration, tokio::join},
-    stream::AudioCodec,
 };
 use kithara_integration_tests::{CreatedHls, TestServerHelper, fixture_protocol::PackagedSignal};
 use num_traits::ToPrimitive;
@@ -34,19 +33,6 @@ const PROVENANCE_TRANSITIONS: [Transition; 6] = [
 struct LagCorrelation {
     lag_frames: isize,
     correlation: f64,
-}
-
-fn control_lag_frames(transition: Transition) -> isize {
-    let content_origin = |variant| {
-        let codec = if variant == FLAC {
-            AudioCodec::Flac
-        } else {
-            AudioCodec::AacLc
-        };
-        isize::try_from(AudioCodec::encoder_priming_frames(codec))
-            .expect("fixture codec origin fits signed lag coordinates")
-    };
-    content_origin(transition.from) - content_origin(transition.to)
 }
 
 fn best_lag_correlation(switched: &[f32], source: &[f32], start_frame: usize) -> LagCorrelation {
@@ -207,11 +193,10 @@ async fn decoder_recreation_preserves_sweep_timeline_against_no_switch_control(
                 &source_control.samples,
                 correlation_start,
             );
-            let expected_control_lag = control_lag_frames(transition);
             let required_correlation =
                 (control_baseline.correlation - CONTROL_CORRELATION_SLACK).max(MIN_CORRELATION);
             println!(
-                "QUALITY_SWITCH_TIMELINE transition={} backend={backend:?} capture_source_frame={} target_decoder_frame={} correlation_start={} lag_frames={} correlation={:.9} control_lag_frames={} expected_control_lag_frames={} control_correlation={:.9} required_correlation={:.9}",
+                "QUALITY_SWITCH_TIMELINE transition={} backend={backend:?} capture_source_frame={} target_decoder_frame={} correlation_start={} lag_frames={} correlation={:.9} control_lag_frames={} control_correlation={:.9} required_correlation={:.9}",
                 transition.label,
                 switched.capture_frame,
                 switched.target_decoder_frame,
@@ -219,7 +204,6 @@ async fn decoder_recreation_preserves_sweep_timeline_against_no_switch_control(
                 best.lag_frames,
                 best.correlation,
                 control_baseline.lag_frames,
-                expected_control_lag,
                 control_baseline.correlation,
                 required_correlation,
             );
@@ -238,13 +222,11 @@ async fn decoder_recreation_preserves_sweep_timeline_against_no_switch_control(
                 transition.label, best.lag_frames, best.correlation,
             ));
             }
-            if (control_baseline.lag_frames - expected_control_lag).abs() > MAX_ACCEPTED_LAG_FRAMES
-            {
+            if control_baseline.lag_frames.abs() > MAX_ACCEPTED_LAG_FRAMES {
                 failures.push(format!(
-                "{} source and destination no-switch controls disagree with their codec origins: lag={} frames, expected={} frames, correlation={:.9}, allowed=+/-{MAX_ACCEPTED_LAG_FRAMES}",
+                "{} source and destination no-switch controls captured at one position hold different content: lag={} frames, correlation={:.9}, allowed=+/-{MAX_ACCEPTED_LAG_FRAMES}",
                 transition.label,
                 control_baseline.lag_frames,
-                expected_control_lag,
                 control_baseline.correlation,
             ));
             }

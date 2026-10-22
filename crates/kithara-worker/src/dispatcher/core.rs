@@ -271,6 +271,17 @@ pub(super) fn produce_pass(
             other => other,
         };
         report.record(slot.id, slot.priority, result);
+        if result == TickResult::Backpressured {
+            let recheck = slot
+                .task
+                .backpressure_recheck()
+                .unwrap_or(budgets.backpressure_poll_interval);
+            report.backpressure_recheck = Some(
+                report
+                    .backpressure_recheck
+                    .map_or(recheck, |soonest| soonest.min(recheck)),
+            );
+        }
         if result == TickResult::Done {
             slot.is_terminal = true;
         }
@@ -334,8 +345,8 @@ pub(super) fn park_after_outcome(
         }
         PassOutcome::Waiting | PassOutcome::UpstreamPending | PassOutcome::Backpressured => {
             *progress_streak = 0;
-            if report.backpressured_tasks > 0 {
-                wait_for_backpressure(wake, budgets);
+            if let Some(recheck) = report.backpressure_recheck {
+                wait_for_backpressure(wake, budgets, &report, recheck);
             } else {
                 wake.wait_timeout(budgets.wait_timeout);
             }
@@ -348,10 +359,19 @@ pub(super) fn park_after_outcome(
 }
 
 #[kithara::measure(label = "worker.backpressure.wait")]
-#[kithara::hang_watchdog]
-fn wait_for_backpressure(wake: &Wake, budgets: &DispatcherConfig) {
-    let poll_interval = budgets.backpressure_poll_interval;
-    let deadline = budgets.wait_timeout;
+fn wait_for_backpressure(
+    wake: &Wake,
+    budgets: &DispatcherConfig,
+    report: &PassReport,
+    poll_interval: Duration,
+) {
+    // A pass where every live task waits on its sink has nothing to do before
+    // the soonest recheck; a waiting task keeps the wait budget.
+    let deadline = if report.waiting_tasks == 0 && report.upstream_pending_tasks == 0 {
+        budgets.wait_timeout.max(poll_interval)
+    } else {
+        budgets.wait_timeout
+    };
     if poll_interval.is_zero() || deadline.is_zero() {
         wake.wait_timeout(Duration::ZERO);
         return;
@@ -361,11 +381,7 @@ fn wait_for_backpressure(wake: &Wake, budgets: &DispatcherConfig) {
     let mut remaining = deadline;
     loop {
         let wait = poll_interval.min(remaining);
-        let mut woken = false;
-        hang_park!(|watchdog_remaining| {
-            woken = wake.wait_poll_timeout(wait.min(watchdog_remaining));
-        });
-        if woken {
+        if wake.wait_poll_timeout(wait) {
             return;
         }
         remaining = deadline.saturating_sub(started.elapsed());

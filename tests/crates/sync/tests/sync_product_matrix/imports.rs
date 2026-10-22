@@ -10,7 +10,6 @@ pub(super) use kithara::{
     output::{OfflineRenderRequest, OfflineRenderer},
     platform::CancelScope,
     record::{RecordingConfig, RecordingCore, RecordingSink},
-    signal::AudioSpec,
 };
 pub(super) use kithara::{
     beat::{BeatGridModel, BeatGridState, GridBeat, RawBeatGrid, SCHEMA_VERSION},
@@ -31,7 +30,7 @@ pub(super) use kithara::{
         ArtifactSource, PlayWorker, PlayWorkerConfig, ResourceConfig, ResourcePrep, ResourceSrc,
     },
     queue::{Queue, QueueConfig, TrackSource, TrackStatus},
-    signal::SessionFrame,
+    signal::{AudioSpec, SessionFrame},
     sync::SessionBeat,
 };
 #[cfg(not(target_os = "android"))]
