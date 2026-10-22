@@ -14,8 +14,8 @@ use crate::{
 
 impl<D: DriverIo> ResourceCore<D> {
     /// Tracks how far the available prefix of the range reaches; since bytes arrive front-to-back
-    /// for a sequential fetch, its advance signals progress and resets the hang watchdog. Failing a
-    /// fast check, the wait parks until the gate is notified — event-driven, with no timer.
+    /// for a sequential fetch, its advance signals progress and resets the hang watchdog.
+    /// The wait parks until the gate is notified, with no timer.
     #[kithara::measure]
     #[kithara::hang_watchdog(timeout = consts::WAIT_HANG_TIMEOUT)]
     pub(super) fn wait_range_inner(
@@ -47,10 +47,6 @@ impl<D: DriverIo> ResourceCore<D> {
 
         loop {
             hang_tick!();
-            if self.inner.driver.try_fast_check(&range) {
-                return Ok(WaitOutcome::Ready);
-            }
-
             let state = self.inner.gate.lock();
 
             if self.inner.cancel.is_cancelled()
@@ -63,29 +59,31 @@ impl<D: DriverIo> ResourceCore<D> {
                 return Err(StorageError::Failed(reason.clone()));
             }
 
-            if range_covered_by(&state.available, &range) {
-                return Ok(WaitOutcome::Ready);
-            }
-
-            if state.committed {
-                let final_len = state.final_len.unwrap_or(0);
-                if range.start >= final_len {
-                    return Ok(WaitOutcome::Eof);
-                }
-                let clamped = range.start..range.end.min(final_len);
-                if range_covered_by(&state.available, &clamped) {
+            let front = {
+                let available = self.inner.available.load();
+                if range_covered_by(&available, &range) {
                     return Ok(WaitOutcome::Ready);
                 }
-                if self.inner.driver.valid_window().is_none() {
-                    return Ok(WaitOutcome::Ready);
-                }
-            }
 
-            let front = state
-                .available
-                .gaps(&range)
-                .next()
-                .map_or(range.end, |gap| gap.start);
+                if state.committed {
+                    let final_len = state.final_len.unwrap_or(0);
+                    if range.start >= final_len {
+                        return Ok(WaitOutcome::Eof);
+                    }
+                    let clamped = range.start..range.end.min(final_len);
+                    if range_covered_by(&available, &clamped) {
+                        return Ok(WaitOutcome::Ready);
+                    }
+                    if self.inner.driver.valid_window().is_none() {
+                        return Ok(WaitOutcome::Ready);
+                    }
+                }
+
+                available
+                    .gaps(&range)
+                    .next()
+                    .map_or(range.end, |gap| gap.start)
+            };
             if front > filled_front {
                 filled_front = front;
                 hang_reset!();
