@@ -119,6 +119,8 @@ fn streaming_resource_open_existing_is_committed(temp_dir: TestTempDir, cancel_t
 
         let resource = open_mmap_at(file_path, None, cancel_token);
 
+        assert_eq!(resource.next_gap(0, 13), None);
+
         assert_eq!(
             resource.status(),
             ResourceStatus::Committed {
@@ -150,6 +152,8 @@ fn streaming_resource_range_write_wait_read(temp_dir: TestTempDir, cancel_token:
     resource.write_at(7, b"World!").unwrap();
 
     resource.wait_range(0..13).unwrap();
+    assert!(resource.contains_range(0..13));
+    assert_eq!(resource.next_gap(0, 13), None);
     let data = read_bytes(&resource, 0, 13);
     assert_eq!(&data, b"Hello, World!");
 }
