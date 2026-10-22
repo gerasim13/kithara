@@ -169,7 +169,6 @@ where
 /// hiding an already-near position; it is the cache being unable to say
 /// whether the seek has landed, so there is nothing here for a cache read to
 /// fall back to.
-#[kithara::flash(io)]
 pub async fn wait_for_position_near_event<S>(
     rx: &mut EventReceiver<TestEvent>,
     queue: &QueueControl<S>,
