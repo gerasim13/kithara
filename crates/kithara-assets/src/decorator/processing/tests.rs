@@ -202,7 +202,7 @@ fn reader_view_blocks_until_writer_commits() {
     let raw_len = raw.len() as u64;
 
     let waiters = [writer.reader(), reopened].map(|reader| {
-        std::thread::spawn(move || {
+        thread::spawn(move || {
             let outcome = reader.wait_range(0..raw_len).unwrap();
             assert_eq!(outcome, WaitOutcome::Ready);
             let mut buf = vec![0u8; 32];
@@ -248,7 +248,7 @@ fn wait_range_aborts_on_cancellation() {
         .build();
     let reader = writer.reader();
 
-    let handle = std::thread::spawn(move || reader.wait_range(0..16));
+    let handle = thread::spawn(move || reader.wait_range(0..16));
 
     thread::sleep(Duration::from_millis(50));
     cancel.cancel();
@@ -439,7 +439,7 @@ fn ending_a_writer_without_commit_interrupts_its_readers(#[case] abandon: bool) 
     let reader = writer.reader();
     let reader_probe = reader.clone();
 
-    let handle = std::thread::spawn(move || reader.wait_range(0..16));
+    let handle = thread::spawn(move || reader.wait_range(0..16));
     thread::sleep(Duration::from_millis(50));
     if abandon {
         writer.abandon();

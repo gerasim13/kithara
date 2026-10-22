@@ -31,6 +31,8 @@ pub struct PassReport {
     pub first_waiting_task: Option<TaskId>,
     pub outcome: PassOutcome,
     pub active_tasks: usize,
+    /// Soonest recheck any backpressured task of the pass asked for.
+    pub backpressure_recheck: Option<Duration>,
     pub backpressured_tasks: usize,
     pub done_tasks: usize,
     pub progress_tasks: usize,
@@ -42,6 +44,7 @@ impl PassReport {
     pub(crate) const fn new(active_tasks: usize) -> Self {
         Self {
             active_tasks,
+            backpressure_recheck: None,
             backpressured_tasks: 0,
             done_tasks: 0,
             first_backpressured_task: None,

@@ -18,26 +18,32 @@ pub(super) fn divisor(mut first: u128, mut second: u128) -> u128 {
     first
 }
 
+fn quotient(numerator: u128, denominator: NonZeroU128) -> u128 {
+    if denominator.get().is_power_of_two() {
+        numerator >> denominator.get().trailing_zeros()
+    } else {
+        numerator / denominator.get()
+    }
+}
+
 impl Ratio {
     pub(super) fn new(numerator: u128, denominator: NonZeroU128) -> Option<Self> {
-        let common = divisor(numerator, denominator.get());
+        let common = NonZeroU128::new(divisor(numerator, denominator.get()))?;
         Some(Self {
-            numerator: numerator / common,
-            denominator: NonZeroU128::new(denominator.get() / common)?,
+            numerator: quotient(numerator, common),
+            denominator: NonZeroU128::new(quotient(denominator.get(), common))?,
         })
     }
 
     pub(super) fn at(self, denominator: NonZeroU128) -> Option<u128> {
         self.numerator
-            .checked_mul(denominator.get().checked_div(self.denominator.get())?)
+            .checked_mul(quotient(denominator.get(), self.denominator))
     }
 
     pub(super) fn common(self, other: Self) -> Option<NonZeroU128> {
+        let common = NonZeroU128::new(divisor(self.denominator.get(), other.denominator.get()))?;
         NonZeroU128::new(
-            self.denominator
-                .get()
-                .checked_div(divisor(self.denominator.get(), other.denominator.get()))?
-                .checked_mul(other.denominator.get())?,
+            quotient(self.denominator.get(), common).checked_mul(other.denominator.get())?,
         )
     }
 
@@ -58,12 +64,13 @@ impl Ratio {
     }
 
     pub(super) fn mul(self, other: Self) -> Option<Self> {
-        let first = divisor(self.numerator, other.denominator.get());
-        let second = divisor(other.numerator, self.denominator.get());
+        let first = NonZeroU128::new(divisor(self.numerator, other.denominator.get()))?;
+        let second = NonZeroU128::new(divisor(other.numerator, self.denominator.get()))?;
         Self::new(
-            (self.numerator / first).checked_mul(other.numerator / second)?,
+            quotient(self.numerator, first).checked_mul(quotient(other.numerator, second))?,
             NonZeroU128::new(
-                (self.denominator.get() / second).checked_mul(other.denominator.get() / first)?,
+                quotient(self.denominator.get(), second)
+                    .checked_mul(quotient(other.denominator.get(), first))?,
             )?,
         )
     }
@@ -102,7 +109,7 @@ impl Ratio {
     }
 
     pub(super) fn source_frame(self) -> Option<u64> {
-        u64::try_from(self.numerator / self.denominator.get()).ok()
+        u64::try_from(quotient(self.numerator, self.denominator)).ok()
     }
 }
 
@@ -135,5 +142,40 @@ impl TryFrom<f64> for Ratio {
             numerator,
             denominator,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test]
+    fn source_quotients_match_full_width_integer_division() {
+        let numerators = [0, 1, 3, u128::from(u64::MAX), 1 << 64, 1 << 127, u128::MAX];
+        for bits in 0..u128::BITS {
+            let denominator = NonZeroU128::new(1 << bits).expect("positive dyadic divisor");
+            for numerator in numerators.into_iter().chain([
+                denominator.get() - 1,
+                denominator.get(),
+                denominator.get() + 1,
+            ]) {
+                assert_eq!(
+                    quotient(numerator, denominator),
+                    numerator / denominator.get(),
+                    "numerator={numerator}, denominator={denominator}",
+                );
+            }
+        }
+        for denominator in [3, 5, 44100, u128::from(u64::MAX), u128::MAX] {
+            let denominator = NonZeroU128::new(denominator).expect("positive general divisor");
+            for numerator in numerators {
+                assert_eq!(
+                    quotient(numerator, denominator),
+                    numerator / denominator.get()
+                );
+            }
+        }
     }
 }

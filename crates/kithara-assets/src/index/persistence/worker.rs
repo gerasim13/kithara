@@ -5,8 +5,7 @@ use std::sync::{OnceLock, Weak};
 use kithara_platform::{
     CancelToken,
     sync::Arc,
-    thread::{self, JoinHandle, spawn_named},
-    time::Instant,
+    thread::{JoinHandle, spawn_named},
 };
 
 use super::{FlushHub, FlushPolicy, flush::HubWait};
@@ -27,25 +26,12 @@ impl WorkerSlot {
         self.handle.get().is_some()
     }
 
-    /// Cancel-driven shutdown join. Joins the worker thread so it is
-    /// gone by the time the hub drops — except when `Drop` is itself
-    /// running on the worker thread (the worker upgraded the last
-    /// `Arc<FlushHub>` during a flush and is dropping it), where a join
-    /// would self-deadlock; there the thread is already unwinding to
-    /// exit, so the handle is simply detached.
-    pub(super) fn shutdown_join(&mut self) {
-        if let Some(handle) = self.handle.take()
-            && handle.thread().id() != thread::current().id()
-            && handle.join().is_err()
-        {
-            tracing::warn!("flush worker thread panicked during shutdown join");
-        }
-    }
-
     /// Spawn the worker once. The thread holds a `Weak<FlushHub>` plus
     /// clones of the wait cell, cancel token, and policy — never a
     /// strong `Arc<FlushHub>` — so the hub can reach refcount zero and
-    /// run [`FlushHub`]'s `Drop`, which cancels and joins this thread.
+    /// run [`FlushHub`]'s `Drop`, which cancels this thread. Past that drop
+    /// the thread cannot upgrade the hub, so it only exits; its handle is
+    /// detached rather than joined.
     pub(super) fn start_with(&self, hub: &Arc<FlushHub>) {
         self.handle.get_or_init(|| {
             let weak = Arc::downgrade(hub);
@@ -84,7 +70,7 @@ fn run(weak: &Weak<FlushHub>, wait: &HubWait, cancel: &CancelToken, policy: &Flu
         }
         drop(guard);
 
-        let debounce_deadline = Instant::now() + policy.debounce;
+        let debounce_deadline = wait.cv.instant() + policy.debounce;
         loop {
             let guard = wait.state.lock();
             if guard.op_count >= policy.force_every_n_ops.get() {
@@ -95,7 +81,7 @@ fn run(weak: &Weak<FlushHub>, wait: &HubWait, cancel: &CancelToken, policy: &Flu
                 final_flush(weak);
                 return;
             }
-            if Instant::now() >= debounce_deadline {
+            if wait.cv.instant() >= debounce_deadline {
                 break;
             }
             let _ = wait.cv.wait_timeout(guard, debounce_deadline);

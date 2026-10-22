@@ -35,7 +35,10 @@ use crate::{
         CursorShape,
         masonry::{changes_modifiers, cursor_icon},
     },
-    masonry::{poses::placements, shader::ShaderDeclaration, vis::VisDeclaration},
+    masonry::{
+        external::ExternalImageDeclaration, poses::placements, shader::ShaderDeclaration,
+        vis::VisDeclaration,
+    },
     render::{Published, document::Ctx},
 };
 
@@ -256,6 +259,22 @@ where
             .focused_widget()
             .and_then(|id| self.read_widget(id, |node: &Node| Some(node.accepts_text_input())))
             == Some(true)
+    }
+
+    /// The device pictures the shown custom widgets drew into the scene, each
+    /// once. A stashed widget's last paint is not part of the scene.
+    pub(crate) fn external_images(&self) -> Vec<ExternalImageDeclaration> {
+        let shown = self.native.iter().filter_map(|id| {
+            let widget = self.root.get_widget(*id)?.downcast::<Node>()?;
+            (!widget.ctx().is_stashed()).then(|| widget.external_images().to_vec())
+        });
+        let mut images: Vec<ExternalImageDeclaration> = Vec::new();
+        for image in shown.flatten() {
+            if !images.contains(&image) {
+                images.push(image);
+            }
+        }
+        images
     }
 
     /// The colour the node `id` writes its text in right now.

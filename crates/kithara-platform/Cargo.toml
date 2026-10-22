@@ -55,6 +55,7 @@ pin-project-lite = { workspace = true }
 tokio = { workspace = true, features = ["time", "sync", "rt", "macros"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+gloo-timers = { workspace = true }
 js-sys = { workspace = true }
 parking_lot_core = { workspace = true, features = ["nightly"] }
 tokio_with_wasm = { workspace = true }

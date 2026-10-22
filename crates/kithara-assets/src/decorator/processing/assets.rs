@@ -56,7 +56,6 @@ where
 {
     type ActiveRes = ProcessedWriter<A::ActiveRes, S>;
     type Context = ProcessCtx;
-    type IndexRes = A::IndexRes;
     type ReadyRes = ProcessedReader<A::ReadyRes, S>;
 
     fn acquire_resource_with_ctx(
@@ -94,8 +93,6 @@ where
         to self.inner {
             fn capabilities(&self) -> Capabilities;
             fn root_dir(&self) -> &Path;
-            fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes>;
-            fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes>;
             fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState>;
             fn delete_asset(&self, asset_root: &str) -> AssetsResult<()>;
             fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()>;

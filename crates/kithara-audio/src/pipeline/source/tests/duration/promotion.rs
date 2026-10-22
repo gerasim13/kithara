@@ -256,7 +256,7 @@ async fn a_finished_empty_incoming_tail_does_not_refine_from_the_outgoing_endpoi
         .revision();
     assert_ne!(revision, original.meta.source_revision);
     assert_eq!(source.resume.decoded_end(revision), None);
-    assert_eq!(source.media_end(), Some(Duration::from_millis(59_969)));
+    assert_eq!(source.media_end(), Some(Duration::from_millis(59_952)));
     assert_ne!(source.media_end(), Some(original.meta.end_timestamp));
 }
 

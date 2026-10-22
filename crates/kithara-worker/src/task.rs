@@ -1,4 +1,6 @@
-use kithara_platform::{CancelGroup, CancelToken, sync::Arc, tokio::runtime::Handle};
+use kithara_platform::{
+    CancelGroup, CancelToken, sync::Arc, time::Duration, tokio::runtime::Handle,
+};
 
 use crate::{
     ComputeContext, ComputeRejected, Wake,
@@ -61,6 +63,15 @@ pub trait Task: 'static {
     /// `None` uses the immutable priority supplied at admission. `Some` overrides
     /// that value, including zero, from state owned by the dispatcher thread.
     fn priority(&self) -> Option<Priority> {
+        None
+    }
+
+    /// How soon the full sink of a backpressured task can take more work.
+    ///
+    /// The dispatcher rechecks the task no sooner, since an earlier pass finds
+    /// the sink still full. `None` keeps the dispatcher's configured poll
+    /// interval.
+    fn backpressure_recheck(&self) -> Option<Duration> {
         None
     }
 

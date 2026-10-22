@@ -20,9 +20,11 @@ class KitharaInitTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         Kithara.initialize(context, TestTransport.okHttp)
 
-        val p1 = KitharaPlayer()
-        val p2 = KitharaPlayer()
-        assertNotSame(p1, p2)
+        KitharaPlayer().use { p1 ->
+            KitharaPlayer().use { p2 ->
+                assertNotSame(p1, p2)
+            }
+        }
     }
 
     @Test
@@ -62,9 +64,9 @@ class KitharaInitTest {
             layouts = layouts,
         )
 
-        val player = KitharaPlayer(KitharaPlayer.Config(store = store))
-
-        assertEquals(PlayerStatus.Unknown, player.status)
+        KitharaPlayer(KitharaPlayer.Config(store = store)).use { player ->
+            assertEquals(PlayerStatus.Unknown, player.status)
+        }
     }
 
     @Test
@@ -100,9 +102,9 @@ class KitharaInitTest {
             layouts = layouts,
         )
 
-        val player = KitharaPlayer(KitharaPlayer.Config(store = store))
-
-        assertEquals(PlayerStatus.Unknown, player.status)
+        KitharaPlayer(KitharaPlayer.Config(store = store)).use { player ->
+            assertEquals(PlayerStatus.Unknown, player.status)
+        }
     }
 
     private object FixedLayout : AssetLayout {

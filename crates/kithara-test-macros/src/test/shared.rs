@@ -105,6 +105,23 @@ pub(crate) fn make_ambient_stmt(args: &TestArgs) -> TokenStream2 {
     }
 }
 
+/// The native sync body: body-held flash mode, then the statements counted as
+/// a flash participant, as `participate` counts the async body's future. The
+/// body's own work holds the virtual clock until it parks in an engine wait.
+pub(crate) fn make_sync_body(
+    test_setup: &TokenStream2,
+    preamble: &TokenStream2,
+    ambient: &TokenStream2,
+    body_stmts: &[syn::Stmt],
+) -> TokenStream2 {
+    quote! {
+        #test_setup
+        #preamble
+        #ambient
+        ::kithara_test_utils::kithara_platform::flash::participate_sync(|| { #(#body_stmts)* })
+    }
+}
+
 /// Per-test process setup, spliced as statements into the test body's scope:
 /// the log subscriber, then the `load` feature's CPU contention held until
 /// the body ends.

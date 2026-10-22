@@ -20,6 +20,8 @@ mod factory;
 mod fmp4;
 mod gapless;
 mod mp4;
+#[cfg(any(android_backend, all(test, feature = "android", feature = "symphonia")))]
+mod pcm;
 mod resampled;
 #[cfg(symphonia_demuxer)]
 mod symphonia;
@@ -47,7 +49,7 @@ pub use gapless::{
 };
 pub use traits::{
     Decoder, DecoderChunkOutcome, DecoderInput, DecoderSeekOutcome, InputReadOutcome, InputState,
-    PrepareWait,
+    LandingClock, PrepareWait,
 };
 pub use types::{
     BlenderProfile, DecoderDuration, DecoderTrackInfo, GaplessProfile, PcmOrigin, TrackMetadata,

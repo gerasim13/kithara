@@ -13,6 +13,8 @@ pub(crate) use control::{
     RouteRestartStatus, observe_commits, prepare_route_restart, publish_transport_event,
 };
 pub use event::TransportEvent;
-pub(crate) use inbox::{OfflineInbox, SessionInboxReturnNode};
+#[cfg(feature = "offline")]
+pub(crate) use inbox::OfflineInbox;
+pub(crate) use inbox::SessionInboxReturnNode;
 pub(crate) use node::install;
 pub(crate) use process::{Span, TransportState, applied_spans};

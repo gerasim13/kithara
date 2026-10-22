@@ -16,7 +16,8 @@ use super::{
     parse::TestArgs,
     shared::{
         finalize_body, make_ambient_stmt, make_dedicated_worker_config, make_serial_attr,
-        make_sync_test_attrs, make_test_setup, make_wasm_serial_guard, wrap_with_timeout,
+        make_sync_body, make_sync_test_attrs, make_test_setup, make_wasm_serial_guard,
+        wrap_with_timeout,
     },
 };
 
@@ -150,14 +151,15 @@ fn generate_native_only(ctx: &GenCtx<'_>) -> TokenStream2 {
         let ambient = make_ambient_stmt(ctx.args);
         let body_stmts = ctx.body_stmts;
         // Plain body for the async-native branches (sole ambient holder there
-        // is the per-poll `with_ambient`); held body for the sync branch.
+        // is the per-poll `with_ambient`); held, participating body for the
+        // sync branch.
         let full_plain = quote! { #preamble #(#body_stmts)* };
-        let full_held = quote! { #test_setup #preamble #ambient #(#body_stmts)* };
+        let full_sync = make_sync_body(&test_setup, &preamble, &ambient, body_stmts);
         tests.extend(emit_native_only_one(
             ctx,
             name,
             &full_plain,
-            &full_held,
+            &full_sync,
             &serial_attr,
             native_is_async,
         ));

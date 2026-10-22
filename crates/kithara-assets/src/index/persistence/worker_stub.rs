@@ -15,7 +15,5 @@ impl WorkerSlot {
         false
     }
 
-    pub(super) fn shutdown_join(&mut self) {}
-
     pub(super) fn start_with(&self, _hub: &Arc<FlushHub>) {}
 }

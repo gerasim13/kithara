@@ -916,6 +916,137 @@ fn a_next_pause_of_an_attached_track_settles_only_its_native_stop(#[case] initia
 }
 
 #[kithara::test]
+#[case::loaded_at_entry(0, false, 0)]
+#[case::loaded_at_entry_primed(0, false, 1_024)]
+#[case::paused_at_entry(0, true, 0)]
+#[case::paused_at_entry_primed(0, true, 1_024)]
+#[case::loaded_after_progress(1, false, 0)]
+#[case::loaded_after_progress_primed(1, false, 1_024)]
+#[case::paused_after_progress(1, true, 0)]
+#[case::paused_after_progress_primed(1, true, 1_024)]
+fn a_zero_frame_observation_retains_the_exact_commanded_cue(
+    #[case] consumed: u64,
+    #[case] paused: bool,
+    #[case] origin_frames: u64,
+) {
+    let mut rig = rig();
+    let (mut track, _inbox) = loaded(&mut rig, A, "exact cue observation");
+    let cue = Duration::from_nanos(43_636_354_167);
+    let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("sample rate"));
+    let origin = spec.duration_for(origin_frames).expect("media origin");
+    let raw = origin + cue + spec.duration_for(consumed).expect("consumed frame time");
+    track.position = cue;
+    track.status = if paused {
+        TrackStatus::Paused { at: cue }
+    } else {
+        TrackStatus::Loaded
+    };
+    let source = AudioChunkInfo {
+        segment: track.segment,
+        spec,
+        media_origin: Some(origin),
+        ..AudioChunkInfo::default()
+    };
+    let mark = SlotMark {
+        session: frame(0),
+        lane: LaneFrame {
+            segment: track.segment,
+            frame: consumed,
+        },
+        position: raw,
+    };
+    let output = mock::output(None).get();
+    let deck = crate::DeckSnapshot {
+        slots: vec![SlotSnapshot {
+            source: Some(source),
+            mark: Some(mark),
+            position: raw.as_secs_f64(),
+            ..SlotSnapshot::default()
+        }],
+        ..crate::DeckSnapshot::default()
+    };
+    let pass = crate::DeckPass {
+        mix: DeckMixSettings::default(),
+        suspended: false,
+        now: frame(0),
+        delivery: FrameCount::new(0),
+        output: &output,
+        deck: &deck,
+    };
+    for _ in 0..2 {
+        let mut scope = rig.deck.ring.scope(rig.deck.scope).expect("live scope");
+        let out = Outbox::new(&mut scope, &mut rig.deck.dispatcher).in_pass(pass);
+        track.observe(&out);
+    }
+    let expected = if consumed == 0 {
+        cue
+    } else {
+        spec.elapsed_since(origin, raw)
+    };
+    assert_eq!(track.position, expected);
+    assert_eq!(track.mark, Some(mark));
+    assert_eq!(track.observed_source, Some(source));
+}
+
+#[kithara::test]
+#[case::before_progress(0, 0)]
+#[case::before_progress_primed(0, 1_024)]
+#[case::after_progress(1, 0)]
+#[case::after_progress_primed(1, 1_024)]
+fn a_zero_frame_stop_retains_the_exact_commanded_cue(
+    #[case] consumed: u64,
+    #[case] origin_frames: u64,
+) {
+    let mut rig = rig();
+    let (mut track, _inbox) = loaded(&mut rig, A, "exact cue stop");
+    command_at_zero(&mut track, &mut rig, TrackCommand::Pause { at: When::Next })
+        .expect("native Stop");
+    let cue = Duration::from_nanos(43_636_354_167);
+    let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("sample rate"));
+    let origin = spec.duration_for(origin_frames).expect("media origin");
+    let raw = origin + cue + spec.duration_for(consumed).expect("consumed frame time");
+    track.position = cue;
+    track.media_origin = Some(origin);
+    track.observed_source = Some(AudioChunkInfo {
+        spec,
+        ..AudioChunkInfo::default()
+    });
+    let mark = SlotMark {
+        session: frame(0),
+        lane: LaneFrame {
+            segment: track.segment,
+            frame: consumed,
+        },
+        position: raw,
+    };
+    rig.deck.ring.publish().expect("publish Stop");
+    rig.deck.inbox.drain();
+    {
+        let mut scope = rig.deck.inbox.scope(rig.deck.scope).expect("live scope");
+        let mut due = scope.next_due(frame(0), 1).expect("admitted Stop");
+        *due.commands_mut() = vec![DeckPart::Returned(Returned::Stopped {
+            slot: A,
+            resume: Some(mark),
+        })];
+        due.apply(());
+    }
+    let kithara_command::ScopedReceipt::Scope(_, receipt) =
+        rig.deck.ring.receipt().expect("Stop receipt")
+    else {
+        panic!("scoped Stop")
+    };
+    answer_track(&mut track, &mut rig, receipt);
+    let expected = if consumed == 0 {
+        cue
+    } else {
+        spec.elapsed_since(origin, raw)
+    };
+    assert_eq!(track.position, expected);
+    assert_eq!(track.status, TrackStatus::Paused { at: expected });
+    assert_eq!(track.resume, Some(mark));
+}
+
+#[kithara::test]
 #[case::mapped(true)]
 #[case::without_mark(false)]
 fn processor_set_paused_updates_playback(#[case] mapped: bool) {
@@ -2786,10 +2917,6 @@ fn superseding_a_scheduled_batch_leaves_the_slot_sounding_as_it_was(
         })
         .expect("deck scope")
         .expect("configuration after cancellation is ready and timely");
-        rig.runtime.block_on(async {
-            a_cancelled_repeat_reaches_its_original_end(441).await;
-            a_cancelled_repeat_reaches_its_original_end(66_150).await;
-        });
         return;
     }
     let mut new = unseated_track();
@@ -2935,8 +3062,11 @@ fn repeat_wav_load(
     (worker, item)
 }
 
+#[kithara::test(tokio)]
+#[case::short(441)]
+#[case::long(66_150)]
 #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
-pub(super) async fn a_cancelled_repeat_reaches_its_original_end(frames: usize) {
+async fn a_cancelled_repeat_reaches_its_original_end(#[case] frames: usize) {
     use kithara_render::rt::StreamShape;
 
     let dir = TestTempDir::new();

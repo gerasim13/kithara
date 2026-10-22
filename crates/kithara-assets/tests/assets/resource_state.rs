@@ -3,7 +3,7 @@ use std::{collections::HashSet, num::NonZeroUsize, path::Path};
 use kithara_assets::{
     AssetResourceState, AssetStore, DiskAssetStore, ReadSide, StorageBackend, WriteSide,
 };
-use kithara_platform::{CancelToken, sync::Arc, time::Duration};
+use kithara_platform::{CancelToken, time::Duration};
 use kithara_test_utils::{bufpool::pools, kithara};
 use tempfile::tempdir;
 
@@ -275,7 +275,7 @@ fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
     let res_a_writer = pending(
         scope_a
             .store()
-            .acquire_resource_with_ctx(&key_a, None, Some(Arc::clone(&proc_a)))
+            .acquire_resource_with_ctx(&key_a, None, Some(proc_a))
             .unwrap(),
     );
     assert_eq!(
@@ -294,10 +294,7 @@ fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
         AssetResourceState::Committed { final_len: Some(3) }
     );
 
-    let reopened = scope_a
-        .store()
-        .open_resource_with_ctx(&key_a, None, Some(Arc::clone(&proc_a)))
-        .unwrap();
+    let reopened = scope_a.store().open_resource(&key_a, None).unwrap();
     let mut processed = pools().get::<u8>();
     reopened.read_into(&mut processed).unwrap();
     assert_eq!(&*processed, [0x45, 0x75, 0x65]);

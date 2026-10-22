@@ -2,8 +2,10 @@
 
 use std::num::NonZeroU32;
 
-use kithara::{events::TrackId, play::InterruptionKind, signal::AudioSpec};
-use kithara_integration_tests::offline::{OfflinePlayer, OfflinePlayerOptions};
+use kithara::{play::InterruptionKind, signal::AudioSpec};
+use kithara_integration_tests::offline::{
+    OfflinePlayer, OfflinePlayerOptions, append_source_loaded,
+};
 use kithara_test_fixtures::integration_fixtures::constant_half;
 
 const SAMPLE_RATE: u32 = 44_100;
@@ -88,12 +90,9 @@ async fn loaded_harness(constant_half: &'static [u8]) -> OfflinePlayer {
         1.0,
         constant_half,
     )));
+    let deck_id = append_source_loaded(&harness, harness.player(), deck_source).await;
     harness
         .with_queue(move |player| {
-            let deck_id = TrackId::allocate();
-            player
-                .append_with_id(deck_id, deck_source)
-                .expect("append PCM deck");
             player
                 .select(deck_id, kithara::queue::Transition::None)
                 .expect("select the item");

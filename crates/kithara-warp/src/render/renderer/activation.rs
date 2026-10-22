@@ -228,17 +228,20 @@ where
         remaining: usize,
         output_limit: usize,
     ) -> Result<PreparedQuantum, ElasticError> {
-        let outputs = if self.requires_staging() {
-            self.trajectory
-                .output_limit(output_limit)
-                .min(self.source_block_frames.get())
-                .min(
-                    self.render_quantum_frames
-                        .map_or(remaining, |limit| limit.get().min(remaining)),
-                )
-        } else {
-            remaining.min(output_limit)
+        // One lane packet, whatever the decoded chunk holds: staging fills it
+        // across chunks. Only an unquantised render follows the chunk.
+        let staging = self.requires_staging();
+        let packet = match self.render_quantum_frames {
+            Some(quantum) => quantum.get().min(self.source_block_frames.get()),
+            None if staging => remaining.min(self.source_block_frames.get()),
+            None => remaining,
         };
+        let output_limit = if staging {
+            self.trajectory.output_limit(output_limit)
+        } else {
+            output_limit
+        };
+        let outputs = packet.min(output_limit);
         if outputs == 0 {
             return Err(ElasticError::EmptyOutput);
         }

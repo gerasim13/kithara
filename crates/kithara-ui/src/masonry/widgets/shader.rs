@@ -70,7 +70,9 @@ impl ShaderLeaf {
         );
         replay(
             &list.finish(),
-            &mut VelloImageBackend::new(scene, frame.image(), image),
+            &mut VelloImageBackend::new(scene, |picture: &Image| {
+                (picture.id() == frame.image()).then_some(image)
+            }),
         );
     }
 

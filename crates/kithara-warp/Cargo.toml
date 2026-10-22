@@ -18,9 +18,9 @@ ignored = ["serde"]
 default = []
 # Beat-grid and warp-plan fixtures for tests outside this crate.
 mock = []
-perf = ["kithara-stretch/perf"]
-usdt = ["dep:kithara-test-utils", "kithara-test-utils/usdt"]
-render = ["dep:kithara-bufpool", "dep:kithara-dsp", "dep:kithara-test-utils"]
+perf = ["kithara-stretch?/perf"]
+usdt = ["kithara-test-utils/usdt"]
+render = ["dep:kithara-bufpool", "dep:kithara-dsp", "dep:kithara-stretch"]
 stretch-signalsmith = ["kithara-stretch/stretch-signalsmith", "render"]
 stretch-bungee = ["kithara-stretch/stretch-bungee", "render"]
 stretch-glide = ["kithara-stretch/stretch-glide", "render"]
@@ -34,10 +34,10 @@ kithara-derive = { workspace = true, features = ["patch", "ranged"] }
 kithara-dsp = { workspace = true, optional = true }
 kithara-platform = { workspace = true }
 kithara-signal = { workspace = true }
-kithara-stretch = { workspace = true, default-features = false }
+kithara-stretch = { workspace = true, optional = true, default-features = false }
 kithara-sync = { workspace = true }
 kithara-test-macros = { workspace = true }
-kithara-test-utils = { workspace = true, features = ["client-reqwest", "tls-rustls"], optional = true }
+kithara-test-utils = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
 
 bon = { workspace = true }
 delegate = { workspace = true }
@@ -57,10 +57,13 @@ kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspac
 kithara-bufpool = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true, features = ["usdt", "client-reqwest", "tls-rustls"] }
-kithara-warp = { path = ".", default-features = false, features = ["usdt", "stretch-identity", "stretch-glide", "stretch-signalsmith", "stretch-bungee"] }
+kithara-warp = { path = ".", default-features = false, features = ["usdt", "stretch-identity", "stretch-glide", "stretch-signalsmith"] }
 
 realfft = { workspace = true }
 serde_json = { workspace = true }
+
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android"), not(all(target_os = "windows", target_env = "msvc"))))'.dev-dependencies]
+kithara-warp = { path = ".", default-features = false, features = ["stretch-bungee"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }

@@ -4,6 +4,7 @@ use kithara::{
     play::TrackFactory,
     queue::{QueueControl, TrackSource},
 };
+#[cfg(not(target_arch = "wasm32"))]
 use kithara_test_fixtures::asset::Asset;
 
 use super::OfflinePlayer;
@@ -18,6 +19,7 @@ pub const LOCAL_LOAD_DEADLINE: Duration = Duration::from_secs(20);
 ///
 /// Panics when the fixture has no file on disk.
 #[must_use]
+#[cfg(not(target_arch = "wasm32"))]
 pub fn asset_source(track: &Asset) -> String {
     track
         .path()
@@ -27,6 +29,7 @@ pub fn asset_source(track: &Asset) -> String {
 }
 
 /// Append a fixture track through the queue loader and wait until it loads.
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn append_loaded(
     harness: &OfflinePlayer,
     queue: &QueueControl<TestPools>,

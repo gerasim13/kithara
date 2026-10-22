@@ -547,7 +547,8 @@ fn identity_source_preserves_buffers_despite_initial_and_live_controls(quarter: 
         .backend(StretchKind::Identity)
         .speed(0.5)
         .keylock(true)
-        .render_quantum_frames(NonZeroUsize::new(16).expect("quantum"))
+        // A decoded chunk the size of a lane packet renders as itself.
+        .render_quantum_frames(NonZeroUsize::new(64).expect("quantum"))
         .build();
     let renderer = kithara_warp::Warp::new((), &config).renderer(spec, pools.clone());
     let drain = EffectDrain::new(0, &pools).expect("empty effect drain");

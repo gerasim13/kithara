@@ -425,14 +425,11 @@ mod tests {
         assert_eq!(current.variant_index, VariantIndex::new(1));
         assert_eq!(current.bandwidth_bps, Some(512_000));
 
-        state.apply_decision(
-            &AbrDecision::UpSwitch {
-                from: VariantIndex::new(1),
-                to: VariantIndex::new(2),
-                reason: AbrReason::UpSwitch,
-            },
-            Instant::now(),
-        );
+        state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
+        let claim = state
+            .claim_pending_decision(state.current_variant_index())
+            .expect("the up-switch request must be claimable");
+        assert!(state.publisher().commit_pending(claim, Instant::now()));
         let after = handle
             .current_variant()
             .expect("current variant after switch");

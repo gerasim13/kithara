@@ -1,7 +1,7 @@
 use kithara_platform::{
     CancelToken,
     sync::{Arc, CondvarGate},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 #[derive(Clone, Copy)]
@@ -71,7 +71,7 @@ impl ReadinessGate {
             if should_abort() {
                 return false;
             }
-            let deadline = Instant::now() + self.poll_interval;
+            let deadline = self.gate.instant() + self.poll_interval;
             state = self.gate.wait_until(state, deadline);
         }
     }
