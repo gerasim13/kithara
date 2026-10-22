@@ -28,10 +28,8 @@ configuration that field owns.
 With `#[config(owner_access)]`, fields marked `get(ref)` also produce a
 `<Config>OwnerAccess` trait. Import
 that trait to call the same getter on any `ConfigOwner` of that type; the method
-borrows the retained configuration directly. For an exclusively owned mutable
-configuration, `#[config_owner_mut]` on the owner derive adds `ConfigOwnerMut`
-and its `apply_config_change` method. Shared and realtime owners keep their
-domain application method so they can prepare and publish accepted changes.
+borrows the retained configuration directly. Owners keep their own
+application method so they can prepare and publish accepted changes.
 Owners still decide when to prepare and publish derived state, especially across
 realtime and thread boundaries. Buffers, counters, handles and observed results
 remain operational state. `Config::values` returns an owned observation snapshot;

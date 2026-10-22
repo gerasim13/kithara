@@ -17,7 +17,7 @@ pub use kithara_derive::{ConfigOwner, Patch};
 mod config;
 mod env;
 mod live;
-pub use config::{Config, ConfigOwner, ConfigOwnerMut};
+pub use config::{Config, ConfigOwner};
 pub use env::path_from_env;
 pub use live::{CheckedConfig, Configure, LiveConfig, Nested};
 
