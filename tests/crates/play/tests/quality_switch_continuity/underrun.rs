@@ -36,13 +36,12 @@ struct Render {
 struct CaptureBlock {
     capture: Range<usize>,
     output: Range<u64>,
-    requested_unix_micros: Option<u128>,
+    started_unix_micros: Option<u128>,
     before: DeckSnapshot,
     after: DeckSnapshot,
     item_events: Vec<ItemEvent>,
     event_error: Option<String>,
     refill_probes: Vec<kithara_test_utils::test::usdt::ProbeEvent>,
-    worker_history: Vec<String>,
     /// The end of the last packet each segment admitted, read before `after`.
     admitted: Vec<(u64, u64)>,
 }
@@ -78,10 +77,10 @@ impl CaptureBlock {
             })
             .collect::<Vec<_>>();
         format!(
-            "capture={:?} output={:?} requested_unix_micros={:?} lane_frames={lane_frames:?} metrics_before={:?} metrics_after={:?} slots_before={:#?} slots_after={:#?} item_events={:?} event_error={:?} refill_probes={:?} worker_history={:?}",
+            "capture={:?} output={:?} started_unix_micros={:?} lane_frames={lane_frames:?} metrics_before={:?} metrics_after={:?} slots_before={:#?} slots_after={:#?} item_events={:?} event_error={:?} refill_probes={:?}",
             self.capture,
             self.output,
-            self.requested_unix_micros,
+            self.started_unix_micros,
             self.before.metrics,
             self.after.metrics,
             self.before.slots,
@@ -89,7 +88,6 @@ impl CaptureBlock {
             self.item_events,
             self.event_error,
             self.refill_probes,
-            self.worker_history,
         )
     }
 }
@@ -98,7 +96,7 @@ impl Render {
     fn capture_window(&self) -> RangeInclusive<u128> {
         let mut times = self.blocks.iter().map(|block| {
             block
-                .requested_unix_micros
+                .started_unix_micros
                 .expect("capture block has a wall timestamp")
         });
         let first = times.next().expect("capture has blocks");
@@ -342,7 +340,7 @@ async fn capture_tiny_ring(
         let frames = (OBSERVATION_FRAMES - samples.len() / usize::from(CHANNELS)).min(BLOCK_FRAMES);
         let capture_start = samples.len() / usize::from(CHANNELS);
         let output_start = prepared.player.host().position();
-        let requested_unix_micros = SystemTime::now()
+        let started_unix_micros = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .ok()
             .map(|duration| duration.as_micros());
@@ -351,30 +349,38 @@ async fn capture_tiny_ring(
         let admitted_count = kithara_test_utils::test::usdt::count("chunk_admitted");
         let snapshot_after = prepared.player.deck_snapshot();
         let output_end = prepared.player.host().position();
-        let starved = snapshot_after.metrics.underruns() > snapshot_before.metrics.underruns();
-        let (refill_probes, worker_history) = if starved && refill_snapshots < 3 {
-            refill_snapshots += 1;
-            let mut worker_history = kithara_test_utils::flight::probes_tail();
-            worker_history.extend(kithara_test_utils::flight::tail());
-            let refill_probes =
-                kithara_test_utils::test::usdt::events_of("feeder_refill_unavailable")
-                    .into_iter()
-                    .rev()
-                    .filter(|event| {
-                        snapshot_after
-                            .slots
-                            .iter()
-                            .filter_map(|slot| slot.mark)
-                            .any(|mark| {
-                                event.field("segment") == Some(mark.lane.segment.get())
-                                    && event.field("lane_frame") == Some(mark.lane.frame)
-                            })
+        let short =
+            snapshot_before
+                .slots
+                .iter()
+                .zip(&snapshot_after.slots)
+                .any(|(before, after)| {
+                    before.mark.zip(after.mark).is_some_and(|(before, after)| {
+                        before.lane.segment == after.lane.segment
+                            && after.lane.frame.checked_sub(before.lane.frame).is_some_and(
+                                |served| served < u64::try_from(frames).unwrap_or(u64::MAX),
+                            )
                     })
-                    .take(8)
-                    .collect();
-            (refill_probes, worker_history)
+                });
+        let refill_probes = if short && refill_snapshots < 3 {
+            refill_snapshots += 1;
+            kithara_test_utils::test::usdt::events_of("feeder_refill_unavailable")
+                .into_iter()
+                .rev()
+                .filter(|event| {
+                    snapshot_after
+                        .slots
+                        .iter()
+                        .filter_map(|slot| slot.mark)
+                        .any(|mark| {
+                            event.field("segment") == Some(mark.lane.segment.get())
+                                && event.field("lane_frame") == Some(mark.lane.frame)
+                        })
+                })
+                .take(8)
+                .collect()
         } else {
-            (Vec::new(), Vec::new())
+            Vec::new()
         };
         let mut observed_events = Vec::new();
         let mut event_error = None;
@@ -395,13 +401,12 @@ async fn capture_tiny_ring(
             CaptureBlock {
                 capture: capture_start..capture_start + frames,
                 output: output_start..output_end,
-                requested_unix_micros,
+                started_unix_micros,
                 before: snapshot_before,
                 after: snapshot_after,
                 item_events: observed_events,
                 event_error,
                 refill_probes,
-                worker_history,
                 admitted: Vec::new(),
             },
             admitted_count,
@@ -539,7 +544,7 @@ fn cochlea_silent_buckets(samples: &[f32]) -> usize {
     timeout(Duration::from_secs(8)),
     hang_timeout_secs(3),
     tracing(
-        "kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_play=debug,kithara_render=debug,hls_continuity=debug,render_refill=trace"
+        "kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_play=debug,render_refill=trace"
     )
 )]
 #[cfg_attr(not(target_os = "android"), case::delayed_symphonia(
@@ -584,6 +589,7 @@ async fn target_rebuild_keeps_player_output_continuous(
     #[case] label: &str,
     #[case] source: (TestServerHelper, CreatedHls),
 ) {
+    let _refill_scope = kithara_test_utils::test::usdt::scope();
     let (_server, created) = source;
     let master_url = created.master_url();
 
@@ -611,15 +617,6 @@ async fn target_rebuild_keeps_player_output_continuous(
     );
     let control_silence = longest_silent_run(&control.samples);
     let switched_silence = longest_silent_run(&switched.samples);
-    tracing::debug!(
-        target: "hls_continuity",
-        control_silence,
-        switched_silence,
-        thread_classes = ?kithara_test_utils::test::usdt::events_of("thread_class"),
-        control = %control.silence_diagnostic(),
-        switched = %switched.silence_diagnostic(),
-        "target rebuild captures completed"
-    );
     assert!(
         switched_silence <= control_silence.saturating_add(MAX_EXTRA_SILENT_FRAMES),
         "{label} inserted an audible silent gap: switched={switched_silence} frames, control={control_silence} frames, target_delay_ms={delay_ms}; switched: {}; control: {}",
@@ -642,7 +639,7 @@ async fn target_rebuild_keeps_player_output_continuous(
     timeout(Duration::from_secs(30)),
     hang_timeout_secs(3),
     tracing(
-        "kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_play=debug,kithara_render=debug,hls_continuity=debug,kithara_audio::pipeline::decode::transition=trace,kithara_audio::pipeline::source::variant=trace,render_refill=trace"
+        "kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_play=debug,kithara_audio::pipeline::decode::transition=trace,kithara_audio::pipeline::source::variant=trace,render_refill=trace"
     )
 )]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
@@ -655,6 +652,7 @@ async fn cold_target_variant_switch_keeps_playback_uninterrupted(
     #[case] backend: DecoderBackend,
     #[future(awt)] cold_sources: Vec<(TestServerHelper, CreatedHls)>,
 ) {
+    let _refill_scope = kithara_test_utils::test::usdt::scope();
     let sources: Vec<(Transition, url::Url)> = TRANSITIONS
         .into_iter()
         .zip(&cold_sources)
@@ -799,16 +797,6 @@ fn cold_switch_failures(
     let mut failures = Vec::new();
     let control_silence = longest_silent_run(&control.samples);
     let switched_silence = longest_silent_run(&switched.samples);
-    tracing::debug!(
-        target: "hls_continuity",
-        transition = transition.label,
-        control_silence,
-        switched_silence,
-        thread_classes = ?kithara_test_utils::test::usdt::events_of("thread_class"),
-        control = %control.silence_diagnostic(),
-        switched = %switched.silence_diagnostic(),
-        "cold target captures completed"
-    );
     if switched_silence > control_silence.saturating_add(MAX_EXTRA_SILENT_FRAMES) {
         failures.push(format!(
             "{} inserted an audible silent gap: switched={switched_silence} frames, control={control_silence} frames; switched {}; control {}",
