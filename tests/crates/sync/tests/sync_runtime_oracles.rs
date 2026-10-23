@@ -513,6 +513,36 @@ async fn bound_tempo_retarget_reaches_pcm_within_twenty_ms(
     );
 }
 
+#[cfg(feature = "flash")]
+#[kithara::test(native, tokio, multi_thread, serial)]
+async fn offline_callback_geometry_does_not_pace_the_audio_clock(
+    #[future(awt)] synthetic_sources: PreparedSources,
+) {
+    let mut harness = ProductHarness::new_for_block(
+        ONE_DECK,
+        &synthetic_sources,
+        CUE,
+        Audible::Deck(0),
+        BLOCK_FRAMES,
+    )
+    .await;
+    let first = harness.host.position();
+    let frames = ONE_DECK.sample_rate as usize;
+    let started = kithara::platform::time::Instant::now();
+    let pcm = harness.capture_frames(ONE_DECK, frames, 128).await;
+    let elapsed = started.elapsed();
+    assert_eq!(
+        harness.host.position(),
+        first + u64::from(ONE_DECK.sample_rate)
+    );
+    assert_eq!(pcm.len(), frames * usize::from(CHANNELS));
+    assert!(pcm.iter().any(|sample| sample.abs() > 0.01));
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "offline PCM callbacks must not wait out their rendered audio duration: {elapsed:?}"
+    );
+}
+
 #[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn running_sync_command_changes_audible_pcm_within_one_block(

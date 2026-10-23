@@ -349,7 +349,7 @@ fn applied_curves(
                 curves.push(AppliedCurve { command, at: *at });
             }
             [kithara::play::Settled::Rejected { .. }] => {}
-            [] if matches!(command.at, When::At(at) if at > mark.session) => {}
+            [] if matches!(command.at, When::At(at) if at >= mark.session) => {}
             [] => {
                 return Err(format!(
                     "speed {:?} has no actual Lane outcome",
@@ -4444,6 +4444,19 @@ fn confirmed_targets_and_consumed_laws_have_separate_clocks() {
         configured_speed_failures(observation, item, mark.lane.segment, &curves, speed)
             .expect("confirmed target")
     };
+    for at in [95, 96, 97] {
+        observation.speeds[0].at = When::At(SessionFrame::new(at));
+        if at < i64::from(mark.session) {
+            assert_eq!(
+                applied_curves(&observation, item, mark, rate).err(),
+                Some(format!("speed {future_seq:?} has no actual Lane outcome")),
+            );
+        } else {
+            assert!(check_config(&observation, 1.0).is_empty());
+            assert_eq!(check_config(&observation, 1.25).len(), 1);
+        }
+    }
+    observation.speeds[0].at = When::At(SessionFrame::new(192));
     assert!(check_config(&observation, 1.0).is_empty());
     assert_eq!(check_config(&observation, 1.25).len(), 1);
     observation.placement_receipts.push((

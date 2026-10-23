@@ -37,7 +37,6 @@ pub(crate) struct ProductHarness {
     /// Keeps real renderer probes scoped to this harness.
     _trace: usdt_trace::Scope,
     output_frames: u64,
-    paced: bool,
     provider: Provider,
     worker: PlayWorker<TestPools>,
     trajectory: TempoTrajectory,
@@ -291,7 +290,7 @@ impl ProductHarness {
         start: Start,
         audible: Audible,
     ) -> Self {
-        Self::build(case, prepared, start, audible, BLOCK_FRAMES, false, None).await
+        Self::build(case, prepared, start, audible, BLOCK_FRAMES, None).await
     }
 
     pub(crate) async fn new_for_block(
@@ -301,7 +300,7 @@ impl ProductHarness {
         audible: Audible,
         block_frames: usize,
     ) -> Self {
-        Self::build(case, prepared, start, audible, block_frames, true, None).await
+        Self::build(case, prepared, start, audible, block_frames, None).await
     }
 
     pub(crate) async fn new_with_decoder(
@@ -311,16 +310,7 @@ impl ProductHarness {
         audible: Audible,
         decoder: DecoderBackend,
     ) -> Self {
-        Self::build(
-            case,
-            prepared,
-            start,
-            audible,
-            BLOCK_FRAMES,
-            false,
-            Some(decoder),
-        )
-        .await
+        Self::build(case, prepared, start, audible, BLOCK_FRAMES, Some(decoder)).await
     }
 
     pub(crate) fn assert_decoder_backend(&self, expected: EventDecoderBackend) {
@@ -341,7 +331,6 @@ impl ProductHarness {
         start: Start,
         audible: Audible,
         block_frames: usize,
-        paced: bool,
         decoder: Option<DecoderBackend>,
     ) -> Self {
         let provider = prepared.0;
@@ -472,7 +461,6 @@ impl ProductHarness {
             host,
             master,
             output_frames,
-            paced,
             provider,
             worker,
             trajectory,
@@ -686,7 +674,6 @@ impl ProductHarness {
             "{}: rendering {frames} frames from {}",
             case.id, self.output_frames
         ));
-        let started = Instant::now();
         let grid = self.tick_all(case).await;
         let start_frame = SessionFrame::new(
             i64::try_from(self.output_frames).expect("observed Host frame fits its session axis"),
@@ -707,12 +694,6 @@ impl ProductHarness {
         self.output_frames = end;
         #[cfg(not(target_os = "android"))]
         self.tap.push(&samples);
-        if self.paced {
-            let frames: f64 = frames.as_();
-            let delay = Duration::from_secs_f64(frames / f64::from(case.sample_rate))
-                .saturating_sub(started.elapsed());
-            time::sleep(delay).await;
-        }
         let master = self.master.drain();
         assert_eq!(self.master.drops(), 0, "the master tap keeps every frame");
         assert_eq!(
