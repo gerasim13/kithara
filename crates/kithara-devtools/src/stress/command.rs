@@ -3668,6 +3668,34 @@ mod engine_selection_tests {
 
     #[test]
     fn pinned_nextest_keeps_engine_contracts_and_rejects_support_tests() {
+        let temp = TempDir::new().expect("isolated fixture receipt");
+        let receipt = temp.path().join("checked");
+        let executable = std::env::current_exe().expect("current test executable");
+        let output = Command::new(&executable)
+            .args(crate::common::child_test_args(
+                module_path!(),
+                "check_pinned_engine_fixture",
+            ))
+            .env("RUSTC_WRAPPER", &executable)
+            .env("RUSTC_WORKSPACE_WRAPPER", &executable)
+            .env("KITHARA_ENGINE_FIXTURE_RECEIPT", &receipt)
+            .output()
+            .expect("isolated engine fixture process");
+        assert!(
+            output.status.success(),
+            "isolated engine fixture failed: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        assert_eq!(
+            fs::read_to_string(receipt).expect("both inventories were checked"),
+            "engine and engine-broadcast checked"
+        );
+    }
+
+    #[test]
+    #[ignore = "subprocess entrypoint"]
+    fn check_pinned_engine_fixture() {
         let project = ProjectConfig::load(&root()).expect("repository config");
         let fixture = engine_fixture(&project);
         let pins: toml::Table =
@@ -3708,6 +3736,8 @@ mod engine_selection_tests {
                 )
                 .env_remove("RUSTFLAGS")
                 .env_remove("CARGO_ENCODED_RUSTFLAGS")
+                .env_remove("RUSTC_WRAPPER")
+                .env_remove("RUSTC_WORKSPACE_WRAPPER")
                 .env("CARGO_TARGET_DIR", fixture.path().join("target"))
                 .env("CARGO_HOME", fixture.path().join("cargo-home"))
                 .current_dir(fixture.path())
@@ -3776,5 +3806,10 @@ mod engine_selection_tests {
                 assert!(selected.contains("kithara-broadcast-tests::broadcast::engine_contract"));
             }
         }
+        fs::write(
+            std::env::var_os("KITHARA_ENGINE_FIXTURE_RECEIPT").expect("fixture receipt path"),
+            "engine and engine-broadcast checked",
+        )
+        .expect("record both checked inventories");
     }
 }
