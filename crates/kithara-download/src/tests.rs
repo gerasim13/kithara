@@ -1828,3 +1828,46 @@ enum TestEvent {
     Abr(AbrEvent),
     Downloader(DownloaderEvent),
 }
+
+#[kithara::test(tokio, native, flash(false), timeout(Duration::from_secs(2)))]
+async fn a_peer_registered_outside_a_runtime_leaves_the_loop_serving() {
+    let config = test_config();
+    let (downloader, _idle_handle) = std::thread::scope(|scope| {
+        scope
+            .spawn(move || {
+                let downloader = Downloader::new(config);
+                let idle = Arc::new(QueuedPeer {
+                    cancel: CancelToken::never(),
+                    cmds: Mutex::new(None),
+                    yielded: Notify::default(),
+                });
+                let handle = downloader.register(idle, None);
+                (downloader, handle)
+            })
+            .join()
+            .expect("registration thread")
+    });
+    let server = TestHttpServer::new(Router::new().route("/data", get(|| async { "body" }))).await;
+    let gate = CompletionGate::new(1);
+    let gate_cb = Arc::clone(&gate);
+    let errors: CompletionErrors = Arc::default();
+    let errors_cb = Arc::clone(&errors);
+    let cmd = FetchCmd::get(server.url("/data"))
+        .writer(Box::new(|_chunk: &[u8]| Ok(())))
+        .on_complete(Box::new(move |_bytes, _headers, error| {
+            errors_cb.lock().push(error.cloned());
+            gate_cb.complete();
+        }))
+        .build();
+    let peer = Arc::new(QueuedPeer {
+        cancel: CancelToken::never(),
+        cmds: Mutex::new(Some(vec![cmd])),
+        yielded: Notify::default(),
+    });
+    let _handle = downloader.register(peer, None);
+    gate.wait().await;
+    assert!(
+        errors.lock().iter().all(Option::is_none),
+        "fetch must succeed"
+    );
+}
