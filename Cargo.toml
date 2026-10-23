@@ -541,7 +541,7 @@ thirtyfour = { version = "0.37.10", default-features = false, features = ["bidi"
 thiserror = "2.0.21"
 thunderdome = { version = "0.6.1", default-features = false }
 tiny_http = "0.12.0"
-tokio = { version = "1.53.2", default-features = false }
+tokio = { version = "1.53.3", default-features = false }
 tokio_with_wasm = { version = "0.9.2", features = ["full"] }
 toml = { version = "1.1", features = ["preserve_order"] }
 tower-http = { version = "0.7", features = ["cors", "fs", "set-header"] }
