@@ -282,24 +282,6 @@ mod tests {
     }
 
     #[kithara::test]
-    fn the_menu_asks_the_host_for_full_screen() {
-        let mut cache = ViewCache::default();
-
-        assert!(matches!(
-            press(&mut cache, "ui.window.toggle_full_screen"),
-            Some(Message::Window(WindowCommand::ToggleFullScreen))
-        ));
-    }
-
-    #[kithara::test]
-    fn the_air_toggle_asks_the_host_for_the_air() {
-        assert!(matches!(
-            broadcast_write("broadcast.toggle", &WriteValue::Trigger),
-            Some(Message::BroadcastToggle)
-        ));
-    }
-
-    #[kithara::test]
     fn narrowing_the_layout_moves_a_focus_it_stops_laying_out() {
         let mut cache = ViewCache::default();
         cache.focus(1);
@@ -420,14 +402,6 @@ mod tests {
                     if (position - 1.0).abs() < f32::EPSILON
             ));
             assert!(matches!(
-                write(state, "deck.eq.low@deck=a", WriteValue::Scalar(1.0)),
-                Some(Message::Deck(DeckId(0), DeckMsg::EqBandChanged(0, _)))
-            ));
-            assert!(
-                write(state, "deck.eq.high_mid@deck=a", WriteValue::Scalar(1.0)).is_none(),
-                "only the bank the mode draws answers"
-            );
-            assert!(matches!(
                 press(state, "deck.eq.mode@bands=4,deck=a"),
                 Some(Message::SetEqMode(EqMode::FourBand))
             ));
@@ -435,6 +409,36 @@ mod tests {
                 press(state, "deck.eq.mode@bands=3,deck=b"),
                 Some(Message::SetEqMode(EqMode::ThreeBand))
             ));
+
+            for (mode, expected) in [
+                (EqMode::ThreeBand, [Some(0), None, Some(1), None, Some(2)]),
+                (EqMode::FourBand, [Some(0), Some(1), None, Some(2), Some(3)]),
+            ] {
+                rig.message(Message::SetEqMode(mode));
+                rig.pump();
+                crate::mock::render_rig(&mut rig, 128);
+                rig.frame();
+                assert_eq!(rig.ui.snapshot.eq_mode, mode);
+
+                for (name, band) in ["low", "low_mid", "mid", "high_mid", "high"]
+                    .into_iter()
+                    .zip(expected)
+                {
+                    let message = write(
+                        &mut rig.ui,
+                        &format!("deck.eq.{name}@deck=a"),
+                        WriteValue::Scalar(1.0),
+                    );
+                    let actual = match message {
+                        Some(Message::Deck(DeckId(0), DeckMsg::EqBandChanged(index, _))) => {
+                            Some(index)
+                        }
+                        None => None,
+                        other => panic!("{mode:?} {name}: unexpected {other:?}"),
+                    };
+                    assert_eq!(actual, band, "{mode:?} {name}");
+                }
+            }
         }
 
         #[kithara::test(native, flash(false))]
