@@ -1299,7 +1299,12 @@ impl ProductHarness {
         let mut evidence = Vec::new();
         for (index, deck) in self.decks.iter().enumerate() {
             let item = deck.current().expect("selected binding track").id;
-            let snapshot = deck.track_snapshot(item).expect("published binding track");
+            let (snapshot, slot) = deck
+                .read_snapshot()
+                .await
+                .into_iter()
+                .find(|(snapshot, _)| snapshot.track.item == item)
+                .expect("real Player snapshot and consumed slot from one DeckPass");
             assert!(matches!(
                 snapshot.track.status,
                 OwnerTrackStatus::Playing { .. }
@@ -1311,15 +1316,9 @@ impl ProductHarness {
                 ),
                 "a playing synchronized track must expose its steady binding or finite correction"
             );
-            let (slot, evaluation_rate) = deck
-                .observe(|observation| {
-                    let slot = observation
-                        .consumed
-                        .iter()
-                        .find_map(|(owner, slot)| (*owner == item).then_some(*slot))?;
-                    Some((slot, observation.consumed_rate?))
-                })
-                .expect("real DeckPass consumed slot and grid evaluation axis");
+            let evaluation_rate = deck
+                .observe(|observation| observation.consumed_rate)
+                .expect("real DeckPass grid evaluation axis");
             assert_eq!(
                 snapshot.track.mark, slot.mark,
                 "the Player snapshot reads that consumed PCM mark"
