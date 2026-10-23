@@ -49,7 +49,6 @@ async fn an_injected_downloader_carries_the_remote_file_requests() {
                 .backend(StorageBackend::Memory)
                 .build(),
         )
-        .pools(pools)
         .downloader(downloader)
         .events(bus)
         .build();
@@ -101,7 +100,6 @@ async fn a_remote_file_without_a_downloader_is_refused(
         let mut completion = bus.subscribe::<FileEvent>();
         let warm = FileConfig::for_src(FileSrc::Remote(fixture.url()))
             .store(store.clone())
-            .pools(pools.clone())
             .downloader(create_test_downloader())
             .events(bus)
             .build();
@@ -126,7 +124,6 @@ async fn a_remote_file_without_a_downloader_is_refused(
     }
     let config = FileConfig::for_src(FileSrc::Remote(fixture.url()))
         .store(store)
-        .pools(pools)
         .build();
     let Err(error) = Stream::<File<TestPools>>::new(config).await else {
         panic!("a remote source opened without a Downloader");

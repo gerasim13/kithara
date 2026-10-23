@@ -24,6 +24,7 @@ use kithara_integration_tests::{
     bufpool_ext::{Pools, TestPools, pools},
     event::TestEvent,
     fixture_protocol::{DelayRule, PcmPattern},
+    hls_fixture::create_test_downloader,
     mock::{LaneAudio, LaneLoader},
     offline::OfflinePlayer,
     output_continuity::{
@@ -179,6 +180,7 @@ pub(crate) async fn abr_switch_on_production_ladder_does_not_hang(
             .build(),
     );
     let hls_config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
@@ -390,6 +392,7 @@ pub(crate) async fn packaged_abr_switch_keeps_player_continuity(
         let warm_config = kithara::play::TrackConfig::for_audio(
             AudioConfig::<Hls<TestPools>>::for_stream(
                 HlsConfig::for_url(url.clone())
+                    .downloader(create_test_downloader())
                     .store(store.clone())
                     .pools(pools.clone())
                     .initial_abr_mode(AbrMode::manual(variant))
@@ -630,6 +633,7 @@ pub(crate) async fn manual_cross_codec_switch_sustains_post_switch_playback(
     );
 
     let hls_config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {

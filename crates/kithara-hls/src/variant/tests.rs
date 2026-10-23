@@ -88,6 +88,14 @@ fn ctx_over(
         ),
         config: Arc::new(
             HlsConfig::for_url(Url::parse("https://example.com/master.m3u8").expect("master url"))
+                .downloader(kithara_download::Downloader::new(
+                    kithara_download::DownloaderConfig::for_client(kithara_net::HttpClient::new(
+                        kithara_net::NetOptions::default(),
+                        crate::test_pools::pools(),
+                        CancelToken::never(),
+                    ))
+                    .build(),
+                ))
                 .store(store.clone())
                 .pools(crate::test_pools::pools())
                 .download_batch_size(prefetch_budget)

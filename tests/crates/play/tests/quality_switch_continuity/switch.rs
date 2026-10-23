@@ -22,6 +22,7 @@ use kithara_integration_tests::{
         GaplessEncoding, PackagedAudioRequest, PackagedAudioSource, PackagedAudioVariantOverride,
         PackagedSignal,
     },
+    hls_fixture::create_test_downloader,
     offline::{OfflinePlayer, OfflinePlayerOptions},
 };
 use kithara_test_utils::TestTempDir;
@@ -359,6 +360,7 @@ async fn prepare_player(
     let config: ResourceConfig<TestPools> = ResourceConfig::for_src(
         ResourceSrc::parse(master_url.as_str()).expect("fixture master URL must be valid"),
     )
+    .downloader(create_test_downloader())
     .store(kithara_integration_tests::disk_asset_store(temp.path()))
     .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
     .decoder(

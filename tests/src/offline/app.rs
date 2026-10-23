@@ -129,6 +129,7 @@ pub async fn app_queue(document: Config) -> AppQueueFixture {
             QueueConfig::builder()
                 .prep(prep)
                 .store(config.store.clone())
+                .downloader(config.downloader.clone())
                 .build(),
         ),
         RENDER_PACE,

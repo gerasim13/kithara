@@ -324,7 +324,6 @@ fn bench_audio_file_new_and_read(c: &mut Criterion) {
                                 .backend(StorageBackend::Memory)
                                 .build(),
                         )
-                        .pools(pools.clone())
                         .build();
                     let config = AudioConfig::<File<TestPools>>::for_stream(file_config)
                         .hint(("mp3").to_string())

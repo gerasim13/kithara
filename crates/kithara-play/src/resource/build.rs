@@ -32,10 +32,8 @@ where
     /// Build an `AudioConfig<File<S>>` from this resource configuration.
     pub(crate) fn build_file_config(
         self,
-        worker: &PlayWorker<S>,
         observer: Option<Box<dyn AudioObserver>>,
     ) -> AudioConfig<kithara_file::File<S>, B> {
-        let pools = worker.pools().clone();
         let (file_src, derived_hint) = match self.src {
             ResourceSrc::Url(ref url) => {
                 (FileSrc::Remote(url.clone()), derive_remote_file_hint(url))
@@ -57,7 +55,6 @@ where
             .maybe_headers(self.headers.clone())
             .maybe_discriminator(self.discriminator.clone())
             .maybe_extension(extension.clone())
-            .pools(pools)
             .maybe_events(self.bus.clone())
             .maybe_cancel(self.cancel.clone())
             .build();
@@ -88,10 +85,13 @@ where
                 });
             }
         };
+        let downloader = self.downloader.ok_or(DecodeError::InvalidData {
+            detail: "a remote ResourceConfig requires a Downloader",
+        })?;
         let mut hls_config = HlsConfig::for_url(url)
             .store(self.store.clone())
             .keys(self.keys)
-            .maybe_downloader(self.downloader)
+            .downloader(downloader)
             .initial_abr_mode(self.initial_abr_mode)
             .maybe_headers(self.headers)
             .maybe_discriminator(self.discriminator)
@@ -150,6 +150,14 @@ mod tests {
 
     fn config(source: &str) -> ResourceConfig<TestPools> {
         ResourceConfig::for_src(ResourceSrc::parse(source).expect("valid test source"))
+            .downloader(kithara_download::Downloader::new(
+                kithara_download::DownloaderConfig::for_client(kithara_net::HttpClient::new(
+                    kithara_net::NetOptions::default(),
+                    pools(),
+                    kithara_platform::CancelToken::never(),
+                ))
+                .build(),
+            ))
             .store(AssetStore::builder(pools()).build())
             .build()
     }
@@ -178,7 +186,7 @@ mod tests {
         let mut config = config("https://example.com/song.mp3");
         config.file.reader_event_capacity = Some(512);
 
-        let built = config.build_file_config(&worker(), None);
+        let built = config.build_file_config(None);
 
         assert_eq!(built.stream().values().reader_event_capacity, 512);
     }
@@ -191,7 +199,7 @@ mod tests {
         let mut config = config("https://example.com/track/stream");
         config.hint = Some("flac".to_owned());
 
-        let built = config.build_file_config(&worker(), None);
+        let built = config.build_file_config(None);
 
         assert_eq!(built.hint(), Some("flac"));
     }
@@ -204,7 +212,7 @@ mod tests {
         let mut config = config("https://example.com/track/stream");
         config.file.extension = Some("wav".to_owned());
 
-        let built = config.build_file_config(&worker(), None);
+        let built = config.build_file_config(None);
 
         assert_eq!(built.hint(), Some("wav"));
     }
@@ -218,7 +226,7 @@ mod tests {
         config.hint = Some("flac".to_owned());
         config.file.extension = Some("wav".to_owned());
 
-        let built = config.build_file_config(&worker(), None);
+        let built = config.build_file_config(None);
 
         assert_eq!(built.hint(), Some("flac"));
     }
@@ -228,7 +236,7 @@ mod tests {
         let mut config = config("https://example.com/song.mp3");
         config.file.extension = Some("wav".to_owned());
 
-        let built = config.build_file_config(&worker(), None);
+        let built = config.build_file_config(None);
 
         assert_eq!(built.hint(), Some("mp3"));
     }
@@ -247,6 +255,14 @@ mod tests {
         let mut config = ResourceConfig::<TestPools>::for_src(
             ResourceSrc::parse(source).expect("valid test source"),
         )
+        .downloader(kithara_download::Downloader::new(
+            kithara_download::DownloaderConfig::for_client(kithara_net::HttpClient::new(
+                kithara_net::NetOptions::default(),
+                pools(),
+                kithara_platform::CancelToken::never(),
+            ))
+            .build(),
+        ))
         .store(
             AssetStore::builder(pools())
                 .backend(StorageBackend::Memory)
@@ -271,7 +287,7 @@ mod tests {
         writer.write_at(0, &bytes).expect("seed cached file bytes");
         writer.commit(Some(4)).expect("commit cached file bytes");
 
-        let built = config.build_file_config(&worker(), None);
+        let built = config.build_file_config(None);
         let mut stream =
             kithara_stream::Stream::<kithara_file::File<TestPools>>::new(built.stream().clone())
                 .await
@@ -308,7 +324,7 @@ mod tests {
         let mut config = config("https://example.com/song.mp3");
         config.preload_chunks = NonZeroUsize::new(9);
 
-        let audio = config.clone().build_file_config(&worker(), None);
+        let audio = config.clone().build_file_config(None);
         let built = config.build_track_config(audio);
 
         assert_eq!(built.preload_chunks().get(), 9);
@@ -357,7 +373,7 @@ mod tests {
         let mut config = config("https://example.com/song.mp3");
         config.block_on_underrun = true;
 
-        let audio = config.clone().build_file_config(&worker(), None);
+        let audio = config.clone().build_file_config(None);
         let built = config.build_track_config(audio);
 
         assert!(built.block_on_underrun());

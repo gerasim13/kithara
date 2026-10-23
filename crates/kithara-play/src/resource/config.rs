@@ -104,7 +104,7 @@ where
     /// Optional cache discriminator mixed into the asset root.
     #[config(skip = "transferred to the asset key")]
     pub(crate) discriminator: Option<String>,
-    /// Shared downloader instance.
+    /// Required for URL sources; the file or HLS owner refuses one without it.
     #[config(skip = "transferred to the selected stream")]
     pub(crate) downloader: Option<Downloader>,
     /// Shared live audio-engine cost meter (decode + effects).
@@ -205,20 +205,18 @@ mod tests {
 
     #[kithara::test]
     fn config_file_url_derives_extension_hint_from_last_path_segment() {
-        let worker = worker();
         let config = test_config("https://example.com/audio/get-mp3/song.MP3?sign=test")
             .unwrap()
-            .build_file_config(&worker, None);
+            .build_file_config(None);
 
         assert_eq!(config.hint(), Some("mp3"));
     }
 
     #[kithara::test]
     fn config_file_url_without_extension_does_not_derive_hint() {
-        let worker = worker();
         let config = test_config("https://example.com/get-mp3/42?sign=test")
             .unwrap()
-            .build_file_config(&worker, None);
+            .build_file_config(None);
 
         assert_eq!(config.hint(), None);
     }
@@ -262,13 +260,12 @@ mod tests {
 
     #[kithara::test]
     fn config_bus_propagates_to_file_config() {
-        let worker = worker();
         let config: ResourceConfig<TestPools> =
             ResourceConfig::for_src(valid_src("https://example.com/song.mp3"))
                 .store(store())
                 .events(EventBus::new(32))
                 .build();
-        let audio_config = config.build_file_config(&worker, None);
+        let audio_config = config.build_file_config(None);
         assert!(kithara_file::File::<TestPools>::event_bus(audio_config.stream()).is_some());
     }
 
@@ -277,6 +274,14 @@ mod tests {
         let worker = worker();
         let config: ResourceConfig<TestPools> =
             ResourceConfig::for_src(valid_src("https://example.com/live.m3u8"))
+                .downloader(Downloader::new(
+                    kithara_download::DownloaderConfig::for_client(kithara_net::HttpClient::new(
+                        kithara_net::NetOptions::default(),
+                        pools(),
+                        CancelToken::never(),
+                    ))
+                    .build(),
+                ))
                 .store(store())
                 .events(EventBus::new(32))
                 .build();
@@ -309,7 +314,7 @@ mod tests {
                 .events(file_bus)
                 .build();
         let _file = Audio::prepare(
-            file.build_file_config(&worker, None),
+            file.build_file_config(None),
             Arc::new(NoopWorkerWake),
             pools(),
         )
@@ -342,6 +347,14 @@ mod tests {
         let mut hls_events = hls_bus.subscribe::<DecoderEvent>();
         let hls: ResourceConfig<TestPools> =
             ResourceConfig::for_src(ResourceSrc::Url(server.url("/direct.m3u8")))
+                .downloader(Downloader::new(
+                    kithara_download::DownloaderConfig::for_client(kithara_net::HttpClient::new(
+                        kithara_net::NetOptions::default(),
+                        pools(),
+                        CancelToken::never(),
+                    ))
+                    .build(),
+                ))
                 .store(store())
                 .events(hls_bus)
                 .hint("wav")
@@ -365,7 +378,6 @@ mod tests {
 
     #[kithara::test]
     fn config_resampler_options_propagate_to_file_config() {
-        let worker = worker();
         let decoder = AudioDecoderConfig::builder()
             .resampler(
                 DecoderResamplerSettings::builder()
@@ -379,7 +391,7 @@ mod tests {
                 .store(store())
                 .decoder(decoder)
                 .build();
-        let audio_config = config.build_file_config(&worker, None);
+        let audio_config = config.build_file_config(None);
 
         assert_eq!(
             audio_config
@@ -404,6 +416,14 @@ mod tests {
             .build();
         let config: ResourceConfig<TestPools> =
             ResourceConfig::for_src(valid_src("https://example.com/live.m3u8"))
+                .downloader(Downloader::new(
+                    kithara_download::DownloaderConfig::for_client(kithara_net::HttpClient::new(
+                        kithara_net::NetOptions::default(),
+                        pools(),
+                        CancelToken::never(),
+                    ))
+                    .build(),
+                ))
                 .store(store())
                 .decoder(decoder)
                 .build();
@@ -485,9 +505,8 @@ mod tests {
 
     #[kithara::test]
     fn file_hint_none_for_url_without_extension() {
-        let worker = worker();
         let config = test_config("https://cdn-edge.zvq.me/track/streamhq?id=125475417").unwrap();
-        let audio_config = config.build_file_config(&worker, None);
+        let audio_config = config.build_file_config(None);
         assert_eq!(
             audio_config.hint(),
             None,
@@ -530,9 +549,8 @@ mod tests {
     #[case("https://example.com/track/streamhq?id=123", None)]
     #[case("https://example.com/audio", None)]
     fn file_hint_from_url_extension(#[case] url: &str, #[case] expected: Option<&str>) {
-        let worker = worker();
         let config = test_config(url).unwrap();
-        let audio_config = config.build_file_config(&worker, None);
+        let audio_config = config.build_file_config(None);
         assert_eq!(
             audio_config.hint(),
             expected,
