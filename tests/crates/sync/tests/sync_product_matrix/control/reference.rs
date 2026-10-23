@@ -1054,21 +1054,6 @@ impl DecodedCapture {
             })
     }
 
-    pub(in super::super) fn physical_failures(
-        &self,
-        pcm: &[f32],
-        marks: &[(SessionFrame, kithara_render::bridge::SlotSnapshot)],
-        consumed: &consumed::Capture,
-        grid: &BeatGridModel,
-        wrong_source: &Audio,
-        jump: Option<(SessionFrame, SessionFrame)>,
-    ) -> Vec<String> {
-        self.check_physical(pcm, marks, consumed, grid, wrong_source, jump)
-            .err()
-            .into_iter()
-            .collect()
-    }
-
     pub(in super::super) fn physical_frame_basis(
         &self,
         info: impl Into<consumed::SourceIdentity>,
@@ -1342,7 +1327,7 @@ impl DecodedCapture {
         Ok((capture_start, frames))
     }
 
-    fn check_physical(
+    pub(in super::super) fn check_physical(
         &self,
         pcm: &[f32],
         marks: &[(SessionFrame, kithara_render::bridge::SlotSnapshot)],
@@ -1350,7 +1335,7 @@ impl DecodedCapture {
         grid: &BeatGridModel,
         wrong_source: &Audio,
         jump: Option<(SessionFrame, SessionFrame)>,
-    ) -> Result<(), String> {
+    ) -> Result<Vec<f32>, String> {
         let (capture_start, frames) = self.physical_capture_clock(pcm, marks)?;
         let sample_rate = consumed.sample_rate;
         check_physical_marks(marks, sample_rate)?;
@@ -1641,7 +1626,7 @@ struct PhysicalReference {
 }
 
 impl PhysicalReference {
-    fn check(self, pcm: &[f32], sample_rate: u32, frames: usize) -> Result<(), String> {
+    fn check(self, pcm: &[f32], sample_rate: u32, frames: usize) -> Result<Vec<f32>, String> {
         let Self {
             expected,
             wrong_cue,
@@ -1735,7 +1720,7 @@ impl PhysicalReference {
                 "physical oracle accepted shifted PCM with unchanged native metadata".to_owned(),
             );
         }
-        Ok(())
+        Ok(expected)
     }
 }
 

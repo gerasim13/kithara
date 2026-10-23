@@ -974,6 +974,21 @@ impl ProductHarness {
         wrong_source: &kithara_integration_tests::pcm_oracle::Audio,
         jump: Option<(SessionFrame, SessionFrame)>,
     ) -> Vec<String> {
+        self.physical_reference(case, deck, pcm, wrong_source, jump)
+            .await
+            .err()
+            .into_iter()
+            .collect()
+    }
+
+    pub(crate) async fn physical_reference(
+        &mut self,
+        case: SyncCase,
+        deck: usize,
+        pcm: &[f32],
+        wrong_source: &kithara_integration_tests::pcm_oracle::Audio,
+        jump: Option<(SessionFrame, SessionFrame)>,
+    ) -> Result<Vec<f32>, String> {
         let selected = &self.decks[deck];
         let item = selected
             .current()
@@ -985,9 +1000,9 @@ impl ProductHarness {
             .and_then(TrackSource::uri)
             != Some(self.source_uris[deck].as_str())
         {
-            return vec![format!(
+            return Err(format!(
                 "deck {deck}: selected source differs from the requested provider URI"
-            )];
+            ));
         }
         let ArtifactSource::Value(grid) = self.provider.beat_grid(deck) else {
             panic!("physical capture has a declared source grid");
@@ -1009,11 +1024,8 @@ impl ProductHarness {
             sample_rate: wrong_source.sample_rate,
         };
         let consumed = super::consumed::Capture::for_track(u64::from(item), case.sample_rate);
-        let failures = kithara::platform::tokio::task::spawn_blocking(move || match consumed {
-            Ok(consumed) => {
-                decoded.physical_failures(&pcm, &marks, &consumed, &grid, &wrong_source, jump)
-            }
-            Err(error) => vec![error],
+        let reference = kithara::platform::tokio::task::spawn_blocking(move || {
+            decoded.check_physical(&pcm, &marks, &consumed?, &grid, &wrong_source, jump)
         })
         .await
         .expect("physical PCM reference analysis must join");
@@ -1025,10 +1037,10 @@ impl ProductHarness {
                 "source": self.source_uris[deck], "item": u64::from(item),
                 "mix_gain": super::control::CONTROL_GAIN,
                 "frames": frames, "ledger_points": ledger_points,
-                "failures": failures,
+                "failures": reference.as_ref().err().into_iter().collect::<Vec<_>>(),
             }),
         );
-        failures
+        reference
     }
 
     pub(crate) async fn command_boundary_failures(

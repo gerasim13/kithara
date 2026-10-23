@@ -695,10 +695,24 @@ async fn shared_worker_capture(
             .all(|deck| deck.engine_load().is_active()),
         "shared worker decode load must remain active through the final captured frame"
     );
-    let failures = harness
-        .physical_failures(case, 0, &samples, wrong_source, None)
-        .await;
-    harness.failures.extend(failures);
+    match harness
+        .physical_reference(case, 0, &samples, wrong_source, None)
+        .await
+    {
+        Ok(expected) => {
+            assert_eq!(
+                samples.len(),
+                expected.len(),
+                "full physical capture length"
+            );
+            let actual = CochleaReport::measure(&samples, CHANNELS, case.sample_rate);
+            let reference = CochleaReport::measure(&expected, CHANNELS, case.sample_rate);
+            harness
+                .failures
+                .extend(time_stretch_failures(case.id(), &actual, &reference));
+        }
+        Err(error) => harness.failures.push(error),
+    }
     let failures = harness.grid_binding_failures(case).await;
     harness.failures.extend(failures);
     let failures = harness.grid_anchor_failures(case, None).await;
@@ -719,13 +733,7 @@ async fn bound_sync_pcm_stays_clean_under_shared_worker_deadline_load(
     let wrong = wrong_source(&mixed_sources);
     let control = shared_worker_capture(SHARED_DEADLINE_CONTROL, &mixed_sources, &wrong).await;
     let candidate = shared_worker_capture(SHARED_DEADLINE, &mixed_sources, &wrong).await;
-    let control_report = CochleaReport::measure(&control.samples, CHANNELS, 48_000);
-    let candidate_report = CochleaReport::measure(&candidate.samples, CHANNELS, 48_000);
-    let mut failures = time_stretch_failures(
-        "bound shared-worker load",
-        &candidate_report,
-        &control_report,
-    );
+    let mut failures = Vec::new();
     let supplemental = synchronization_failures(
         "bound shared-worker load",
         &[candidate.samples.as_slice()],
