@@ -244,3 +244,129 @@ pub(crate) fn is_maybe_vbri_tag(buf: &[u8], header: &FrameHeader) -> bool {
         .iter()
         .any(|&b| b != 0)
 }
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::header;
+
+    fn info_tag(
+        tag_id: [u8; 4],
+        flags: u32,
+        encoder_id: [u8; 4],
+        extension_len: usize,
+        has_crc: bool,
+        valid_crc: Option<bool>,
+    ) -> (FrameHeader, Vec<u8>) {
+        let word: u32 = if has_crc { 0xfffa_9000 } else { 0xfffb_9000 };
+        let header = header::parse_frame_header(word).expect("MPEG-1 Layer III stereo header");
+        let mut bytes = word.to_be_bytes().to_vec();
+        bytes.resize(consts::MPEG_HEADER_LEN + header.side_info_len(), 0);
+        bytes.extend_from_slice(&tag_id);
+        bytes.extend_from_slice(&flags.to_be_bytes());
+        if flags & 1 != 0 {
+            bytes.extend_from_slice(&42_000_u32.to_be_bytes());
+        }
+        if flags & 2 != 0 {
+            bytes.extend_from_slice(&0x1234_5678_u32.to_be_bytes());
+        }
+        if flags & 4 != 0 {
+            bytes.extend_from_slice(&[0x8a; 100]);
+        }
+        if flags & 8 != 0 {
+            bytes.extend_from_slice(&0x9abc_def0_u32.to_be_bytes());
+        }
+
+        let mut extension = encoder_id.to_vec();
+        extension.extend_from_slice(b"3.100");
+        extension.extend_from_slice(&[0x12, 0x34]);
+        extension.extend_from_slice(&0x5678_9abc_u32.to_be_bytes());
+        extension.extend_from_slice(&0xdef0_u16.to_be_bytes());
+        extension.extend_from_slice(&0x1234_u16.to_be_bytes());
+        extension.extend_from_slice(&[0x56, 0x78]);
+        extension.extend_from_slice(&[0x24, 0x69, 0xab]);
+        extension.extend_from_slice(&[0xcd, 0xef]);
+        extension.extend_from_slice(&0x1234_u16.to_be_bytes());
+        extension.extend_from_slice(&0x5678_9abc_u32.to_be_bytes());
+        extension.extend_from_slice(&0xdef0_u16.to_be_bytes());
+        assert_eq!(extension.len(), 34);
+
+        let mut checksum = Crc16AnsiLe::new(0);
+        checksum.process_buf_bytes(&bytes);
+        checksum.process_buf_bytes(&extension);
+        let crc = match valid_crc {
+            Some(true) => checksum.crc(),
+            Some(false) => checksum.crc().wrapping_add(1).max(1),
+            None => 0,
+        };
+        extension.extend_from_slice(&crc.to_be_bytes());
+        bytes.extend_from_slice(&extension[..extension_len]);
+        (header, bytes)
+    }
+
+    #[kithara::test]
+    fn info_tag_reads_trim_and_frame_count() {
+        let trim = Some((1_111, 1_946));
+        let cases = [
+            ("missing", b"LAME", 0, false, Some(true), None),
+            ("short-before-trim", b"LAME", 23, false, Some(true), None),
+            ("trim-only", b"LAME", 24, false, Some(false), trim),
+            ("short-trailer", b"LAME", 35, false, Some(false), trim),
+            ("lame", b"LAME", 36, false, Some(true), trim),
+            ("lavf", b"Lavf", 36, false, Some(true), trim),
+            ("lavc", b"Lavc", 36, false, Some(true), trim),
+            ("unknown", b"OtHr", 36, false, Some(true), Some((0, 0))),
+            ("lame-zero-crc", b"LAME", 36, false, None, trim),
+            ("lame-bad-crc", b"LAME", 36, false, Some(false), None),
+            ("lavf-bad-crc", b"Lavf", 36, false, Some(false), trim),
+            ("lavc-bad-crc", b"Lavc", 36, false, Some(false), trim),
+            ("lame-protected", b"LAME", 36, true, Some(true), trim),
+            ("lavf-protected", b"Lavf", 36, true, Some(true), trim),
+            ("lavc-protected", b"Lavc", 36, true, Some(true), trim),
+            (
+                "lavf-protected-bad-crc",
+                b"Lavf",
+                36,
+                true,
+                Some(false),
+                None,
+            ),
+            (
+                "lavc-protected-bad-crc",
+                b"Lavc",
+                36,
+                true,
+                Some(false),
+                None,
+            ),
+        ];
+
+        for tag_id in [b"Xing", b"Info"] {
+            for flags in 0..16 {
+                for (name, encoder_id, extension_len, has_crc, valid_crc, expected_trim) in cases {
+                    let (header, bytes) = info_tag(
+                        *tag_id,
+                        flags,
+                        *encoder_id,
+                        extension_len,
+                        has_crc,
+                        valid_crc,
+                    );
+                    let tag = try_read_info_tag(&bytes, &header).expect("synthetic Xing/Info tag");
+                    assert_eq!(
+                        tag.num_frames,
+                        (flags & 1 != 0).then_some(42_000),
+                        "{name}, flags {flags:#x}, id {tag_id:?}"
+                    );
+                    assert_eq!(
+                        tag.lame.map(|lame| (lame.enc_delay, lame.enc_padding)),
+                        expected_trim,
+                        "{name}, flags {flags:#x}, id {tag_id:?}"
+                    );
+                }
+            }
+        }
+    }
+}
