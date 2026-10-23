@@ -14,11 +14,7 @@ mod kithara {
     pub(crate) use kithara_test_macros::mock;
 }
 
-use crate::{
-    PcmOrigin,
-    error::DecodeResult,
-    types::{GaplessProfile, TrackMetadata},
-};
+use crate::{PcmOrigin, error::DecodeResult, types::GaplessProfile};
 
 /// Outcome of a [`DecoderInput::try_read`] call.
 ///
@@ -263,13 +259,6 @@ pub trait Decoder: Send + 'static {
             track_info.gapless_tail,
             codec.map_or(0, |codec| self.default_priming_frames(codec)),
         )
-    }
-
-    /// Get track metadata (title, artist, album, artwork).
-    ///
-    /// Returns default metadata if not available.
-    fn metadata(&self) -> TrackMetadata {
-        TrackMetadata::default()
     }
 
     /// Decode the next chunk of PCM data.

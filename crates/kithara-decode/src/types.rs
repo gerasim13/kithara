@@ -78,7 +78,7 @@ impl GaplessProfile {
     }
 }
 
-/// Audio track metadata extracted from decoder tags.
+/// Optional audio track metadata.
 ///
 /// Intentionally without `#[non_exhaustive]`: downstream fixtures and
 /// processors construct this stable optional-field value with struct literals.

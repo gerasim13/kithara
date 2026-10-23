@@ -112,7 +112,7 @@ impl PcmReader {
             DecoderFactory::create_with_probe(Cursor::new(bytes.to_vec()), Some(hint), config)
                 .map_err(|error| format!("open: {error}"))?;
         let spec = decoder.spec();
-        let metadata = decoder.metadata();
+        let metadata = TrackMetadata::default();
         let mut samples = Vec::new();
         loop {
             match decoder

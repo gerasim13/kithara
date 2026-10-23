@@ -16,7 +16,6 @@ use crate::{
     demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer},
     error::{DecodeError, DecodeResult},
     traits::{Decoder, DecoderChunkOutcome, DecoderSeekOutcome},
-    types::TrackMetadata,
 };
 
 impl HeadStrip {
@@ -397,10 +396,6 @@ where
         if let Some(hooks) = self.hooks.as_mut() {
             hooks.flush();
         }
-    }
-
-    fn metadata(&self) -> TrackMetadata {
-        TrackMetadata::default()
     }
 
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
