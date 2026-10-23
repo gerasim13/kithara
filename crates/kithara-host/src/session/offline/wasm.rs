@@ -14,9 +14,11 @@ use kithara_worker::{PendingTask, Task, TaskContext, TaskError, TickResult};
 
 use crate::consts::SESSION_PUMP_INTERVAL;
 
-#[derive(Clone)]
+#[derive(Clone, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, vis = "pub(super)")]
 pub(crate) struct OfflineTaskRoute {
     task: Arc<Mutex<Option<Box<dyn Task>>>>,
+    #[field(get, deref = false)]
     notify: Arc<Notify>,
     cancel: CancelGroup,
 }
