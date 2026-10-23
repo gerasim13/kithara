@@ -35,8 +35,14 @@ not (
 """
 fail-fast = false
 test-threads = "num-cpus"
-# Wall-clock backstop; test-owned watchdogs enforce their own deadlines.
-# The long real-track queue takes below need an outer bound above 120s.
+# Wall-clock BACKSTOP only. The real per-test bound is the macro `timeout(...)`
+# on each test — its abort watchdog kills a hung test at its own budget+3s, so
+# this backstop only matters for tests with NO per-test timeout. It must sit
+# above the slowest *actual* real runtime (NOT above the largest budget): the
+# full-suite worst case under contention is ~57s (a flash(false) real-socket
+# downswitch test). 120s = ~2x that — well clear of every legit run, while a
+# real wedge fails in 120s instead of 300s. A flash deadlock is normally caught
+# far sooner by the virtual hang-watchdog (~1s).
 slow-timeout = { period = "120s", terminate-after = 1 }
 # Default 100ms is too tight when 12 cores run 1800+ tests concurrently;
 # munmap of a 46MB test binary + stdout flush can exceed it even for
@@ -193,13 +199,3 @@ filter = """
 ))
 """
 threads-required = "num-test-threads"
-
-# These real-clock takes render up to 120 seconds of audio. Their test-owned
-# watchdog is 300 seconds; let it report before the outer process backstop.
-[[profile.default.overrides]]
-filter = 'binary_id(=kithara-sync-tests::sync) and test(/^sync_product_matrix::queue::one_queue_crossfades_five_real_tracks_through_four_public_next_requests_/)'
-slow-timeout = { period = "305s", terminate-after = 1 }
-
-[[profile.ci.overrides]]
-filter = 'binary_id(=kithara-sync-tests::sync) and test(/^sync_product_matrix::queue::one_queue_crossfades_five_real_tracks_through_four_public_next_requests_/)'
-slow-timeout = { period = "305s", terminate-after = 1 }
