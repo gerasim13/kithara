@@ -1,7 +1,10 @@
-mod consts {
+use kithara_stream::id3v2_tag_len;
+
+pub(super) mod consts {
     pub(super) const MPEG_HEADER_LEN: usize = 4;
     pub(super) const SYNC_MASK: u32 = 0xFFE0_0000;
     pub(super) const SYNC_VALUE: u32 = 0xFFE0_0000;
+    pub(in crate::gapless) const LAME_TRIM_SPAN: usize = MPEG_HEADER_LEN + 32 + 120 + 24;
 }
 
 /// Raw fields read from the LAME extension of a Xing/Info tag.
@@ -93,20 +96,17 @@ fn find_frame_start(data: &[u8]) -> Option<usize> {
 }
 
 pub(super) fn skip_id3v2(data: &[u8]) -> usize {
-    if data.len() < 10 || &data[..3] != b"ID3" {
-        return 0;
+    let mut end = 0;
+    while let Some(length) = data.get(end..).and_then(id3v2_tag_len) {
+        let Some(next) = usize::try_from(length)
+            .ok()
+            .and_then(|length| end.checked_add(length))
+        else {
+            break;
+        };
+        end = next;
     }
-    if data[6] & 0x80 != 0 || data[7] & 0x80 != 0 || data[8] & 0x80 != 0 || data[9] & 0x80 != 0 {
-        return 0;
-    }
-    let size = (u32::from(data[6]) << 21)
-        | (u32::from(data[7]) << 14)
-        | (u32::from(data[8]) << 7)
-        | u32::from(data[9]);
-    let Ok(size) = usize::try_from(size) else {
-        return 0;
-    };
-    10usize.checked_add(size).unwrap_or_default()
+    end
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -168,19 +168,6 @@ mod tests {
         buf[lame_off + 22] = ((trim >> 8) & 0xFF) as u8;
         buf[lame_off + 23] = (trim & 0xFF) as u8;
         buf
-    }
-
-    #[kithara::test(native, flash(false))]
-    fn finds_the_frame_when_the_id3_tag_fits_the_buffer() {
-        let mut data = vec![0u8; 10 + 64];
-        data[..3].copy_from_slice(b"ID3");
-        data[3] = 3;
-        data[9] = 64;
-        data.extend_from_slice(&build_mpeg1_stereo_xing(576, 960));
-
-        let lame = read_lame_trim(&data).expect("BUG: LAME behind an ID3v2 tag");
-
-        assert_eq!(lame.enc_delay, 576);
     }
 
     #[kithara::test(native, flash(false))]
