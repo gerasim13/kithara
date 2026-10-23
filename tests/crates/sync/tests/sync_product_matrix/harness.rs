@@ -1591,7 +1591,7 @@ impl ProductHarness {
             match operation {
                 Operation::Play => {
                     self.play_all().await;
-                    self.wait_playing(case, "play_ready").await;
+                    self.settle(case, 2).await;
                 }
                 Operation::Seek => self.seek_staggered(case).await,
                 Operation::Sync => self.request_sync(case).await,
