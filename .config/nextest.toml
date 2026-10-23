@@ -142,15 +142,6 @@ leak-timeout = { period = "2s", result = "fail" }
 path = "junit.xml"
 store-failure-output = true
 
-# Let the existing 300s queue watchdog report before the runner's backstop.
-[[profile.default.overrides]]
-filter = 'binary_id(=kithara-sync-tests::sync) and (test(/^sync_product_matrix::queue::one_queue_crossfades_five_music_tracks_and_retargets_host_during_overlap$/) + test(/^sync_product_matrix::queue::one_queue_crossfades_five_real_tracks_through_four_public_next_requests_/))'
-slow-timeout = { period = "305s", terminate-after = 1 }
-
-[[profile.ci.overrides]]
-filter = 'binary_id(=kithara-sync-tests::sync) and (test(/^sync_product_matrix::queue::one_queue_crossfades_five_music_tracks_and_retargets_host_during_overlap$/) + test(/^sync_product_matrix::queue::one_queue_crossfades_five_real_tracks_through_four_public_next_requests_/))'
-slow-timeout = { period = "305s", terminate-after = 1 }
-
 # The memory budget asks the graphics device how many bytes the process holds,
 # and the device answers for the whole process. Any test drawing beside it is
 # counted into its readings, which would make the verdict a property of the
