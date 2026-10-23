@@ -123,7 +123,8 @@ fn prepare(consumer_root: &Path, target: &Path, directory: &Path) -> PathBuf {
     fs::write(consumer.join("Cargo.toml"), manifest).expect("write consumer manifest");
     if revision.is_some() {
         success(run(
-            &mut cargo(&consumer, target, &["generate-lockfile"]),
+            cargo(&consumer, target, &["generate-lockfile"])
+                .env("CARGO_NET_GIT_FETCH_WITH_CLI", "true"),
             directory,
             "pin-lock",
             300,
