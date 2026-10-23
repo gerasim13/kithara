@@ -3418,7 +3418,12 @@ mod tests {
 
 #[cfg(test)]
 mod engine_selection_tests {
-    use std::{collections::BTreeSet, fs, path::Path, process::Command};
+    use std::{
+        collections::BTreeSet,
+        fs,
+        path::Path,
+        process::{Command, Stdio},
+    };
 
     use serde_json::Value;
     use tempfile::TempDir;
@@ -3711,12 +3716,13 @@ mod engine_selection_tests {
                 .env("CARGO_TARGET_DIR", fixture.path().join("target"))
                 .env("CARGO_HOME", fixture.path().join("cargo-home"))
                 .current_dir(fixture.path())
+                .stderr(Stdio::inherit())
                 .output()
                 .expect("nextest inventory");
             assert!(
                 output.status.success(),
-                "{name}: {}",
-                String::from_utf8_lossy(&output.stderr)
+                "{name}: nextest inventory exited with {}",
+                output.status
             );
             let inventory: Value = serde_json::from_slice(&output.stdout).expect("nextest JSON");
             let mut selected = BTreeSet::new();
