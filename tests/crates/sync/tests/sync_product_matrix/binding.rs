@@ -940,22 +940,23 @@ fn ordinary_span_is_local(
     let position = source_media_for_beat(source, from, rate)?;
     let mut cursor = media_seconds_position(position, rate)?;
     let mut tempo = grid_tempo(source, cursor)?;
-    if include_endpoints {
-        let BeatGridQuery::Resolved(kithara::warp::BeatGridRegion::Bounded(region)) =
-            source.region_at(MapPoint::new(source.stamp(), cursor))
-        else {
-            return Err("source span has no declared bounded region".to_owned());
-        };
-        if let MapPosition::Asset(start) = region.start()
-            && f64::from(start) > 0.0
-            && grid_beat_at(source, region.start())? == from
-        {
-            let previous = MapPosition::Asset(
-                AssetFrame::new(f64::from(start).next_down()).map_err(|error| error.to_string())?,
-            );
-            if grid_tempo(source, previous)? != tempo {
-                return Ok(false);
-            }
+    let BeatGridQuery::Resolved(kithara::warp::BeatGridRegion::Bounded(region)) =
+        source.region_at(MapPoint::new(source.stamp(), cursor))
+    else {
+        return Err("source span has no declared bounded region".to_owned());
+    };
+    let boundary = grid_beat_at(source, region.start())?;
+    if let MapPosition::Asset(start) = region.start()
+        && f64::from(start) > 0.0
+        && from <= boundary
+        && boundary <= to
+        && (include_endpoints || from < boundary && boundary < to)
+    {
+        let previous = MapPosition::Asset(
+            AssetFrame::new(f64::from(start).next_down()).map_err(|error| error.to_string())?,
+        );
+        if grid_tempo(source, previous)? != tempo {
+            return Ok(false);
         }
     }
     loop {
@@ -3297,6 +3298,80 @@ async fn supplied_grids_bind_consumed_pcm_marks_to_the_host(
         "direct grid binding failed: {}",
         failures.join("\n")
     );
+}
+
+#[kithara::test(native)]
+fn ordinary_source_spans_preserve_beat_sides_at_rounded_seams() {
+    let rate = NonZeroU32::new(48_000).expect("source rate");
+    let ArtifactSource::Value(model) = synthetic_grid() else {
+        panic!("declared source grid");
+    };
+    let mut raw = model.as_raw().clone();
+    raw.beats = [(74, 31.96), (75, 32.38), (76, 32.8)]
+        .into_iter()
+        .map(|(ordinal, at)| GridBeat {
+            at,
+            ordinal,
+            confidence: None,
+        })
+        .collect();
+    raw.downbeats.clear();
+    raw.meter = None;
+    let model = BeatGridModel::try_from(raw).expect("rounded source seam");
+    let source = source_with_duration(&model, rate, None).expect("declared source geometry");
+    let seam = 75.0_f64;
+    let before = seam.next_down();
+    let position = media_seconds_position(
+        source_media_for_beat(&source, before, rate).expect("inverse before seam"),
+        rate,
+    )
+    .expect("asset coordinate before seam");
+    let BeatGridQuery::Resolved(kithara::warp::BeatGridRegion::Bounded(region)) =
+        source.region_at(MapPoint::new(source.stamp(), position))
+    else {
+        panic!("bounded source region");
+    };
+    assert!(before < seam);
+    assert_eq!(
+        grid_beat_at(&source, region.start()).expect("seam beat"),
+        seam
+    );
+    assert_eq!(
+        position,
+        region.start(),
+        "inverse rounds onto the next cell"
+    );
+    let MapPosition::Asset(start) = region.start() else {
+        panic!("asset region");
+    };
+    let previous = MapPosition::Asset(
+        AssetFrame::new(f64::from(start).next_down()).expect("previous asset coordinate"),
+    );
+    assert_ne!(
+        grid_tempo(&source, previous).expect("previous tempo"),
+        grid_tempo(&source, position).expect("next tempo"),
+        "exact adjacent slopes must differ"
+    );
+    for from in [before.next_down(), before, seam, seam.next_up()] {
+        for to in [before, seam, seam.next_up(), before + 2.0 / 48_000.0] {
+            if to <= from {
+                continue;
+            }
+            for include_endpoints in [false, true] {
+                let crosses = if include_endpoints {
+                    from <= seam && seam <= to
+                } else {
+                    from < seam && seam < to
+                };
+                assert_eq!(
+                    ordinary_span_is_local(&source, from, to, rate, include_endpoints)
+                        .expect("finite source span"),
+                    !crosses,
+                    "span {from:?}..{to:?}, endpoints={include_endpoints}"
+                );
+            }
+        }
+    }
 }
 
 #[kithara::test(native)]
