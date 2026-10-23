@@ -225,6 +225,28 @@ struct AppliedCurve<'a> {
     at: SessionFrame,
 }
 
+struct SourceGeometry<'a> {
+    model: &'a BeatGridModel,
+    source: BeatGridSnapshot,
+    maximum_slope: f64,
+}
+
+impl<'a> SourceGeometry<'a> {
+    fn new(
+        model: &'a BeatGridModel,
+        rate: NonZeroU32,
+        duration: Option<Duration>,
+    ) -> Result<Self, String> {
+        let source = source_with_duration(model, rate, duration)?;
+        let maximum_slope = maximum_source_slope(model, &source, rate)?;
+        Ok(Self {
+            model,
+            source,
+            maximum_slope,
+        })
+    }
+}
+
 struct PrefixPlan {
     latest: bool,
     initial_media: Duration,
@@ -1509,13 +1531,14 @@ impl AppliedCurve<'_> {
 
     fn verify_prefix(
         &self,
-        model: &BeatGridModel,
-        source: &BeatGridSnapshot,
+        geometry: &SourceGeometry<'_>,
         host: &TempoTrajectory,
         horizon: std::ops::Bound<SessionFrame>,
         predecessor: f64,
         commanded: bool,
     ) -> Result<PrefixProof, String> {
+        let model = geometry.model;
+        let source = &geometry.source;
         let command = self.command;
         let rate = host.sample_rate();
         let mut plan = self.prefix_plan(source, host, horizon, predecessor, commanded)?;
@@ -1550,7 +1573,7 @@ impl AppliedCurve<'_> {
                     phase + beat - initial_beat,
                     frame,
                     plan.terminal,
-                    maximum_source_slope(model, source, rate)?,
+                    geometry.maximum_slope,
                     &mut failures,
                 )?;
                 plan.deadline = Some(deadline);
@@ -1666,13 +1689,14 @@ impl AppliedCurve<'_> {
 
     fn verify_end(
         &self,
-        model: &BeatGridModel,
-        source: &BeatGridSnapshot,
+        geometry: &SourceGeometry<'_>,
         observation: &LinkObservation,
         curves: &[AppliedCurve<'_>],
         snapshot: &kithara::link::LinkedSnapshot<kithara::play::TrackSnapshot>,
         deadline: Option<u64>,
     ) -> Result<Vec<String>, String> {
+        let model = geometry.model;
+        let source = &geometry.source;
         let command = self.command;
         let item = command.item;
         let host = self.owner_host(observation)?;
@@ -1744,7 +1768,7 @@ impl AppliedCurve<'_> {
 
     fn verify(
         &self,
-        model: &BeatGridModel,
+        geometry: &SourceGeometry<'_>,
         observation: &LinkObservation,
         curves: &[AppliedCurve<'_>],
         index: usize,
@@ -1753,7 +1777,6 @@ impl AppliedCurve<'_> {
     ) -> Result<(serde_json::Value, SelectedBinding), String> {
         let command = self.command;
         let host = self.owner_host(observation)?;
-        let rate = host.sample_rate();
         let input = command
             .input
             .and_then(|input| observation.owner_inputs.get(input))
@@ -1771,7 +1794,6 @@ impl AppliedCurve<'_> {
             ));
         }
         let predecessor = self.check_planned_input(observation, curves, index, failures)?;
-        let source = source_with_duration(model, rate, command.before.duration)?;
         let mark = snapshot
             .track
             .mark
@@ -1798,17 +1820,10 @@ impl AppliedCurve<'_> {
             std::ops::Bound::Excluded(horizon)
         };
         let (terminal, deadline, prefix_failures, prefix_diagnostics, reference) =
-            self.verify_prefix(model, &source, host, bound, predecessor, commanded)?;
+            self.verify_prefix(geometry, host, bound, predecessor, commanded)?;
         failures.extend(prefix_failures);
         if latest {
-            failures.extend(self.verify_end(
-                model,
-                &source,
-                observation,
-                curves,
-                snapshot,
-                deadline,
-            )?);
+            failures.extend(self.verify_end(geometry, observation, curves, snapshot, deadline)?);
         }
         Ok((
             serde_json::json!({"seq": command.seq.get(), "applied": i64::from(self.at), "verified_through": i64::from(horizon), "terminal_start": terminal, "terminal_end": deadline, "host_input": command.host_input, "prefix_diagnostics": prefix_diagnostics}),
@@ -2059,17 +2074,27 @@ pub(super) fn executed_law(
             ));
         }
     };
-    let latest = curves.iter().rposition(|curve| curve.at <= mark.session);
+    let active = curves.partition_point(|curve| curve.at <= mark.session);
+    let latest = active.checked_sub(1);
     let mut verified = Vec::new();
-    for (index, applied) in curves
-        .iter()
-        .enumerate()
-        .filter(|(_, curve)| curve.at <= mark.session)
+    let mut group_start = 0;
+    for group in curves[..active]
+        .chunk_by(|first, second| first.command.before.duration == second.command.before.duration)
     {
-        let (evidence, anchor) =
-            applied.verify(model, observation, &curves, index, snapshot, &mut failures)?;
-        verified.push(evidence);
-        reference = Some(anchor);
+        let geometry = SourceGeometry::new(model, rate, group[0].command.before.duration)?;
+        for (index, applied) in group.iter().enumerate() {
+            let (evidence, anchor) = applied.verify(
+                &geometry,
+                observation,
+                &curves,
+                group_start + index,
+                snapshot,
+                &mut failures,
+            )?;
+            verified.push(evidence);
+            reference = Some(anchor);
+        }
+        group_start += group.len();
     }
     let speed = if let Some(index) = latest {
         let applied = &curves[index];
@@ -4415,7 +4440,7 @@ fn confirmed_targets_and_consumed_laws_have_separate_clocks() {
     let ArtifactSource::Value(model) = synthetic_grid() else {
         panic!("declared source grid");
     };
-    let source = source_with_duration(&model, rate, None).expect("declared source geometry");
+    let geometry = SourceGeometry::new(&model, rate, None).expect("declared source geometry");
     let host = TempoTrajectory::new(
         TempoStep {
             frame: SessionFrame::new(0),
@@ -4438,8 +4463,7 @@ fn confirmed_targets_and_consumed_laws_have_separate_clocks() {
     let verify = |end| {
         applied
             .verify_prefix(
-                &model,
-                &source,
+                &geometry,
                 &host,
                 std::ops::Bound::Included(SessionFrame::new(end)),
                 1.0,
@@ -4481,7 +4505,7 @@ fn confirmed_targets_and_consumed_laws_have_separate_clocks() {
     raw.downbeats.clear();
     raw.meter = None;
     let model = BeatGridModel::try_from(raw).expect("two source slopes");
-    let source = source_with_duration(&model, rate, None).expect("source crossing geometry");
+    let geometry = SourceGeometry::new(&model, rate, None).expect("source crossing geometry");
     let source_grid = sync_source_grid(&model, rate, None).expect("native source geometry");
     let host = TempoTrajectory::new(
         TempoStep {
@@ -4522,8 +4546,7 @@ fn confirmed_targets_and_consumed_laws_have_separate_clocks() {
     };
     let proof = applied
         .verify_prefix(
-            &model,
-            &source,
+            &geometry,
             &host,
             std::ops::Bound::Included(start + kithara::signal::FrameCount::new(4)),
             1.0,
@@ -4549,8 +4572,7 @@ fn confirmed_targets_and_consumed_laws_have_separate_clocks() {
     };
     let proof = applied
         .verify_prefix(
-            &model,
-            &source,
+            &geometry,
             &host,
             std::ops::Bound::Included(start + kithara::signal::FrameCount::new(4)),
             1.0,
