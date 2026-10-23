@@ -4970,7 +4970,6 @@ dependencies = [
  "kithara-test-dylib",
  "kithara-test-macros",
  "kithara-test-utils",
- "kithara-workspace-hack",
  "serde",
  "thiserror 2.0.21",
  "tracing",
@@ -5002,7 +5001,6 @@ dependencies = [
  "bon",
  "kithara-derive",
  "kithara-test-utils",
- "kithara-workspace-hack",
  "serde",
 ]
 
@@ -5085,7 +5083,6 @@ dependencies = [
  "humantime-serde",
  "kithara-test-dylib",
  "kithara-test-utils",
- "kithara-workspace-hack",
  "proc-macro2",
  "quote",
  "serde",
@@ -5828,7 +5825,6 @@ dependencies = [
  "kithara-platform",
  "kithara-test-dylib",
  "kithara-test-utils",
- "kithara-workspace-hack",
  "libc",
  "loom",
  "parking_lot",
@@ -6088,7 +6084,6 @@ name = "kithara-ring"
 version = "0.0.1-alpha5"
 dependencies = [
  "kithara-test-utils",
- "kithara-workspace-hack",
  "ringbuf",
 ]
 
@@ -6285,7 +6280,6 @@ dependencies = [
 name = "kithara-test-macros"
 version = "0.0.1-alpha5"
 dependencies = [
- "kithara-workspace-hack",
  "proc-macro2",
  "quote",
  "syn 3.0.6",
@@ -6594,7 +6588,6 @@ dependencies = [
  "digest 0.10.7",
  "dispatch2",
  "either",
- "errno",
  "fastrand",
  "firewheel",
  "firewheel-core",
@@ -6625,7 +6618,6 @@ dependencies = [
  "log",
  "memchr",
  "ndk",
- "nu-ansi-term",
  "num-complex",
  "num-rational",
  "num-traits",
@@ -6634,7 +6626,6 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "once_cell",
  "parking_lot",
- "parking_lot_core",
  "percent-encoding",
  "portable-atomic",
  "raw-window-handle",
@@ -6667,8 +6658,6 @@ dependencies = [
  "tower-http 0.6.11",
  "tracing",
  "tracing-core",
- "tracing-log",
- "tracing-subscriber",
  "typenum",
  "url",
  "uuid",
