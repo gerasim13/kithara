@@ -2,7 +2,6 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{StreamExt, stream};
 use http::{Request, Response};
-use kithara_platform::maybe_send::{MaybeSend, MaybeSync};
 
 use crate::{HttpBody, NetError};
 
@@ -12,11 +11,12 @@ mod kithara {
 
 /// Opens response headers and transfers ownership of the streaming body.
 /// Dropping the future or body must cancel its outstanding delivery work.
+/// The resource can move between workers; wasm request futures remain local.
 /// External implementations must protect pending I/O with
 /// [`kithara_platform::flash::real_io`].
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
-pub trait HttpTransport: MaybeSend + MaybeSync {
+pub trait HttpTransport: Send + Sync {
     /// # Errors
     ///
     /// Returns the typed transport failure without retrying the request.

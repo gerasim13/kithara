@@ -54,7 +54,9 @@ fn respond(status: StatusCode, headers: &[(&str, &str)], body: impl Into<Body>) 
     headers
         .iter()
         .fold(
-            Response::builder().status(status),
+            Response::builder()
+                .status(status)
+                .header("Content-Type", "application/octet-stream"),
             |builder, (key, value)| builder.header(*key, *value),
         )
         .body(body.into())
@@ -77,15 +79,14 @@ fn truncated(head: Builder, sent: Bytes, linger: Duration) -> Response {
         kithara_platform::time::sleep(linger).await;
         Err::<Bytes, _>(io::Error::other("connection dropped mid-body"))
     });
-    head.body(Body::from_stream(stream::iter([Ok(sent)]).chain(dropped)))
+    head.header("Content-Type", "application/octet-stream")
+        .body(Body::from_stream(stream::iter([Ok(sent)]).chain(dropped)))
         .expect("truncated response")
 }
 
-/// Sends the head and never a byte of the body.
-fn stalled_head() -> Response {
-    Response::new(Body::from_stream(
-        stream::pending::<Result<Bytes, io::Error>>(),
-    ))
+/// Never sends response headers.
+async fn stalled_head() -> Response {
+    futures::future::pending().await
 }
 
 fn fast_options(max_retries: u32) -> NetOptions {
@@ -303,7 +304,10 @@ async fn apple_range_rejects_partial_without_content_length() {
         panic!("partial range without content-length must fail before body delivery");
     };
 
-    assert!(matches!(error, NetError::Decode(detail) if detail.contains("content-length")));
+    assert!(
+        matches!(&error, NetError::Decode(detail) if detail.contains("content-length")),
+        "range without Content-Length returned {error:?}"
+    );
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
@@ -415,11 +419,11 @@ async fn apple_ignored_range_resume_continues_after_discovering_total() {
     let seen = Arc::clone(&requests);
     let server = serve(move |headers: HeaderMap| {
         let body = body.clone();
-        let attempt = seen.fetch_add(1, Ordering::SeqCst);
+        seen.fetch_add(1, Ordering::SeqCst);
         async move {
-            if attempt > 0 {
+            let range = request_header(&headers, "range").expect("range header");
+            if range.ends_with('-') {
                 let start = range_start(&headers).expect("resumed range start");
-                let range = request_header(&headers, "range").expect("range header");
                 assert_eq!(range, format!("bytes={start}-"));
                 let end_exclusive = BODY_LEN;
                 let end = end_exclusive.saturating_sub(1);
@@ -430,10 +434,15 @@ async fn apple_ignored_range_resume_continues_after_discovering_total() {
                     body.slice(start..end_exclusive),
                 )
             } else {
-                truncated(
-                    Response::builder(),
-                    body.slice(..FIRST_WRITE_LEN),
-                    Duration::from_millis(60),
+                assert_eq!(range, format!("bytes=0-{REQUEST_END}"));
+                let first = body.slice(..FIRST_WRITE_LEN);
+                respond(
+                    StatusCode::OK,
+                    &[],
+                    Body::from_stream(
+                        stream::once(async move { Ok::<_, io::Error>(first) })
+                            .chain(stream::pending()),
+                    ),
                 )
             }
         }
@@ -549,7 +558,7 @@ async fn apple_short_body_yields_before_premature_eof_under_flash() {
 
 #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 async fn apple_stream_head_stall_times_out() {
-    let server = serve(|| async { stalled_head() }).await;
+    let server = serve(stalled_head).await;
     let url = server.url(PROBE);
 
     let client = HttpClient::new(stream_options(300), pools(), CancelToken::never());
@@ -563,7 +572,7 @@ async fn apple_stream_head_stall_times_out() {
 
 #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 async fn apple_stream_observes_cancellation() {
-    let server = serve(|| async { stalled_head() }).await;
+    let server = serve(stalled_head).await;
     let url = server.url(PROBE);
 
     let cancel = CancelToken::root();
