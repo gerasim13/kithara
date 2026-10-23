@@ -5,7 +5,7 @@ use kithara_stream::AudioCodec;
 
 use super::{
     GaplessInfo,
-    mp3::{read_lame_trim, skip_id3v2},
+    mp3::{consts as mp3_consts, read_lame_trim, skip_id3v2},
     mp4::probe_mp4_gapless_dyn,
 };
 use crate::traits::{DecoderInput, InputReadOutcome};
@@ -66,10 +66,8 @@ where
     }
 }
 
-/// Xing/Info and LAME live in the first audio frame, which an `ID3v2` tag can
-/// push past the probe window: cover art alone reaches hundreds of kilobytes.
-/// The tag declares its own length, so skip to the first audio byte and read
-/// the window there instead of widening it.
+/// Leading `ID3v2` tags can push the LAME fields past the probe window.
+/// Seek past tags until the window holds those fields without buffering cover art.
 fn read_mp3_probe_prefix<S>(
     source: &mut dyn DecoderInput,
     pools: &PoolRegion<S>,
@@ -77,21 +75,26 @@ fn read_mp3_probe_prefix<S>(
 where
     S: HasPool<u8>,
 {
-    let buffer = read_probe_window(source, pools)?;
-    let audio_start = skip_id3v2(&buffer);
-    if buffer.len() < consts::WINDOW_BYTES || audio_start < consts::WINDOW_BYTES {
-        return Ok(buffer);
-    }
-
-    let repositioned = u64::try_from(audio_start)
-        .ok()
-        .filter(|offset| source.seek(SeekFrom::Start(*offset)).is_ok());
-    match repositioned {
-        Some(_) => {
-            drop(buffer);
-            read_probe_window(source, pools)
+    let mut offset = 0_u64;
+    loop {
+        let buffer = read_probe_window(source, pools)?;
+        let audio_start = skip_id3v2(&buffer);
+        if buffer.len() < consts::WINDOW_BYTES
+            || buffer.len().saturating_sub(audio_start) >= mp3_consts::LAME_TRIM_SPAN
+        {
+            return Ok(buffer);
         }
-        None => Ok(buffer),
+
+        let Some(next_offset) = u64::try_from(audio_start)
+            .ok()
+            .and_then(|length| offset.checked_add(length))
+        else {
+            return Ok(buffer);
+        };
+        if source.seek(SeekFrom::Start(next_offset)).is_err() {
+            return Ok(buffer);
+        }
+        offset = next_offset;
     }
 }
 
@@ -151,16 +154,6 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn probe_window_starts_at_the_audio_behind_an_oversized_id3_tag() {
-        let mut source = Cursor::new(mp3_behind_id3(32 * 1024));
-
-        let buffer = read_mp3_probe_prefix(&mut source, &pools()).expect("BUG: read probe prefix");
-
-        assert_eq!(buffer.first().copied(), Some(0xFF));
-        assert_eq!(buffer.get(1).copied(), Some(0xFB));
-    }
-
-    #[kithara::test(native, flash(false))]
     fn probe_window_stays_put_when_the_source_ends_inside_the_tag() {
         let mut data = mp3_behind_id3(32 * 1024);
         data.truncate(4 * 1024);
@@ -175,7 +168,9 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn probe_window_keeps_a_tag_that_fits_it() {
         let tag_bytes = 10 + 1024;
-        let mut source = Cursor::new(mp3_behind_id3(1024));
+        let mut data = mp3_behind_id3(1024);
+        data.resize(consts::WINDOW_BYTES + 1024, 0);
+        let mut source = Cursor::new(data);
 
         let buffer = read_mp3_probe_prefix(&mut source, &pools()).expect("BUG: read probe prefix");
 

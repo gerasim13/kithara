@@ -22,8 +22,9 @@ use super::{
     HostTransport, call::consts::READ_SIZE, install,
 };
 use crate::{
-    HttpClient, NetObserver, Observer,
+    HttpClient,
     error::NetError,
+    observe::{NetObserver, Observer},
     test_pools::pools,
     types::{Headers, NetOptions, RangeSpec, RetryPolicy},
 };
@@ -681,4 +682,110 @@ async fn a_second_transport_is_refused_and_the_first_keeps_serving() {
     assert!(matches!(second, Err(AlreadyInstalled)), "got {second:?}");
     assert_eq!(answer, Bytes::from_static(b"first"));
     assert_eq!(seen.starts.load(Ordering::SeqCst), 1);
+}
+
+#[derive(Debug)]
+enum Report {
+    FirstByte {
+        status: u16,
+    },
+    Retrying {
+        attempt: u32,
+        max_retries: u32,
+    },
+    Exhausted {
+        max_retries: u32,
+        consumed: u64,
+        error: NetError,
+    },
+}
+
+#[derive(Default)]
+struct Reports(Mutex<Vec<Report>>);
+
+impl NetObserver for Reports {
+    fn first_byte(&self, _ttfb: Duration, status: u16, _partial: bool) {
+        self.0.lock().push(Report::FirstByte { status });
+    }
+
+    fn retry_exhausted(&self, max_retries: u32, consumed: u64, error: &NetError) {
+        self.0.lock().push(Report::Exhausted {
+            max_retries,
+            consumed,
+            error: error.clone(),
+        });
+    }
+
+    fn retrying(&self, attempt: u32, max_retries: u32, _error: &NetError, _backoff: Duration) {
+        self.0.lock().push(Report::Retrying {
+            attempt,
+            max_retries,
+        });
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Op {
+    GetBytes,
+    Stream,
+    Range,
+}
+
+async fn fail(client: &HttpClient, url: Url, op: Op) {
+    let opened = match op {
+        Op::GetBytes => client.get_bytes(url, None).await.map(drop),
+        Op::Stream => client.stream(url, None).await.map(drop),
+        Op::Range => client
+            .get_range(url, RangeSpec::new(0, Some(1)), None)
+            .await
+            .map(drop),
+    };
+    opened.expect_err("every attempt answers 500");
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
+#[case::get_bytes(Op::GetBytes)]
+#[case::stream(Op::Stream)]
+#[case::range(Op::Range)]
+async fn an_observed_handle_reports_every_attempt(#[case] op: Op) {
+    let (client, _, url) = client(Plan {
+        status: 500,
+        ..Plan::serving(Bytes::new())
+    });
+    let reports = Arc::new(Reports::default());
+    let observed =
+        client.with_observer(Some(Observer(Arc::clone(&reports) as Arc<dyn NetObserver>)));
+
+    fail(&observed, url.clone(), op).await;
+    let observed_reports = std::mem::take(&mut *reports.0.lock());
+    fail(&client, url, op).await;
+
+    assert!(
+        matches!(
+            observed_reports.as_slice(),
+            [
+                Report::FirstByte { status: 500 },
+                Report::Retrying {
+                    attempt: 1,
+                    max_retries: 2
+                },
+                Report::FirstByte { status: 500 },
+                Report::Retrying {
+                    attempt: 2,
+                    max_retries: 2
+                },
+                Report::FirstByte { status: 500 },
+                Report::Exhausted {
+                    max_retries: 2,
+                    consumed: 0,
+                    error: NetError::Status { status, .. },
+                },
+            ] if status.get() == 500
+        ),
+        "got {observed_reports:?}"
+    );
+    assert!(
+        reports.0.lock().is_empty(),
+        "the base client reports to no observer"
+    );
 }

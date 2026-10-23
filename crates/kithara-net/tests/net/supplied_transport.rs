@@ -4,7 +4,9 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{StreamExt, stream};
 use http::{Request, Response};
-use kithara_net::{HttpBody, HttpClient, HttpTransport, NetError, NetOptions, RetryPolicy};
+use kithara_net::{
+    HttpBody, HttpClient, HttpTransport, NetError, NetObserver, NetOptions, Observer, RetryPolicy,
+};
 use kithara_platform::{
     CancelToken,
     sync::Arc,
@@ -15,6 +17,17 @@ use url::Url;
 
 struct Supplied {
     requests: Arc<AtomicUsize>,
+}
+
+#[derive(Default)]
+struct Arrivals(AtomicUsize);
+
+impl NetObserver for Arrivals {
+    fn first_byte(&self, _ttfb: Duration, status: u16, partial: bool) {
+        assert_eq!(status, 200);
+        assert!(!partial);
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
 }
 
 #[async_trait]
@@ -133,17 +146,28 @@ async fn refused_body_has_one_diagnostic_contract(#[case] path: &str, #[case] ex
 #[kithara::test(tokio, flash(true))]
 async fn derived_handles_retain_the_supplied_transport() {
     let (client, requests) = client(Duration::from_secs(3));
-    let observed = client.with_observer(None);
+    let arrivals = Arc::new(Arrivals::default());
+    let observed = client.with_observer(Some(Observer(arrivals.clone())));
     let derived = observed.with_retry_policy(RetryPolicy::builder().max_retries(2).build());
-    for handle in [&client, &observed, &derived] {
+    for (handle, expected) in [(&client, 0), (&observed, 1), (&derived, 2)] {
         assert_eq!(handle.get_bytes(url("/head"), None).await.unwrap(), "head");
+        assert_eq!(arrivals.0.load(Ordering::SeqCst), expected);
     }
     assert_eq!(requests.load(Ordering::SeqCst), 3);
+    assert_eq!(
+        derived
+            .with_observer(None)
+            .get_bytes(url("/head"), None)
+            .await
+            .unwrap(),
+        "head"
+    );
+    assert_eq!(arrivals.0.load(Ordering::SeqCst), 2);
     assert!(matches!(
         derived.get_bytes(url("/unknown"), None).await,
         Err(NetError::Refused(_))
     ));
-    assert_eq!(requests.load(Ordering::SeqCst), 4);
+    assert_eq!(requests.load(Ordering::SeqCst), 5);
 }
 
 #[kithara::test(tokio)]

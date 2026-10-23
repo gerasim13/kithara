@@ -1,27 +1,21 @@
 use std::future::Future;
 
-use async_trait::async_trait;
-use bytes::Bytes;
 use kithara_platform::{CancelToken, time::sleep, tokio};
-use url::Url;
 
 use crate::{
-    ByteStream,
     error::{NetError, Retryability},
     observe::Observer,
-    traits::Net,
-    types::{Headers, RangeSpec, RetryPolicy},
+    types::RetryPolicy,
 };
 
-/// Retry decorator for Net implementations
+/// Retry loop shared by the client handles.
 pub(crate) struct RetryNet<N> {
     cancel: CancelToken,
     inner: N,
-    observer: Option<Observer>,
     retry_policy: RetryPolicy,
 }
 
-impl<N: Net> RetryNet<N> {
+impl<N> RetryNet<N> {
     delegate::delegate! {
         to self {
             #[field(&inner)]
@@ -29,16 +23,10 @@ impl<N: Net> RetryNet<N> {
         }
     }
 
-    pub(crate) const fn new(
-        inner: N,
-        retry_policy: RetryPolicy,
-        cancel: CancelToken,
-        observer: Option<Observer>,
-    ) -> Self {
+    pub(crate) const fn new(inner: N, retry_policy: RetryPolicy, cancel: CancelToken) -> Self {
         Self {
             cancel,
             inner,
-            observer,
             retry_policy,
         }
     }
@@ -46,7 +34,11 @@ impl<N: Net> RetryNet<N> {
     /// Promotes a transient error to a terminal `RetryExhausted` once a non-zero retry budget has
     /// been spent, so downstream (HLS settle, readers) treats it as a give-up rather than a
     /// transient signal.
-    async fn retry_loop<F, Fut, T>(&self, mut op: F) -> Result<T, NetError>
+    pub(crate) async fn retry_loop<F, Fut, T>(
+        &self,
+        observer: Option<&Observer>,
+        mut op: F,
+    ) -> Result<T, NetError>
     where
         F: FnMut() -> Fut,
         Fut: Future<Output = Result<T, NetError>>,
@@ -66,7 +58,7 @@ impl<N: Net> RetryNet<N> {
             if !self.retry_policy.should_retry(&error, attempt) {
                 return Err(
                     if max > 0 && error.retryability() == Retryability::Transient {
-                        if let Some(observer) = self.observer.as_ref() {
+                        if let Some(observer) = observer {
                             observer.0.retry_exhausted(max, 0, &error);
                         }
                         NetError::RetryExhausted {
@@ -79,7 +71,7 @@ impl<N: Net> RetryNet<N> {
                 );
             }
             let delay = self.retry_policy.delay_for_attempt(attempt);
-            if let Some(observer) = self.observer.as_ref() {
+            if let Some(observer) = observer {
                 observer.0.retrying(attempt + 1, max, &error, delay);
             }
             tokio::select! {
@@ -92,51 +84,6 @@ impl<N: Net> RetryNet<N> {
     }
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
-#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
-impl<N: Net> Net for RetryNet<N> {
-    async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError> {
-        self.retry_loop(|| self.inner.get_bytes(url.clone(), headers.clone()))
-            .await
-    }
-
-    async fn get_range(
-        &self,
-        url: Url,
-        range: RangeSpec,
-        headers: Option<Headers>,
-    ) -> Result<ByteStream, NetError> {
-        self.retry_loop(|| {
-            self.inner
-                .get_range(url.clone(), range.clone(), headers.clone())
-        })
-        .await
-    }
-
-    async fn head(&self, url: Url, headers: Option<Headers>) -> Result<Headers, NetError> {
-        self.retry_loop(|| self.inner.head(url.clone(), headers.clone()))
-            .await
-    }
-
-    async fn post_bytes(
-        &self,
-        url: Url,
-        body: Bytes,
-        headers: Option<Headers>,
-    ) -> Result<Bytes, NetError> {
-        self.retry_loop(|| {
-            self.inner
-                .post_bytes(url.clone(), body.clone(), headers.clone())
-        })
-        .await
-    }
-
-    async fn stream(&self, url: Url, headers: Option<Headers>) -> Result<ByteStream, NetError> {
-        self.retry_loop(|| self.inner.stream(url.clone(), headers.clone()))
-            .await
-    }
-}
-
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
@@ -146,16 +93,7 @@ mod tests {
 
     use std::num::NonZeroU16;
 
-    use futures::stream;
-    use kithara_platform::time::Duration;
-    use unimock::{MockFn, Unimock, matching};
-
     use super::*;
-    use crate::traits::NetMock;
-
-    fn test_url() -> Url {
-        Url::parse("http://test.com").expect("BUG: hard-coded test URL is valid")
-    }
 
     fn status_404() -> NetError {
         NetError::Status {
@@ -163,26 +101,6 @@ mod tests {
             url: None,
             body: None,
         }
-    }
-
-    fn empty_stream() -> ByteStream {
-        ByteStream::new(Headers::default(), Box::pin(stream::empty()))
-    }
-
-    fn fast_retry_policy(max_retries: u32) -> RetryPolicy {
-        RetryPolicy {
-            max_retries,
-            base_delay: Duration::from_millis(1),
-            max_delay: Duration::from_secs(1),
-        }
-    }
-
-    fn retry_net(mock: Unimock, policy: RetryPolicy) -> RetryNet<Unimock> {
-        RetryNet::new(mock, policy, CancelToken::never(), None)
-    }
-
-    fn retry_net_default(mock: Unimock) -> RetryNet<Unimock> {
-        retry_net(mock, RetryPolicy::default())
     }
 
     #[kithara::test]
@@ -206,256 +124,5 @@ mod tests {
         let policy = RetryPolicy::default();
         let error = status_404();
         assert!(!policy.should_retry(&error, 0));
-    }
-
-    #[kithara::test]
-    #[case(0, Duration::ZERO, "first attempt no delay")]
-    #[case(1, Duration::from_millis(100), "second attempt base delay")]
-    #[case(2, Duration::from_millis(200), "third attempt 2x delay")]
-    #[case(3, Duration::from_millis(400), "fourth attempt 4x delay")]
-    fn test_default_retry_policy_delay_for_attempt(
-        #[case] attempt: u32,
-        #[case] expected: Duration,
-        #[case] _desc: &str,
-    ) {
-        let policy = RetryPolicy {
-            base_delay: Duration::from_millis(100),
-            max_delay: Duration::from_secs(10),
-            max_retries: 5,
-        };
-        assert_eq!(policy.delay_for_attempt(attempt), expected);
-    }
-
-    #[kithara::test(tokio)]
-    async fn test_retry_net_get_bytes_success_first_try() {
-        let mock = Unimock::new(
-            NetMock::get_bytes
-                .some_call(matching!(_, _))
-                .returns(Ok(Bytes::from("success"))),
-        );
-        let retry_net = retry_net_default(mock);
-
-        let url = test_url();
-        let result = retry_net.get_bytes(url, None).await;
-
-        assert!(result.is_ok());
-    }
-
-    #[kithara::test(tokio)]
-    async fn test_retry_net_get_bytes_retry_then_success() {
-        let mock = Unimock::new((
-            NetMock::get_bytes
-                .next_call(matching!(_, _))
-                .returns(Err(NetError::Timeout)),
-            NetMock::get_bytes
-                .next_call(matching!(_, _))
-                .returns(Err(NetError::Timeout)),
-            NetMock::get_bytes
-                .next_call(matching!(_, _))
-                .returns(Ok(Bytes::from("success"))),
-        ));
-        let retry_net = retry_net(mock, fast_retry_policy(3));
-
-        let url = test_url();
-        let result = retry_net.get_bytes(url, None).await;
-
-        assert!(result.is_ok());
-    }
-
-    #[kithara::test(tokio)]
-    async fn test_retry_net_get_bytes_max_retries_exhausted() {
-        let mock = Unimock::new(
-            NetMock::get_bytes
-                .each_call(matching!(_, _))
-                .returns(Err(NetError::Timeout)),
-        );
-        let retry_net = retry_net(mock, fast_retry_policy(2));
-
-        let url = test_url();
-        let result = retry_net.get_bytes(url, None).await;
-
-        assert!(result.is_err());
-    }
-
-    #[kithara::test(tokio)]
-    async fn test_retry_net_get_bytes_non_retryable_error() {
-        let mock = Unimock::new(
-            NetMock::get_bytes
-                .some_call(matching!(_, _))
-                .returns(Err(status_404())),
-        );
-        let retry_net = retry_net_default(mock);
-
-        let url = test_url();
-        let result = retry_net.get_bytes(url, None).await;
-
-        assert!(result.is_err());
-    }
-
-    #[kithara::test(tokio)]
-    async fn test_retry_net_post_bytes_success_first_try() {
-        let mock = Unimock::new(
-            NetMock::post_bytes
-                .some_call(matching!(_, _, _))
-                .returns(Ok(Bytes::from("created"))),
-        );
-        let retry_net = retry_net_default(mock);
-
-        let url = test_url();
-        let result = retry_net
-            .post_bytes(url, Bytes::from("payload"), None)
-            .await;
-
-        assert!(result.is_ok());
-    }
-
-    #[kithara::test(tokio)]
-    async fn test_retry_net_post_bytes_retry_then_success() {
-        let mock = Unimock::new((
-            NetMock::post_bytes
-                .next_call(matching!(_, _, _))
-                .returns(Err(NetError::Timeout)),
-            NetMock::post_bytes
-                .next_call(matching!(_, _, _))
-                .returns(Err(NetError::Timeout)),
-            NetMock::post_bytes
-                .next_call(matching!(_, _, _))
-                .returns(Ok(Bytes::from("created"))),
-        ));
-        let retry_net = retry_net(mock, fast_retry_policy(3));
-
-        let url = test_url();
-        let result = retry_net
-            .post_bytes(url, Bytes::from("payload"), None)
-            .await;
-
-        assert!(result.is_ok());
-    }
-
-    #[kithara::test(tokio)]
-    async fn test_retry_net_post_bytes_non_retryable_error() {
-        let mock = Unimock::new(
-            NetMock::post_bytes
-                .some_call(matching!(_, _, _))
-                .returns(Err(status_404())),
-        );
-        let retry_net = retry_net_default(mock);
-
-        let url = test_url();
-        let result = retry_net
-            .post_bytes(url, Bytes::from("payload"), None)
-            .await;
-
-        assert!(result.is_err());
-    }
-
-    #[kithara::test(tokio)]
-    async fn test_retry_net_stream_success() {
-        let mock = Unimock::new(
-            NetMock::stream
-                .some_call(matching!(_, _))
-                .answers(&|_, _, _| Ok(empty_stream())),
-        );
-        let retry_net = retry_net_default(mock);
-
-        let url = test_url();
-        let result = retry_net.stream(url, None).await;
-
-        assert!(result.is_ok());
-    }
-
-    #[kithara::test(tokio)]
-    async fn test_retry_net_stream_retry_then_success() {
-        let mock = Unimock::new((
-            NetMock::stream
-                .next_call(matching!(_, _))
-                .answers(&|_, _, _| Err(NetError::Timeout)),
-            NetMock::stream
-                .next_call(matching!(_, _))
-                .answers(&|_, _, _| Err(NetError::Timeout)),
-            NetMock::stream
-                .next_call(matching!(_, _))
-                .answers(&|_, _, _| Ok(empty_stream())),
-        ));
-        let retry_net = retry_net(mock, fast_retry_policy(3));
-
-        let url = test_url();
-        let result = retry_net.stream(url, None).await;
-
-        assert!(result.is_ok());
-    }
-
-    #[kithara::test(tokio)]
-    async fn test_retry_net_get_range_success() {
-        let mock = Unimock::new(
-            NetMock::get_range
-                .some_call(matching!(_, _, _))
-                .answers(&|_, _, _, _| Ok(empty_stream())),
-        );
-        let retry_net = retry_net_default(mock);
-
-        let url = test_url();
-        let range = RangeSpec::new(0, None);
-        let result = retry_net.get_range(url, range, None).await;
-
-        assert!(result.is_ok());
-    }
-
-    #[kithara::test(tokio)]
-    async fn test_retry_net_get_range_retry_then_success() {
-        let mock = Unimock::new((
-            NetMock::get_range
-                .next_call(matching!(_, _, _))
-                .answers(&|_, _, _, _| Err(NetError::Timeout)),
-            NetMock::get_range
-                .next_call(matching!(_, _, _))
-                .answers(&|_, _, _, _| Err(NetError::Timeout)),
-            NetMock::get_range
-                .next_call(matching!(_, _, _))
-                .answers(&|_, _, _, _| Ok(empty_stream())),
-        ));
-        let retry_net = retry_net(mock, fast_retry_policy(3));
-
-        let url = test_url();
-        let range = RangeSpec::new(0, None);
-        let result = retry_net.get_range(url, range, None).await;
-
-        assert!(result.is_ok());
-    }
-
-    #[kithara::test(tokio)]
-    async fn test_retry_net_head_success() {
-        let mock = Unimock::new(
-            NetMock::head
-                .some_call(matching!(_, _))
-                .returns(Ok(Headers::default())),
-        );
-        let retry_net = retry_net_default(mock);
-
-        let url = test_url();
-        let result = retry_net.head(url, None).await;
-
-        assert!(result.is_ok());
-    }
-
-    #[kithara::test(tokio)]
-    async fn test_retry_net_head_retry_then_success() {
-        let mock = Unimock::new((
-            NetMock::head
-                .next_call(matching!(_, _))
-                .returns(Err(NetError::Timeout)),
-            NetMock::head
-                .next_call(matching!(_, _))
-                .returns(Err(NetError::Timeout)),
-            NetMock::head
-                .next_call(matching!(_, _))
-                .returns(Ok(Headers::default())),
-        ));
-        let retry_net = retry_net(mock, fast_retry_policy(3));
-
-        let url = test_url();
-        let result = retry_net.head(url, None).await;
-
-        assert!(result.is_ok());
     }
 }

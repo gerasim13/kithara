@@ -6,10 +6,7 @@ use kithara_derive::Patch;
 use kithara_platform::time::Duration;
 use serde::{Deserialize, Deserializer};
 
-use crate::{
-    error::{NetError, Retryability},
-    observe::Observer,
-};
+use crate::error::{NetError, Retryability};
 
 bitflags! {
     /// HTTP codings auto-decoded for whole-body native requests.
@@ -104,26 +101,46 @@ pub enum ImpersonatePreset {
     Chrome,
 }
 
-#[derive(Clone, Debug, Default, derive_more::From, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Headers {
-    #[from]
-    inner: HashMap<String, String>,
+    inner: HashMap<String, (String, String)>,
 }
 
 impl Headers {
     pub fn insert<K: Into<String>, V: Into<String>>(&mut self, key: K, value: V) {
-        self.inner.insert(key.into(), value.into());
+        let name = key.into();
+        self.inner
+            .insert(name.to_ascii_lowercase(), (name, value.into()));
+    }
+
+    #[must_use]
+    pub fn get(&self, key: &str) -> Option<&str> {
+        self.inner
+            .get(&key.to_ascii_lowercase())
+            .map(|(_, value)| value.as_str())
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.inner
+            .values()
+            .map(|(name, value)| (name.as_str(), value.as_str()))
     }
 
     delegate::delegate! {
         to self.inner {
-            #[expr($.map(String::as_str))]
-            pub fn get(&self, key: &str) -> Option<&str>;
             #[must_use]
             pub fn is_empty(&self) -> bool;
-            #[expr($.map(|(k, v)| (k.as_str(), v.as_str())))]
-            pub fn iter(&self) -> impl Iterator<Item = (&str, &str)>;
         }
+    }
+}
+
+impl From<HashMap<String, String>> for Headers {
+    fn from(map: HashMap<String, String>) -> Self {
+        let mut headers = Self::default();
+        for (name, value) in map {
+            headers.insert(name, value);
+        }
+        headers
     }
 }
 
@@ -211,8 +228,6 @@ pub struct NetOptions {
     /// backend and on wasm32 (no emulation there).
     #[config(builder(default))]
     pub(crate) impersonate: ImpersonatePreset,
-    #[config(skip = "injected request observer", patch(skip))]
-    pub(crate) observer: Option<Observer>,
     #[config(nested, builder(default), patch(nested))]
     pub(crate) retry_policy: RetryPolicy,
     /// Accept invalid TLS certificates (self-signed, expired, wrong hostname).
@@ -234,44 +249,6 @@ pub struct NetOptions {
     /// Set to 0 to disable pooling.
     #[config(builder(default = 8))]
     pub(crate) pool_max_idle_per_host: usize,
-}
-
-impl NetOptions {
-    /// The same options carrying a different observer.
-    ///
-    /// The source is destructured exhaustively on purpose. Rebuilding through
-    /// the builder is the workspace form for a config, and a bare
-    /// `Self::builder()` chain would silently reset any option nobody
-    /// remembered to list here; the pattern has no rest, so an option added
-    /// to the struct breaks this build instead.
-    #[must_use]
-    pub fn with_observer(&self, observer: Option<Observer>) -> Self {
-        let Self {
-            compression,
-            inactivity_timeout,
-            impersonate,
-            observer: _,
-            retry_policy,
-            is_insecure,
-            body_queue_capacity,
-            body_queue_resume_at,
-            pool_max_idle_per_host,
-            pool_idle_timeout,
-        } = self.clone();
-
-        Self::builder()
-            .compression(compression)
-            .inactivity_timeout(inactivity_timeout)
-            .impersonate(impersonate)
-            .maybe_observer(observer)
-            .retry_policy(retry_policy)
-            .is_insecure(is_insecure)
-            .body_queue_capacity(body_queue_capacity)
-            .body_queue_resume_at(body_queue_resume_at)
-            .pool_max_idle_per_host(pool_max_idle_per_host)
-            .pool_idle_timeout(pool_idle_timeout)
-            .build()
-    }
 }
 
 #[cfg(test)]
@@ -298,6 +275,10 @@ mod tests {
     #[case::simple_key("key1", "value1")]
     #[case::content_type("Content-Type", "application/json")]
     #[case::custom_header("X-Custom-Header", "custom-value")]
+    #[case::with_spaces("X-Custom Header", "value with spaces")]
+    #[case::with_unicode("X-Emoji", "\u{1f389}")]
+    #[case::with_special_chars("X-Special", "a\tb\nc")]
+    #[case::empty_value("X-Empty", "")]
     async fn test_headers_insert_and_get(#[case] key: &str, #[case] value: &str) {
         let mut headers = Headers::default();
         headers.insert(key, value);
@@ -322,25 +303,6 @@ mod tests {
         assert_eq!(iterated.get("key1"), Some(&"value1".to_string()));
         assert_eq!(iterated.get("key2"), Some(&"value2".to_string()));
         assert_eq!(iterated.get("key3"), Some(&"value3".to_string()));
-    }
-
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
-    async fn test_headers_from_hashmap() {
-        let mut map = HashMap::new();
-        map.insert("key1".to_string(), "value1".to_string());
-        map.insert("key2".to_string(), "value2".to_string());
-
-        let headers: Headers = map.into();
-
-        assert!(!headers.is_empty());
-        assert_eq!(headers.get("key1"), Some("value1"));
-        assert_eq!(headers.get("key2"), Some("value2"));
-    }
-
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
-    async fn test_headers_default() {
-        let headers = Headers::default();
-        assert!(headers.is_empty());
     }
 
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
@@ -512,27 +474,32 @@ mod tests {
         assert!(delay >= Duration::ZERO);
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
-    #[case::with_spaces("X-Custom Header", "value with spaces")]
-    #[case::with_unicode("X-Emoji", "🎉")]
-    #[case::with_special_chars("X-Special", "a\tb\nc")]
-    #[case::empty_value("X-Empty", "")]
-    async fn test_headers_special_characters(#[case] key: &str, #[case] value: &str) {
-        let mut headers = Headers::default();
-        headers.insert(key, value);
-
-        assert_eq!(headers.get(key), Some(value));
-    }
-
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
-    async fn test_headers_case_sensitive() {
-        let mut headers = Headers::default();
-        headers.insert("Content-Type", "application/json");
-        headers.insert("content-type", "text/plain");
-
-        assert_eq!(headers.get("Content-Type"), Some("application/json"));
-        assert_eq!(headers.get("content-type"), Some("text/plain"));
-        assert_ne!(headers.get("Content-Type"), headers.get("content-type"));
+    #[kithara::test(tokio, timeout(Duration::from_secs(2)))]
+    #[case::insert_then_lookup({
+        let mut h = Headers::default();
+        h.insert("content-length", "13");
+        h
+    }, "Content-Length", "13", &[("content-length", "13")])]
+    #[case::two_spellings_one_entry({
+        let mut h = Headers::default();
+        h.insert("content-type", "a");
+        h.insert("Content-Type", "b");
+        h
+    }, "CONTENT-TYPE", "b", &[("Content-Type", "b")])]
+    #[case::from_map(
+        Headers::from(HashMap::from([("Content-Length".to_owned(), "5".to_owned())])),
+        "content-length",
+        "5",
+        &[("Content-Length", "5")]
+    )]
+    async fn a_header_name_matches_in_any_case(
+        #[case] headers: Headers,
+        #[case] lookup: &str,
+        #[case] value: &str,
+        #[case] entries: &[(&str, &str)],
+    ) {
+        assert_eq!(headers.get(lookup), Some(value));
+        assert_eq!(headers.iter().collect::<Vec<_>>(), entries);
     }
 }
 

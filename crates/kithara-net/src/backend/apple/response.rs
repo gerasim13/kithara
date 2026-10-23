@@ -69,8 +69,10 @@ fn headers_from_response_parts(
         accept_encoding == AcceptEncodingPolicy::Configured && has_content_encoding(&pairs);
     let mut headers = Headers::default();
     for (key, value) in pairs {
-        let key = key.to_ascii_lowercase();
-        if is_decoded && (key == "content-encoding" || key == "content-length") {
+        if is_decoded
+            && (key.eq_ignore_ascii_case("content-encoding")
+                || key.eq_ignore_ascii_case("content-length"))
+        {
             continue;
         }
         headers.insert(key, value);

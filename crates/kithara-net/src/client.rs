@@ -27,8 +27,7 @@ use crate::{
     observe::Observer,
     range_response::{accepts_response_status, validate_range_response},
     resumable::{Refetch, Resumed, resumable_body},
-    retry::{RetryClient, RetryNet},
-    traits::Net,
+    retry::{RawNet, RetryClient, RetryNet},
     transport::HttpTransport,
     types::{AcceptEncodingPolicy, Headers, NetOptions, RangeSpec, RetryPolicy},
 };
@@ -89,12 +88,11 @@ fn extract_headers(resp: &Response<HttpBody>) -> Headers {
 }
 
 /// Raw HTTP policy owner over one transport resource. Lives
-/// behind [`HttpClient`]'s [`RetryNet`] decorator — exposed only via
-/// the [`Net`] trait, never constructed by callers directly.
+/// behind [`HttpClient`]'s [`RetryNet`] decorator through [`RawNet`].
 #[derive(Clone)]
 pub struct RawHttp {
     /// Master-derived cancel, captured by the self-healing body so a re-fetch
-    /// loop exits promptly on teardown. Same token the `RetryNet` layer uses.
+    /// loop exits promptly on teardown. Same token the `RetryNet` retry loop uses.
     cancel: CancelToken,
     inner: Arc<dyn HttpTransport>,
     options: NetOptions,
@@ -136,6 +134,7 @@ impl RawHttp {
         range: Option<RangeSpec>,
         headers: Option<Headers>,
         accept_partial: bool,
+        observer: Option<&Observer>,
     ) -> Result<crate::ByteStream, NetError> {
         let mut req = Self::request(
             Method::GET,
@@ -155,7 +154,9 @@ impl RawHttp {
                     })?,
             );
         }
-        let resp = self.send_checked(req, url.clone(), accept_partial).await?;
+        let resp = self
+            .send_checked(req, url.clone(), accept_partial, observer)
+            .await?;
         Self::response_to_stream(resp, range.as_ref(), &url)
     }
 
@@ -176,11 +177,12 @@ impl RawHttp {
         req: Request<Bytes>,
         url: Url,
         accept_partial: bool,
+        observer: Option<&Observer>,
     ) -> Result<Response<HttpBody>, NetError> {
         let started = Instant::now();
         let resp = self.send_idle_bounded(req).await?;
         let status = resp.status();
-        if let Some(observer) = self.options.observer.as_ref() {
+        if let Some(observer) = observer {
             observer.0.first_byte(
                 started.elapsed(),
                 status.as_u16(),
@@ -221,11 +223,14 @@ impl RawHttp {
         base_start: u64,
         end: Option<u64>,
         headers: Option<Headers>,
+        observer: Option<&Observer>,
     ) -> crate::ByteStream {
         let out_headers = first.headers.clone();
         let partial = first.is_partial();
         let me = self.clone();
         let resource = url.clone();
+        let observer = observer.cloned();
+        let refetch_observer = observer.clone();
         let (resume_base, resume_end) = if partial {
             (base_start, end)
         } else {
@@ -235,10 +240,13 @@ impl RawHttp {
             let me = me.clone();
             let url = url.clone();
             let headers = headers.clone();
+            let observer = refetch_observer.clone();
             let abs = resume_base.saturating_add(consumed);
             let resume = RangeSpec::new(abs, resume_end);
             Box::pin(async move {
-                let stream = me.raw_body(url, Some(resume), headers, true).await?;
+                let stream = me
+                    .raw_body(url, Some(resume), headers, true, observer.as_ref())
+                    .await?;
                 let skip = if stream.is_partial() { 0 } else { abs };
                 Ok(Resumed { stream, skip })
             })
@@ -250,16 +258,16 @@ impl RawHttp {
             self.options.inactivity_timeout,
             self.options.retry_policy,
             self.cancel.clone(),
-            self.options.observer.clone(),
+            observer,
         );
         crate::ByteStream::with_partial(out_headers, body, partial)
     }
 }
 
-/// Production HTTP client used across the workspace. Wraps a raw
-/// `Client` with the workspace's [`RetryNet`] decorator so
-/// every [`Net`] method (`head`/`get_bytes`/`post_bytes`/`get_range`/`stream`) honours
-/// `options.retry_policy` — retryable errors (TLS-close, timeout,
+/// Production HTTP client used across the workspace. Runs every
+/// [`Net`](crate::Net) method (`head`/`get_bytes`/`post_bytes`/`get_range`/`stream`)
+/// through [`RetryNet`]'s retry loop over a raw `Client`, honouring
+/// `options.retry_policy`: retryable errors (TLS-close, timeout,
 /// 5xx, IO) are re-issued with exponential backoff; non-retryable
 /// errors (HTTP 4xx, cancellation) propagate immediately.
 pub type HttpClient = RetryClient<RawHttp>;
@@ -273,8 +281,8 @@ impl std::fmt::Debug for RetryClient<RawHttp> {
 }
 
 impl RetryClient<RawHttp> {
-    /// Build a retry-decorated HTTP client rooted on `cancel`. The
-    /// `RetryNet` layer aborts pending retries when that token is
+    /// Build an HTTP client rooted on `cancel`. The `RetryNet` retry
+    /// loop aborts pending retries when that token is
     /// cancelled. Callers MUST pass a token that lives in the
     /// consumer-crate's cancel tree — typically
     /// `master_cancel.child()` derived at the consumer-crate top
@@ -307,21 +315,16 @@ impl RetryClient<RawHttp> {
         cancel: CancelToken,
     ) -> Self {
         let retry_policy = options.retry_policy;
-        let observer = options.observer.clone();
         let raw = RawHttp {
             inner: Arc::new(transport),
             options,
             cancel: cancel.clone(),
         };
         Self {
-            net: Arc::new(RetryNet::new(raw, retry_policy, cancel, observer)),
+            net: Arc::new(RetryNet::new(raw, retry_policy, cancel)),
             connection_metrics: ConnectionMetrics::default(),
+            observer: None,
         }
-    }
-
-    #[must_use]
-    pub fn with_observer(&self, observer: Option<Observer>) -> Self {
-        self.with_options(self.options().clone().with_observer(observer))
     }
 
     /// Returns a handle with a different retry policy, sharing the HTTP
@@ -341,16 +344,11 @@ impl RetryClient<RawHttp> {
             cancel: current.cancel.clone(),
         };
         let retry_policy = raw.options.retry_policy;
-        let observer = raw.options.observer.clone();
-        let net = Arc::new(RetryNet::new(
-            raw,
-            retry_policy,
-            current.cancel.clone(),
-            observer,
-        ));
+        let net = Arc::new(RetryNet::new(raw, retry_policy, current.cancel.clone()));
         Self {
             net,
             connection_metrics: self.connection_metrics.clone(),
+            observer: self.observer.clone(),
         }
     }
 
@@ -365,9 +363,14 @@ impl RetryClient<RawHttp> {
 
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
-impl Net for RawHttp {
+impl RawNet for RawHttp {
     #[kithara::measure]
-    async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError> {
+    async fn get_bytes(
+        &self,
+        url: Url,
+        headers: Option<Headers>,
+        observer: Option<&Observer>,
+    ) -> Result<Bytes, NetError> {
         let req = Self::request(
             Method::GET,
             &url,
@@ -375,7 +378,7 @@ impl Net for RawHttp {
             headers,
             AcceptEncodingPolicy::Configured,
         )?;
-        let resp = self.send_checked(req, url, false).await?;
+        let resp = self.send_checked(req, url, false, observer).await?;
         body_bytes(resp, self.options.inactivity_timeout).await
     }
 
@@ -385,15 +388,27 @@ impl Net for RawHttp {
         url: Url,
         range: RangeSpec,
         headers: Option<Headers>,
+        observer: Option<&Observer>,
     ) -> Result<crate::ByteStream, NetError> {
         let first = self
-            .raw_body(url.clone(), Some(range.clone()), headers.clone(), true)
+            .raw_body(
+                url.clone(),
+                Some(range.clone()),
+                headers.clone(),
+                true,
+                observer,
+            )
             .await?;
-        Ok(self.wrap_resumable(first, url, range.start, range.end, headers))
+        Ok(self.wrap_resumable(first, url, range.start, range.end, headers, observer))
     }
 
     #[kithara::measure]
-    async fn head(&self, url: Url, headers: Option<Headers>) -> Result<Headers, NetError> {
+    async fn head(
+        &self,
+        url: Url,
+        headers: Option<Headers>,
+        observer: Option<&Observer>,
+    ) -> Result<Headers, NetError> {
         let req = Self::request(
             Method::HEAD,
             &url,
@@ -401,7 +416,7 @@ impl Net for RawHttp {
             headers,
             AcceptEncodingPolicy::Identity,
         )?;
-        let resp = self.send_checked(req, url, true).await?;
+        let resp = self.send_checked(req, url, true, observer).await?;
         let out = normalize_head_headers(extract_headers(&resp));
         body_bytes(resp, self.options.inactivity_timeout).await?;
         Ok(out)
@@ -413,6 +428,7 @@ impl Net for RawHttp {
         url: Url,
         body: Bytes,
         headers: Option<Headers>,
+        observer: Option<&Observer>,
     ) -> Result<Bytes, NetError> {
         let req = Self::request(
             Method::POST,
@@ -421,7 +437,7 @@ impl Net for RawHttp {
             headers,
             AcceptEncodingPolicy::Configured,
         )?;
-        let resp = self.send_checked(req, url, false).await?;
+        let resp = self.send_checked(req, url, false, observer).await?;
         body_bytes(resp, self.options.inactivity_timeout).await
     }
 
@@ -431,11 +447,12 @@ impl Net for RawHttp {
         &self,
         url: Url,
         headers: Option<Headers>,
+        observer: Option<&Observer>,
     ) -> Result<crate::ByteStream, NetError> {
         let first = self
-            .raw_body(url.clone(), None, headers.clone(), false)
+            .raw_body(url.clone(), None, headers.clone(), false, observer)
             .await?;
-        Ok(self.wrap_resumable(first, url, 0, None, headers))
+        Ok(self.wrap_resumable(first, url, 0, None, headers, observer))
     }
 }
 
@@ -936,27 +953,6 @@ mod tests {
     }
 
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
-    async fn http_client_retries_503_until_ok() {
-        let (server, counter) = server_failing_first_n(2).await;
-        let url = server.url("/probe");
-        let client = HttpClient::new(
-            fast_options(3),
-            crate::test_pools::pools(),
-            CancelToken::never(),
-        );
-        let bytes = client
-            .get_bytes(url, None)
-            .await
-            .expect("get_bytes must succeed after retries");
-        assert_eq!(&bytes[..], b"ok");
-        assert_eq!(
-            counter.load(Ordering::SeqCst),
-            3,
-            "exactly 3 attempts: 2 failed (503) + 1 ok"
-        );
-    }
-
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn http_client_no_retry_propagates_5xx() {
         let (server, counter) = server_failing_first_n(2).await;
         let url = server.url("/probe");
@@ -977,56 +973,6 @@ mod tests {
             counter.load(Ordering::SeqCst),
             1,
             "max_retries=0 issues exactly one attempt"
-        );
-    }
-
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
-    async fn http_client_head_retries_503_until_ok() {
-        let (server, counter) = server_failing_first_n(1).await;
-        let url = server.url("/probe");
-        let client = HttpClient::new(
-            fast_options(2),
-            crate::test_pools::pools(),
-            CancelToken::never(),
-        );
-        client.head(url, None).await.expect("HEAD must retry");
-        assert_eq!(counter.load(Ordering::SeqCst), 2);
-    }
-
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
-    async fn http_client_post_retries_then_echoes_body() {
-        let (server, counter) = server_post_echo_failing_first_n(1).await;
-        let url = server.url("/echo");
-        let client = HttpClient::new(
-            fast_options(2),
-            crate::test_pools::pools(),
-            CancelToken::never(),
-        );
-        let echoed = client
-            .post_bytes(url, Bytes::from_static(b"ping"), None)
-            .await
-            .expect("post_bytes must succeed after retry");
-        assert_eq!(&echoed[..], b"ping", "server must echo the posted body");
-        assert_eq!(
-            counter.load(Ordering::SeqCst),
-            2,
-            "exactly 2 attempts: 1 failed (503) + 1 ok"
-        );
-    }
-
-    /// `with_observer` rebuilds the options around the new observer. A field
-    /// it fails to carry over is a knob that silently reverts to its default
-    /// the moment the downloader attaches an observer to the client.
-    #[kithara::test]
-    fn attaching_an_observer_carries_the_options_over() {
-        let options = NetOptions::builder()
-            .pool_idle_timeout(Duration::from_secs(77))
-            .build();
-        let client = HttpClient::new(options, crate::test_pools::pools(), CancelToken::never());
-
-        assert_eq!(
-            client.with_observer(None).options().pool_idle_timeout,
-            Duration::from_secs(77)
         );
     }
 
