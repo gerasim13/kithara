@@ -7,10 +7,7 @@ pub use kithara::{
         AudioControl, AudioRead, AudioReadError, AudioSession, ChunkOutcome, ReadOutcome,
         SeekOutcome,
     },
-    decode::{
-        GaplessInfo, GaplessMode, GaplessTailCompensation, GaplessTrimmer, SilenceTrimParams,
-        TrackMetadata,
-    },
+    decode::{GaplessInfo, GaplessMode, GaplessTailCompensation, GaplessTrimmer, TrackMetadata},
     events::{EventBus, TrackId},
     platform::time::{self, Duration},
     play::{PlayerEvent, ResourceConfig, ResourceSrc},
@@ -52,10 +49,6 @@ pub use crate::{
     },
     offline::{OfflinePlayer, OfflinePlayerOptions, TimedPlayerEvent},
 };
-
-pub fn silence_trim_with_trailing() -> GaplessMode {
-    GaplessMode::SilenceTrim(SilenceTrimParams::builder().trim_trailing(true).build())
-}
 
 pub fn expected_visible_frames(encoder_delay: u32, trailing_delay: u32) -> usize {
     let packets_per_segment = AAC_GAPLESS_SEGMENT_FRAMES.div_ceil(AAC_FRAME_SAMPLES);

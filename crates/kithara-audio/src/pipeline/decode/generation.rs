@@ -120,29 +120,15 @@ impl DecoderGeneration {
         mode: GaplessMode,
         physical: Option<Duration>,
         decoded_end: Option<Duration>,
-        physical_reconciled: bool,
     ) -> Option<Duration> {
         let declared = self.decoder.duration();
-        let (physical, origin) = match declared {
-            Some(kithara_decode::DecoderDuration::RawLength(raw))
-                if matches!(mode, GaplessMode::SilenceTrim(_))
-                    && self.gapless_profile.gapless().is_none()
-                    && !physical_reconciled =>
-            {
-                (
-                    Some(raw),
-                    self.decoder.initial_pcm_origin().map(PcmOrigin::position),
-                )
-            }
-            _ => (physical, self.visible_origin),
-        };
         let content_shift = self.undeclared_priming(mode)?;
         crate::pipeline::gapless::media_end(
             declared,
             self.gapless_profile,
             mode,
             physical,
-            origin,
+            self.visible_origin,
             self.media_origin,
             decoded_end,
         )
