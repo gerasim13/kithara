@@ -28,6 +28,7 @@ use kithara_test_utils::TestHttpServer;
 use crate::{
     HttpClient,
     error::NetError,
+    observe::{NetObserver, Observer},
     test_pools::pools,
     types::{Compression, Headers, NetOptions, RangeSpec, RetryPolicy},
 };
@@ -89,7 +90,7 @@ async fn stalled_head() -> Response {
     futures::future::pending().await
 }
 
-fn fast_options(max_retries: u32) -> NetOptions {
+fn retry_options(max_retries: u32) -> NetOptions {
     NetOptions::builder()
         .retry_policy(RetryPolicy {
             max_retries,
@@ -240,14 +241,15 @@ async fn apple_identity_stream_rejects_nonidentity_content_encoding() {
     })
     .await;
     let url = server.url(PROBE);
-    let client = HttpClient::new(fast_options(0), pools(), CancelToken::never());
+    let client = HttpClient::new(retry_options(0), pools(), CancelToken::never());
 
     let Err(error) = client.stream(url.clone(), None).await else {
         panic!("encoded bytes must not reach an identity stream");
     };
 
     assert!(
-        matches!(error, NetError::Decode(detail) if detail.contains(url.as_str()) && detail.contains("gzip"))
+        matches!(&error, NetError::Decode(detail) if detail.contains(url.as_str()) && detail.contains("gzip")),
+        "identity stream returned {error:?}"
     );
 }
 
@@ -262,7 +264,7 @@ async fn apple_head_backfills_content_length_from_content_range() {
     })
     .await;
 
-    let client = HttpClient::new(fast_options(0), pools(), CancelToken::never());
+    let client = HttpClient::new(retry_options(0), pools(), CancelToken::never());
     let headers = client.head(server.url(PROBE), None).await.expect("head");
 
     assert_eq!(headers.get("content-length"), Some("1234"));
@@ -272,7 +274,7 @@ async fn apple_head_backfills_content_length_from_content_range() {
 async fn apple_range_rejects_partial_without_content_range() {
     let server = serve(|| async { respond(StatusCode::PARTIAL_CONTENT, &[], "part") }).await;
     let url = server.url(PROBE);
-    let client = HttpClient::new(fast_options(0), pools(), CancelToken::never());
+    let client = HttpClient::new(retry_options(0), pools(), CancelToken::never());
 
     let Err(error) = client
         .get_range(url, RangeSpec::new(0, Some(3)), None)
@@ -295,7 +297,7 @@ async fn apple_range_rejects_partial_without_content_length() {
     })
     .await;
     let url = server.url(PROBE);
-    let client = HttpClient::new(fast_options(0), pools(), CancelToken::never());
+    let client = HttpClient::new(retry_options(0), pools(), CancelToken::never());
 
     let Err(error) = client
         .get_range(url, RangeSpec::new(0, Some(3)), None)
@@ -340,7 +342,7 @@ async fn apple_resume_rejects_a_different_content_range() {
         }
     })
     .await;
-    let client = HttpClient::new(fast_options(1), pools(), CancelToken::never());
+    let client = HttpClient::new(retry_options(1), pools(), CancelToken::never());
     let stream = client
         .stream(server.url(PROBE), None)
         .await
@@ -391,7 +393,7 @@ async fn apple_resume_rejects_a_conflicting_representation_total() {
         }
     })
     .await;
-    let client = HttpClient::new(fast_options(1), pools(), CancelToken::never());
+    let client = HttpClient::new(retry_options(1), pools(), CancelToken::never());
     let stream = client
         .stream(server.url(PROBE), None)
         .await
@@ -448,7 +450,7 @@ async fn apple_ignored_range_resume_continues_after_discovering_total() {
         }
     })
     .await;
-    let client = HttpClient::new(fast_options(2), pools(), CancelToken::never());
+    let client = HttpClient::new(retry_options(2), pools(), CancelToken::never());
     let stream = client
         .get_range(
             server.url(PROBE),
@@ -472,7 +474,7 @@ async fn apple_open_ended_stream_delivers_chunks() {
     let server =
         serve(|| async { respond(StatusCode::OK, &[], unsized_body(&[b"abc", b"def"])) }).await;
 
-    let client = HttpClient::new(fast_options(0), pools(), CancelToken::never());
+    let client = HttpClient::new(retry_options(0), pools(), CancelToken::never());
     let stream = client
         .stream(server.url(PROBE), None)
         .await
@@ -531,7 +533,7 @@ async fn apple_short_body_yields_before_premature_eof_under_flash() {
     })
     .await;
 
-    let client = HttpClient::new(fast_options(1), pools(), CancelToken::never());
+    let client = HttpClient::new(retry_options(1), pools(), CancelToken::never());
     let stream = client
         .stream(server.url(PROBE), None)
         .await
@@ -588,4 +590,62 @@ async fn apple_stream_observes_cancellation() {
         Err(error) => assert!(matches!(error, NetError::Cancelled)),
         Ok(_) => panic!("head wait must observe cancellation"),
     }
+}
+
+#[derive(Default)]
+struct AttemptLog {
+    first_bytes: Mutex<Vec<u16>>,
+    retries: Mutex<Vec<(u32, u32, NetError)>>,
+    exhausted: Mutex<Vec<(u32, u64, NetError)>>,
+}
+
+impl NetObserver for AttemptLog {
+    fn first_byte(&self, _ttfb: Duration, status: u16, _partial: bool) {
+        self.first_bytes.lock().push(status);
+    }
+
+    fn retrying(&self, attempt: u32, max_retries: u32, error: &NetError, _backoff: Duration) {
+        self.retries
+            .lock()
+            .push((attempt, max_retries, error.clone()));
+    }
+
+    fn retry_exhausted(&self, max_retries: u32, consumed: u64, error: &NetError) {
+        self.exhausted
+            .lock()
+            .push((max_retries, consumed, error.clone()));
+    }
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
+async fn apple_observed_handle_reports_every_attempt() {
+    let server = serve(|| async { StatusCode::INTERNAL_SERVER_ERROR }).await;
+    let url = server.url(PROBE);
+    let mut options = retry_options(2);
+    options.inactivity_timeout = Duration::from_secs(2);
+    let client = HttpClient::new(options, pools(), CancelToken::never());
+
+    let log = Arc::new(AttemptLog::default());
+    let observed = client.with_observer(Some(Observer(log.clone())));
+    observed
+        .get_bytes(url.clone(), None)
+        .await
+        .expect_err("HTTP 500 exhausts retries");
+    assert_eq!(*log.first_bytes.lock(), [500, 500, 500]);
+    assert!(matches!(log.retries.lock().as_slice(),
+        [(1, 2, NetError::Status { status: first, .. }),
+         (2, 2, NetError::Status { status: second, .. })]
+        if first.get() == 500 && second.get() == 500));
+    assert!(matches!(log.exhausted.lock().as_slice(),
+        [(2, 0, NetError::Status { status, .. })] if status.get() == 500));
+    client
+        .get_bytes(url, None)
+        .await
+        .expect_err("base request also fails");
+    assert_eq!(*log.first_bytes.lock(), [500, 500, 500]);
+    assert!(matches!(log.retries.lock().as_slice(),
+        [(1, 2, NetError::Status { status: first, .. }),
+         (2, 2, NetError::Status { status: second, .. })]
+        if first.get() == 500 && second.get() == 500));
+    assert_eq!(log.exhausted.lock().len(), 1);
 }

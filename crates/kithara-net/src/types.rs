@@ -512,15 +512,22 @@ mod settings_tests {
     use super::{Compression, Duration, NetOptions, NetOptionsPatch, RetryPolicy};
 
     #[kithara::test(native, flash(false))]
-    fn a_patch_writes_only_the_fields_it_names() {
+    #[case::default_deadline(30)]
+    #[case::custom_deadline(90)]
+    #[case::long_deadline(300)]
+    #[case::extended_deadline(1_000)]
+    fn a_patch_writes_only_the_fields_it_names(#[case] timeout_secs: u64) {
+        let document = format!("inactivity_timeout: {timeout_secs}s\npool_idle_timeout: 250ms\n");
         let settings: NetOptionsPatch =
-            serde_yaml_ng::from_str("inactivity_timeout: 90s\npool_idle_timeout: 250ms\n")
-                .expect("the document types");
+            serde_yaml_ng::from_str(&document).expect("the document types");
         let mut options = NetOptions::builder().body_queue_capacity(7).build();
 
         options.apply(settings);
 
-        assert_eq!(options.inactivity_timeout, Duration::from_secs(90));
+        assert_eq!(
+            options.inactivity_timeout,
+            Duration::from_secs(timeout_secs)
+        );
         assert_eq!(options.pool_idle_timeout, Duration::from_millis(250));
         assert_eq!(
             options.body_queue_capacity, 7,
