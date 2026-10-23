@@ -1,13 +1,21 @@
 use kithara::{
+    audio::{AudioObserveError, AudioObserver},
+    bufpool::SampleBuffer,
     effects::LimiterConfig,
     play::{DeckMixSettings, Position, Settled},
+    signal::{AudioChunk, AudioChunkInfo},
 };
 use kithara_integration_tests::{
     offline::{OfflinePlayer, OfflinePlayerOptions, linked::LinkReceiptOrigin},
     pcm_oracle::Audio,
 };
 use kithara_render::bridge::DeckSnapshot;
+use kithara_test_utils::bufpool::{Pools, pools_with_budget, sample_buffer};
 use num_traits::ToPrimitive;
+use ringbuf::{
+    HeapCons, HeapProd, HeapRb,
+    traits::{Consumer, Observer, Producer, Split},
+};
 
 use super::{
     super::{cases::*, consumed, imports::*},
@@ -25,7 +33,7 @@ pub(in super::super) struct ControlCapture {
     requested: Position,
     landing: Result<(SessionFrame, u64), String>,
     source: Result<(), String>,
-    decoded: Arc<Mutex<DecodedCapture>>,
+    decoded: Arc<Mutex<DecodedRecorder>>,
 }
 
 #[derive(Clone)]
@@ -44,7 +52,7 @@ impl ControlCapture {
             "requested_ns": self.requested.as_nanos().to_string(),
             "landing": format!("{:?}", self.landing),
             "requested_source": format!("{:?}", self.source),
-            "decoded_chunks": self.decoded.lock().chunks.len(),
+            "decoded_chunks": self.decoded.lock().view().chunks.len(),
             "retained_frames": self.pcm.len() / usize::from(CHANNELS),
             "points": self.points.iter().map(|point| {
                 serde_json::json!({
@@ -151,9 +159,10 @@ impl ControlCapture {
             })
             .collect::<Result<Vec<_>, String>>()?;
         let consumed = consumed::Capture::for_track(self.item, first.deck.sample_rate)?;
-        let decoded = self.decoded.lock();
+        let mut recording = self.decoded.lock();
+        let decoded = recording.view();
         decoded.check_physical(&self.pcm, &marks, &consumed, grid, wrong_source, None)?;
-        drop(decoded);
+        drop(recording);
         let retained = i64::from(marks.first().expect("capture has an initial mark").0)
             ..i64::from(marks.last().expect("capture has a final mark").0);
         consumed::check_trace_negatives(self.item, first.deck.sample_rate, retained)
@@ -359,7 +368,7 @@ impl ControlCapture {
 
     fn check_packet_law(
         &self,
-        info: kithara::signal::AudioChunkInfo,
+        info: AudioChunkInfo,
         span: kithara::signal::SourceSpan,
         source: u128,
         rate: (u128, u128),
@@ -752,8 +761,7 @@ pub(in super::super) async fn capture(
         .initial_abr_mode(AbrMode::manual(0))
         .build();
     let id = harness.load_config(config).await;
-    let decoded = Arc::new(Mutex::new(DecodedCapture::default()));
-    let observer = DecodedObserver(decoded.clone());
+    let (decoded, observer) = DecodedRecorder::open();
     let requested_source = source.clone();
     let source_custody = harness
         .with_queue(move |control| {
@@ -909,7 +917,7 @@ pub(in super::super) async fn capture(
     )
 }
 
-type DecodedChunk = (kithara::signal::AudioChunkInfo, Vec<f32>);
+type DecodedChunk = (AudioChunkInfo, Arc<SampleBuffer>);
 
 #[derive(Clone, Default)]
 pub(in super::super) struct DecodedCapture {
@@ -918,37 +926,98 @@ pub(in super::super) struct DecodedCapture {
     rejected: bool,
 }
 
-pub(in super::super) struct DecodedObserver(pub(in super::super) Arc<Mutex<DecodedCapture>>);
+pub(in super::super) struct DecodedRecorder {
+    incoming: HeapCons<Result<DecodedChunk, AudioObserveError>>,
+    capture: DecodedCapture,
+    chunk_limit: usize,
+    sample_limit: usize,
+}
 
-impl kithara::audio::AudioObserver for DecodedObserver {
-    fn try_observe(
-        &mut self,
-        chunk: &kithara::signal::AudioChunk,
-    ) -> Result<(), kithara::audio::AudioObserveError> {
-        let mut capture = self
-            .0
-            .try_lock()
-            .map_err(|_| kithara::audio::AudioObserveError::Full)?;
+impl DecodedRecorder {
+    pub(in super::super) fn open() -> (Arc<Mutex<Self>>, DecodedObserver) {
+        Self::with_limits(8_192, 16_777_216)
+    }
+
+    fn with_limits(chunks: usize, samples: usize) -> (Arc<Mutex<Self>>, DecodedObserver) {
+        let (outgoing, incoming) = HeapRb::new(chunks + 1).split();
+        let pools = pools_with_budget(samples * size_of::<f32>());
+        (
+            Arc::new(Mutex::new(Self {
+                incoming,
+                capture: DecodedCapture::default(),
+                chunk_limit: chunks,
+                sample_limit: samples,
+            })),
+            DecodedObserver {
+                outgoing: Some(outgoing),
+                pools,
+            },
+        )
+    }
+
+    pub(in super::super) fn view(&mut self) -> &DecodedCapture {
+        while let Some(chunk) = self.incoming.try_pop() {
+            let Ok((info, pcm)) = chunk else {
+                self.capture.rejected = true;
+                continue;
+            };
+            let key = (info.source_revision, info.frame_offset);
+            if let Some((previous, samples)) = self.capture.chunks.get(&key) {
+                self.capture.rejected |= *previous != info || samples[..] != pcm[..];
+            } else if self.capture.chunks.len() >= self.chunk_limit
+                || self.capture.samples + pcm.len() > self.sample_limit
+            {
+                self.capture.rejected = true;
+            } else {
+                self.capture.samples += pcm.len();
+                self.capture.chunks.insert(key, (info, pcm));
+            }
+        }
+        &self.capture
+    }
+}
+
+pub(in super::super) struct DecodedObserver {
+    outgoing: Option<HeapProd<Result<DecodedChunk, AudioObserveError>>>,
+    pools: Pools,
+}
+
+impl DecodedObserver {
+    fn reject(&mut self) -> Result<(), AudioObserveError> {
+        if let Some(mut outgoing) = self.outgoing.take() {
+            // Data offers always leave one slot for a sticky terminal failure.
+            outgoing
+                .try_push(Err(AudioObserveError::Full))
+                .expect("reserved decoder failure slot");
+        }
+        Err(AudioObserveError::Full)
+    }
+}
+
+impl AudioObserver for DecodedObserver {
+    fn try_observe(&mut self, chunk: &AudioChunk) -> Result<(), AudioObserveError> {
+        let outgoing = self.outgoing.as_ref().ok_or(AudioObserveError::Closed)?;
+        if !outgoing.read_is_held() {
+            self.outgoing = None;
+            return Err(AudioObserveError::Closed);
+        }
         let samples = chunk.as_ref();
-        if samples.is_empty()
+        if outgoing.vacant_len() <= 1
+            || samples.is_empty()
             || samples.len() > 32_768
             || samples.len() != chunk.frames() * usize::from(chunk.meta.spec.channels)
-            || capture.chunks.len() >= 8_192
-            || capture.samples + samples.len() > 16_777_216
         {
-            capture.rejected = true;
-            return Err(kithara::audio::AudioObserveError::Full);
+            return self.reject();
         }
-        let key = (chunk.meta.source_revision, chunk.meta.frame_offset);
-        if let Some((previous, pcm)) = capture.chunks.get(&key) {
-            if *previous != chunk.meta || pcm.as_slice() != samples {
-                capture.rejected = true;
-            }
-        } else {
-            capture.samples += samples.len();
-            capture.chunks.insert(key, (chunk.meta, samples.to_vec()));
+        let mut pcm = self.pools.get::<f32>();
+        if pcm.try_extend_from_slice(samples).is_err() {
+            return self.reject();
         }
-        drop(capture);
+        self.outgoing
+            .as_mut()
+            .expect("active decoder intake")
+            .try_push(Ok((chunk.meta, Arc::new(pcm))))
+            .expect("data slot checked before bounded PCM copy");
         Ok(())
     }
 }
@@ -1208,7 +1277,7 @@ impl DecodedCapture {
 
     pub(in super::super) fn fixture_domain(
         &self,
-        info: kithara::signal::AudioChunkInfo,
+        info: AudioChunkInfo,
         reference: &Audio,
         witnessed_first: u64,
     ) -> Result<std::ops::Range<u64>, String> {
@@ -1780,8 +1849,9 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
         NonZeroU32::new(reference.sample_rate).expect("fixture sample rate"),
     );
     let mut capture = DecodedCapture::default();
+    let pcm_pools = pools();
     for start in [0_u64, 32, 64] {
-        let info = kithara::signal::AudioChunkInfo {
+        let info = AudioChunkInfo {
             spec,
             source_revision: 7,
             frame_offset: start,
@@ -1789,11 +1859,14 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
             timestamp: spec.duration_for(start).expect("chunk start"),
             end_timestamp: spec.duration_for(start + 32).expect("chunk end"),
             media_origin: Some(Duration::ZERO),
-            ..kithara::signal::AudioChunkInfo::default()
+            ..AudioChunkInfo::default()
         };
         let start = usize::try_from(start).expect("fixture frame offset");
         let channels = usize::from(reference.channels);
-        let samples = reference.samples[start * channels..(start + 32) * channels].to_vec();
+        let samples = Arc::new(sample_buffer(
+            &pcm_pools,
+            &reference.samples[start * channels..(start + 32) * channels],
+        ));
         capture.samples += samples.len();
         capture
             .chunks
@@ -1871,8 +1944,11 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
         .expect("first source chunk");
     first.0.frames = 64;
     first.0.end_timestamp = spec.duration_for(64).expect("extended source end");
-    first.1 = reference.samples[..64 * channels].to_vec();
-    let replacement = kithara::signal::AudioChunkInfo {
+    first.1 = Arc::new(sample_buffer(
+        &pcm_pools,
+        &reference.samples[..64 * channels],
+    ));
+    let replacement = AudioChunkInfo {
         frame_offset: 31,
         frames: 32,
         timestamp: spec.duration_for(31).expect("overlapping source start"),
@@ -1883,10 +1959,13 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
         (7, 31),
         (
             replacement,
-            reference.samples[31 * channels..63 * channels]
-                .iter()
-                .map(|sample| sample * 0.5)
-                .collect(),
+            Arc::new(sample_buffer(
+                &pcm_pools,
+                &reference.samples[31 * channels..63 * channels]
+                    .iter()
+                    .map(|sample| sample * 0.5)
+                    .collect::<Vec<_>>(),
+            )),
         ),
     );
     overlapping.samples += 64 * channels;
@@ -2013,7 +2092,10 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
     for channel in [0, 1] {
         for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
             let mut broken = capture.clone();
-            broken.chunks.get_mut(&(7, 32)).expect("middle chunk").1[channel] = invalid;
+            let (_, pcm) = broken.chunks.get_mut(&(7, 32)).expect("middle chunk");
+            let mut changed = sample_buffer(&pcm_pools, &pcm[..]);
+            changed[channel] = invalid;
+            *pcm = Arc::new(changed);
             for speed in [0.5, 1.5] {
                 assert!(
                     broken
@@ -2029,12 +2111,9 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
         }
     }
     let mut missing_right = capture.clone();
-    missing_right
-        .chunks
-        .get_mut(&(7, 64))
-        .expect("last chunk")
-        .1
-        .pop();
+    let (_, pcm) = missing_right.chunks.get_mut(&(7, 64)).expect("last chunk");
+    let truncated = sample_buffer(&pcm_pools, &pcm[..pcm.len() - 1]);
+    *pcm = Arc::new(truncated);
     assert!(
         missing_right
             .sample_at(identity, (380, denominator), 1.0, 0)
@@ -2050,4 +2129,153 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
             .samples_at(identity, (380, denominator), 1.0, [0, 1])
             .is_err()
     );
+}
+
+#[kithara::test(native)]
+fn decoded_capture_analysis_does_not_drop_the_next_chunk() {
+    let (captured, mut observer) = DecodedRecorder::open();
+    let mut analysis = captured.lock();
+    let before = analysis.view().clone();
+    let spec = AudioSpec::new(CHANNELS, NonZeroU32::new(48_000).expect("test sample rate"));
+    let info = AudioChunkInfo {
+        spec,
+        frame_offset: 32,
+        frames: 2,
+        source_revision: 7,
+        media_origin: Some(Duration::ZERO),
+        ..AudioChunkInfo::default()
+    };
+    let pcm = [0.125, -0.25, 0.5, -0.75];
+    let chunk = AudioChunk::new(info, sample_buffer(&pools(), &pcm));
+    observer
+        .try_observe(&chunk)
+        .expect("analysis must not discard the next decoder chunk");
+    assert!(before.chunks.is_empty());
+    drop(analysis);
+    let observed = captured.lock().view().clone();
+    let (actual_info, actual_pcm) = observed.chunks.get(&(7, 32)).expect("accepted chunk");
+    assert_eq!(*actual_info, info);
+    assert_eq!(&actual_pcm[..], pcm);
+    assert!(!observed.rejected);
+}
+
+fn decoded_test_chunk(frame_offset: u64, samples: &[f32]) -> AudioChunk {
+    AudioChunk::new(
+        AudioChunkInfo {
+            spec: AudioSpec::new(CHANNELS, NonZeroU32::new(48_000).expect("test rate")),
+            frame_offset,
+            frames: u32::try_from(samples.len() / usize::from(CHANNELS)).expect("test frames"),
+            source_revision: 7,
+            media_origin: Some(Duration::ZERO),
+            ..AudioChunkInfo::default()
+        },
+        sample_buffer(&pools(), samples),
+    )
+}
+
+#[kithara::test(native)]
+#[case::queue(1, 16)]
+#[case::budget(8, 4)]
+fn decoded_capture_saturation_is_sticky(#[case] chunks: usize, #[case] samples: usize) {
+    let (recording, mut observer) = DecodedRecorder::with_limits(chunks, samples);
+    let mut held = recording.lock();
+    let first = decoded_test_chunk(0, &[0.125, -0.25, 0.5, -0.75]);
+    observer.try_observe(&first).expect("first fact fits");
+    let next = decoded_test_chunk(2, &[0.25, -0.5, 0.75, -1.0]);
+    assert_eq!(observer.try_observe(&next), Err(AudioObserveError::Full));
+    assert_eq!(observer.try_observe(&next), Err(AudioObserveError::Closed));
+    let captured = held.view();
+    assert!(captured.rejected);
+    assert_eq!(captured.chunks.len(), 1);
+    assert_eq!(captured.samples, 4);
+    assert_eq!(&captured.chunks[&(7, 0)].1[..], first.as_ref());
+    assert!(held.view().rejected, "draining does not erase the failure");
+    drop(held);
+}
+
+#[kithara::test(native)]
+#[case::empty(0)]
+#[case::oversized(32_770)]
+#[case::partial_frame(3)]
+fn decoded_capture_malformed_facts_are_visible(#[case] len: usize) {
+    let (recording, mut observer) = DecodedRecorder::open();
+    let chunk = decoded_test_chunk(0, &vec![0.125; len]);
+    assert_eq!(observer.try_observe(&chunk), Err(AudioObserveError::Full));
+    let captured = recording.lock().view().clone();
+    assert!(captured.rejected);
+    assert!(captured.chunks.is_empty());
+    assert_eq!(captured.samples, 0);
+}
+
+#[kithara::test(native)]
+fn decoded_capture_bounds_unique_facts_without_counting_duplicates() {
+    let (recording, mut observer) = DecodedRecorder::with_limits(2, 16);
+    let first = decoded_test_chunk(0, &[0.125, -0.25, 0.5, -0.75]);
+    for _ in 0..10 {
+        observer
+            .try_observe(&first)
+            .expect("duplicate fits the handoff");
+        let captured = recording.lock().view().clone();
+        assert_eq!(captured.chunks.len(), 1);
+        assert_eq!(captured.samples, 4);
+        assert!(!captured.rejected);
+    }
+    let before = recording.lock().view().clone();
+    assert_ne!(before.chunks[&(7, 0)].1.as_ptr(), first.as_ref().as_ptr());
+    let second = decoded_test_chunk(2, &[0.25, -0.5, 0.75, -1.0]);
+    observer.try_observe(&second).expect("second unique fact");
+    let after = recording.lock().view().clone();
+    assert_eq!(before.chunks.len(), 1, "old snapshot has no receiver");
+    assert_eq!(after.chunks.len(), 2);
+    assert_eq!(after.samples, 8);
+    assert!(!after.rejected);
+    assert!(Arc::ptr_eq(
+        &before.chunks[&(7, 0)].1,
+        &after.chunks[&(7, 0)].1
+    ));
+    assert_eq!(&before.chunks[&(7, 0)].1[..], first.as_ref());
+    let third = decoded_test_chunk(4, &[0.5, -0.25, 0.75, -0.125]);
+    observer.try_observe(&third).expect("handoff has room");
+    let full = recording.lock().view().clone();
+    assert!(
+        full.rejected,
+        "collector enforces the retained unique limit"
+    );
+    assert_eq!(full.chunks.len(), 2);
+    assert_eq!(full.samples, 8);
+    assert!(!before.rejected, "prior immutable snapshot is unchanged");
+}
+
+#[kithara::test(native)]
+#[case::metadata(true)]
+#[case::pcm(false)]
+fn decoded_capture_conflicting_fact_is_visible(#[case] change_metadata: bool) {
+    let (recording, mut observer) = DecodedRecorder::with_limits(2, 16);
+    let first = decoded_test_chunk(0, &[0.125, -0.25, 0.5, -0.75]);
+    observer.try_observe(&first).expect("original fact");
+    let before = recording.lock().view().clone();
+    let mut changed = decoded_test_chunk(0, first.as_ref());
+    if change_metadata {
+        changed.meta.media_origin = Some(Duration::from_millis(1));
+    } else {
+        changed.samples[0] += 0.125;
+    }
+    observer
+        .try_observe(&changed)
+        .expect("handoff accepts the fact");
+    let after = recording.lock().view().clone();
+    assert!(after.rejected);
+    assert_eq!(after.chunks.len(), 1);
+    assert_eq!(after.samples, 4);
+    assert_eq!(after.chunks[&(7, 0)].0, first.meta);
+    assert_eq!(&after.chunks[&(7, 0)].1[..], first.as_ref());
+    assert!(!before.rejected);
+}
+
+#[kithara::test(native)]
+fn decoded_capture_reader_drop_closes_observer() {
+    let (recording, mut observer) = DecodedRecorder::open();
+    let chunk = decoded_test_chunk(0, &[0.125, -0.25, 0.5, -0.75]);
+    drop(recording);
+    assert_eq!(observer.try_observe(&chunk), Err(AudioObserveError::Closed));
 }

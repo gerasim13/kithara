@@ -6252,6 +6252,7 @@ dependencies = [
  "kithara-test-fixtures",
  "kithara-test-utils",
  "num-traits",
+ "ringbuf",
  "serde_json",
 ]
 

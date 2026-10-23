@@ -43,7 +43,7 @@ pub(crate) struct ProductHarness {
     operation_grid: Option<kithara::warp::BeatGridSnapshot>,
     capture_marks: Vec<(SessionFrame, TrackId, SlotSnapshot)>,
     host_grids: Vec<(SessionFrame, kithara::warp::BeatGridSnapshot)>,
-    decoded: Vec<Arc<Mutex<super::control::DecodedCapture>>>,
+    decoded: Vec<Arc<Mutex<super::control::DecodedRecorder>>>,
     source_uris: Vec<String>,
     /// The second each deck's start opens it at, before its stagger.
     cues: Vec<f64>,
@@ -438,8 +438,7 @@ impl ProductHarness {
             };
             let control = deck.control().clone();
             let muted = !audible.hears(index);
-            let reference = Arc::new(Mutex::new(super::control::DecodedCapture::default()));
-            let observer = super::control::DecodedObserver(reference.clone());
+            let (reference, observer) = super::control::DecodedRecorder::open();
             let id = host
                 .run(move || {
                     control.set_muted(muted).expect("deck mute");
@@ -993,7 +992,7 @@ impl ProductHarness {
             .iter()
             .filter_map(|(frame, owner, slot)| (*owner == item).then_some((*frame, *slot)))
             .collect();
-        let decoded = self.decoded[deck].lock().clone();
+        let decoded = self.decoded[deck].lock().view().clone();
         #[cfg(not(target_os = "android"))]
         let frames = pcm.len() / usize::from(CHANNELS);
         #[cfg(not(target_os = "android"))]
@@ -1157,14 +1156,15 @@ impl ProductHarness {
             .iter()
             .filter_map(|(frame, item, slot)| (*item == speed.item).then_some((*frame, *slot)))
             .collect();
-        let decoded = self.decoded[0].lock();
+        let mut recording = self.decoded[0].lock();
+        let decoded = recording.view();
         match super::binding::commanded_span_failures(
             speed,
             issued,
             expected,
             &marks,
             selected_jump,
-            &decoded,
+            decoded,
         ) {
             Ok(errors) if errors.is_empty() => {
                 let late = super::binding::commanded_span_failures(
@@ -1175,7 +1175,7 @@ impl ProductHarness {
                     selected_jump.map(|(media, landing)| {
                         (media, landing + kithara::signal::FrameCount::new(1))
                     }),
-                    &decoded,
+                    decoded,
                 );
                 if !matches!(late, Ok(ref errors) if !errors.is_empty()) {
                     failures.push(format!(
@@ -1213,10 +1213,10 @@ impl ProductHarness {
                             expected,
                             &shifted,
                             selected_jump,
-                            &decoded,
+                            decoded,
                         )
                     });
-                drop(decoded);
+                drop(recording);
                 if !matches!(shifted, Ok(ref errors) if !errors.is_empty()) {
                     failures.push(format!(
                         "command source-law offset negative did not reject the PCM: {shifted:?}"
@@ -1236,40 +1236,26 @@ impl ProductHarness {
         expected: SessionFrame,
         failures: &mut Vec<String>,
     ) {
-        let previous = first
-            .and_then(|slot| slot.source)
-            .map(|info| info.render_revision);
-        let mut first_changed = None;
-        for (_, item, slot) in &self.capture_marks {
-            if *item != speed.item {
-                continue;
-            }
-            let Some((mark, info)) = slot.mark.zip(slot.source) else {
-                failures.push("command capture lost its consumed mark or SourceSpan".to_owned());
-                continue;
-            };
-            let Some(origin) = i64::try_from(mark.lane.frame)
-                .ok()
-                .and_then(|lane| i64::from(mark.session).checked_sub(lane))
-                .and_then(|frame| frame.checked_add(i64::try_from(info.lane_frame).ok()?))
-                .map(SessionFrame::new)
-            else {
-                failures.push("command PCM interval has no session coordinate".to_owned());
-                continue;
-            };
-            if origin < expected && Some(info.render_revision) != previous {
-                failures
-                    .push("consumed source law changed before the admitted lane frame".to_owned());
-            }
-            if info.render_revision == speed.seq.get() && origin >= issued {
-                first_changed =
-                    Some(first_changed.map_or(origin, |first: SessionFrame| first.min(origin)));
-            }
-        }
-        if first_changed != Some(expected) {
-            failures.push(format!(
-                "new source law first consumed at {first_changed:?}, expected {expected:?}"
-            ));
+        let Some(info) = first.and_then(|slot| slot.source) else {
+            failures.push("command capture lost its pre-command source identity".to_owned());
+            return;
+        };
+        let Some((end, _, _)) = self.capture_marks.last() else {
+            failures.push("command capture lost its final consumed frame".to_owned());
+            return;
+        };
+        let result =
+            super::consumed::Capture::for_track(u64::from(speed.item), info.spec.sample_rate.get())
+                .and_then(|capture| {
+                    capture.command_boundary(
+                        i64::from(issued)..i64::from(*end),
+                        info.render_revision,
+                        speed.seq.get(),
+                        i64::from(expected),
+                    )
+                });
+        if let Err(error) = result {
+            failures.push(error);
         }
     }
 

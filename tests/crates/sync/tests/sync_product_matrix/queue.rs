@@ -24,7 +24,7 @@ use kithara_test_utils::tracing;
 use super::{
     cases::NEWTECHNO_PHRASE,
     consumed::{Capture, SourceIdentity},
-    control::{CONTROL_GAIN, DecodedCapture, DecodedObserver},
+    control::{CONTROL_GAIN, DecodedRecorder},
     imports::*,
     providers::Provider,
 };
@@ -149,7 +149,7 @@ struct Voice {
     item: TrackId,
     entry: Position,
     model: Arc<BeatGridModel>,
-    decoded: Arc<Mutex<DecodedCapture>>,
+    decoded: Arc<Mutex<DecodedRecorder>>,
     fixture: kithara_integration_tests::pcm_oracle::Audio,
     first: BTreeMap<SegmentId, SlotSnapshot>,
     bound: Option<(SlotSnapshot, BeatGridSnapshot, f32)>,
@@ -397,6 +397,7 @@ fn voice_intervals(
     let (initial_origin, initial_basis) = voice
         .decoded
         .lock()
+        .view()
         .physical_basis(identity, initial_raw)
         .unwrap_or_else(|error| panic!("item {:?}: {error}", voice.item));
     let origin = residency_origin(voice, first_info);
@@ -423,6 +424,7 @@ fn voice_intervals(
     let physical_domain = voice
         .decoded
         .lock()
+        .view()
         .fixture_domain(first_info, &voice.fixture, origin)
         .unwrap_or_else(|error| panic!("named source {:?}: {error}", voice.item));
     let slices = consumed
@@ -458,6 +460,7 @@ fn voice_intervals(
         let (physical_origin, physical_basis) = voice
             .decoded
             .lock()
+            .view()
             .physical_basis(interval.identity, raw)
             .unwrap_or_else(|error| panic!("item {:?}: {error}", voice.item));
         result.push(Interval {
@@ -590,7 +593,8 @@ fn reference(
             source_seen = Some(interval.voice);
             reported = Instant::now();
         }
-        let decoded = voice.decoded.lock();
+        let mut recording = voice.decoded.lock();
+        let decoded = recording.view();
         let span = interval.source;
         // A frame's endpoint is the next frame's start, so each coordinate is
         // projected once and carried into the following frame.
@@ -648,7 +652,7 @@ fn reference(
                 }
             }
         }
-        drop(decoded);
+        drop(recording);
     }
     let ceiling = kithara::effects::LimiterConfig::default().ceiling();
     for sample in &mut expected {
@@ -902,8 +906,7 @@ impl QueueMusic {
             .discriminator(format!("queue321-{index}"))
             .beat_grid(ArtifactSource::Value(model.clone()))
             .build();
-            let decoded = Arc::new(Mutex::new(DecodedCapture::default()));
-            let observer = DecodedObserver(decoded.clone());
+            let (decoded, observer) = DecodedRecorder::open();
             let control = self.deck.control().clone();
             let item = self
                 .host
@@ -2770,7 +2773,7 @@ async fn capture_music(kind: MusicCase, key_lock: bool, tracks: &[(&str, Start)]
                         residency_origin(voice, first.source.expect("first source identity")),
                     ),
                     entry_boundary(voice),
-                    &voice.decoded.lock(),
+                    voice.decoded.lock().view(),
                 )
                 .unwrap_or_else(|error| {
                     panic!("item {:?}: independent Queue law: {error}", voice.item)
@@ -2810,7 +2813,7 @@ async fn capture_music(kind: MusicCase, key_lock: bool, tracks: &[(&str, Start)]
                 residency_origin(voice, first.source.expect("first source identity")),
             ),
             entry_boundary(voice),
-            &voice.decoded.lock(),
+            voice.decoded.lock().view(),
         )
         .is_err()
     });

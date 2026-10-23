@@ -665,8 +665,12 @@ async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
                 );
             });
             let snapshot = harness.decks[0]
-                .track_snapshot(item)
-                .expect("successor linked snapshot");
+                .read_snapshot()
+                .await
+                .into_iter()
+                .map(|(snapshot, _)| snapshot)
+                .find(|snapshot| snapshot.track.item == item)
+                .expect("owner reports the successor linked track");
             assert_eq!(snapshot.sync, SyncStatus::On);
             assert!(!snapshot.track.pending_lane, "successor segment is Ready");
             hang_reset!();
