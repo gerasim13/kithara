@@ -29,7 +29,10 @@ async fn an_injected_downloader_carries_the_remote_file_requests() {
             bytes: Arc::new(bytes.clone()),
             content_type: Some("audio/mpeg"),
         },
-        delivery: Delivery::Range,
+        delivery: Delivery::Throttle {
+            chunk: 1024,
+            delay_ms: 10,
+        },
     });
     let pools = pools();
     let downloader = Downloader::new(
