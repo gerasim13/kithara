@@ -36,11 +36,6 @@ impl<T: Default> Default for Mutex<T> {
     }
 }
 
-// SAFETY: browser is single-threaded; a `Mutex` value never crosses threads.
-unsafe impl<T> Send for Mutex<T> {}
-// SAFETY: same — no concurrent access on the single browser thread.
-unsafe impl<T> Sync for Mutex<T> {}
-
 /// The inner guard is `pub(crate)` because the condvar implementation needs the raw guard.
 pub struct MutexGuard<'a, T>(pub(crate) Guard<'a, T>);
 
