@@ -1687,12 +1687,13 @@ steps = [
     "chrome",
     "webcodecs",
     "include",
-  ], label = "Chromium WebCodecs tests" },
+  ], label = "Chromium WebCodecs tests", env = { CHROMEDRIVER_ARGS = "--verbose --log-path={root}/target/web-chromium.log" } },
 ]
 role = "gate"
 kinds = ["platforms", "main", "nightly"]
 kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 60
+artifact = { name = "web-chromium-driver", path = "target/web-chromium.log", when = "failure" }
 
 # Nightly here, not on the push gate: the full integration suite does not
 # compile for wasm32 today. The lane reports the break every night instead of
