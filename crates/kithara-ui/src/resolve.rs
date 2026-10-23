@@ -471,7 +471,19 @@ mod tests {
     }
 
     #[kithara::test]
-    fn loads_nested_includes_two_levels_deep() {
+    #[case::row(r#"Row(children: [Include(id: "c", source: "c.kmodule.ron")])"#)]
+    #[case::slot(r#"Slot(id: "body", default: [Include(id: "c", source: "c.kmodule.ron")])"#)]
+    #[case::adaptive(
+        r#"Adaptive(id: "body", measure: Width, size: (w: Fill, h: Fill),
+        base: Text(id: "empty"),
+        steps: [(from: 400.0, node: Include(id: "c", source: "c.kmodule.ron"))])"#
+    )]
+    #[case::popover(
+        r#"Popover(id: "body", open: Model(id: "menu.open"),
+        anchor: Text(id: "anchor"),
+        content: Include(id: "c", source: "c.kmodule.ron"))"#
+    )]
+    fn loads_nested_includes_two_levels_deep(#[case] body: &str) {
         let mut resolver = MemResolver::default();
         resolver.insert(
             "a.kmodule.ron",
@@ -480,19 +492,17 @@ mod tests {
                 r#"Row(children: [Include(id: "b", source: "sub/b.kmodule.ron")])"#,
             ),
         );
-        resolver.insert(
-            "sub/b.kmodule.ron",
-            &module(
-                "b",
-                r#"Row(children: [Include(id: "c", source: "c.kmodule.ron")])"#,
-            ),
-        );
+        resolver.insert("sub/b.kmodule.ron", &module("b", body));
         resolver.insert("sub/c.kmodule.ron", &module("c", r#"Text(id: "x")"#));
 
         let (uri, set) =
             load_module_graph(&resolver, None, "a.kmodule.ron", &Limits::default()).unwrap();
         assert_eq!(uri.0, "a.kmodule.ron");
         assert_eq!(set.defs.len(), 3);
+        assert!(
+            set.defs
+                .contains_key(&SourceUri("sub/c.kmodule.ron".to_owned()))
+        );
     }
 
     #[kithara::test]
