@@ -456,15 +456,10 @@ impl ControlCapture {
         for frame in 0..frames {
             let position = (origin + frame as u128 * rate.0, rate.1);
             for channel in 0..usize::from(CHANNELS) {
-                expected
-                    .push(source_sample(reference, position, self.rate, channel)? * CONTROL_GAIN);
+                expected.push(output_sample(
+                    source_sample(reference, position, self.rate, channel)? * CONTROL_GAIN,
+                )?);
             }
-        }
-        if expected
-            .iter()
-            .any(|sample| !sample.is_finite() || sample.abs() >= LimiterConfig::default().ceiling())
-        {
-            return Err("control reference exceeds its configured output headroom".to_owned());
         }
         compare_pcm(&self.pcm, &expected)?;
         if !expected.iter().any(|sample| *sample != 0.0) {
@@ -564,6 +559,13 @@ pub(super) fn mapped_samples<const N: usize>(
     sampling::SampleKernel::new(position, speed)?.samples(sample)
 }
 
+fn output_sample(sample: f32) -> Result<f32, String> {
+    if !sample.is_finite() || sample.abs() >= LimiterConfig::default().ceiling() {
+        return Err("control reference exceeds its configured output headroom".to_owned());
+    }
+    Ok(kithara::signal::sanitize_sample(sample))
+}
+
 pub(in super::super) fn compare_pcm(actual: &[f32], expected: &[f32]) -> Result<(), String> {
     if actual.len() != expected.len() || actual.is_empty() {
         return Err(format!(
@@ -624,8 +626,9 @@ fn check_content_guards(
                 rate.1 * wrong_rate.1,
             );
             for channel in 0..channels {
-                wrong
-                    .push(source_sample(reference, position, wrong_speed, channel)? * CONTROL_GAIN);
+                wrong.push(output_sample(
+                    source_sample(reference, position, wrong_speed, channel)? * CONTROL_GAIN,
+                )?);
             }
         }
         if compare_pcm(&wrong, &expected[..window * channels]).is_ok() {
@@ -652,7 +655,9 @@ fn check_content_guards(
         for frame in 0..window {
             let position = (source_origin + frame as u128 * rate.0, rate.1);
             for channel in 0..channels {
-                wrong.push(source_sample(source, position, speed, channel)? * CONTROL_GAIN);
+                wrong.push(output_sample(
+                    source_sample(source, position, speed, channel)? * CONTROL_GAIN,
+                )?);
             }
         }
         if compare_pcm(&wrong, &expected[..window * channels]).is_ok() {
@@ -1442,26 +1447,24 @@ impl DecodedCapture {
                 )
                 .map_err(|error| format!("wrong-tempo negative: {error}"))?;
             for (channel, sample) in expected.into_iter().enumerate() {
-                let sample = sample * gain * CONTROL_GAIN;
-                if !sample.is_finite() || sample.abs() >= LimiterConfig::default().ceiling() {
-                    return Err(format!(
-                        "physical reference has no limiter headroom at frame {session}"
-                    ));
-                }
-                reference.expected.push(sample);
+                reference
+                    .expected
+                    .push(output_sample(sample * gain * CONTROL_GAIN).map_err(|_| {
+                        format!("physical reference has no limiter headroom at frame {session}")
+                    })?);
                 reference
                     .wrong_cue
-                    .push(wrong_cue[channel] * gain * CONTROL_GAIN);
+                    .push(output_sample(wrong_cue[channel] * gain * CONTROL_GAIN)?);
                 reference
                     .wrong_tempo
-                    .push(wrong_tempo[channel] * gain * CONTROL_GAIN);
+                    .push(output_sample(wrong_tempo[channel] * gain * CONTROL_GAIN)?);
                 let wrong_frame = (frame as u128 * u128::from(wrong_source.sample_rate))
                     / u128::from(sample_rate);
-                reference.wrong_payload.push(
+                reference.wrong_payload.push(output_sample(
                     source_sample(wrong_source, (wrong_frame, 1), 1.0, channel)?
                         * gain
                         * CONTROL_GAIN,
-                );
+                )?);
             }
             physical_supplied_beats(
                 &mut reference.supplied_beats,
@@ -1721,6 +1724,48 @@ impl PhysicalReference {
             );
         }
         Ok(expected)
+    }
+}
+
+#[kithara::test(native)]
+fn output_reference_keeps_the_limiter_sample_domain_and_strict_pcm_checks() {
+    let source = [
+        0.0,
+        -0.0,
+        f32::from_bits(1),
+        -f32::from_bits(1),
+        f32::MIN_POSITIVE / 2.0,
+        -f32::MIN_POSITIVE / 2.0,
+        f32::MIN_POSITIVE,
+        -f32::MIN_POSITIVE,
+        0.125,
+        -0.25,
+    ];
+    let mut actual = source;
+    let mut limiter = kithara::effects::PeakLimiter::new(
+        NonZeroU32::new(48_000).expect("output rate"),
+        NonZeroUsize::MIN,
+        LimiterConfig::default(),
+    )
+    .expect("output limiter");
+    limiter.process_planar(&mut [&mut actual]);
+    let expected: Vec<_> = source
+        .into_iter()
+        .map(output_sample)
+        .collect::<Result<_, _>>()
+        .expect("finite reference with headroom");
+    compare_pcm(&actual, &expected).expect("reference matches the actual output contract");
+    assert!(compare_pcm(&[f32::from_bits(1)], &[0.0]).is_err());
+    let mut corrupted = actual;
+    corrupted[8] = f32::from_bits(corrupted[8].to_bits() + 1);
+    assert!(compare_pcm(&corrupted, &expected).is_err());
+    for invalid in [
+        f32::NAN,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        LimiterConfig::default().ceiling(),
+    ] {
+        assert!(output_sample(invalid).is_err());
     }
 }
 
