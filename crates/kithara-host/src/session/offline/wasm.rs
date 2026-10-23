@@ -117,9 +117,13 @@ impl Drop for OfflineTaskHandle {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, rc::Rc};
+    use std::{
+        cell::Cell,
+        rc::Rc,
+        sync::atomic::{AtomicBool, Ordering},
+    };
 
-    use kithara_platform::{sync::mpsc, time::Duration};
+    use kithara_platform::{sync::mpsc, thread, time::Duration};
     use kithara_play::PlayError;
     use kithara_test_utils::{cancel::cancel_token, kithara};
     use kithara_worker::{DispatcherConfig, TaskConfig, Worker, WorkerConfig};
@@ -203,5 +207,60 @@ mod tests {
             receiver.try_recv(),
             Ok(OfflineMsg::Deck(DeckMsg::Receipts))
         ));
+    }
+
+    struct OwnerTask {
+        owner: thread::ThreadId,
+        wrong_thread: Arc<AtomicBool>,
+    }
+
+    impl Task for OwnerTask {
+        fn tick(&mut self) -> TickResult {
+            if thread::current().id() != self.owner {
+                self.wrong_thread.store(true, Ordering::Release);
+            }
+            TickResult::Waiting
+        }
+    }
+
+    #[kithara::test(wasm, timeout(Duration::from_secs(10)))]
+    async fn a_deck_wake_on_a_worker_runs_the_task_on_its_owner() {
+        let worker = Worker::new(WorkerConfig::new());
+        let dispatcher = worker.dispatcher(
+            DispatcherConfig::builder()
+                .name("offline-owner-test")
+                .build(),
+        );
+        let pending = dispatcher.reserve(TaskConfig::new()).expect("reserve task");
+        let route = OfflineTaskRoute::new(&pending);
+        let wrong_thread = Arc::new(AtomicBool::new(false));
+        let owner = thread::current().id();
+        let task_flag = wrong_thread.clone();
+        let _task = route
+            .clone()
+            .start(pending, move |_| OwnerTask {
+                owner,
+                wrong_thread: task_flag,
+            })
+            .expect("start task");
+        let (postbox, _mailbox) = kithara_command::mailbox::<(), PlayError>();
+        let (sender, _receiver) = mpsc::channel();
+        let client = Arc::new(OfflineSessionClient::new(postbox, sender, route));
+        let waker = client.waker(DeckMsg::Receipts);
+        let finished = Arc::new(AtomicBool::new(false));
+        let wake_finished = finished.clone();
+
+        drop(thread::spawn(move || {
+            waker.wake();
+            wake_finished.store(true, Ordering::Release);
+        }));
+        while !finished.load(Ordering::Acquire) {
+            sleep(SESSION_PUMP_INTERVAL).await;
+        }
+
+        assert!(
+            !wrong_thread.load(Ordering::Acquire),
+            "offline task ran on the waking worker"
+        );
     }
 }

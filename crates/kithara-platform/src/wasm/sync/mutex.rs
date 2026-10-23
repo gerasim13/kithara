@@ -59,3 +59,36 @@ impl<T> DerefMut for MutexGuard<'_, T> {
         &mut self.0
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::rc::Rc;
+
+    use super::Mutex;
+
+    const _: bool = {
+        trait AmbiguousIfSend<A> {
+            const CHECK: bool;
+        }
+        impl<T: ?Sized> AmbiguousIfSend<()> for T {
+            const CHECK: bool = true;
+        }
+        impl<T: ?Sized + Send> AmbiguousIfSend<u8> for T {
+            const CHECK: bool = true;
+        }
+        <Mutex<Rc<()>> as AmbiguousIfSend<_>>::CHECK
+    };
+
+    const _: bool = {
+        trait AmbiguousIfSync<A> {
+            const CHECK: bool;
+        }
+        impl<T: ?Sized> AmbiguousIfSync<()> for T {
+            const CHECK: bool = true;
+        }
+        impl<T: ?Sized + Sync> AmbiguousIfSync<u8> for T {
+            const CHECK: bool = true;
+        }
+        <Mutex<Rc<()>> as AmbiguousIfSync<_>>::CHECK
+    };
+}
