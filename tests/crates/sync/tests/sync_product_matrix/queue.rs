@@ -1081,7 +1081,7 @@ impl QueueMusic {
                     debt_ns = elapsed.saturating_sub(deadline).as_nanos(),
                     lead_ns = deadline.saturating_sub(elapsed).as_nanos());
             }
-            let callback_started = self.render_block(frames, &mut data).await;
+            self.render_block(frames, &mut data).await;
             render_time += render_started.elapsed();
             if next_beat == Some(frame(now))
                 && snapshot.iter().any(|(_, slot)| {
@@ -1099,8 +1099,7 @@ impl QueueMusic {
             next_beat = Some(boundary);
             hang_reset!();
             let block_frames: f64 = frames.as_();
-            cadence = cadence.max(callback_started)
-                + Duration::from_secs_f64(block_frames / f64::from(RATE));
+            cadence += Duration::from_secs_f64(block_frames / f64::from(RATE));
             time::sleep(cadence.saturating_duration_since(Instant::now())).await;
         }
         let history = self.deck.observe(|observation| {
