@@ -154,11 +154,12 @@ mod document_tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn a_unit_mode_types_from_its_tag_alone() {
-        let mode: GaplessMode =
-            serde_yaml_ng::from_str("mode: media_only\n").expect("the document types");
+    #[case::media_only("mode: media_only\n", GaplessMode::MediaOnly)]
+    #[case::codec_priming("mode: codec_priming\n", GaplessMode::CodecPriming)]
+    fn a_unit_mode_types_from_its_tag_alone(#[case] document: &str, #[case] expected: GaplessMode) {
+        let mode: GaplessMode = serde_yaml_ng::from_str(document).expect("the document types");
 
-        assert_eq!(mode, GaplessMode::MediaOnly);
+        assert_eq!(mode, expected);
     }
 
     /// `deny_unknown_fields` is inert on an internally tagged enum (the tag
@@ -167,11 +168,15 @@ mod document_tests {
     /// on the outer `mode`/`params` object, not just assume it from the
     /// container attribute being present.
     #[kithara::test(native, flash(false))]
-    fn an_unknown_sibling_key_is_rejected_on_a_unit_variant() {
-        let error = serde_yaml_ng::from_str::<GaplessMode>("mode: media_only\nvolume: 1\n")
+    #[case::sibling_key("mode: media_only\nvolume: 1\n", "volume")]
+    fn a_document_naming_an_unknown_key_or_mode_is_refused(
+        #[case] document: &str,
+        #[case] needle: &str,
+    ) {
+        let error = serde_yaml_ng::from_str::<GaplessMode>(document)
             .expect_err("a typo must not be silently ignored");
 
-        assert!(error.to_string().contains("volume"), "{error}");
+        assert!(error.to_string().contains(needle), "{error}");
     }
 
     #[kithara::test(native, flash(false))]

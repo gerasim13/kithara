@@ -491,3 +491,15 @@ async fn failed_source_after_original_pcm_never_publishes_an_eof_length(
         Some(original.meta.timestamp)
     );
 }
+
+#[kithara::test(tokio)]
+#[case::media_only(GaplessMode::MediaOnly)]
+#[case::codec_priming(GaplessMode::CodecPriming)]
+async fn a_raw_length_endpoint_follows_the_visible_origin_before_any_output(
+    #[case] mode: GaplessMode,
+) {
+    let mut extent = extent(Some(Duration::from_secs(60)), 700, true);
+    extent.media_origin = Some(Duration::from_millis(700));
+    let source = physical_source_with_mode(extent, mode).await;
+    assert_eq!(source.media_end(), Some(Duration::from_millis(59_969)));
+}

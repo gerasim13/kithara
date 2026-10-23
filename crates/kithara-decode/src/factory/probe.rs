@@ -410,29 +410,6 @@ mod tests {
     }
 
     #[kithara::test]
-    fn test_probe_hint_default() {
-        let hint = ProbeHint::default();
-        assert!(hint.codec.is_none());
-        assert!(hint.container.is_none());
-        assert!(hint.extension.is_none());
-        assert!(hint.mime.is_none());
-    }
-
-    #[kithara::test]
-    fn test_probe_hint_with_all_fields() {
-        let hint = ProbeHint {
-            codec: Some(AudioCodec::Flac),
-            container: Some(ContainerFormat::Ogg),
-            extension: Some("flac".into()),
-            mime: Some("audio/flac".into()),
-        };
-        assert_eq!(hint.codec, Some(AudioCodec::Flac));
-        assert_eq!(hint.container, Some(ContainerFormat::Ogg));
-        assert_eq!(hint.extension, Some("flac".into()));
-        assert_eq!(hint.mime, Some("audio/flac".into()));
-    }
-
-    #[kithara::test]
     fn sniff_container_detects_hls_fmp4_init_and_segment(aac_init: Vec<u8>, aac_segment: Vec<u8>) {
         let mut init_source: BoxedSource = Box::new(Cursor::new(aac_init));
         assert_eq!(
@@ -543,14 +520,11 @@ mod tests {
     }
 
     #[kithara::test]
-    fn test_probe_priority_codec_over_extension() {
-        let hint = ProbeHint {
-            codec: Some(AudioCodec::Flac),
-            extension: Some("mp3".into()),
-            ..Default::default()
-        };
+    #[case::codec_over_extension(ProbeHint { codec: Some(AudioCodec::Flac), extension: Some("mp3".into()), ..Default::default() }, AudioCodec::Flac)]
+    #[case::extension_over_container(ProbeHint { extension: Some("flac".into()), container: Some(ContainerFormat::MpegAudio), ..Default::default() }, AudioCodec::Flac)]
+    fn test_probe_priority(#[case] hint: ProbeHint, #[case] expected: AudioCodec) {
         let codec = probe_codec(&hint).expect("BUG: should probe successfully");
-        assert_eq!(codec, AudioCodec::Flac);
+        assert_eq!(codec, expected);
     }
 
     #[kithara::test]

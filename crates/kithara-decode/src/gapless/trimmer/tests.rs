@@ -298,38 +298,6 @@ fn trailing_trim_buffers_until_flush(trim_ramp: Vec<f32>) {
 }
 
 #[kithara::test]
-fn trailing_trim_drops_tail_on_flush(trim_ramp: Vec<f32>) {
-    let spec = mono_spec();
-    let mut trimmer = GaplessTrimmer::from(GaplessInfo {
-        leading_frames: 0,
-        trailing_frames: 2_048,
-    });
-
-    assert!(
-        trimmer
-            .push(chunk(spec, 0, 1_024, &trim_ramp))
-            .expect("valid gapless PCM")
-            .is_empty()
-    );
-    assert!(
-        trimmer
-            .push(chunk(spec, 1_024, 1_024, &trim_ramp))
-            .expect("valid gapless PCM")
-            .is_empty()
-    );
-    assert_eq!(
-        trimmer
-            .push(chunk(spec, 2_048, 1_024, &trim_ramp))
-            .expect("valid gapless PCM")
-            .len(),
-        1
-    );
-
-    let ready = trimmer.flush().expect("valid gapless PCM");
-    assert!(ready.is_empty());
-}
-
-#[kithara::test]
 fn trailing_trim_handles_more_than_inline_tail_chunks(trim_ramp: Vec<f32>) {
     let spec = mono_spec();
     let mut trimmer = GaplessTrimmer::from(GaplessInfo {

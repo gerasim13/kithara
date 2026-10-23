@@ -3,7 +3,7 @@
 use kithara_integration_tests::mock::gapless::*;
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
-async fn single_track_silence_trim_strips_leading_priming(
+async fn single_track_media_only_strips_leading_priming(
     temp_dir: TestTempDir,
     #[future(awt)] primed: (TestServerHelper, CreatedHls),
 ) {
@@ -12,7 +12,7 @@ async fn single_track_silence_trim_strips_leading_priming(
             .block_on_underrun(true)
             .crossfade_duration(0.0)
             .gapless(true)
-            .gapless_mode(silence_trim_with_trailing())
+            .gapless_mode(GaplessMode::MediaOnly)
             .build(),
         GAPLESS_SAMPLE_RATE,
     )
@@ -59,7 +59,7 @@ async fn single_track_silence_trim_strips_leading_priming(
     hang_timeout_secs(1),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_play=debug,kithara_stream=debug")
 )]
-async fn two_tracks_gapless_no_click_with_silence_trim_zero_crossfade(
+async fn two_tracks_gapless_no_click_with_media_only_zero_crossfade(
     temp_dir: TestTempDir,
     #[future(awt)] trimmed: (TestServerHelper, CreatedHls),
     #[future(awt)] trimmed_next: (TestServerHelper, CreatedHls),
@@ -70,7 +70,7 @@ async fn two_tracks_gapless_no_click_with_silence_trim_zero_crossfade(
             .block_on_underrun(true)
             .crossfade_duration(0.0)
             .gapless(true)
-            .gapless_mode(silence_trim_with_trailing())
+            .gapless_mode(GaplessMode::MediaOnly)
             .build(),
         GAPLESS_SAMPLE_RATE,
     )
@@ -142,7 +142,7 @@ async fn two_tracks_gapless_stitch_continuity_metric(
             .block_on_underrun(true)
             .crossfade_duration(0.0)
             .gapless(true)
-            .gapless_mode(silence_trim_with_trailing())
+            .gapless_mode(GaplessMode::MediaOnly)
             .build(),
         GAPLESS_SAMPLE_RATE,
     )
@@ -248,17 +248,8 @@ async fn apple_fused_gapless_fixture_keeps_device_rate_seam_metric(
         "fixture must keep the selected one-frame-deficit search geometry"
     );
 
-    let probe_harness = OfflinePlayer::with_sample_rate(
-        OfflinePlayerOptions::builder()
-            .block_on_underrun(true)
-            .crossfade_duration(0.0)
-            .gapless(true)
-            .gapless_mode(silence_trim_with_trailing())
-            .build(),
-        FUSED_FIXTURE_DEVICE_RATE,
-    )
-    .await;
-    let probe = create_apple_fused_resource(&probe_harness, &apple_probe.1, temp_dir.path()).await;
+    let probe_worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
+    let probe = create_apple_fused_resource(&probe_worker, &apple_probe.1, temp_dir.path()).await;
     let probe = kithara_integration_tests::mock::open_resource(&probe)
         .await
         .expect("open Apple fused probe");
@@ -268,7 +259,7 @@ async fn apple_fused_gapless_fixture_keeps_device_rate_seam_metric(
         "visible length must be the scaled ratio rounded either way: got {}, expected {floor_frames} or {ceil_frames}",
         probe.output_frames
     );
-    probe_harness.close().await;
+    drop(probe_worker);
 
     let pending_decision = render_apple_fused_deficit_seam(
         &apple_first.1,
@@ -315,14 +306,14 @@ async fn render_apple_fused_deficit_seam(
             .block_on_underrun(true)
             .crossfade_duration(0.0)
             .gapless(true)
-            .gapless_mode(silence_trim_with_trailing())
+            .gapless_mode(GaplessMode::MediaOnly)
             .build(),
         FUSED_FIXTURE_DEVICE_RATE,
     )
     .await;
 
-    let first = create_apple_fused_resource(&harness, first_source, cache_dir).await;
-    let second = create_apple_fused_resource(&harness, second_source, cache_dir).await;
+    let first = create_apple_fused_resource(harness.worker(), first_source, cache_dir).await;
+    let second = create_apple_fused_resource(harness.worker(), second_source, cache_dir).await;
 
     let [first_id, _second_id] = load_tagged_queue(&harness, [first, second]).await;
 
