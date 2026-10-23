@@ -148,6 +148,8 @@ exit 98
             .env("CARGO_TARGET_DIR", &self.target)
             .env("CARGO", env!("CARGO"))
             .env("CARGO_HOME", &self.cargo_home)
+            .env("RUSTC_WRAPPER", "")
+            .env("RUSTC_WORKSPACE_WRAPPER", "")
             .env("XTASK_SELF_CACHE_CARGO", &self.bootstrap_cargo)
             .env("SELF_CACHE_BOOTSTRAP_ARTIFACT", &self.bootstrap_artifact)
             .stdin(Stdio::null());
@@ -180,6 +182,8 @@ exit 98
             .current_dir(&self.root)
             .env("CARGO_TARGET_DIR", &self.target)
             .env("CARGO_HOME", &self.cargo_home)
+            .env("RUSTC_WRAPPER", "")
+            .env("RUSTC_WORKSPACE_WRAPPER", "")
             .env("PATH", self.fake_path()?)
             .env("SELF_CACHE_CARGO_LOG", &self.cargo_log)
             .env("SELF_CACHE_GIT_LOG", &self.git_log)
@@ -213,6 +217,8 @@ exit 98
             .current_dir(root)
             .env("CARGO", env!("CARGO"))
             .env("CARGO_HOME", &self.cargo_home)
+            .env("RUSTC_WRAPPER", "")
+            .env("RUSTC_WORKSPACE_WRAPPER", "")
             .env("XTASK_SELF_CACHE_CARGO", &fake_cargo)
             .env("PATH", self.fake_path()?)
             .env("SELF_CACHE_CARGO_LOG", &self.cargo_log)
@@ -267,6 +273,8 @@ exit 98
             .env("CARGO_TARGET_DIR", &self.target)
             .env("CARGO", env!("CARGO"))
             .env("CARGO_HOME", &self.cargo_home)
+            .env("RUSTC_WRAPPER", "")
+            .env("RUSTC_WORKSPACE_WRAPPER", "")
             .env("PATH", self.fake_path()?)
             .env("SELF_CACHE_CARGO_LOG", &self.cargo_log)
             .env("SELF_CACHE_GIT_LOG", &self.git_log)
@@ -370,6 +378,47 @@ exec "$SELF_CACHE_TEST_XTASK" "$@"
         assert!(!self.cargo_log.exists(), "self-cache invoked Cargo");
         assert!(!self.git_log.exists(), "self-cache invoked Git");
     }
+}
+
+#[test]
+fn fixture_metadata_does_not_inherit_compiler_wrappers() -> Result<()> {
+    const CHILD: &str = "SELF_CACHE_FIXTURE_WRAPPER_CHILD";
+    if env::var_os(CHILD).is_some() {
+        let fixture = Fixture::new()?;
+        assert_success(&fixture.bootstrap()?);
+        let refresh = fixture.cached(&["self-cache", "refresh", "--force"])?;
+        assert!(!refresh.status.success());
+        assert_eq!(
+            fs::read_to_string(&fixture.cargo_log)?,
+            cargo_build_log(&fs::canonicalize(&fixture.root)?, &fixture.target)
+        );
+        return Ok(());
+    }
+
+    let temp = tempfile::tempdir()?;
+    let wrapper = temp.path().join("compiler-wrapper");
+    let log = temp.path().join("wrapper.log");
+    write_executable(
+        &wrapper,
+        "#!/bin/sh\nprintf 'unexpected inherited compiler wrapper\\n' > \"$SELF_CACHE_WRAPPER_LOG\"\nexit 91\n",
+    )?;
+    for variable in ["RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER"] {
+        let output = Command::new(env::current_exe()?)
+            .args([
+                "--exact",
+                stringify!(fixture_metadata_does_not_inherit_compiler_wrappers),
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env("SELF_CACHE_WRAPPER_LOG", &log)
+            .env("RUSTC_WRAPPER", "")
+            .env("RUSTC_WORKSPACE_WRAPPER", "")
+            .env(variable, &wrapper)
+            .output()?;
+        assert_success(&output);
+        assert!(!log.exists(), "fixture invoked inherited {variable}");
+    }
+    Ok(())
 }
 
 /// A command whose stdout is its answer keeps it clean while it waits: the
@@ -1215,6 +1264,8 @@ wait "$descendant"
         .env("CARGO_TARGET_DIR", &fixture.target)
         .env("CARGO", env!("CARGO"))
         .env("CARGO_HOME", &fixture.cargo_home)
+        .env("RUSTC_WRAPPER", "")
+        .env("RUSTC_WORKSPACE_WRAPPER", "")
         .env("XTASK_SELF_CACHE_CARGO", &fake_cargo)
         .env("SELF_CACHE_CARGO_PID", &cargo_pid)
         .env("SELF_CACHE_DESCENDANT_PID", &descendant_pid)
