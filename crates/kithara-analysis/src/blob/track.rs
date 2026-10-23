@@ -2,6 +2,7 @@ use std::{num::NonZeroU32, ops::Range};
 
 use kithara_platform::time::Duration;
 use kithara_signal::{CoverageRead, CoverageWrite, FrameSpan};
+use rangemap::RangeSet;
 
 use crate::{
     AnalysisFingerprint, BeatArtifact, BeatSnapshot, BeatState, TrackAnalysis, Waveform,
@@ -61,64 +62,107 @@ impl TryFrom<(&[u8], &AnalysisFingerprint)> for TrackAnalysis {
                 expected: consts::TRACK_ANALYSIS_BYTES_VERSION,
             });
         }
+        RawTrackSnapshot::read(&mut reader)?.into_analysis(active)
+    }
+}
 
+struct RawTrackSnapshot<'a> {
+    token: String,
+    source_sample_rate: NonZeroU32,
+    media_origin: Option<Duration>,
+    extent: Option<u64>,
+    revision: u64,
+    settled: bool,
+    coverage: RangeSet<u64>,
+    waveform_tag: String,
+    waveform_bytes: &'a [u8],
+    beat_tag: String,
+    grid_bytes: &'a [u8],
+    final_grid: bool,
+    unanalysed: Vec<Range<u64>>,
+}
+
+impl<'a> RawTrackSnapshot<'a> {
+    fn read(reader: &mut Reader<'a>) -> Result<Self, BlobError> {
         let token = reader.read_str()?;
-        let (source_sample_rate, media_origin) = read_source_axis(&mut reader)?;
+        let (source_sample_rate, media_origin) = read_source_axis(reader)?;
         let extent = reader.read_optional_u64()?;
         let revision = reader.read_u64()?;
         let settled = reader.read_bool()?;
         let coverage = reader.read_coverage()?;
-
         let waveform_tag = reader.read_str()?;
         let waveform_bytes = reader.read_section()?;
         let beat_tag = reader.read_str()?;
         let grid_bytes = reader.read_section()?;
         let final_grid = reader.read_bool()?;
-        let unanalysed = read_ranges(&mut reader)?;
+        let unanalysed = read_ranges(reader)?;
         reader.finish()?;
+        Ok(Self {
+            token,
+            source_sample_rate,
+            media_origin,
+            extent,
+            revision,
+            settled,
+            coverage,
+            waveform_tag,
+            waveform_bytes,
+            beat_tag,
+            grid_bytes,
+            final_grid,
+            unanalysed,
+        })
+    }
 
-        let waveform_ok = active.waveform().is_some_and(|tag| waveform_tag == tag);
-        let beat_ok = active.beat().is_some_and(|tag| beat_tag == tag);
+    fn matching_artifacts(&self, active: &AnalysisFingerprint) -> Result<(bool, bool), BlobError> {
+        let waveform_ok = active
+            .waveform()
+            .is_some_and(|tag| self.waveform_tag == tag);
+        let beat_ok = active.beat().is_some_and(|tag| self.beat_tag == tag);
         let empty = active.waveform().is_none()
             && active.beat().is_none()
-            && waveform_tag.is_empty()
-            && beat_tag.is_empty()
-            && waveform_bytes.is_empty()
-            && grid_bytes.is_empty()
-            && !final_grid
-            && unanalysed.is_empty();
+            && self.waveform_tag.is_empty()
+            && self.beat_tag.is_empty()
+            && self.waveform_bytes.is_empty()
+            && self.grid_bytes.is_empty()
+            && !self.final_grid
+            && self.unanalysed.is_empty();
         if !waveform_ok && !beat_ok && !empty {
             return Err(BlobError::Fingerprint);
         }
+        Ok((waveform_ok, beat_ok))
+    }
 
-        let waveform = (waveform_ok && !waveform_bytes.is_empty())
-            .then(|| Waveform::try_from(waveform_bytes))
+    fn into_analysis(self, active: &AnalysisFingerprint) -> Result<TrackAnalysis, BlobError> {
+        let (waveform_ok, beat_ok) = self.matching_artifacts(active)?;
+        let waveform = (waveform_ok && !self.waveform_bytes.is_empty())
+            .then(|| Waveform::try_from(self.waveform_bytes))
             .transpose()
             .map_err(|_| BlobError::Corrupt)?;
-        let grid = (beat_ok && !grid_bytes.is_empty())
-            .then(|| BeatArtifact::try_from(grid_bytes))
+        let grid = (beat_ok && !self.grid_bytes.is_empty())
+            .then(|| BeatArtifact::try_from(self.grid_bytes))
             .transpose()
             .map_err(|_| BlobError::Corrupt)?;
-        let state = if final_grid {
+        let state = if self.final_grid {
             BeatState::Final
         } else {
             BeatState::Provisional
         };
 
-        Ok(Self::builder()
-            .token(token.as_str().into())
-            .revision(revision)
-            .source_sample_rate(source_sample_rate)
-            .maybe_media_origin(media_origin)
-            .maybe_extent(extent)
-            .settled(settled)
-            .coverage(coverage)
+        Ok(TrackAnalysis::builder()
+            .token(self.token.as_str().into())
+            .revision(self.revision)
+            .source_sample_rate(self.source_sample_rate)
+            .maybe_media_origin(self.media_origin)
+            .maybe_extent(self.extent)
+            .settled(self.settled)
+            .coverage(self.coverage)
             .fingerprint(AnalysisFingerprint::new(
-                beat_ok.then_some(beat_tag.as_str()),
-                waveform_ok.then_some(waveform_tag.as_str()),
+                beat_ok.then_some(self.beat_tag.as_str()),
+                waveform_ok.then_some(self.waveform_tag.as_str()),
             ))
             .maybe_waveform(waveform)
-            .maybe_beat(grid.map(|grid| BeatSnapshot::new(grid, state, unanalysed)))
+            .maybe_beat(grid.map(|grid| BeatSnapshot::new(grid, state, self.unanalysed)))
             .build())
     }
 }
