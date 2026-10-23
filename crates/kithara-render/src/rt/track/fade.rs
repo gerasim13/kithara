@@ -144,18 +144,20 @@ impl TrackFade {
             &mut outgoing[..frames],
             &mut incoming[..frames],
         );
-        let mut linear = [0.0; FADE_CHUNK];
-        let linear = &mut linear[..frames];
         let selected = if matches!(self.direction, Direction::In) {
-            fade::gains(FadeCurve::Linear, gain, &mut outgoing[..frames], linear);
-            &mut incoming[..frames]
+            &incoming[..frames]
         } else {
-            fade::gains(FadeCurve::Linear, gain, linear, &mut incoming[..frames]);
-            &mut outgoing[..frames]
+            &outgoing[..frames]
         };
-        kithara_dsp::sub(selected, linear);
-        kithara_dsp::scale_add(selected, self.settings.depth, linear);
-        gain.copy_from_slice(linear);
+        for (position, &selected) in gain.iter_mut().zip(selected.iter()) {
+            let (out, into) = FadeCurve::Linear.compute_gains_0_to_1(*position);
+            let linear = if matches!(self.direction, Direction::In) {
+                into
+            } else {
+                out
+            };
+            *position = self.settings.depth.mul_add(selected - linear, linear);
+        }
     }
 
     /// The curve position `u` of the frames from `first`, mapped through the

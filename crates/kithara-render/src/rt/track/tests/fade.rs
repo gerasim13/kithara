@@ -171,3 +171,38 @@ fn chunked_fades_keep_the_gain_law_through_the_settled_tail() {
         }
     }
 }
+
+#[kithara::test]
+fn long_fades_keep_the_gain_law_at_curve_edges_and_the_settled_tail() {
+    let rate = NonZeroU32::new(1_000).expect("nonzero rate");
+    let settings = CrossfadeSettings::new(1_000.001, CrossfadeCurve::EqualPower, 0.7, 0.3)
+        .expect("valid settings");
+    for first in [0, 5, 999_980] {
+        for outgoing in [false, true] {
+            let mut fade = TrackFade::default();
+            if outgoing {
+                fade.play(rate);
+                fade.fade_out(settings, rate);
+            } else {
+                fade.fade_in(settings, rate);
+            }
+            fade.advance(first);
+            let mut left = [0.25; 33];
+            let mut right = [-0.75; 33];
+            let mut output_left = [0.125; 33];
+            let mut output_right = [-0.25; 33];
+            fade.mix_range(
+                &mut [&mut left, &mut right],
+                &mut [&mut output_left, &mut output_right],
+                0..33,
+            );
+            for (offset, (&left, &right)) in output_left.iter().zip(&output_right).enumerate() {
+                let frame = cast::<usize, f32>(first + offset).expect("frame fits f32");
+                let (out, into) = settings.gains(frame / 1_000_000.0);
+                let gain = if outgoing { out } else { into };
+                assert_eq!(left.to_bits(), 0.25_f32.mul_add(gain, 0.125).to_bits());
+                assert_eq!(right.to_bits(), (-0.75_f32).mul_add(gain, -0.25).to_bits());
+            }
+        }
+    }
+}
