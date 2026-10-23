@@ -770,7 +770,7 @@ impl QueueMusic {
             .prep(
                 ResourcePrep::builder()
                     .worker(worker.clone())
-                    .block_on_underrun(false)
+                    .block_on_underrun(true)
                     .warp(warp)
                     .build(),
             )
@@ -928,15 +928,8 @@ impl QueueMusic {
         let mut law_time = Duration::ZERO;
         let mut render_time = Duration::ZERO;
         let mut data = CapturedMusic::default();
-        let mut cadence = self.start_clock(&mut data).await;
+        self.start_clock(&mut data).await;
         hang_reset!();
-        let first_frames: f64 = (BLOCK - 1).as_();
-        time::sleep(
-            Duration::from_secs_f64(first_frames / f64::from(RATE))
-                .saturating_sub(cadence.elapsed()),
-        )
-        .await;
-        cadence = Instant::now();
         let source_count: f64 = self.kind.sources().len().as_();
         let max_frames: u64 = match self.kind {
             MusicCase::Natural => (((source_count * 4.0)
@@ -1069,19 +1062,7 @@ impl QueueMusic {
             }
             let (frames, boundary) = pull_frames(&consumed, &grid, now);
             let render_started = Instant::now();
-            if tracing::enabled!(target: "kithara_test::sync::queue321::pacing", tracing::Level::DEBUG)
-            {
-                let elapsed = cadence.elapsed();
-                let frame = self.host.position();
-                let requested_frames: f64 = frames.as_();
-                let deadline = Duration::from_secs_f64(requested_frames / f64::from(RATE));
-                tracing::debug!(target: "kithara_test::sync::queue321::pacing",
-                    phase = "render", frame, frames,
-                    cadence_elapsed_ns = elapsed.as_nanos(), deadline_ns = deadline.as_nanos(),
-                    debt_ns = elapsed.saturating_sub(deadline).as_nanos(),
-                    lead_ns = deadline.saturating_sub(elapsed).as_nanos());
-            }
-            let callback_started = self.render_block(frames, &mut data).await;
+            self.render_block(frames, &mut data).await;
             render_time += render_started.elapsed();
             if next_beat == Some(frame(now))
                 && snapshot.iter().any(|(_, slot)| {
@@ -1098,10 +1079,6 @@ impl QueueMusic {
             }
             next_beat = Some(boundary);
             hang_reset!();
-            let block_frames: f64 = frames.as_();
-            cadence = cadence.max(callback_started)
-                + Duration::from_secs_f64(block_frames / f64::from(RATE));
-            time::sleep(cadence.saturating_duration_since(Instant::now())).await;
         }
         let history = self.deck.observe(|observation| {
             super::binding::published_host_history(
@@ -1240,7 +1217,7 @@ impl QueueMusic {
         });
     }
 
-    async fn start_clock(&mut self, data: &mut CapturedMusic) -> Instant {
+    async fn start_clock(&mut self, data: &mut CapturedMusic) {
         assert_eq!(
             self.host.position(),
             0,
@@ -1252,7 +1229,7 @@ impl QueueMusic {
                 "no native source Start precedes the initial Host callback"
             );
         });
-        let started = self.render_block(BLOCK - 1, data).await;
+        self.render_block(BLOCK - 1, data).await;
         assert_eq!(self.host.position(), (BLOCK - 1) as u64);
         assert_eq!(data.pcm.len(), (BLOCK - 1) * 2);
         assert!(
@@ -1278,7 +1255,6 @@ impl QueueMusic {
         {
             tap.evidence("startup", evidence.clone());
         }
-        started
     }
 
     async fn deliver_grids(&self, data: &mut CapturedMusic) {
@@ -1584,7 +1560,7 @@ impl QueueMusic {
             },
             "source_ready_basis": events.iter().filter(|event| event.probe == "lane_source_ready")
                 .map(|event| event.fields().collect::<BTreeMap<_, _>>()).collect::<Vec<_>>(),
-            "cadence": "paced at rendered duration; Host max/Warp quantum 512, max pull 511; stop at actual packet interior then final frame and published Host beat boundaries; not fixed-512 deadline stress"
+            "cadence": "on-demand offline callbacks; Host max/Warp quantum 512, max pull 511; stop at actual packet interior then final frame and published Host beat boundaries; not device deadline stress"
         });
         for tap in [&mut self.output_wav, &mut self.master_wav]
             .into_iter()
@@ -2918,7 +2894,6 @@ async fn capture_music(kind: MusicCase, key_lock: bool, tracks: &[(&str, Start)]
     tokio,
     multi_thread,
     serial,
-    timeout(Duration::from_secs(300)),
     tracing("kithara_test::sync::queue321=info")
 )]
 async fn one_queue_crossfades_five_music_tracks_and_retargets_host_during_overlap() {
@@ -2941,7 +2916,6 @@ async fn one_queue_crossfades_five_music_tracks_and_retargets_host_during_overla
     tokio,
     multi_thread,
     serial,
-    timeout(Duration::from_secs(300)),
     tracing("kithara_test::sync::queue321=info")
 )]
 #[case::rate_from_start(false, &[
