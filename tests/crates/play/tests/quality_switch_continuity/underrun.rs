@@ -584,7 +584,6 @@ async fn target_rebuild_keeps_player_output_continuous(
     #[case] label: &str,
     #[case] source: (TestServerHelper, CreatedHls),
 ) {
-    let _refill_scope = kithara_test_utils::test::usdt::scope();
     let (_server, created) = source;
     let master_url = created.master_url();
 
@@ -656,7 +655,6 @@ async fn cold_target_variant_switch_keeps_playback_uninterrupted(
     #[case] backend: DecoderBackend,
     #[future(awt)] cold_sources: Vec<(TestServerHelper, CreatedHls)>,
 ) {
-    let _refill_scope = kithara_test_utils::test::usdt::scope();
     let sources: Vec<(Transition, url::Url)> = TRANSITIONS
         .into_iter()
         .zip(&cold_sources)
