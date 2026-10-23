@@ -119,9 +119,16 @@ impl Drop for OfflineTaskHandle {
 mod tests {
     use std::{cell::Cell, rc::Rc};
 
+    use kithara_platform::{sync::mpsc, time::Duration};
+    use kithara_play::PlayError;
     use kithara_test_utils::{cancel::cancel_token, kithara};
+    use kithara_worker::{DispatcherConfig, TaskConfig, Worker, WorkerConfig};
 
     use super::*;
+    use crate::session::{
+        decks::{DeckInbox, DeckMsg},
+        offline::{OfflineSessionClient, task::OfflineMsg},
+    };
 
     struct LocalTask {
         ticks: Rc<Cell<usize>>,
@@ -162,5 +169,39 @@ mod tests {
         assert!(cancelled.get());
         assert_eq!(ticks.get(), 1);
         assert!(route.task.lock().is_none());
+    }
+
+    struct WaitingTask;
+
+    impl Task for WaitingTask {
+        fn tick(&mut self) -> TickResult {
+            TickResult::Waiting
+        }
+    }
+
+    #[kithara::test(wasm, timeout(Duration::from_secs(2)))]
+    async fn a_deck_wake_delivers_its_message() {
+        let worker = Worker::new(WorkerConfig::new());
+        let dispatcher = worker.dispatcher(
+            DispatcherConfig::builder()
+                .name("offline-deck-wake-test")
+                .build(),
+        );
+        let pending = dispatcher.reserve(TaskConfig::new()).expect("reserve task");
+        let route = OfflineTaskRoute::new(&pending);
+        let _task = route
+            .clone()
+            .start(pending, |_| WaitingTask)
+            .expect("start task");
+        let (postbox, _mailbox) = kithara_command::mailbox::<(), PlayError>();
+        let (sender, receiver) = mpsc::channel();
+        let client = Arc::new(OfflineSessionClient::new(postbox, sender, route));
+
+        client.waker(DeckMsg::Receipts).wake();
+
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(OfflineMsg::Deck(DeckMsg::Receipts))
+        ));
     }
 }
