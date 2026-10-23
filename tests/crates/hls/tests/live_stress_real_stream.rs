@@ -134,6 +134,7 @@ fn switch_trigger_downloader(pools: &Pools, cancel: &CancelToken) -> Downloader 
             pools.clone(),
             cancel.child(),
         ))
+        .runtime(kithara::platform::tokio::runtime::Handle::current())
         .abr_settings(abr_switch_trigger())
         .cancel(cancel.child())
         .build(),

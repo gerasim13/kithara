@@ -74,11 +74,14 @@ impl DiskQueue {
                 ..CrossfadeSettings::default()
             })
             .unwrap_or_default();
-        let downloader = Downloader::new(
-            DownloaderConfig::for_client(HttpClient::new(net, pools, CancelToken::never()))
-                .maybe_max_concurrent(max_concurrent_downloads)
-                .build(),
-        );
+        let downloader = Downloader::new({
+            let config =
+                DownloaderConfig::for_client(HttpClient::new(net, pools, CancelToken::never()))
+                    .maybe_max_concurrent(max_concurrent_downloads);
+            #[cfg(not(target_arch = "wasm32"))]
+            let config = config.runtime(kithara::platform::tokio::runtime::Handle::current());
+            config.build()
+        });
         let facade = Queue::new(
             QueueConfig::builder()
                 .prep(prep)

@@ -43,6 +43,7 @@ async fn hls_config_with_downloader_shares_downloader_across_two_streams(temp_di
             pools.clone(),
             CancelToken::never(),
         ))
+        .runtime(kithara::platform::tokio::runtime::Handle::current())
         .soft_timeout(Duration::ZERO)
         .cancel(cancel.child())
         .build(),

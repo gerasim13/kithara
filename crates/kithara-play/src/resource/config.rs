@@ -269,19 +269,24 @@ mod tests {
         assert!(kithara_file::File::<TestPools>::event_bus(audio_config.stream()).is_some());
     }
 
-    #[kithara::test]
-    fn config_bus_propagates_to_hls_config() {
+    #[kithara::test(tokio)]
+    async fn config_bus_propagates_to_hls_config() {
         let worker = worker();
         let config: ResourceConfig<TestPools> =
             ResourceConfig::for_src(valid_src("https://example.com/live.m3u8"))
-                .downloader(Downloader::new(
-                    kithara_download::DownloaderConfig::for_client(kithara_net::HttpClient::new(
-                        kithara_net::NetOptions::default(),
-                        pools(),
-                        CancelToken::never(),
-                    ))
-                    .build(),
-                ))
+                .downloader(Downloader::new({
+                    let config = kithara_download::DownloaderConfig::for_client(
+                        kithara_net::HttpClient::new(
+                            kithara_net::NetOptions::default(),
+                            pools(),
+                            CancelToken::never(),
+                        ),
+                    );
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let config =
+                        config.runtime(kithara_platform::tokio::runtime::Handle::current());
+                    config.build()
+                }))
                 .store(store())
                 .events(EventBus::new(32))
                 .build();
@@ -347,14 +352,19 @@ mod tests {
         let mut hls_events = hls_bus.subscribe::<DecoderEvent>();
         let hls: ResourceConfig<TestPools> =
             ResourceConfig::for_src(ResourceSrc::Url(server.url("/direct.m3u8")))
-                .downloader(Downloader::new(
-                    kithara_download::DownloaderConfig::for_client(kithara_net::HttpClient::new(
-                        kithara_net::NetOptions::default(),
-                        pools(),
-                        CancelToken::never(),
-                    ))
-                    .build(),
-                ))
+                .downloader(Downloader::new({
+                    let config = kithara_download::DownloaderConfig::for_client(
+                        kithara_net::HttpClient::new(
+                            kithara_net::NetOptions::default(),
+                            pools(),
+                            CancelToken::never(),
+                        ),
+                    );
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let config =
+                        config.runtime(kithara_platform::tokio::runtime::Handle::current());
+                    config.build()
+                }))
                 .store(store())
                 .events(hls_bus)
                 .hint("wav")
@@ -404,8 +414,8 @@ mod tests {
         );
     }
 
-    #[kithara::test]
-    fn config_explicit_resampler_backend_propagates_to_hls_config() {
+    #[kithara::test(tokio)]
+    async fn config_explicit_resampler_backend_propagates_to_hls_config() {
         let worker = worker();
         let decoder = AudioDecoderConfig::builder()
             .resampler(
@@ -416,14 +426,19 @@ mod tests {
             .build();
         let config: ResourceConfig<TestPools> =
             ResourceConfig::for_src(valid_src("https://example.com/live.m3u8"))
-                .downloader(Downloader::new(
-                    kithara_download::DownloaderConfig::for_client(kithara_net::HttpClient::new(
-                        kithara_net::NetOptions::default(),
-                        pools(),
-                        CancelToken::never(),
-                    ))
-                    .build(),
-                ))
+                .downloader(Downloader::new({
+                    let config = kithara_download::DownloaderConfig::for_client(
+                        kithara_net::HttpClient::new(
+                            kithara_net::NetOptions::default(),
+                            pools(),
+                            CancelToken::never(),
+                        ),
+                    );
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let config =
+                        config.runtime(kithara_platform::tokio::runtime::Handle::current());
+                    config.build()
+                }))
                 .store(store())
                 .decoder(decoder)
                 .build();

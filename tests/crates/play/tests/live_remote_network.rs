@@ -175,6 +175,7 @@ async fn live_remote_resource_decodes_with_duration(
         .build();
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), CancelToken::never()))
+            .runtime(kithara::platform::tokio::runtime::Handle::current())
             .build(),
     );
     let config: ResourceConfig<TestPools> =

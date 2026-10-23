@@ -49,6 +49,7 @@ async fn a_caller_built_config_keeps_its_downloader() {
             pools(),
             scope.token().child(),
         ))
+        .runtime(kithara::platform::tokio::runtime::Handle::current())
         .cancel(scope.token())
         .build(),
     );

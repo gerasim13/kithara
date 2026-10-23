@@ -419,14 +419,17 @@ mod tests {
         let bus = EventBus::new(8);
         let mut events = bus.subscribe();
         let config = FileConfig::for_src(FileSrc::Remote(remote_url))
-            .downloader(Downloader::new(
-                kithara_download::DownloaderConfig::for_client(kithara_net::HttpClient::new(
-                    kithara_net::NetOptions::default(),
-                    pools.clone(),
-                    CancelToken::never(),
-                ))
-                .build(),
-            ))
+            .downloader(Downloader::new({
+                let config =
+                    kithara_download::DownloaderConfig::for_client(kithara_net::HttpClient::new(
+                        kithara_net::NetOptions::default(),
+                        pools.clone(),
+                        CancelToken::never(),
+                    ));
+                #[cfg(not(target_arch = "wasm32"))]
+                let config = config.runtime(tokio::runtime::Handle::current());
+                config.build()
+            }))
             .store(waiting_store)
             .cancel(cancel.clone())
             .events(bus)

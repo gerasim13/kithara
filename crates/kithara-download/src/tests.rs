@@ -116,7 +116,9 @@ fn test_client_with_options(options: NetOptions) -> HttpClient {
 }
 
 fn test_config() -> DownloaderConfig {
-    DownloaderConfig::for_client(test_client()).build()
+    DownloaderConfig::for_client(test_client())
+        .runtime(kithara_platform::tokio::runtime::Handle::current())
+        .build()
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(1)))]
@@ -742,7 +744,11 @@ async fn peer_handle_execute_returns_error_on_unreachable() {
     let net = NetOptions::builder()
         .inactivity_timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
         .build();
-    let dl = Downloader::new(DownloaderConfig::for_client(test_client_with_options(net)).build());
+    let dl = Downloader::new(
+        DownloaderConfig::for_client(test_client_with_options(net))
+            .runtime(kithara_platform::tokio::runtime::Handle::current())
+            .build(),
+    );
     let handle = dl.register(Arc::new(MockPeer::new()), None);
 
     let h2 = handle.clone();
@@ -774,6 +780,7 @@ async fn peer_handle_downloader_cancel_cascades() {
     let cancel = CancelToken::never();
     let dl = Downloader::new(
         DownloaderConfig::for_client(test_client())
+            .runtime(kithara_platform::tokio::runtime::Handle::current())
             .cancel(cancel.clone())
             .build(),
     );
@@ -1121,6 +1128,7 @@ async fn soft_timeout_publishes_load_slow_on_peer_bus() {
     let url = server.url("/data");
 
     let config = DownloaderConfig::for_client(test_client())
+        .runtime(kithara_platform::tokio::runtime::Handle::current())
         .soft_timeout(Duration::from_millis(SOFT_TIMEOUT_MS))
         .build();
     let dl = Downloader::new(config);
@@ -1148,6 +1156,7 @@ async fn soft_timeout_covers_response_body() {
     let server = spawn_slow_body_server(SLOW_BODY_DELAY_MS).await;
     let url = server.url("/data");
     let config = DownloaderConfig::for_client(test_client())
+        .runtime(kithara_platform::tokio::runtime::Handle::current())
         .soft_timeout(Duration::from_millis(SOFT_TIMEOUT_MS))
         .build();
     let dl = Downloader::new(config);
@@ -1360,7 +1369,11 @@ async fn retry_and_first_byte_publish_on_peer_bus() {
                 .build(),
         )
         .build();
-    let dl = Downloader::new(DownloaderConfig::for_client(test_client_with_options(net)).build());
+    let dl = Downloader::new(
+        DownloaderConfig::for_client(test_client_with_options(net))
+            .runtime(kithara_platform::tokio::runtime::Handle::current())
+            .build(),
+    );
     let root = EventBus::new(64);
     let scoped = root.scoped();
     let mut rx = scoped.subscribe();
@@ -1418,7 +1431,11 @@ async fn stalled_body_publishes_resume_and_exhaustion_events() {
                 .build(),
         )
         .build();
-    let dl = Downloader::new(DownloaderConfig::for_client(test_client_with_options(net)).build());
+    let dl = Downloader::new(
+        DownloaderConfig::for_client(test_client_with_options(net))
+            .runtime(kithara_platform::tokio::runtime::Handle::current())
+            .build(),
+    );
     let root = EventBus::new(64);
     let scoped = root.scoped();
     let mut rx = scoped.subscribe();

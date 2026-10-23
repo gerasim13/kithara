@@ -38,6 +38,7 @@ async fn an_injected_downloader_carries_the_remote_file_requests() {
             pools.clone(),
             CancelToken::never(),
         ))
+        .runtime(kithara::platform::tokio::runtime::Handle::current())
         .soft_timeout(Duration::ZERO)
         .build(),
     );

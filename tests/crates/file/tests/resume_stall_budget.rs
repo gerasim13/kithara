@@ -131,6 +131,7 @@ async fn zero_progress_resume_loop_fails_terminally() {
             pools.clone(),
             CancelToken::never(),
         ))
+        .runtime(kithara::platform::tokio::runtime::Handle::current())
         .cancel(cancel.clone())
         .build(),
     );

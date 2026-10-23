@@ -86,6 +86,7 @@ fn audio_config(
         .initial_abr_mode(auto(0))
         .downloader(Downloader::new(
             DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), cancel.child()))
+                .runtime(tokio::runtime::Handle::current())
                 .build(),
         ))
         .build();

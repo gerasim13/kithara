@@ -332,16 +332,19 @@ mod tests {
                 ),
                 config: Arc::new(
                     HlsConfig::for_url("https://example.com/master.m3u8".parse().expect("url"))
-                        .downloader(kithara_download::Downloader::new(
-                            kithara_download::DownloaderConfig::for_client(
+                        .downloader(kithara_download::Downloader::new({
+                            let config = kithara_download::DownloaderConfig::for_client(
                                 kithara_net::HttpClient::new(
                                     kithara_net::NetOptions::default(),
                                     crate::test_pools::pools(),
                                     kithara_platform::CancelToken::never(),
                                 ),
-                            )
-                            .build(),
-                        ))
+                            );
+                            #[cfg(not(target_arch = "wasm32"))]
+                            let config =
+                                config.runtime(kithara_platform::tokio::runtime::Handle::current());
+                            config.build()
+                        }))
                         .store((*store).clone())
                         .pools(crate::test_pools::pools())
                         .download_batch_size(8)
@@ -400,7 +403,7 @@ mod tests {
         }
     }
 
-    #[kithara::test(native, flash(true), timeout(Duration::from_secs(10)))]
+    #[kithara::test(tokio, native, flash(true), timeout(Duration::from_secs(10)))]
     async fn retained_reader_wake_precedes_an_unrelated_deadline() {
         let fixture = Fixture::with_look_ahead(Fixture::SEGMENT_BYTES);
         let peer = Arc::clone(
@@ -493,8 +496,8 @@ mod tests {
     /// the cursor moves past the first one, and the cursor move itself wakes the
     /// peer, so the re-dispatch needs no external event (no seek, no ABR tick, no
     /// stalled fetch, and above all no timer).
-    #[kithara::test]
-    fn reader_consumption_advances_the_prefetch_window() {
+    #[kithara::test(tokio)]
+    async fn reader_consumption_advances_the_prefetch_window() {
         // One and a half segments: wide enough for segments 0 and 1 from the
         // stream start, narrow enough that segment 2 stays outside the window
         // until the reader drains the first one.

@@ -113,6 +113,7 @@ async fn file_stream_closes_early_seek_still_works() {
             pools.clone(),
             CancelToken::never(),
         ))
+        .runtime(kithara::platform::tokio::runtime::Handle::current())
         .cancel(cancel_token.clone())
         .build(),
     );

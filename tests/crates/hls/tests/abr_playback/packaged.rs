@@ -99,6 +99,7 @@ async fn open_packaged_hls_audio(
             pools.clone(),
             cancel.child(),
         ))
+        .runtime(kithara::platform::tokio::runtime::Handle::current())
         .abr_settings(abr_fast())
         .cancel(cancel.child())
         .build(),
@@ -465,6 +466,7 @@ pub(crate) async fn packaged_abr_switch_keeps_player_continuity(
             pools.clone(),
             cancel.child(),
         ))
+        .runtime(kithara::platform::tokio::runtime::Handle::current())
         .abr_settings(abr_fast())
         .cancel(cancel.child())
         .build(),

@@ -172,6 +172,7 @@ mod document_tests {
                 pools(),
                 kithara_platform::CancelToken::never(),
             ))
+            .runtime(kithara_platform::tokio::runtime::Handle::current())
             .build(),
         ))
         .store(
@@ -188,13 +189,13 @@ mod document_tests {
     /// the baked value with `~`, which types to `None` the same way an absent
     /// key does. The default is part of that contract rather than an
     /// implementation detail.
-    #[kithara::test(native, flash(false))]
-    fn a_silent_document_probes_with_head() {
+    #[kithara::test(tokio, native, flash(false))]
+    async fn a_silent_document_probes_with_head() {
         assert_eq!(config().size_probe_method, SizeProbeMethod::Head);
     }
 
-    #[kithara::test(native, flash(false))]
-    fn a_document_sets_the_batch_size_and_leaves_the_window() {
+    #[kithara::test(tokio, native, flash(false))]
+    async fn a_document_sets_the_batch_size_and_leaves_the_window() {
         let patch: HlsConfigPatch =
             serde_yaml_ng::from_str("download_batch_size: 6\n").expect("the document types");
         // Seeded off the crate default so a merge that reset every unnamed
@@ -211,8 +212,8 @@ mod document_tests {
         );
     }
 
-    #[kithara::test(native, flash(false))]
-    fn an_already_optional_knob_takes_a_bare_number_from_the_document() {
+    #[kithara::test(tokio, native, flash(false))]
+    async fn an_already_optional_knob_takes_a_bare_number_from_the_document() {
         let patch: HlsConfigPatch =
             serde_yaml_ng::from_str("look_ahead_bytes: 5000000\n").expect("the document types");
         let mut config = config();

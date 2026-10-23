@@ -610,6 +610,7 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) 
             pools.clone(),
             cancel.child(),
         ))
+        .runtime(kithara::platform::tokio::runtime::Handle::current())
         .abr_settings(
             kithara::abr::AbrSettings::builder()
                 .initial_throughput_bps(Some(top_bandwidth * 2))

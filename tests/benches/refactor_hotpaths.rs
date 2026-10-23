@@ -382,6 +382,7 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
                             pools.clone(),
                             CancelToken::never(),
                         ))
+                        .runtime(kithara::platform::tokio::runtime::Handle::current())
                         .build(),
                     );
                     let store = AssetStore::builder(pools.clone())

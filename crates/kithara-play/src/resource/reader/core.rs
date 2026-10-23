@@ -1229,14 +1229,19 @@ mod tests {
         );
         let load = |src: ResourceSrc, track: CancelToken| {
             let mut config: ResourceConfig<TestPools> = ResourceConfig::for_src(src)
-                .downloader(kithara_download::Downloader::new(
-                    kithara_download::DownloaderConfig::for_client(kithara_net::HttpClient::new(
-                        kithara_net::NetOptions::default(),
-                        pools.clone(),
-                        CancelToken::never(),
-                    ))
-                    .build(),
-                ))
+                .downloader(kithara_download::Downloader::new({
+                    let config = kithara_download::DownloaderConfig::for_client(
+                        kithara_net::HttpClient::new(
+                            kithara_net::NetOptions::default(),
+                            pools.clone(),
+                            CancelToken::never(),
+                        ),
+                    );
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let config =
+                        config.runtime(kithara_platform::tokio::runtime::Handle::current());
+                    config.build()
+                }))
                 .store(
                     AssetStore::builder(pools.clone())
                         .backend(StorageBackend::Memory)

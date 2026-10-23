@@ -255,35 +255,38 @@ mod tests {
             .build();
         let url = Url::parse("https://example.com/master.m3u8").expect("valid test URL");
         HlsConfig::for_url(url)
-            .downloader(kithara_download::Downloader::new(
-                kithara_download::DownloaderConfig::for_client(kithara_net::HttpClient::new(
-                    kithara_net::NetOptions::default(),
-                    crate::test_pools::pools(),
-                    kithara_platform::CancelToken::never(),
-                ))
-                .build(),
-            ))
+            .downloader(kithara_download::Downloader::new({
+                let config =
+                    kithara_download::DownloaderConfig::for_client(kithara_net::HttpClient::new(
+                        kithara_net::NetOptions::default(),
+                        crate::test_pools::pools(),
+                        kithara_platform::CancelToken::never(),
+                    ));
+                #[cfg(not(target_arch = "wasm32"))]
+                let config = config.runtime(kithara_platform::tokio::runtime::Handle::current());
+                config.build()
+            }))
             .store(store)
             .pools(crate::test_pools::pools())
             .build()
     }
 
-    #[kithara::test]
-    fn default_window_keeps_two_streams_within_shared_capacity() {
+    #[kithara::test(tokio)]
+    async fn default_window_keeps_two_streams_within_shared_capacity() {
         let config = config_with_capacity(128);
 
         assert_eq!(effective_look_ahead_segments(&config), Some(60));
     }
 
-    #[kithara::test]
-    fn window_preserves_reserve_below_default_maximum() {
+    #[kithara::test(tokio)]
+    async fn window_preserves_reserve_below_default_maximum() {
         let config = config_with_capacity(63);
 
         assert_eq!(effective_look_ahead_segments(&config), Some(59));
     }
 
-    #[kithara::test]
-    fn window_preserves_minimum_until_capacity_is_exhausted() {
+    #[kithara::test(tokio)]
+    async fn window_preserves_minimum_until_capacity_is_exhausted() {
         let at_minimum = config_with_capacity(3);
         let below_minimum = config_with_capacity(2);
 
@@ -291,16 +294,16 @@ mod tests {
         assert_eq!(effective_look_ahead_segments(&below_minimum), Some(2));
     }
 
-    #[kithara::test]
-    fn configured_maximum_bounds_the_window() {
+    #[kithara::test(tokio)]
+    async fn configured_maximum_bounds_the_window() {
         let mut config = config_with_capacity(128);
         config.ephemeral_cache_max_media_window = 10;
 
         assert_eq!(effective_look_ahead_segments(&config), Some(10));
     }
 
-    #[kithara::test]
-    fn configured_minimum_takes_precedence_over_smaller_maximum() {
+    #[kithara::test(tokio)]
+    async fn configured_minimum_takes_precedence_over_smaller_maximum() {
         let mut config = config_with_capacity(128);
         config.ephemeral_cache_min_media_window = 8;
         config.ephemeral_cache_max_media_window = 2;
