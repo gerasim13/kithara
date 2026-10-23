@@ -1562,8 +1562,14 @@ impl ProductHarness {
             }
         }
         #[cfg(not(target_os = "android"))]
-        self.master_tap
-            .evidence("grid_anchors", serde_json::json!(evidence));
+        self.master_tap.evidence(
+            if required_placements.is_some() {
+                "grid_anchors_required_placements"
+            } else {
+                "grid_anchors"
+            },
+            serde_json::json!(evidence),
+        );
         failures
     }
 

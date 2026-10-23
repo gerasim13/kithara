@@ -3251,10 +3251,6 @@ fn source_media_at(
     SyncCase { id: "tempo-hold-30hz", ride: TempoRide::Hold(120.0), ..TEMPO_DOWN_30 },
     None
 )]
-#[case::plain_tempo_down(Provider::HlsMp3(HlsProtection::Plain), TEMPO_DOWN_30, None)]
-#[case::plain_sync_seek_play(Provider::HlsMp3(HlsProtection::Plain), SYNC_SEEK_PLAY, None)]
-#[case::drm_tempo_down(Provider::HlsMp3(HlsProtection::Drm), TEMPO_DOWN_30, None)]
-#[case::drm_sync_seek_play(Provider::HlsMp3(HlsProtection::Drm), SYNC_SEEK_PLAY, None)]
 #[case::symphonia_tempo_down(
     Provider::HlsMp3(HlsProtection::Plain),
     TEMPO_DOWN_30,
