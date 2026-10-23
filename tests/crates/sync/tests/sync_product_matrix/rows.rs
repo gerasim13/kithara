@@ -314,7 +314,11 @@ async fn wav_product_rows_reach_the_pcm_oracle(
     tokio,
     multi_thread,
     serial,
-    timeout(Duration::from_secs(if cfg!(target_os = "android") { 600 } else { 60 }))
+    timeout(if cfg!(target_os = "android") {
+        Duration::from_secs(600)
+    } else {
+        Duration::from_secs(60)
+    })
 )]
 #[case::hls_mp3_sync_seek_play(source_hls_mp3_plain().await, SYNC_SEEK_PLAY)]
 #[case::hls_mp3_tempo_down_30hz(source_hls_mp3_plain().await, TEMPO_DOWN_30)]
