@@ -2,7 +2,8 @@ use std::io::Read;
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    download::{Downloader, DownloaderConfig},
+    download::{Downloader, DownloaderConfig, DownloaderEvent},
+    events::EventBus,
     hls::{AbrMode, Hls, HlsConfig},
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
@@ -15,7 +16,13 @@ use kithara_integration_tests::{
 };
 use kithara_test_utils::{TestTempDir, temp_dir};
 
-#[kithara::test(tokio, native, timeout(Duration::from_secs(20)), hang_timeout_secs(1))]
+#[kithara::test(
+    tokio,
+    native,
+    flash(false),
+    timeout(Duration::from_secs(20)),
+    hang_timeout_secs(1)
+)]
 async fn hls_config_with_downloader_shares_downloader_across_two_streams(temp_dir: TestTempDir) {
     let hls_a = TestServerHelper::new()
         .await
@@ -36,6 +43,7 @@ async fn hls_config_with_downloader_shares_downloader_across_two_streams(temp_di
             pools.clone(),
             CancelToken::never(),
         ))
+        .soft_timeout(Duration::ZERO)
         .cancel(cancel.child())
         .build(),
     );
@@ -49,8 +57,13 @@ async fn hls_config_with_downloader_shares_downloader_across_two_streams(temp_di
         .backend(StorageBackend::Disk { root: temp_b })
         .build();
 
+    let bus_a = EventBus::new(1024);
+    let bus_b = EventBus::new(1024);
+    let mut events_a = bus_a.subscribe::<DownloaderEvent>();
+    let mut events_b = bus_b.subscribe::<DownloaderEvent>();
     let config_a = HlsConfig::for_url(hls_a.master_url())
         .cancel(cancel.clone())
+        .events(bus_a)
         .store(store_a)
         .pools(pools.clone())
         .initial_abr_mode(AbrMode::manual(0))
@@ -58,6 +71,7 @@ async fn hls_config_with_downloader_shares_downloader_across_two_streams(temp_di
         .build();
     let config_b = HlsConfig::for_url(hls_b.master_url())
         .cancel(cancel.clone())
+        .events(bus_b)
         .store(store_b)
         .pools(pools.clone())
         .initial_abr_mode(AbrMode::manual(0))
@@ -92,6 +106,14 @@ async fn hls_config_with_downloader_shares_downloader_across_two_streams(temp_di
         bytes_b.len(),
         "shared-downloader streams produced different total byte counts",
     );
+
+    for events in [&mut events_a, &mut events_b] {
+        let mut reported = false;
+        while let Ok(envelope) = events.try_recv() {
+            reported |= matches!(envelope.event, DownloaderEvent::LoadSlow { .. });
+        }
+        assert!(reported, "each stream must use the injected Downloader");
+    }
 
     cancel.cancel();
 }
