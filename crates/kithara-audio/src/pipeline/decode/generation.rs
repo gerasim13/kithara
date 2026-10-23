@@ -6,8 +6,7 @@ use std::{
 };
 
 use kithara_decode::{
-    BlenderProfile, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, GaplessMode,
-    GaplessProfile, PcmOrigin,
+    DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, GaplessMode, GaplessProfile, PcmOrigin,
 };
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
@@ -282,7 +281,7 @@ impl DecoderGeneration {
     }
 
     fn comparison_base_frames(&self) -> Option<u64> {
-        let spec = self.blender_profile().spec();
+        let spec = self.spec();
         if self
             .visible_origin
             .is_some_and(|origin| spec.frame_at(origin).is_err())
@@ -303,7 +302,7 @@ impl DecoderGeneration {
                     ResumeTarget::Position(_) | ResumeTarget::Render(_) => None,
                 })
         };
-        self.blender_profile().spec().sample_rate == other.blender_profile().spec().sample_rate
+        self.spec().sample_rate == other.spec().sample_rate
             && retained_source(self) == retained_source(other)
     }
 
@@ -412,7 +411,7 @@ impl DecoderGeneration {
             pub(crate) const fn comparison_base(&self) -> Option<Duration>;
         }
         to self.decoder {
-            pub(crate) fn blender_profile(&self) -> BlenderProfile;
+            pub(crate) fn spec(&self) -> AudioSpec;
             #[call(as_ref)]
             pub(crate) fn decoder(&self) -> &dyn Decoder;
             #[call(as_mut)]

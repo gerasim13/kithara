@@ -10,7 +10,7 @@ use kithara_test_utils::kithara;
 
 use super::{ComposedDecoder, DecoderRuntime, HeadStrip, PcmOriginState, Prefill, state::SeekTrim};
 use crate::{
-    BlenderProfile, InputState, PcmOrigin, PrepareWait,
+    InputState, PcmOrigin, PrepareWait,
     codec::FrameCodec,
     consts,
     demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer},
@@ -378,10 +378,6 @@ where
     C: FrameCodec,
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    fn blender_profile(&self) -> BlenderProfile {
-        BlenderProfile::new(self.spec)
-    }
-
     fn duration(&self) -> Option<crate::DecoderDuration> {
         self.duration
     }

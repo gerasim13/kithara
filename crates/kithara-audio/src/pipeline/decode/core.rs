@@ -7,12 +7,12 @@ use std::{
 
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_decode::{
-    BlenderProfile, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome,
+    DecodeError, DecodeResult, Decoder, DecoderChunkOutcome,
     DecoderFactory as BackendDecoderFactory, DecoderSeekOutcome, GaplessMode, LandingClock,
 };
 use kithara_events::DeferredBus;
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_signal::AudioChunk;
+use kithara_signal::{AudioChunk, AudioSpec};
 use kithara_stream::{
     ByteMap, MediaInfo, OpenedReader, ReaderProfile, StreamType, VariantTransition,
 };
@@ -202,7 +202,7 @@ impl ActiveDecode {
     where
         S: HasPool<f32>,
     {
-        let blender = GaplessBlender::new(active.blender_profile(), pools)?;
+        let blender = GaplessBlender::new(active.spec(), pools)?;
         Ok(Self {
             active,
             gapless_mode,
@@ -220,11 +220,30 @@ impl ActiveDecode {
         self.active.seal_visible_origin(self.gapless_mode);
     }
 
-    pub(crate) fn discontinuity(&self) -> crate::SourceDiscontinuity {
-        crate::SourceDiscontinuity::new(
-            self.discontinuity_revision,
-            self.active.blender_profile().spec(),
-        )
+    delegate::delegate! {
+        to self.active {
+            #[call(finish)]
+            pub(crate) fn finish_active(&mut self) -> DecodeResult<()>;
+            pub(crate) fn mark_source_exhausted(&mut self);
+            #[expr(crate::SourceDiscontinuity::new(self.discontinuity_revision, $))]
+            #[call(spec)]
+            pub(crate) fn discontinuity(&self) -> crate::SourceDiscontinuity;
+            #[call(spec)]
+            pub(crate) fn output_spec(&self) -> AudioSpec;
+        }
+        to self.output {
+            pub(crate) const fn stats(&self) -> (u64, u64);
+            pub(crate) fn track(
+                &mut self,
+                chunk: &AudioChunk,
+                emit: Option<&DeferredBus<AudioLaneEvent>>,
+            );
+        }
+        to self.blender {
+            #[cfg(test)]
+            #[call(is_steady)]
+            pub(crate) fn blender_is_steady(&self) -> bool;
+        }
     }
 
     pub(crate) fn next_chunk(&mut self, stream_position: u64) -> DecodeResult<DecoderChunkOutcome> {
@@ -308,10 +327,6 @@ impl ActiveDecode {
         self.next_output_inner(cursor, physical_duration, false)
     }
 
-    pub(crate) fn output_spec(&self) -> kithara_signal::AudioSpec {
-        self.active.blender_profile().spec()
-    }
-
     pub(crate) fn prepare_deferred(
         &mut self,
         prepare_input: bool,
@@ -340,24 +355,24 @@ impl ActiveDecode {
         }
     }
 
-    pub(crate) fn prepare_incoming_profile(&mut self, profile: BlenderProfile) {
+    pub(crate) fn prepare_incoming_profile(&mut self, profile: AudioSpec) {
         if let Err(error) = self.blender.prepare_active(profile) {
             self.stage_error = Some(DecodeError::backend(error));
             return;
         }
-        if self.active.blender_profile().spec() != profile.spec() {
+        if self.active.spec() != profile {
             return;
         }
         let result = self
             .active
-            .prepare_holdback(profile.spec(), self.blender.join_frame_count());
+            .prepare_holdback(profile, self.blender.join_frame_count());
         if let StageResult::Invalid(failure) = result {
             let error = Self::reject_stage(*failure);
             self.stage_error = Some(error);
         }
     }
 
-    pub(crate) fn prepare_replacement_profile(&mut self, profile: BlenderProfile) {
+    pub(crate) fn prepare_replacement_profile(&mut self, profile: AudioSpec) {
         if let Err(error) = self.blender.prepare_active(profile) {
             self.stage_error = Some(DecodeError::backend(error));
         }
@@ -382,7 +397,7 @@ impl ActiveDecode {
 
     pub(crate) fn replace_active(&mut self, active: DecoderGeneration) -> DecoderGeneration {
         self.discontinuity_revision = self.discontinuity_revision.wrapping_add(1);
-        self.blender.replace_active(active.blender_profile());
+        self.blender.replace_active(active.spec());
         mem::replace(&mut self.active, active)
     }
 
@@ -395,8 +410,7 @@ impl ActiveDecode {
         let Some(IncomingDecode::Priming { generation, .. }) = self.incoming.as_ref() else {
             return false;
         };
-        self.blender.is_steady()
-            && self.active.blender_profile().spec() == generation.blender_profile().spec()
+        self.blender.is_steady() && self.active.spec() == generation.spec()
     }
     pub(crate) fn notify_seek(&mut self) -> Option<DecoderGeneration> {
         self.active.notify_seek();
@@ -458,27 +472,6 @@ impl ActiveDecode {
     pub(crate) fn update_len(&self, len: u64) {
         self.active.decoder().update_byte_len(len);
     }
-
-    delegate::delegate! {
-        to self.active {
-            #[call(finish)]
-            pub(crate) fn finish_active(&mut self) -> DecodeResult<()>;
-            pub(crate) fn mark_source_exhausted(&mut self);
-        }
-        to self.output {
-            pub(crate) const fn stats(&self) -> (u64, u64);
-            pub(crate) fn track(
-                &mut self,
-                chunk: &AudioChunk,
-                emit: Option<&DeferredBus<AudioLaneEvent>>,
-            );
-        }
-        to self.blender {
-            #[cfg(test)]
-            #[call(is_steady)]
-            pub(crate) fn blender_is_steady(&self) -> bool;
-        }
-    }
 }
 
 /// Text of a caught decoder panic, for the warning that replaces the crash.
@@ -496,7 +489,7 @@ mod tests {
     use std::num::NonZeroU32;
 
     use kithara_abr::{AbrMode, AbrReason, AbrState, VariantIndex};
-    use kithara_decode::{BlenderProfile, DecoderSeekOutcome};
+    use kithara_decode::DecoderSeekOutcome;
     use kithara_platform::time::Duration;
     use kithara_signal::{AudioChunkInfo, AudioSpec};
     use kithara_stream::{
@@ -665,7 +658,7 @@ mod tests {
             generation: incoming,
             frontier: OutgoingFrontier::Awaiting,
         });
-        decode.prepare_incoming_profile(BlenderProfile::new(spec));
+        decode.prepare_incoming_profile(spec);
         let make_chunk = |offset| {
             AudioChunk::new(
                 AudioChunkInfo {
@@ -719,7 +712,7 @@ mod tests {
             generation: incoming,
             frontier: OutgoingFrontier::Awaiting,
         });
-        decode.prepare_incoming_profile(BlenderProfile::new(spec));
+        decode.prepare_incoming_profile(spec);
         let make_chunk = |offset| {
             AudioChunk::new(
                 AudioChunkInfo {
@@ -801,9 +794,9 @@ mod tests {
             frontier: OutgoingFrontier::Awaiting,
         });
 
-        decode.prepare_replacement_profile(BlenderProfile::new(spec));
+        decode.prepare_replacement_profile(spec);
         let allocated_before = pools.stats().allocated_bytes;
-        decode.prepare_incoming_profile(BlenderProfile::new(spec));
+        decode.prepare_incoming_profile(spec);
         assert!(
             decode.stage_error.is_some(),
             "pre-existing discontinuous PCM must arm a prepare-time error"
@@ -854,7 +847,7 @@ mod tests {
             generation: incoming,
             frontier: OutgoingFrontier::Awaiting,
         });
-        decode.prepare_incoming_profile(BlenderProfile::new(spec));
+        decode.prepare_incoming_profile(spec);
         let samples = decode_quarter[..128 * usize::from(spec.channels)].to_vec();
         decode
             .push(AudioChunk::new(
@@ -948,7 +941,7 @@ mod tests {
                 generation: incoming,
                 frontier: OutgoingFrontier::Exact { frame, rate },
             });
-            decode.prepare_incoming_profile(BlenderProfile::new(spec));
+            decode.prepare_incoming_profile(spec);
             assert_eq!(decode.outgoing_holdback_cut(), Some(cut));
             for (frame, marker) in [(first_frame, 0.125), (first_frame + 1, 0.25)] {
                 decode
@@ -1006,7 +999,7 @@ mod tests {
                 generation: incoming,
                 frontier: OutgoingFrontier::Exact { frame, rate },
             });
-            decode.prepare_incoming_profile(BlenderProfile::new(spec));
+            decode.prepare_incoming_profile(spec);
             let prepared = decode
                 .prepare_promotion()
                 .expect("both native sides cover the exact join");
@@ -1081,7 +1074,7 @@ mod tests {
                 rate: spec.sample_rate.get(),
             },
         });
-        decode.prepare_incoming_profile(BlenderProfile::new(spec));
+        decode.prepare_incoming_profile(spec);
         let capacity = decode.active().staged_capacity();
         for (offset, frames) in [(0, 64), (64, OUTGOING_FRAMES - 64)] {
             decode
@@ -1392,7 +1385,7 @@ mod tests {
             .expect("valid gapless PCM");
         decode
             .blender
-            .prepare_active(BlenderProfile::new(spec))
+            .prepare_active(spec)
             .expect("join scratch fits test pools");
         assert!(decode.blender.prepare_join(|outgoing| {
             outgoing.copy_from_slice(&outgoing_samples);

@@ -78,25 +78,6 @@ impl GaplessProfile {
     }
 }
 
-/// Construction-time decoded-audio specification for a gapless blender.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct BlenderProfile {
-    spec: AudioSpec,
-}
-
-impl BlenderProfile {
-    #[must_use]
-    pub const fn new(spec: AudioSpec) -> Self {
-        Self { spec }
-    }
-
-    #[must_use]
-    pub const fn spec(self) -> AudioSpec {
-        self.spec
-    }
-}
-
 /// Audio track metadata extracted from decoder tags.
 ///
 /// Intentionally without `#[non_exhaustive]`: downstream fixtures and

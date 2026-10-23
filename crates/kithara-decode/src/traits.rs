@@ -17,7 +17,7 @@ mod kithara {
 use crate::{
     PcmOrigin,
     error::DecodeResult,
-    types::{BlenderProfile, GaplessProfile, TrackMetadata},
+    types::{GaplessProfile, TrackMetadata},
 };
 
 /// Outcome of a [`DecoderInput::try_read`] call.
@@ -204,14 +204,6 @@ pub enum InputState {
 /// decoder type is determined at runtime (e.g., based on media info).
 #[kithara::mock(api = DecoderMock)]
 pub trait Decoder: Send + 'static {
-    /// Construction-time PCM specification used to configure PCM blending.
-    ///
-    /// The default exposes the same output specification already returned by
-    /// [`Self::spec`].
-    fn blender_profile(&self) -> BlenderProfile {
-        BlenderProfile::new(self.spec())
-    }
-
     /// Default leading-silence frame count for `codec` when no
     /// container-/encoder-level gapless metadata is available.
     ///

@@ -14,9 +14,9 @@ use kithara_test_utils::kithara;
 use smallvec::SmallVec;
 
 use crate::{
-    BlenderProfile, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome,
-    DecoderResamplerConfig, DecoderSeekOutcome, DecoderTrackInfo, GaplessTailCompensation,
-    InputState, LandingClock, PcmOrigin, PrepareWait, TrackMetadata,
+    DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderResamplerConfig,
+    DecoderSeekOutcome, DecoderTrackInfo, GaplessTailCompensation, InputState, LandingClock,
+    PcmOrigin, PrepareWait, TrackMetadata,
 };
 
 pub(crate) fn wrap<B, S>(
@@ -486,10 +486,6 @@ where
     B: ResamplerBackend,
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    fn blender_profile(&self) -> BlenderProfile {
-        BlenderProfile::new(self.target_spec)
-    }
-
     fn duration(&self) -> Option<crate::DecoderDuration> {
         let declared = self.decoder.duration()?;
         let native_frames = self.native_duration_frames(declared)?;

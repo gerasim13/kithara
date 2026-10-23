@@ -51,9 +51,7 @@ pub use traits::{
     Decoder, DecoderChunkOutcome, DecoderInput, DecoderSeekOutcome, InputReadOutcome, InputState,
     LandingClock, PrepareWait,
 };
-pub use types::{
-    BlenderProfile, DecoderDuration, DecoderTrackInfo, GaplessProfile, PcmOrigin, TrackMetadata,
-};
+pub use types::{DecoderDuration, DecoderTrackInfo, GaplessProfile, PcmOrigin, TrackMetadata};
 #[cfg(all(target_arch = "wasm32", feature = "webcodecs"))]
 pub use webcodecs::probe::spawn_webcodecs_probe;
 mod consts;
