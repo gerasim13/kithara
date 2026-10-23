@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    panic::Location,
     sync::{
         RwLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -10,7 +11,7 @@ use kithara::platform::{
     flash,
     sync::Arc,
     time::{Duration, sleep},
-    tokio::{sync::watch, task::spawn},
+    tokio::sync::watch,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -401,9 +402,7 @@ impl TestServerState {
             .get(hls_token)
             .is_some_and(|hls| hls.flash);
         flash::with_ambient(ambient, async {
-            spawn(response_delay(duration))
-                .await
-                .expect("response delay task must complete");
+            flash::participate(response_delay(duration), Location::caller()).await;
         })
         .await;
     }
@@ -488,6 +487,42 @@ impl TestServerState {
 mod tests {
 
     use super::*;
+
+    #[cfg(feature = "flash")]
+    #[kithara::test(tokio, flash(true))]
+    async fn dropping_response_delay_removes_its_timer() {
+        let state = TestServerState::new();
+        let token = state.insert_hls_spec(HlsSpec::default()).unwrap();
+        let _real_io = flash::real_io();
+        let mut delay = Box::pin(state.delay_response(&token, Duration::from_secs(30)));
+        assert!(futures::poll!(delay.as_mut()).is_pending());
+        let pending_delay = || {
+            flash::hang_dump("response delay cancellation")
+                .lines()
+                .any(|line| line.contains("timed id=") && line.contains("test_server_state.rs"))
+        };
+        kithara_test_utils::wait_until(
+            Duration::from_secs(1),
+            "response delay armed",
+            pending_delay,
+        )
+        .await
+        .unwrap();
+        drop(delay);
+        let mut after = String::new();
+        kithara_test_utils::wait_until(Duration::from_secs(1), "complete engine snapshot", || {
+            after = flash::hang_dump("after response cancellation");
+            !after.contains("engine core lock held")
+        })
+        .await
+        .unwrap();
+        assert!(
+            !after
+                .lines()
+                .any(|line| line.contains("timed id=") && line.contains("test_server_state.rs")),
+            "dropping a response must remove its pending delay: {after}",
+        );
+    }
 
     #[kithara::test(native, flash(false))]
     fn behavior_register_returns_token_and_counts_start_at_zero() {

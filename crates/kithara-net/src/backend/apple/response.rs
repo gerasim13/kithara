@@ -1,16 +1,11 @@
 use bytes::Bytes;
 use kithara_apple::foundation::{
     ns::{NSData, NSError, NSInteger, NSURLResponse},
-    urlsession::{self, DataCompletion, ResponseParts},
+    urlsession::{self, ResponseParts},
 };
-use kithara_platform::{sync::Mutex, tokio::sync::oneshot};
-use url::Url;
 
 use crate::{
-    backend::{
-        common::non_identity_content_encoding,
-        pooled::{ByteBuffers, pooled_bytes},
-    },
+    backend::pooled::{ByteBuffers, pooled_bytes},
     error::NetError,
     types::{AcceptEncodingPolicy, Headers},
 };
@@ -21,49 +16,17 @@ pub(in crate::backend::apple) mod consts {
 
 pub(super) type HttpResponseParts = (Option<u16>, Headers);
 
-pub(crate) struct AppleDataResponse {
-    pub(crate) body: Bytes,
-    pub(crate) headers: Headers,
-    pub(crate) status: Option<u16>,
-}
-
 pub(super) struct StreamHead {
     pub(super) headers: Headers,
     pub(super) status: Option<u16>,
 }
 
-pub(super) fn completion_result(
-    completion: &DataCompletion<'_>,
-    buffers: &ByteBuffers,
-    accept_encoding: AcceptEncodingPolicy,
-    url: &Url,
-) -> Result<AppleDataResponse, NetError> {
-    if let Some(error) = completion.error() {
-        return Err(error_from_nserror(error));
-    }
-
-    let (status, headers) = match completion.response_parts() {
-        Some(parts) => headers_from_response_parts(parts, accept_encoding, url)?,
-        None => (None, Headers::default()),
-    };
-    let body = completion
-        .data()
-        .map_or_else(|| Ok(Bytes::new()), |data| copy_data(data, buffers))?;
-    Ok(AppleDataResponse {
-        body,
-        headers,
-        status,
-    })
-}
-
 pub(super) fn http_parts(
     response: &NSURLResponse,
     accept_encoding: AcceptEncodingPolicy,
-    url: &Url,
-) -> Result<Option<HttpResponseParts>, NetError> {
+) -> Option<HttpResponseParts> {
     urlsession::response_parts(response)
-        .map(|parts| headers_from_response_parts(parts, accept_encoding, url))
-        .transpose()
+        .map(|parts| headers_from_response_parts(parts, accept_encoding))
 }
 
 pub(super) fn copy_data(data: &NSData, buffers: &ByteBuffers) -> Result<Bytes, NetError> {
@@ -97,26 +60,11 @@ pub(super) fn error_from_nserror(error: &NSError) -> NetError {
     ))
 }
 
-pub(super) fn send_once<T>(slot: &Mutex<Option<oneshot::Sender<T>>>, value: T) {
-    if let Some(sender) = slot.lock().take() {
-        sender.send(value).ok();
-    }
-}
-
 fn headers_from_response_parts(
     parts: ResponseParts,
     accept_encoding: AcceptEncodingPolicy,
-    url: &Url,
-) -> Result<(Option<u16>, Headers), NetError> {
+) -> HttpResponseParts {
     let (status, pairs) = parts.into();
-    if accept_encoding == AcceptEncodingPolicy::Identity
-        && status.is_some_and(|status| (200..300).contains(&status))
-        && let Some(value) = non_identity_content_encoding(&pairs)
-    {
-        return Err(NetError::Decode(format!(
-            "response body for {url} retained content-encoding under identity policy: {value}"
-        )));
-    }
     let is_decoded =
         accept_encoding == AcceptEncodingPolicy::Configured && has_content_encoding(&pairs);
     let mut headers = Headers::default();
@@ -127,7 +75,7 @@ fn headers_from_response_parts(
         }
         headers.insert(key, value);
     }
-    Ok((status, headers))
+    (status, headers)
 }
 
 fn has_content_encoding(pairs: &[(String, String)]) -> bool {
@@ -141,24 +89,11 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::has_content_encoding;
-    use crate::backend::common::non_identity_content_encoding;
 
     #[kithara::test(native, flash(false))]
     fn content_encoding_detection_is_ascii_case_insensitive() {
         let pairs = [("CoNtEnT-EnCoDiNg".to_string(), "identity, GZIP".to_string())];
 
         assert!(has_content_encoding(&pairs));
-        assert_eq!(
-            non_identity_content_encoding(&pairs),
-            Some("identity, GZIP")
-        );
-    }
-
-    #[kithara::test(native, flash(false))]
-    fn identity_content_encoding_is_not_rejected() {
-        let pairs = [("Content-Encoding".to_string(), "IDENTITY".to_string())];
-
-        assert!(has_content_encoding(&pairs));
-        assert_eq!(non_identity_content_encoding(&pairs), None);
     }
 }

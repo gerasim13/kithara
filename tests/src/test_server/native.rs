@@ -1,7 +1,10 @@
 use std::env;
 
 use axum::{Router, middleware, routing::get};
-use kithara::platform::sync::Arc;
+use kithara::{
+    net::{HttpClient, NetOptions},
+    platform::{CancelToken, sync::Arc},
+};
 use kithara_test_fixtures::{Mp3Shape, SignalAsset, assets::by_name};
 use kithara_test_utils::TestHttpServer;
 use tower_http::cors::CorsLayer;
@@ -34,6 +37,16 @@ impl TestServerHelper {
 
     pub(crate) const fn for_server(state: Arc<TestServerState>, base_url: Url) -> Self {
         Self { state, base_url }
+    }
+
+    /// Serve this fixture's routes in memory through the normal HTTP client policies.
+    #[must_use]
+    pub fn modeled_client(&self, options: NetOptions, cancel: CancelToken) -> HttpClient {
+        HttpClient::new_with_transport(
+            options,
+            super::modeled::Transport::new(router(Arc::clone(&self.state)), self.base_url.origin()),
+            cancel,
+        )
     }
 
     /// Build a URL for a static test asset.

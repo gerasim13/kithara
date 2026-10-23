@@ -5662,6 +5662,7 @@ version = "0.0.1-alpha5"
 dependencies = [
  "aes 0.9.3",
  "anyhow",
+ "async-trait",
  "axum",
  "base64 0.23.1",
  "bon",
@@ -5703,6 +5704,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tower-http 0.7.1",
+ "tower-service",
  "tracing",
  "tracing-log",
  "unimock",
@@ -5780,6 +5782,7 @@ dependencies = [
  "fieldwork",
  "futures",
  "hotpath",
+ "http",
  "humantime-serde",
  "kithara-apple",
  "kithara-bufpool",

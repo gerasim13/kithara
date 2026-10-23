@@ -8,7 +8,6 @@ use kithara_apple::foundation::{
     },
 };
 use kithara_platform::{sync::Arc, tokio::sync::oneshot};
-use url::Url;
 
 use super::{
     response::{StreamHead, error_from_nserror, http_parts},
@@ -26,7 +25,6 @@ pub(super) struct StreamState {
     pub(super) accept_encoding: AcceptEncodingPolicy,
     pub(super) body_queue: Option<Arc<AppleBodyQueue>>,
     pub(super) head_sender: Option<oneshot::Sender<Result<StreamHead, NetError>>>,
-    pub(super) url: Url,
 }
 
 impl AppleSessionEvents {
@@ -115,15 +113,11 @@ impl UrlSessionEvents for AppleSessionEvents {
         let Some(mut state) = self.streams.get_mut(&task_id) else {
             return;
         };
-        let head = http_parts(response, state.accept_encoding, &state.url).and_then(|parts| {
-            parts
-                .map(|(status, headers)| StreamHead { headers, status })
-                .ok_or_else(|| {
-                    NetError::Network(
-                        "NSURLSession returned a non-HTTP stream response".to_string(),
-                    )
-                })
-        });
+        let head = http_parts(response, state.accept_encoding)
+            .map(|(status, headers)| StreamHead { headers, status })
+            .ok_or_else(|| {
+                NetError::Network("NSURLSession returned a non-HTTP stream response".to_owned())
+            });
         if let Some(sender) = state.head_sender.take() {
             sender.send(head).ok();
         }

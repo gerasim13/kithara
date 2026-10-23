@@ -25,8 +25,8 @@ use kithara_platform::{
 };
 use kithara_test_utils::TestHttpServer;
 
-use super::client::HttpClient;
 use crate::{
+    HttpClient,
     error::NetError,
     test_pools::pools,
     types::{Compression, Headers, NetOptions, RangeSpec, RetryPolicy},
