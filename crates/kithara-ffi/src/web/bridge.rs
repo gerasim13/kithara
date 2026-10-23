@@ -38,12 +38,26 @@ fn ensure_host_channel() -> Result<(wasm::HostSender<FfiPools>, Pools), JsValue>
         return Ok((channel.sender.clone(), channel.pools.clone()));
     }
 
+    web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(
+
+        "pr731-stage: host pools begin",
+
+    ));
     let pools = build_pools()
         .map_err(|error| JsValue::from_str(&format!("pool construction failed: {error}")))?;
+    web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(
+        "pr731-stage: host construction begin",
+    ));
     let host = FfiHost::new(HostConfig::builder().build())
         .map_err(|error| JsValue::from_str(&format!("host construction failed: {error}")))?;
+    web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(
+        "pr731-stage: host channel begin",
+    ));
     let (sender, receiver) = wasm::worker_host_channel(&host)
         .map_err(|error| JsValue::from_str(&format!("host channel failed: {error}")))?;
+    web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(
+        "pr731-stage: host channel ready",
+    ));
     play_wasm::spawn_webcodecs_probe(pools.clone());
     *guard = Some(HostChannel {
         receiver,
@@ -90,6 +104,9 @@ impl QueueBridge {
                 .unwrap_or_else(|| "host construction failed".into()),
         })?;
         let resources = ResourceBuilder::new(pools.clone());
+        web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(
+            "pr731-stage: queue construction begin",
+        ));
         let queue = FfiQueue::new(
             QueueConfig::builder()
                 .prep(
@@ -101,11 +118,23 @@ impl QueueBridge {
                 .store(resources.store.clone())
                 .build(),
         );
+        web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(
+            "pr731-stage: queue constructed",
+        ));
         let control = queue.control();
         let (analysis, requests) = mpsc::channel();
+        web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(
+            "pr731-stage: queue worker spawn begin",
+        ));
         let worker = thread::spawn(move || {
+            web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(
+                "pr731-stage: queue worker entered",
+            ));
             crate::web::worker::worker_main(queue, host_sender, pools, requests);
         });
+        web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(
+            "pr731-stage: queue worker spawn returned",
+        ));
         std::mem::forget(worker);
         self.queue.get_or_init(|| control.clone());
         Ok(self.engine.get_or_init(|| Engine {

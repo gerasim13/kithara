@@ -27,6 +27,9 @@ pub(crate) mod consts {
 /// [`EVENT_CHANNEL`](consts::EVENT_CHANNEL). Spawned from
 /// [`worker_main`](crate::web::worker::worker_main).
 pub(crate) fn spawn(queue: &FfiQueueControl) {
+    web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(
+        "pr731-stage: observer subscriptions begin",
+    ));
     let rx = queue.subscribe::<QueueBusEvent>();
     let item_rx = queue.subscribe::<ItemBusEvent>();
     task_spawn(async move {
@@ -70,15 +73,24 @@ fn spawn_duration_poll(queue: &FfiQueueControl) {
 }
 
 async fn run(mut rx: EventReceiver<QueueBusEvent>) {
+    web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(
+        "pr731-stage: observer queue task entered",
+    ));
     let Ok(channel) = BroadcastChannel::new(consts::EVENT_CHANNEL) else {
         console::warn_1(&JsValue::from_str(
             "kithara: BroadcastChannel unavailable in worker; event bridge disabled",
         ));
         return;
     };
+    web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(
+        "pr731-stage: observer channel ready",
+    ));
     loop {
         match rx.recv().await {
             Ok(Envelope { event, .. }) => {
+                web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(
+                    "pr731-stage: observer queue event received",
+                ));
                 if let Some(ffi) = to_ffi(&event) {
                     let _ = channel.post_message(&encode(&ffi));
                 }

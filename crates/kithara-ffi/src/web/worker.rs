@@ -32,12 +32,27 @@ pub(super) fn worker_main(
     analysis_rx: mpsc::Receiver<AnalysisRequest>,
 ) {
     assert_not_main_thread(concat!(module_path!(), "::worker_main"));
+    web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(
+        "pr731-stage: worker main before keepalive",
+    ));
     keep_worker_alive();
+    web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(
+        "pr731-stage: worker main before task spawn",
+    ));
     task_spawn(async move {
+        web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(
+            "pr731-stage: worker async task entered",
+        ));
         let control = queue.control();
         let mut membership = control.subscribe::<QueueEvent>();
         crate::web::observer::source::spawn(&control);
+        web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(
+            "pr731-stage: observer source spawned",
+        ));
         let mut host = wasm::remote_host(host_sender);
+        web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(
+            "pr731-stage: remote host insertion begin",
+        ));
         let owner = match host.insert(queue) {
             Ok(owner) => owner,
             Err(error) => {
@@ -45,6 +60,9 @@ pub(super) fn worker_main(
                 return;
             }
         };
+        web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(
+            "pr731-stage: remote host insertion returned",
+        ));
         let mut analysis = AnalysisRuns::new(pools);
         loop {
             tokio::select! {

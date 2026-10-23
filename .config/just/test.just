@@ -86,7 +86,7 @@ wasm BROWSER="chrome" SUITE="all" REAL_AUDIO_ROUTE="exclude":
         -Z build-std=std,panic_abort,core,alloc \
         -Z build-std-features=optimize_for_size \
         -p kithara-ffi --test web-observer --no-default-features \
-        --features wasm
+        --features wasm -- --nocapture
     fi
     WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
       cargo "+$toolchain" test --profile test-release \

@@ -326,8 +326,18 @@ fn through_vello(list: &DrawList) -> Vec<u8> {
 
 #[kithara::test]
 fn vello_paints_what_a_clip_contains() {
+    let rgba = through_vello(&clipped());
+    let evidence = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/parity/pr731-vello-clip");
+    let saved = std::fs::create_dir_all(&evidence)
+        .and_then(|()| std::fs::write(evidence.join("surface-96x96.rgba"), &rgba));
+    eprintln!(
+        "pr731-vello: center_green={} bytes={} artifact={saved:?}",
+        sample(&rgba, 32.0, 32.0),
+        rgba.len(),
+    );
     assert!(
-        clip_is_on_top(&through_vello(&clipped())),
+        clip_is_on_top(&rgba),
         "the Vello backend painted its own geometry over what the clip contained"
     );
 }
@@ -495,6 +505,7 @@ pub(crate) fn rasterise_at(
     let instance = Instance::new(&InstanceDescriptor::default());
     let adapter = block_on(instance.request_adapter(&RequestAdapterOptions::default()))
         .map_err(|error| format!("no wgpu adapter: {error}"))?;
+    eprintln!("pr731-vello: adapter={:?}", adapter.get_info());
     let (device, queue) = block_on(adapter.request_device(&DeviceDescriptor::default()))
         .map_err(|error| format!("no wgpu device: {error}"))?;
     let mut renderer = Renderer::new(
