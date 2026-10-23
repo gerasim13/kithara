@@ -68,5 +68,9 @@ axum = { workspace = true }
 [target.'cfg(target_os = "android")'.dev-dependencies]
 kithara-android = { workspace = true }
 
+[[test]]
+name = "request_events"
+path = "tests/request_events.rs"
+
 [lints]
 workspace = true
