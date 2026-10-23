@@ -169,6 +169,7 @@ mod document_tests {
     /// container attribute being present.
     #[kithara::test(native, flash(false))]
     #[case::sibling_key("mode: media_only\nvolume: 1\n", "volume")]
+    #[case::silence_trim("mode: silence_trim\nparams:\n  threshold_db: 60.0\n", "silence_trim")]
     fn a_document_naming_an_unknown_key_or_mode_is_refused(
         #[case] document: &str,
         #[case] needle: &str,
