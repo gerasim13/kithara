@@ -109,7 +109,6 @@ async fn delayed_drm_track() -> (TestServerHelper, Url) {
     drm_source(Some(150)).await
 }
 
-#[kithara_test_utils::kithara::flash(io)]
 #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, temp: TestTempDir) {
     let pools = app_pools(&PoolsSection::default()).expect("build app pool region");
