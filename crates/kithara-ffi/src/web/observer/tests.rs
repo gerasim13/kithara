@@ -295,7 +295,16 @@ async fn surface_settings_follow_owner_publication_and_report_refusal() {
             && player.is_muted()
     })
     .await
-    .expect("owner publishes every setting");
+    .unwrap_or_else(|error| {
+        panic!(
+            "{error}; rate={}, volume={}, muted={}, process_calls={}, events={:?}",
+            player.playing_rate(),
+            player.volume(),
+            player.is_muted(),
+            player.rt_process_calls_js(),
+            *events.lock(),
+        )
+    });
     player
         .set_volume_js(0.75)
         .expect("admit volume while muted");
