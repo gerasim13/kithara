@@ -29,18 +29,17 @@ pub(crate) struct XingInfoTag {
     pub(crate) num_frames: Option<u32>,
 }
 
+struct LameExtension {
+    encoder: [u8; consts::LAME_LAYOUT_ENCODER_LEN],
+    trim: LameTag,
+}
+
 /// Try to read a Xing/Info tag from the provided MPEG frame.
 pub(crate) fn try_read_info_tag(buf: &[u8], header: &FrameHeader) -> Option<XingInfoTag> {
     try_read_info_tag_inner(buf, header).ok().flatten()
 }
 
-/// The stored CRC is not itself part of the checksum it validates.
 fn try_read_info_tag_inner(buf: &[u8], header: &FrameHeader) -> Result<Option<XingInfoTag>> {
-    /// The full LAME extension size.
-    const LAME_EXT_LEN: u64 = 36;
-    /// The minimal LAME extension size up to the encoding delay and padding fields.
-    const MIN_LAME_EXT_LEN: u64 = 24;
-
     if !is_maybe_info_tag(buf, header) {
         return Ok(None);
     }
@@ -61,6 +60,29 @@ fn try_read_info_tag_inner(buf: &[u8], header: &FrameHeader) -> Result<Option<Xi
         return Ok(None);
     }
 
+    let num_frames = read_xing_fields(&mut reader)?;
+
+    let lame = if reader.inner().bytes_available() >= consts::LAME_LAYOUT_MIN_EXT_LEN {
+        let extension = read_lame_extension(&mut reader)?;
+        let crc = read_lame_trailer(&mut reader, header, &extension.encoder)?;
+
+        let is_tag_ok = crc.is_none_or(|crc| crc == 0 || crc == reader.monitor().crc());
+
+        if is_tag_ok {
+            Some(extension.trim)
+        } else {
+            warn!("xing tag lame extension crc mismatch");
+            None
+        }
+    } else {
+        info!("xing tag too small for lame extension");
+        None
+    };
+
+    Ok(Some(XingInfoTag { lame, num_frames }))
+}
+
+fn read_xing_fields<B: ReadBytes>(reader: &mut B) -> Result<Option<u32>> {
     let flags = reader.read_be_u32()?;
 
     let num_frames = if flags & 0x1 != 0 {
@@ -82,80 +104,81 @@ fn try_read_info_tag_inner(buf: &[u8], header: &FrameHeader) -> Result<Option<Xi
         let _quality = reader.read_be_u32()?;
     }
 
-    let lame = if reader.inner().bytes_available() >= MIN_LAME_EXT_LEN {
-        let mut encoder = [0; consts::LAME_LAYOUT_ENCODER_LEN];
-        reader.read_buf_exact(&mut encoder)?;
+    Ok(num_frames)
+}
 
-        let _revision = reader.read_u8()?;
+fn read_lame_extension<B: ReadBytes>(reader: &mut B) -> Result<LameExtension> {
+    let mut encoder = [0; consts::LAME_LAYOUT_ENCODER_LEN];
+    reader.read_buf_exact(&mut encoder)?;
 
-        let _lowpass = reader.read_u8()?;
+    let _revision = reader.read_u8()?;
 
-        let _replaygain_peak = reader.read_be_u32()?;
-        let _replaygain_radio = reader.read_be_u16()?;
-        let _replaygain_audiophile = reader.read_be_u16()?;
+    let _lowpass = reader.read_u8()?;
 
-        let _encoding_flags = reader.read_u8()?;
+    let _replaygain_peak = reader.read_be_u32()?;
+    let _replaygain_radio = reader.read_be_u16()?;
+    let _replaygain_audiophile = reader.read_be_u16()?;
 
-        let _abr = reader.read_u8()?;
+    let _encoding_flags = reader.read_u8()?;
 
-        let (enc_delay, enc_padding) = {
-            let trim = reader.read_be_u24()?;
+    let _abr = reader.read_u8()?;
 
-            if encoder[..consts::LAME_LAYOUT_ENCODER_ID_LEN] == *b"LAME"
-                || encoder[..consts::LAME_LAYOUT_ENCODER_ID_LEN] == *b"Lavf"
-                || encoder[..consts::LAME_LAYOUT_ENCODER_ID_LEN] == *b"Lavc"
-            {
-                let delay =
-                    consts::LAME_LAYOUT_DECODER_DELAY + (trim >> consts::LAME_LAYOUT_TRIM_BITS);
-                let padding = trim & ((1 << consts::LAME_LAYOUT_TRIM_BITS) - 1);
+    let (enc_delay, enc_padding) = {
+        let trim = reader.read_be_u24()?;
 
-                (
-                    delay,
-                    padding.saturating_sub(consts::LAME_LAYOUT_DECODER_DELAY),
-                )
-            } else {
-                (0, 0)
-            }
-        };
+        if encoder[..consts::LAME_LAYOUT_ENCODER_ID_LEN] == *b"LAME"
+            || encoder[..consts::LAME_LAYOUT_ENCODER_ID_LEN] == *b"Lavf"
+            || encoder[..consts::LAME_LAYOUT_ENCODER_ID_LEN] == *b"Lavc"
+        {
+            let delay = consts::LAME_LAYOUT_DECODER_DELAY + (trim >> consts::LAME_LAYOUT_TRIM_BITS);
+            let padding = trim & ((1 << consts::LAME_LAYOUT_TRIM_BITS) - 1);
 
-        let crc = if reader.inner().bytes_available() >= LAME_EXT_LEN - MIN_LAME_EXT_LEN {
-            let _misc = reader.read_u8()?;
-
-            let _mp3_gain = reader.read_u8()?;
-
-            let _surround_info = reader.read_be_u16()?;
-
-            let _music_len = reader.read_be_u32()?;
-
-            let _music_crc = reader.read_be_u16()?;
-
-            if header.has_crc || encoder[..consts::LAME_LAYOUT_ENCODER_ID_LEN] == *b"LAME" {
-                Some(reader.inner_mut().read_be_u16()?)
-            } else {
-                None
-            }
+            (
+                delay,
+                padding.saturating_sub(consts::LAME_LAYOUT_DECODER_DELAY),
+            )
         } else {
-            info!("xing tag lame extension is truncated");
-            None
-        };
-
-        let is_tag_ok = crc.is_none_or(|crc| crc == 0 || crc == reader.monitor().crc());
-
-        if is_tag_ok {
-            Some(LameTag {
-                enc_delay,
-                enc_padding,
-            })
-        } else {
-            warn!("xing tag lame extension crc mismatch");
-            None
+            (0, 0)
         }
-    } else {
-        info!("xing tag too small for lame extension");
-        None
     };
 
-    Ok(Some(XingInfoTag { lame, num_frames }))
+    Ok(LameExtension {
+        encoder,
+        trim: LameTag {
+            enc_delay,
+            enc_padding,
+        },
+    })
+}
+
+/// The stored CRC is not itself part of the checksum it validates.
+fn read_lame_trailer<B: ReadBytes + FiniteStream>(
+    reader: &mut MonitorStream<B, Crc16AnsiLe>,
+    header: &FrameHeader,
+    encoder: &[u8; consts::LAME_LAYOUT_ENCODER_LEN],
+) -> Result<Option<u16>> {
+    /// The full LAME extension size.
+    const LAME_EXT_LEN: u64 = 36;
+
+    if reader.inner().bytes_available() >= LAME_EXT_LEN - consts::LAME_LAYOUT_MIN_EXT_LEN {
+        let _misc = reader.read_u8()?;
+
+        let _mp3_gain = reader.read_u8()?;
+
+        let _surround_info = reader.read_be_u16()?;
+
+        let _music_len = reader.read_be_u32()?;
+
+        let _music_crc = reader.read_be_u16()?;
+
+        if header.has_crc || encoder[..consts::LAME_LAYOUT_ENCODER_ID_LEN] == *b"LAME" {
+            return Ok(Some(reader.inner_mut().read_be_u16()?));
+        }
+    } else {
+        info!("xing tag lame extension is truncated");
+    }
+
+    Ok(None)
 }
 
 /// Perform a fast check to see if the packet contains a Xing/Info tag. If this returns true, the
