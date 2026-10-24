@@ -303,6 +303,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_same_named_function_import_does_not_hide_the_type_module() {
+        let temp = tempdir().expect("directory");
+        let path = temp.path().join("lib.rs");
+        fs::write(
+            &path,
+            "mod channel { pub struct Sender; pub fn channel() {} }\n\
+             pub use channel::{Sender, channel};\n\
+             impl Sender { fn send(&self) {} }\n",
+        )
+        .expect("source");
+        let source = Source::read(temp.path(), &path, false).expect("source index");
+        assert_eq!(
+            source.owner(&source.implementations[0]).as_deref(),
+            Some("channel::Sender")
+        );
+    }
+
+    #[test]
+    fn a_self_expanding_external_import_remains_unresolved() {
+        let temp = tempdir().expect("directory");
+        let path = temp.path().join("lib.rs");
+        fs::write(
+            &path,
+            "use foreign::foreign; trait Local {} impl Local for foreign::Value {}",
+        )
+        .expect("source");
+        let source = Source::read(temp.path(), &path, false).expect("source index");
+        assert!(source.owner(&source.implementations[0]).is_none());
+    }
+
+    #[test]
     fn lcom4_tracks_fields_calls_and_full_module_owners_across_files() {
         let temp = tempdir().expect("directory");
         fs::write(

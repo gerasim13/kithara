@@ -15,7 +15,6 @@ use kithara::{
 };
 use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
-    event::TestEvent,
     kithara,
     memory_source::{MemStream, MemStreamConfig, MemorySource},
     mock::LaneAudio,
@@ -156,7 +155,7 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(
     let audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .expect("audio construction");
-    let mut events = audio.event_bus().subscribe();
+    let mut events = audio.event_bus().subscribe::<DecoderEvent>();
     let mut audio = kithara_integration_tests::mock::with_blocking_reads(audio);
     kithara_integration_tests::mock::wait_for_preload(&mut audio, "non-unity source").await;
 
@@ -221,23 +220,20 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(
         }
     };
     hang_reset!();
-    loop {
+    'decoder_event: loop {
         hang_tick!();
-        match events.try_recv() {
-            Ok(envelope)
-                if matches!(
-                    envelope.event,
-                    TestEvent::Decoder(DecoderEvent::DecoderChanged {
-                        cause: DecoderChangeCause::HostRateChange,
-                        ..
-                    })
-                ) =>
-            {
-                break;
+        while let Ok(envelope) = events.try_recv() {
+            if matches!(
+                envelope.event,
+                DecoderEvent::DecoderChanged {
+                    cause: DecoderChangeCause::HostRateChange,
+                    ..
+                }
+            ) {
+                break 'decoder_event;
             }
-            Ok(_) => {}
-            Err(_) => time::sleep(Duration::from_millis(5)).await,
         }
+        time::sleep(Duration::from_millis(5)).await;
     }
     assert!(
         rebuilt.meta.timestamp >= committed_at_route.saturating_add(resume_margin),

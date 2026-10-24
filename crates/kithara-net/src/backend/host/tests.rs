@@ -19,9 +19,10 @@ use url::Url;
 
 use super::{
     AlreadyInstalled, HostBuffer, HostCall, HostEvents, HostFailure, HostMethod, HostRequest,
-    HostTransport, HttpClient, call::consts::READ_SIZE, install,
+    HostTransport, call::consts::READ_SIZE, install,
 };
 use crate::{
+    HttpClient,
     error::NetError,
     observe::{NetObserver, Observer},
     test_pools::pools,
@@ -39,6 +40,7 @@ enum OnStart {
 #[derive(Clone, Copy, Debug)]
 enum OnRead {
     Serve,
+    Delayed(Duration),
     Hold,
     RespondAgain,
     ReportViolation,
@@ -76,8 +78,15 @@ struct Recorded {
 #[derive(Default)]
 struct Seen {
     cancels: AtomicU32,
+    heads: AtomicU32,
     starts: AtomicU32,
     requests: Mutex<Vec<Recorded>>,
+}
+
+impl NetObserver for Seen {
+    fn first_byte(&self, _elapsed: Duration, _status: u16, _partial: bool) {
+        self.heads.fetch_add(1, Ordering::SeqCst);
+    }
 }
 
 /// One test's plan and what its transport saw.
@@ -202,6 +211,32 @@ impl HostCall for FakeCall {
             OnRead::Serve => {
                 self.serve(buffer);
             }
+            OnRead::Delayed(delay) => {
+                assert_eq!(
+                    self.seen.heads.load(Ordering::SeqCst),
+                    1,
+                    "the client observes headers before pulling the body"
+                );
+                let mut buffer = buffer;
+                let len = {
+                    let mut offset = self.offset.lock();
+                    let rest = &self.plan.body[*offset..];
+                    let len = rest.len().min(buffer.as_ref().len());
+                    buffer.as_mut()[..len].copy_from_slice(&rest[..len]);
+                    *offset += len;
+                    len
+                };
+                let events = self.events.clone();
+                let seen = Arc::clone(&self.seen);
+                kithara_platform::tokio::task::spawn(async move {
+                    kithara_platform::time::sleep(delay).await;
+                    if len == 0 || seen.cancels.load(Ordering::SeqCst) != 0 {
+                        events.end();
+                    } else {
+                        events.read(buffer, len);
+                    }
+                });
+            }
             OnRead::Hold => *self.held.lock() = Some(buffer),
             OnRead::RespondAgain => self.events.response(200, Vec::new()),
             OnRead::ReportViolation => self
@@ -246,12 +281,36 @@ fn pattern(len: usize) -> Bytes {
         .collect()
 }
 
+#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
+async fn whole_body_trickle_is_bounded_per_chunk() {
+    let body = pattern(READ_SIZE * 4);
+    let mut plan = Plan::serving(body.clone());
+    plan.on_read = OnRead::Delayed(Duration::from_millis(75));
+    let (url, seen) = Router::installed().route(plan);
+    let client = HttpClient::new(
+        NetOptions::builder()
+            .inactivity_timeout(Duration::from_millis(200))
+            .retry_policy(retry_policy(0))
+            .build(),
+        pools(),
+        CancelToken::never(),
+    )
+    .with_observer(Some(Observer(seen.clone())));
+    assert_eq!(client.get_bytes(url, None).await.unwrap(), body);
+    assert_eq!(seen.starts.load(Ordering::SeqCst), 1);
+    assert_eq!(seen.cancels.load(Ordering::SeqCst), 0);
+}
+
 fn sent_headers(seen: &Seen) -> HashSet<(String, String)> {
-    seen.requests.lock()[0].headers.iter().cloned().collect()
+    seen.requests.lock()[0]
+        .headers
+        .iter()
+        .map(|(name, value)| (name.to_ascii_lowercase(), value.clone()))
+        .collect()
 }
 
 fn identity() -> (String, String) {
-    ("Accept-Encoding".to_owned(), "identity".to_owned())
+    ("accept-encoding".to_owned(), "identity".to_owned())
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(2)))]
@@ -503,7 +562,11 @@ async fn byte_addressed_requests_ask_for_identity() {
     assert!(sent_headers(&head_seen).contains(&identity()));
     let range_headers = sent_headers(&range_seen);
     assert!(range_headers.contains(&identity()));
-    assert!(range_headers.contains(&("Range".to_owned(), "bytes=2-5".to_owned())));
+    assert!(
+        range_headers
+            .iter()
+            .any(|(name, value)| name.eq_ignore_ascii_case("range") && value == "bytes=2-5")
+    );
     assert!(
         !sent_headers(&whole_seen).contains(&identity()),
         "a whole body leaves the coding to the host's client"
@@ -517,7 +580,10 @@ async fn a_surviving_content_encoding_is_rejected() {
         ..Plan::serving(Bytes::from_static(b"\x1f\x8b"))
     });
 
-    let opened = client.stream(url, None).await;
+    let opened = client
+        .with_observer(Some(Observer(seen.clone())))
+        .stream(url, None)
+        .await;
 
     assert!(
         matches!(opened, Err(NetError::Decode(_))),
@@ -529,10 +595,54 @@ async fn a_surviving_content_encoding_is_rejected() {
         "a coding is not retried"
     );
     assert_eq!(
+        seen.heads.load(Ordering::SeqCst),
+        1,
+        "validation follows the response head"
+    );
+    assert_eq!(
         seen.cancels.load(Ordering::SeqCst),
         1,
         "the rejected call is stopped"
     );
+}
+
+#[kithara::test(tokio)]
+async fn identity_coding_preserves_body_bytes() {
+    let (client, seen, url) = client(Plan {
+        headers: vec![("CoNtEnT-EnCoDiNg".to_owned(), "IDENTITY".to_owned())],
+        ..Plan::serving(Bytes::from_static(b"identity body"))
+    });
+    assert_eq!(client.get_bytes(url, None).await.unwrap(), "identity body");
+    assert_eq!(seen.starts.load(Ordering::SeqCst), 1);
+}
+
+#[kithara::test(tokio)]
+async fn head_metadata_preserves_values_and_backfills_representation_length() {
+    let (client, _, url) = client(Plan {
+        status: 206,
+        headers: vec![
+            ("Content-Range".to_owned(), "bytes 0-0/1234".to_owned()),
+            ("ETag".to_owned(), "\"a\"".to_owned()),
+        ],
+        ..Plan::serving(Bytes::new())
+    });
+    let headers = client.head(url, None).await.unwrap();
+    assert_eq!(headers.get("content-length"), Some("1234"));
+    assert_eq!(headers.get("etag"), Some("\"a\""));
+}
+
+#[kithara::test(tokio)]
+async fn a_refused_status_preserves_its_url_and_body() {
+    let (client, seen, url) = client(Plan {
+        status: 404,
+        ..Plan::serving(Bytes::from_static(b"gone"))
+    });
+    let error = client.get_bytes(url.clone(), None).await.unwrap_err();
+    assert!(
+        matches!(error, NetError::Status { status, url: Some(resource), body: Some(body) }
+        if status.get() == 404 && resource == url && body == "gone")
+    );
+    assert_eq!(seen.starts.load(Ordering::SeqCst), 1);
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(2)))]
@@ -553,7 +663,8 @@ async fn a_post_body_arrives_intact() {
     assert!(
         request
             .headers
-            .contains(&("X-Salt".to_owned(), "pepper".to_owned()))
+            .iter()
+            .any(|(name, value)| name.eq_ignore_ascii_case("x-salt") && value == "pepper")
     );
 }
 

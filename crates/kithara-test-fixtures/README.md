@@ -16,6 +16,13 @@ Audio test assets produced at build time and served from a persistent store
 on disk. A test asks for bytes and gets them; nothing is synthesized or
 encoded inside a test's wall-clock deadline.
 
+Every whole audio asset also has a `reference_<accessor>` record produced by
+independent FFprobe and FFmpeg during the build. `reference::audio(&asset)` reads
+its native rate, channel count, full decoded PCM and optional exact declared
+presentation extent. Reading a reference never launches media tools; a missing
+or invalid record fails. Product output recorded during a test still requires
+independent decoding of those actual output bytes.
+
 Source edits, dependency updates and commits do not invalidate prepared assets.
 The explicit `cache-version` file of `kithara-fixture-media` selects the shared
 cache revision. Change it
@@ -88,7 +95,7 @@ fn decode_prepared_audio(tone_mp3: &'static [u8]) {
 ```
 
 Fixture providers read already-built assets. Signal generation, including tiny
-PCM inputs, belongs in `kithara-fixture-gen` and runs through `build.rs`. Async providers
+PCM inputs, belongs in `kithara-fixture-gen` and runs through the build script. Async providers
 may own local servers and return them with the prepared input; test parameters
 use `#[future(awt)]` to receive those resources after preparation.
 
@@ -112,7 +119,7 @@ use `#[future(awt)]` to receive those resources after preparation.
 - `kithara-fixture-media` — waveforms, PCM buffers, the RIFF writer, the fMP4
   mux and the store, shared by the generator and the library and re-exported
   here as `signal`, `fmp4` and `store`.
-- `build.rs` — calls the generator when `native-fixtures` is on.
+- `build/main.rs` - prepares portable inputs and calls the native generator when `native-fixtures` is on.
 - `src/store/` — the optional HTTP origin that ART uses as the one record
   source, over the shared store.
 

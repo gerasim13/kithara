@@ -2676,6 +2676,250 @@ fn synchronous_participation_reuses_async_credit_and_settles_unwinds() {
     assert_eq!(forward::async_active_count(), 0);
 }
 
+#[cfg(not(feature = "loom"))]
+#[kithara::test(native, flash(false), timeout(Duration::from_secs(2)))]
+#[case::unnamed(false)]
+#[case::named(true)]
+fn a_sync_driver_joins_a_child_waiting_on_virtual_time(#[case] named: bool) {
+    let _g = guard();
+    reset();
+    let _ambient = ambient_scope(true);
+    let _flash = enter_dynamic(true);
+    let started = Instant::now();
+    let value = super::participate_sync(|| {
+        let work = || {
+            crate::thread::sleep(Duration::from_secs(17));
+            7_u8
+        };
+        let child = if named {
+            crate::thread::spawn_named("timed-join-child", work)
+        } else {
+            crate::thread::spawn(work)
+        };
+        child.join().expect("timed child returns its native result")
+    });
+    assert_eq!(value, 7);
+    assert_eq!(started.elapsed(), Duration::from_secs(17));
+    assert_eq!(super::system::FLASH.active_count(), 0);
+    assert_eq!(super::system::FLASH.timed_count(), 0);
+}
+
+#[cfg(all(feature = "no-block", not(feature = "loom")))]
+#[kithara::test(native, flash(false), timeout(Duration::from_secs(2)))]
+fn an_async_poll_cannot_join_a_child_waiting_on_virtual_time() {
+    let _g = guard();
+    reset();
+    let _ambient = ambient_scope(true);
+    let _flash = enter_dynamic(true);
+    kithara_test_utils::hang::suppress_expected_panic_dumps();
+
+    let (error, _) = on_virtual_clock(async {
+        let _mode = crate::no_block::force_panic_mode();
+        crate::no_block::watch_budget("async_native_join", 10_000, async {
+            let (finished, completion) = tokio::sync::oneshot::channel();
+            let (release, released) = mpsc::channel();
+            let child = crate::thread::spawn(move || {
+                crate::thread::sleep(Duration::from_secs(17));
+                finished
+                    .send(())
+                    .expect("detached child reports completion");
+                let _ = released.recv();
+            });
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| child.join()));
+            completion
+                .await
+                .expect("child finishes after rejected join");
+            assert_eq!(super::system::FLASH.active_count(), 1);
+            // The library used by test-utils owns a different Flash engine.
+            let mut waiting = std::pin::pin!(crate::time::timeout(Duration::from_secs(1), async {
+                while super::system::FLASH.active_count() != 0 {
+                    crate::time::sleep(kithara_test_utils::wait::POLL_TICK).await;
+                }
+            }));
+            assert!(
+                std::future::poll_fn(|cx| std::task::Poll::Ready(waiting.as_mut().poll(cx)))
+                    .await
+                    .is_pending()
+            );
+            release.send(()).expect("release the detached child");
+            waiting.await.expect("detached child releases its credit");
+            result.expect_err("a blocking native join inside an async poll must be rejected")
+        })
+        .await
+    });
+
+    let message = error
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| error.downcast_ref::<&str>().copied())
+        .unwrap_or("");
+    assert!(message.contains("BRIDGED"), "panic message: {message}");
+    assert_eq!(super::system::FLASH.active_count(), 0);
+    assert_eq!(forward::async_active_count(), 0);
+    assert_eq!(super::system::FLASH.timed_count(), 0);
+}
+
+#[cfg(all(feature = "no-block", not(feature = "loom")))]
+#[derive(Clone, Copy)]
+enum RejectedSyncWait {
+    TimedCondvar,
+    UntimedCondvar,
+    Sleep,
+    ThreadPark,
+    Yield,
+    HarnessPark,
+}
+
+#[cfg(all(feature = "no-block", not(feature = "loom")))]
+#[kithara::test(native, flash(false), timeout(Duration::from_secs(2)))]
+#[case::timed_condvar(RejectedSyncWait::TimedCondvar)]
+#[case::untimed_condvar(RejectedSyncWait::UntimedCondvar)]
+#[case::sleep(RejectedSyncWait::Sleep)]
+#[case::thread_park(RejectedSyncWait::ThreadPark)]
+#[case::yield_wait(RejectedSyncWait::Yield)]
+#[case::harness_park(RejectedSyncWait::HarnessPark)]
+fn a_rejected_sync_wait_publishes_no_waiter(#[case] kind: RejectedSyncWait) {
+    let _g = guard();
+    reset();
+    let _ambient = ambient_scope(true);
+    let _flash = enter_dynamic(true);
+    kithara_test_utils::hang::suppress_expected_panic_dumps();
+
+    let ((result, before, after), elapsed) = on_virtual_clock(async {
+        let _mode = crate::no_block::force_panic_mode();
+        crate::no_block::watch_budget("rejected_sync_wait", 10_000, async {
+            let flash = &super::system::FLASH;
+            let cvid = flash.next_condvar_id();
+            let duration = Duration::from_secs(17);
+            let (timer, advance) = flash
+                .register_sleep_async(super::duration_to_nanos(duration), Waker::noop().clone());
+            advance.fire();
+            let counts = || {
+                (
+                    flash.timed_count(),
+                    flash.indef_count(),
+                    flash.diag_yield_count(),
+                    flash.active_count(),
+                    flash.async_active_count(),
+                )
+            };
+            let before = counts();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match kind {
+                RejectedSyncWait::TimedCondvar => {
+                    let _ = flash.register_condvar_timed(
+                        flash.clock.now_nanos() + super::duration_to_nanos(duration),
+                        cvid,
+                    );
+                }
+                RejectedSyncWait::UntimedCondvar => {
+                    let _ = flash.register_condvar_untimed(cvid);
+                }
+                RejectedSyncWait::Sleep => flash.sleep_timed(duration),
+                RejectedSyncWait::ThreadPark => flash.park_timed_unparkable(
+                    duration,
+                    super::ids::ThreadKey::of(thread::current().id()),
+                    super::system::ParkRole::Deadline,
+                ),
+                RejectedSyncWait::Yield => flash.yield_until_advance(),
+                RejectedSyncWait::HarnessPark => flash.park_for(duration),
+            }));
+            let after = counts();
+            flash.signal_condvar(cvid, true);
+            drop(timer);
+            (result, before, after)
+        })
+        .await
+    });
+
+    let error = result.expect_err("a watched async poll must reject a synchronous wait");
+    let message = error
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| error.downcast_ref::<&str>().copied())
+        .unwrap_or("");
+    assert!(message.contains("BRIDGED"), "panic message: {message}");
+    assert_eq!(before, (1, 0, 0, 0, 1));
+    assert_eq!(after, before, "rejection must precede waiter publication");
+    assert_eq!(elapsed, Duration::ZERO);
+    assert_eq!(super::system::FLASH.timed_count(), 0);
+    assert_eq!(super::system::FLASH.indef_count(), 0);
+    assert_eq!(super::system::FLASH.diag_yield_count(), 0);
+    assert_eq!(super::system::FLASH.active_count(), 0);
+    assert_eq!(forward::async_active_count(), 0);
+}
+
+#[cfg(not(feature = "loom"))]
+#[kithara::test(native, flash(false))]
+fn a_sync_driver_joins_an_immediate_child_without_changing_its_result() {
+    let _g = guard();
+    reset();
+    let _ambient = ambient_scope(true);
+    let _flash = enter_dynamic(true);
+    let started = Instant::now();
+    let (expected, actual) = super::participate_sync(|| {
+        let child = crate::thread::spawn(crate::thread::current_thread_id);
+        let expected = child.thread().id();
+        (expected, child.join().expect("immediate native result"))
+    });
+    assert_eq!(crate::common::thread_id::thread_id_hash(expected), actual);
+    assert_eq!(started.elapsed(), Duration::ZERO);
+    assert_eq!(super::system::FLASH.active_count(), 0);
+}
+
+#[cfg(not(feature = "loom"))]
+#[kithara::test(native, flash(false), timeout(Duration::from_secs(2)))]
+fn a_detached_platform_child_finishes_and_releases_its_credit() {
+    let _g = guard();
+    reset();
+    let _ambient = ambient_scope(true);
+    let _flash = enter_dynamic(true);
+    super::participate_sync(|| {
+        let (finished, completion) = crate::sync::mpsc::channel();
+        let child = crate::thread::spawn_named("detached-join-child", move || {
+            crate::thread::sleep(Duration::from_secs(1));
+            finished.send(7_u8).expect("detached child reports");
+        });
+        drop(child);
+        assert_eq!(completion.recv().expect("detached child completes"), 7);
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while super::system::FLASH.active_count() != 1 {
+            assert!(
+                Instant::now() < deadline,
+                "only the synchronous driver remains"
+            );
+            crate::thread::sleep(kithara_test_utils::wait::POLL_TICK);
+        }
+    });
+    assert_eq!(super::system::FLASH.active_count(), 0);
+    assert_eq!(super::system::FLASH.timed_count(), 0);
+}
+
+#[cfg(not(feature = "loom"))]
+#[kithara::test(native, flash(false), timeout(Duration::from_secs(2)))]
+fn a_timed_panicking_child_releases_its_joiner_and_preserves_the_payload() {
+    let _g = guard();
+    reset();
+    let _ambient = ambient_scope(true);
+    let _flash = enter_dynamic(true);
+    kithara_test_utils::hang::suppress_expected_panic_dumps();
+    let error = super::participate_sync(|| {
+        let child = crate::thread::spawn_named("panicking-join-child", || {
+            crate::thread::sleep(Duration::from_secs(1));
+            panic!("native child panic");
+        });
+        child.join().expect_err("native panic remains an error")
+    });
+    assert_eq!(error.downcast_ref::<&str>(), Some(&"native child panic"));
+    assert_eq!(super::system::FLASH.active_count(), 0);
+    assert_eq!(super::system::FLASH.timed_count(), 0);
+}
+
+#[kithara::test(loom)]
+fn a_platform_thread_join_preserves_native_result_ownership() {
+    let child = crate::thread::spawn(|| 7_u8);
+    assert_eq!(child.join().expect("modelled native result"), 7);
+}
+
 fn pooled_wait_elapsed<F>(engine: bool, make_wait: impl FnOnce() -> F) -> Duration
 where
     F: FnOnce() + Send + 'static,

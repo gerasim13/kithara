@@ -12,7 +12,7 @@ use kithara_integration_tests::{
     },
     grid::Start,
     kithara,
-    pcm_oracle::{Audio, decode},
+    pcm_oracle::Audio,
 };
 use num_traits::AsPrimitive;
 
@@ -255,14 +255,9 @@ fn capture_source_anchor(harness: &ProductHarness) -> (u128, NonZeroU128) {
     })
 }
 
-async fn wrong_source(prepared: &PreparedSources) -> Audio {
-    Audio {
-        samples: decode(prepared.0.wrong_control_reference(0).bytes())
-            .await
-            .expect("independent wrong-source PCM"),
-        channels: CHANNELS,
-        sample_rate: ONE_DECK.sample_rate,
-    }
+fn wrong_source(prepared: &PreparedSources) -> Audio {
+    kithara_integration_tests::pcm_oracle::prepared(&prepared.0.wrong_control_reference(0))
+        .expect("independent wrong-source PCM")
 }
 
 fn align_source_runs(candidate: &CommandRun, control: &CommandRun) -> AlignedRun {
@@ -475,7 +470,7 @@ async fn bound_tempo_retarget_reaches_pcm_within_twenty_ms(
     #[case] warm_blocks: usize,
     #[case] driver_frames: usize,
 ) {
-    let wrong = wrong_source(&sweep_sources).await;
+    let wrong = wrong_source(&sweep_sources);
     hang_tick!(format!(
         "tempo retarget: {phase} phase, {driver_frames}-frame capture group"
     ));
@@ -518,12 +513,42 @@ async fn bound_tempo_retarget_reaches_pcm_within_twenty_ms(
     );
 }
 
+#[cfg(feature = "flash")]
+#[kithara::test(native, tokio, multi_thread, serial)]
+async fn offline_callback_geometry_does_not_pace_the_audio_clock(
+    #[future(awt)] synthetic_sources: PreparedSources,
+) {
+    let mut harness = ProductHarness::new_for_block(
+        ONE_DECK,
+        &synthetic_sources,
+        CUE,
+        Audible::Deck(0),
+        BLOCK_FRAMES,
+    )
+    .await;
+    let first = harness.host.position();
+    let frames = ONE_DECK.sample_rate as usize;
+    let started = kithara::platform::time::Instant::now();
+    let pcm = harness.capture_frames(ONE_DECK, frames, 128).await;
+    let elapsed = started.elapsed();
+    assert_eq!(
+        harness.host.position(),
+        first + u64::from(ONE_DECK.sample_rate)
+    );
+    assert_eq!(pcm.len(), frames * usize::from(CHANNELS));
+    assert!(pcm.iter().any(|sample| sample.abs() > 0.01));
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "offline PCM callbacks must not wait out their rendered audio duration: {elapsed:?}"
+    );
+}
+
 #[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn running_sync_command_changes_audible_pcm_within_one_block(
     #[future(awt)] synthetic_sources: PreparedSources,
 ) {
-    let wrong = wrong_source(&synthetic_sources).await;
+    let wrong = wrong_source(&synthetic_sources);
     for driver_frames in [128, 256, 512] {
         hang_tick!(format!(
             "running SYNC: {driver_frames}-frame capture group and candidate"
@@ -700,10 +725,24 @@ async fn shared_worker_capture(
             .all(|deck| deck.engine_load().is_active()),
         "shared worker decode load must remain active through the final captured frame"
     );
-    let failures = harness
-        .physical_failures(case, 0, &samples, wrong_source, None)
-        .await;
-    harness.failures.extend(failures);
+    match harness
+        .physical_reference(case, 0, &samples, wrong_source, None)
+        .await
+    {
+        Ok(expected) => {
+            assert_eq!(
+                samples.len(),
+                expected.len(),
+                "full physical capture length"
+            );
+            let actual = CochleaReport::measure(&samples, CHANNELS, case.sample_rate);
+            let reference = CochleaReport::measure(&expected, CHANNELS, case.sample_rate);
+            harness
+                .failures
+                .extend(time_stretch_failures(case.id(), &actual, &reference));
+        }
+        Err(error) => harness.failures.push(error),
+    }
     let failures = harness.grid_binding_failures(case).await;
     harness.failures.extend(failures);
     let failures = harness.grid_anchor_failures(case, None).await;
@@ -721,16 +760,10 @@ async fn shared_worker_capture(
 async fn bound_sync_pcm_stays_clean_under_shared_worker_deadline_load(
     #[future(awt)] mixed_sources: PreparedSources,
 ) {
-    let wrong = wrong_source(&mixed_sources).await;
+    let wrong = wrong_source(&mixed_sources);
     let control = shared_worker_capture(SHARED_DEADLINE_CONTROL, &mixed_sources, &wrong).await;
     let candidate = shared_worker_capture(SHARED_DEADLINE, &mixed_sources, &wrong).await;
-    let control_report = CochleaReport::measure(&control.samples, CHANNELS, 48_000);
-    let candidate_report = CochleaReport::measure(&candidate.samples, CHANNELS, 48_000);
-    let mut failures = time_stretch_failures(
-        "bound shared-worker load",
-        &candidate_report,
-        &control_report,
-    );
+    let mut failures = Vec::new();
     let supplemental = synchronization_failures(
         "bound shared-worker load",
         &[candidate.samples.as_slice()],

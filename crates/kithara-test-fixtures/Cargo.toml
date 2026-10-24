@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 description = "Build-time generated audio test assets: content-addressed store and generated accessors."
 publish = false
+build = "build/main.rs"
 
 [[bin]]
 name = "kithara-fixture-export"
@@ -59,15 +60,17 @@ kithara-stream = { workspace = true, features = ["client-reqwest", "tls-rustls"]
 # `AudioCodec` for the fMP4 sample entries.
 kithara-stream = { workspace = true, default-features = false, optional = true }
 
-kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
-
-serde_json = { workspace = true, optional = true }
+serde_json = { workspace = true, features = ["float_roundtrip"], optional = true }
 
 [build-dependencies]
+kithara-effects = { workspace = true }
 kithara-fixture-gen = { workspace = true, optional = true }
+kithara-fixture-media = { workspace = true }
+num-traits = { workspace = true }
 
 [dev-dependencies]
 kithara-analysis = { workspace = true, default-features = false, features = ["client-reqwest", "tls-rustls"] }
+kithara-core-test-fixtures = { workspace = true }
 kithara-drm = { workspace = true }
 kithara-platform = { workspace = true }
 # The backend features are what lets `cargo test -p kithara-test-fixtures` stand on
@@ -85,6 +88,10 @@ kithara-analysis = { workspace = true, features = ["symphonia"] }
 kithara-decode = { workspace = true, default-features = false, features = ["client-reqwest", "symphonia", "tls-rustls"] }
 kithara-resampler = { workspace = true }
 
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+kithara-test-utils = { workspace = true, features = ["subscriber"] }
+wasm-bindgen-test = { workspace = true }
+
 [target.'cfg(target_os = "android")'.dev-dependencies]
 kithara-test-dylib = { workspace = true }
 
@@ -94,6 +101,10 @@ workspace = true
 [[test]]
 name = "rhythm_contract"
 required-features = ["rhythm"]
+
+[[test]]
+name = "reference_contract"
+required-features = ["rhythm", "wav"]
 
 [[test]]
 name = "library_contract"

@@ -724,7 +724,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-time",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1470,8 +1470,7 @@ dependencies = [
 [[package]]
 name = "cochlea-features"
 version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "795aca1c0e2aafba56811f86fb3a79ed450263104504dea6fe2e28322630d356"
+source = "git+https://github.com/gerasim13/cochlea.git?rev=a088af3343910e1284c598090258e6804b7fc5cb#a088af3343910e1284c598090258e6804b7fc5cb"
 dependencies = [
  "ebur128",
  "hound",
@@ -2546,7 +2545,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4324,7 +4323,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4800,7 +4799,7 @@ dependencies = [
  "rkyv",
  "same-file",
  "serde",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "tempfile",
  "thiserror 2.0.21",
  "tracing",
@@ -4889,7 +4888,7 @@ dependencies = [
  "rten-tensor",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "smallvec",
  "thiserror 2.0.21",
  "unimock",
@@ -5114,7 +5113,7 @@ dependencies = [
  "same-file",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "syn 3.0.6",
  "tempfile",
  "toml 1.1.7+spec-1.1.0",
@@ -5221,6 +5220,7 @@ dependencies = [
  "bon",
  "delegate",
  "derive-where",
+ "fearless_simd",
  "fieldwork",
  "firewheel",
  "kithara-bufpool",
@@ -5228,6 +5228,7 @@ dependencies = [
  "kithara-derive",
  "kithara-dsp",
  "kithara-effects",
+ "kithara-fixture-media",
  "kithara-resampler",
  "kithara-signal",
  "kithara-test-fixtures",
@@ -5450,8 +5451,10 @@ dependencies = [
  "kithara-analysis",
  "kithara-audio",
  "kithara-bufpool",
+ "kithara-core-test-fixtures",
  "kithara-decode",
  "kithara-drm",
+ "kithara-effects",
  "kithara-encode",
  "kithara-events",
  "kithara-fixture-gen",
@@ -5462,11 +5465,12 @@ dependencies = [
  "kithara-stream",
  "kithara-test-macros",
  "kithara-test-utils",
- "kithara-workspace-hack",
  "num-traits",
+ "opus",
  "rayon",
  "reqwest",
- "sha2 0.11.0",
+ "serde_json",
+ "sha2 0.11.1",
  "tempfile",
  "thiserror 2.0.21",
  "tiny_http",
@@ -5486,12 +5490,12 @@ dependencies = [
  "kithara-platform",
  "kithara-stream",
  "kithara-test-utils",
- "kithara-workspace-hack",
  "num-traits",
  "serde",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "tempfile",
  "thiserror 2.0.21",
+ "wasm-bindgen-test",
 ]
 
 [[package]]
@@ -5606,6 +5610,7 @@ dependencies = [
  "kithara-dsp",
  "kithara-effects",
  "kithara-events",
+ "kithara-fixture-media",
  "kithara-host",
  "kithara-output",
  "kithara-platform",
@@ -5615,6 +5620,7 @@ dependencies = [
  "kithara-signal",
  "kithara-sync",
  "kithara-test-dylib",
+ "kithara-test-fixtures",
  "kithara-test-utils",
  "kithara-warp",
  "kithara-worker",
@@ -5653,6 +5659,7 @@ version = "0.0.1-alpha5"
 dependencies = [
  "aes 0.9.3",
  "anyhow",
+ "async-trait",
  "axum",
  "base64 0.23.1",
  "bon",
@@ -5689,11 +5696,12 @@ dependencies = [
  "ringbuf",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tower-http 0.7.1",
+ "tower-service",
  "tracing",
  "tracing-log",
  "unimock",
@@ -5725,6 +5733,7 @@ dependencies = [
  "kithara-render",
  "kithara-signal",
  "kithara-sync",
+ "kithara-test-fixtures",
  "kithara-test-utils",
  "kithara-warp",
  "kithara-workspace-hack",
@@ -5770,6 +5779,7 @@ dependencies = [
  "fieldwork",
  "futures",
  "hotpath",
+ "http",
  "humantime-serde",
  "kithara-apple",
  "kithara-bufpool",
@@ -5894,7 +5904,7 @@ dependencies = [
  "num-traits",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "thiserror 2.0.21",
  "tracing",
  "unimock",
@@ -5950,6 +5960,7 @@ dependencies = [
  "kithara-signal",
  "kithara-stream",
  "kithara-sync",
+ "kithara-test-fixtures",
  "kithara-test-utils",
  "kithara-warp",
  "kithara-worker",
@@ -6236,6 +6247,7 @@ dependencies = [
  "kithara-test-fixtures",
  "kithara-test-utils",
  "num-traits",
+ "ringbuf",
  "serde_json",
 ]
 
@@ -6255,8 +6267,10 @@ version = "0.0.1-alpha5"
 dependencies = [
  "hls_m3u8",
  "kithara-analysis",
+ "kithara-core-test-fixtures",
  "kithara-decode",
  "kithara-drm",
+ "kithara-effects",
  "kithara-fixture-gen",
  "kithara-fixture-media",
  "kithara-platform",
@@ -6265,7 +6279,6 @@ dependencies = [
  "kithara-test-dylib",
  "kithara-test-macros",
  "kithara-test-utils",
- "kithara-workspace-hack",
  "num-traits",
  "reqwest",
  "serde",
@@ -6274,6 +6287,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tiny_http",
  "toml 1.1.7+spec-1.1.0",
+ "wasm-bindgen-test",
 ]
 
 [[package]]
@@ -6331,6 +6345,7 @@ dependencies = [
  "kithara-apple",
  "kithara-derive",
  "kithara-platform",
+ "kithara-test-fixtures",
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-ui",
@@ -6566,7 +6581,6 @@ dependencies = [
 name = "kithara-workspace-hack"
 version = "0.0.1-alpha5"
 dependencies = [
- "ahash",
  "aho-corasick",
  "arrayvec",
  "audioadapter-buffers",
@@ -6588,7 +6602,6 @@ dependencies = [
  "digest 0.10.7",
  "dispatch2",
  "either",
- "fastrand",
  "firewheel",
  "firewheel-core",
  "firewheel-graph",
@@ -6596,13 +6609,11 @@ dependencies = [
  "form_urlencoded",
  "futures-channel",
  "futures-core",
- "futures-io",
  "futures-sink",
  "futures-util",
  "getrandom 0.3.4",
  "getrandom 0.4.3",
  "half",
- "hashbrown 0.14.5",
  "hashbrown 0.16.1",
  "hashbrown 0.17.1",
  "hyper",
@@ -6652,8 +6663,6 @@ dependencies = [
  "time",
  "tokio",
  "tokio-util",
- "toml_datetime 1.1.2+spec-1.1.0",
- "toml_parser",
  "tower",
  "tower-http 0.6.11",
  "tracing",
@@ -6664,7 +6673,6 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "winnow 1.0.4",
  "zerocopy",
  "zeroize",
  "zstd-sys",
@@ -7421,7 +7429,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8672,7 +8680,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9469,7 +9477,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9526,7 +9534,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9880,9 +9888,9 @@ dependencies = [
 
 [[package]]
 name = "sha2"
-version = "0.11.0"
+version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "446ba717509524cb3f22f17ecc096f10f4822d76ab5c0b9822c5f9c284e825f4"
+checksum = "47d7069beb7d6ac7b9acd1039986e73443f24234f41074da099d6f994ac9ad19"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.3.1",
@@ -10512,10 +10520,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.5",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -12496,7 +12504,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -13067,7 +13075,7 @@ dependencies = [
  "rustdoc-types",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "signal-hook",
  "syn 3.0.6",
  "tempfile",

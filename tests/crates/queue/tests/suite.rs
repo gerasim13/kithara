@@ -15,6 +15,7 @@ mod file_replay_from_warm_cache;
 mod full_playthrough_census;
 mod loader_lanes;
 mod loader_starvation;
+mod local_file_recovery;
 mod local_track_plays;
 mod mp3_plays_to_its_end;
 mod next_crossfade_hands_over_transport;

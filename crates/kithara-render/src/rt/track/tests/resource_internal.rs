@@ -171,9 +171,7 @@ impl AudioSource for RefillSource {
 
 #[kithara::test(tokio)]
 async fn reset_for_seek_drops_buffered_samples() {
-    let samples: Vec<f32> = (0_u16..1024)
-        .flat_map(|frame| [f32::from(frame); 2])
-        .collect();
+    let samples = kithara_test_fixtures::unit_fixtures::render_seek_before();
     let (mut pr, mut packets) = resource("position.mp3", 1.0, &samples, false);
     let mut left = vec![0.0f32; 128];
     let mut right = vec![0.0f32; 128];
@@ -185,9 +183,7 @@ async fn reset_for_seek_drops_buffered_samples() {
     let buffered_before = left[127];
 
     let segment = SegmentId::FIRST.next();
-    let samples: Vec<f32> = (1024_u16..2048)
-        .flat_map(|frame| [f32::from(frame); 2])
-        .collect();
+    let samples = kithara_test_fixtures::unit_fixtures::render_seek_after();
     packets.push(PcmPacket::Chunk(Box::new(chunk(
         spec(),
         segment,

@@ -19,14 +19,14 @@ use crate::{
     types::{Headers, RangeSpec},
 };
 
-/// Inner stream type used inside [`ByteStream`].
+/// HTTP response body after the transport's native decoding.
 ///
 /// On native: requires `Send` (multi-threaded tokio runtime).
 /// On wasm32: no `Send` bound (JsValue-based streams are `!Send`).
 #[cfg(not(target_arch = "wasm32"))]
-type RawByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, NetError>> + Send>>;
+pub type HttpBody = Pin<Box<dyn Stream<Item = Result<Bytes, NetError>> + Send>>;
 #[cfg(target_arch = "wasm32")]
-type RawByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, NetError>>>>;
+pub type HttpBody = Pin<Box<dyn Stream<Item = Result<Bytes, NetError>>>>;
 
 /// HTTP byte stream with response headers.
 ///
@@ -41,7 +41,7 @@ type RawByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, NetError>>>>;
 pub struct ByteStream {
     /// Response headers from the HTTP request that produced this stream.
     pub headers: Headers,
-    inner: RawByteStream,
+    inner: HttpBody,
     #[field(get = is_partial)]
     partial: bool,
 }
@@ -49,19 +49,19 @@ pub struct ByteStream {
 impl ByteStream {
     /// Create a new `ByteStream` from response headers and a raw body stream.
     #[must_use]
-    pub fn new(headers: Headers, inner: RawByteStream) -> Self {
+    pub fn new(headers: Headers, inner: HttpBody) -> Self {
         Self::with_partial(headers, inner, false)
     }
 
     /// Consume the wrapper, returning just the raw byte stream.
     #[must_use = "the wrapper is consumed; dropping the stream discards the response body"]
-    pub fn into_inner(self) -> RawByteStream {
+    pub fn into_inner(self) -> HttpBody {
         self.inner
     }
 
     /// Create a new `ByteStream` and record whether the response was partial.
     #[must_use]
-    pub fn with_partial(headers: Headers, inner: RawByteStream, partial: bool) -> Self {
+    pub fn with_partial(headers: Headers, inner: HttpBody, partial: bool) -> Self {
         Self {
             headers,
             inner,

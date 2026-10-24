@@ -345,6 +345,7 @@ impl FlashInner {
         let delta = crate::flash::duration_to_nanos(d);
         let token = Token::new();
         let mut s = self.core.lock();
+        let wait = self.enter_wait_locked(&mut s);
         let deadline = self.clock.now_nanos().saturating_add(delta);
         let id = s.registry.fresh_id();
         s.bound_pace_lag(&self.clock);
@@ -352,7 +353,6 @@ impl FlashInner {
             (deadline, id),
             Entry::timed(WaitKind::Timed, Wake::Sync(Arc::clone(&token))),
         );
-        let wait = self.enter_wait_locked(&mut s);
         let adv = s.try_advance(&self.clock);
         drop(s);
         adv.fire();
@@ -381,6 +381,7 @@ impl FlashInner {
         if s.sched.unpark_pending.remove(&thread_id) {
             return;
         }
+        let wait = self.enter_wait_locked(&mut s);
         let deadline = self.clock.now_nanos().saturating_add(delta);
         let id = s.registry.fresh_id();
         s.bound_pace_lag(&self.clock);
@@ -392,7 +393,6 @@ impl FlashInner {
                 role,
             ),
         );
-        let wait = self.enter_wait_locked(&mut s);
         let adv = s.try_advance(&self.clock);
         drop(s);
         adv.fire();
@@ -412,6 +412,7 @@ impl FlashInner {
         let delta = crate::flash::duration_to_nanos(d);
         let token = Token::new();
         let mut s = self.core.lock();
+        let wait = self.enter_wait_locked(&mut s);
         let deadline = self.clock.now_nanos().saturating_add(delta);
         let id = s.registry.fresh_id();
         s.bound_pace_lag(&self.clock);
@@ -419,7 +420,6 @@ impl FlashInner {
             (deadline, id),
             Entry::timed(WaitKind::Timed, Wake::Sync(Arc::clone(&token))),
         );
-        let wait = self.enter_wait_locked(&mut s);
         let adv = s.try_advance(&self.clock);
         drop(s);
         adv.fire();
@@ -471,9 +471,9 @@ impl FlashInner {
             std::thread::yield_now();
             return;
         }
+        let wait = self.enter_wait_locked(&mut s);
         let id = s.registry.fresh_id();
         s.sched.yielders.insert(id, Wake::Sync(Arc::clone(&token)));
-        let wait = self.enter_wait_locked(&mut s);
         let adv = s.try_advance(&self.clock);
         drop(s);
         adv.fire();
@@ -500,6 +500,7 @@ impl FlashInner {
     ) -> (Arc<Token>, WakeBatch, WaitGuard<'_>) {
         let token = Token::new();
         let mut s = self.core.lock();
+        let wait = self.enter_wait_locked(&mut s);
         let deadline_nanos = deadline_nanos.max(self.clock.now_nanos());
         let id = s.registry.fresh_id();
         s.bound_pace_lag(&self.clock);
@@ -507,7 +508,6 @@ impl FlashInner {
             (deadline_nanos, id),
             Entry::timed(WaitKind::Condvar(cvid), Wake::Sync(Arc::clone(&token))),
         );
-        let wait = self.enter_wait_locked(&mut s);
         let adv = s.try_advance(&self.clock);
         drop(s);
         (token, adv, wait)
@@ -522,6 +522,7 @@ impl FlashInner {
         let token = Token::new();
         let parked = Parked::here();
         let mut s = self.core.lock();
+        let wait = self.enter_wait_locked(&mut s);
         let id = s.registry.fresh_id();
         s.sched.indef.insert(
             id,
@@ -531,7 +532,6 @@ impl FlashInner {
                 parked,
             ),
         );
-        let wait = self.enter_wait_locked(&mut s);
         let adv = s.try_advance(&self.clock);
         drop(s);
         (token, adv, wait)

@@ -12,7 +12,7 @@ impl ConnectionMetrics {
         self.opened.load(Ordering::SeqCst)
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), any(reqwest_backend, apple_backend)))]
     pub(crate) fn record_opened_connection(&self) {
         self.opened.fetch_add(1, Ordering::SeqCst);
     }

@@ -1,6 +1,6 @@
 use std::ops::{Range, RangeInclusive};
 
-use cochlea_features::{Audio as ProbeAudio, SegmentOpts, segment_timeline};
+use cochlea_features::{Audio as ProbeAudio, SegmentOpts, count_silent_segments};
 use kithara::{
     assets::{AssetStore, StorageBackend},
     platform::{time::SystemTime, tokio::join},
@@ -526,14 +526,10 @@ fn cochlea_silent_buckets(samples: &[f32]) -> usize {
         channels: CHANNELS,
         sample_rate: SAMPLE_RATE,
     };
-    segment_timeline(
+    count_silent_segments(
         &audio,
         &SegmentOpts::default().with_window_ms(COCHLEA_WINDOW_MS),
     )
-    .segments
-    .iter()
-    .filter(|segment| segment.silent)
-    .count()
 }
 
 #[kithara::test(

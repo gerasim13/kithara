@@ -9,7 +9,9 @@ use crate::Bound;
 #[kithara::test]
 #[case::ready(true)]
 #[case::rejected(false)]
-fn a_segment_entry_keeps_its_native_curve_and_waits_for_native_readiness(#[case] applied: bool) {
+async fn a_segment_entry_keeps_its_native_curve_and_waits_for_native_readiness(
+    #[case] applied: bool,
+) {
     let mut rig = rig();
     let (mut track, mut inbox) = prepared_track();
     let curve = SpeedCurve::Approach(
@@ -70,9 +72,9 @@ fn a_segment_entry_keeps_its_native_curve_and_waits_for_native_readiness(#[case]
                 TrackStatus::Paused { at: Duration::ZERO },
                 TrackStatus::Loading,
             ] {
-                assert_preparation_refusal(host_rate, status, false);
+                assert_preparation_refusal(host_rate, status, false).await;
             }
-            assert_preparation_refusal(host_rate, TrackStatus::Loaded, true);
+            assert_preparation_refusal(host_rate, TrackStatus::Loaded, true).await;
             assert_obsolete_preparation_refusal(host_rate);
             for tick_before_receipt in [false, true] {
                 for release_before_receipt in [false, true] {
@@ -80,13 +82,14 @@ fn a_segment_entry_keeps_its_native_curve_and_waits_for_native_readiness(#[case]
                         host_rate,
                         tick_before_receipt,
                         release_before_receipt,
-                    );
+                    )
+                    .await;
                 }
             }
         }
-        assert_terminal_adoption_refusal(false, false);
-        assert_terminal_adoption_refusal(false, true);
-        assert_terminal_adoption_refusal(true, false);
+        assert_terminal_adoption_refusal(false, false).await;
+        assert_terminal_adoption_refusal(false, true).await;
+        assert_terminal_adoption_refusal(true, false).await;
     }
 }
 
@@ -127,7 +130,7 @@ fn pause_prepared_track(track: &mut Track, rig: &mut Rig) {
     assert_eq!(track.resume, Some(stopped_mark));
 }
 
-fn assert_preparation_refusal(host_rate: bool, initial: TrackStatus, reserved: bool) {
+async fn assert_preparation_refusal(host_rate: bool, initial: TrackStatus, reserved: bool) {
     let mut rig = rig();
     let (mut track, mut inbox) = if reserved || initial == TrackStatus::Loading {
         let mut track = track(A);
@@ -135,7 +138,7 @@ fn assert_preparation_refusal(host_rate: bool, initial: TrackStatus, reserved: b
             track.slot = None;
         }
         load(&mut track, &mut rig, Duration::ZERO);
-        let opened = opened_fixture(&mut rig, "refused-preparation");
+        let opened = opened_fixture(&mut rig, "refused-preparation").await;
         let receipt = rig.open(Ok(opened)).expect("native opened source");
         rig.with_outbox(|out| track.settle(TrackReceipt::Loaded(receipt), out))
             .expect("live scope");
@@ -143,7 +146,7 @@ fn assert_preparation_refusal(host_rate: bool, initial: TrackStatus, reserved: b
         track.lane = Some(sender);
         (track, inbox)
     } else if matches!(initial, TrackStatus::Paused { .. }) {
-        loaded(&mut rig, A, "refused-paused-preparation")
+        loaded(&mut rig, A, "refused-paused-preparation").await
     } else {
         prepared_track()
     };
@@ -307,8 +310,10 @@ fn assert_obsolete_preparation_refusal(host_rate: bool) {
     );
 }
 
-fn playing_incumbent(support: &mut Rig) -> (mock::MixerRig, [[f32; 32]; 2]) {
-    let incumbent = opened_fixture(support, "failed-replacement-incumbent").opened;
+async fn playing_incumbent(support: &mut Rig) -> (mock::MixerRig, [[f32; 32]; 2]) {
+    let incumbent = opened_fixture(support, "failed-replacement-incumbent")
+        .await
+        .opened;
     let shape = kithara_render::rt::StreamShape::new(
         NonZeroU32::new(32).expect("host block"),
         mock::SAMPLE_RATE,
@@ -442,17 +447,17 @@ fn settle_refused_replacement(
     assert!(!newcomer.releasing);
 }
 
-fn assert_failed_replacement_keeps_incumbent(
+async fn assert_failed_replacement_keeps_incumbent(
     host_rate: bool,
     tick_before_receipt: bool,
     release_before_receipt: bool,
 ) {
     let mut support = rig();
-    let (mut mixer, mut pcm) = playing_incumbent(&mut support);
+    let (mut mixer, mut pcm) = playing_incumbent(&mut support).await;
     let mut newcomer = track(A);
     newcomer.slot = None;
     load(&mut newcomer, &mut support, Duration::ZERO);
-    let opened = opened_fixture(&mut support, "failed-replacement-newcomer");
+    let opened = opened_fixture(&mut support, "failed-replacement-newcomer").await;
     let receipt = support.open(Ok(opened)).expect("native newcomer open");
     with_mixer(&mut mixer, &mut support.dispatcher, frame(64), |out| {
         newcomer.settle(TrackReceipt::Loaded(receipt), out)
@@ -567,11 +572,11 @@ fn assert_failed_replacement_keeps_incumbent(
     assert_incumbent_survives_release(&mut newcomer, &mut support, &mut mixer, &mut pcm);
 }
 
-fn assert_terminal_adoption_refusal(cancelled: bool, outdated: bool) {
+async fn assert_terminal_adoption_refusal(cancelled: bool, outdated: bool) {
     for tick_before_receipt in [false, true] {
         for release_before_receipt in [false, true] {
             let mut rig = rig();
-            let (mut track, mut inbox) = loaded(&mut rig, A, "terminal-adoption");
+            let (mut track, mut inbox) = loaded(&mut rig, A, "terminal-adoption").await;
             let deferred = cancelled || !outdated;
             let original = command_at_zero(
                 &mut track,

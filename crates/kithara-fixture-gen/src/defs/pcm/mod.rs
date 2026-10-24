@@ -1,6 +1,8 @@
 mod analysis;
 mod beat;
 mod common;
+mod fixed_signal;
+mod fixed_wav;
 mod integration;
 mod mock;
 mod play;
