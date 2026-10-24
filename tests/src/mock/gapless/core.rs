@@ -153,7 +153,6 @@ pub async fn create_apple_fused_resource(
 
 pub async fn render_synthetic_fused_deficit_seam(
     tail_compensation: bool,
-    pcm: &[f32],
     stereo: &[f32],
 ) -> SyntheticSeamRender {
     let expected_device_frames = ceil_scaled_frames(
@@ -186,10 +185,14 @@ pub async fn render_synthetic_fused_deficit_seam(
         first_frames,
         first_frame_count,
     )));
-    let second = harness.pcm_deck(Box::new(SyntheticPcmReader::new(
-        pcm[FUSED_FIXTURE_IDEAL_DEVICE_FRAMES..].to_vec(),
-        FUSED_FIXTURE_IDEAL_DEVICE_FRAMES,
-    )));
+    let second = TrackSource::Uri(
+        kithara_test_fixtures::assets::fused_seam_second_wav_default()
+            .path()
+            .expect("prepared fused seam second source")
+            .to_str()
+            .expect("UTF-8 prepared fused seam path")
+            .to_owned(),
+    );
 
     let [_, second_id] = load_tagged_queue(&harness, [first, second]).await;
 

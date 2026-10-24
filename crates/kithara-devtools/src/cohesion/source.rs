@@ -26,6 +26,7 @@ pub(super) struct Source {
     pub(super) notes: BTreeSet<String>,
     pub(super) implementations: Vec<Implementation>,
     imports: BTreeMap<String, BTreeMap<String, BTreeSet<String>>>,
+    modules: BTreeSet<String>,
     root: PathBuf,
     include_tests: bool,
 }
@@ -120,6 +121,7 @@ impl Source {
                 }
                 Item::Mod(value) => {
                     let child = join(module, &value.ident.to_string());
+                    self.modules.insert(child.clone());
                     if let Some((_, items)) = &value.content {
                         self.items(
                             file,
@@ -200,6 +202,9 @@ impl Source {
                 parts.remove(0);
             }
             return self.resolve_absolute(&join(&parents.join("::"), &parts.join("::")), visited);
+        }
+        if self.modules.contains(&join(module, first)) {
+            return self.resolve_absolute(&join(module, path), visited);
         }
         if let Some(paths) = self
             .imports
@@ -342,6 +347,31 @@ pub(super) fn methods(item: &ItemImpl, tests: bool) -> impl Iterator<Item = &syn
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_module_aliases_resolve_beside_same_named_value_imports() {
+        let mut source = Source::default();
+        source.definition("channel", "Sender", String::new(), false);
+        source.modules.insert("channel".to_owned());
+        source.imports.insert(
+            String::new(),
+            BTreeMap::from([(
+                "channel".to_owned(),
+                BTreeSet::from(["external::channel".to_owned()]),
+            )]),
+        );
+        source.imports.insert(
+            "channel".to_owned(),
+            BTreeMap::from([(
+                "Alias".to_owned(),
+                BTreeSet::from(["crate::channel::Sender".to_owned()]),
+            )]),
+        );
+        assert_eq!(
+            source.resolve("", "channel::Alias", &mut BTreeSet::new()),
+            Some("channel::Sender".to_owned()),
+        );
+    }
 
     #[test]
     fn expanding_import_cycles_leave_local_owners_resolvable() {

@@ -260,6 +260,7 @@ const fn with_alpha(color: Rgba, alpha: f32) -> Rgba {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_fixtures::portable;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -293,15 +294,13 @@ mod tests {
 
     /// The left edge of every column the hero wave draws, in order.
     fn column_edges(bounds: Rect, zoom: f32) -> Vec<f32> {
-        let buckets = (0..4096)
-            .map(|index| {
-                let level: f32 = index.as_();
-                let level = 0.3 + (level * 0.017).sin().abs() * 0.6;
-                WaveBucket {
-                    high: level,
-                    low: level,
-                    mid: level,
-                }
+        let buckets = portable::hero_wave_levels()
+            .iter()
+            .copied()
+            .map(|level| WaveBucket {
+                high: level,
+                low: level,
+                mid: level,
             })
             .collect::<Vec<_>>();
         let data = HeroWave {

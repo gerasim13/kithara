@@ -1,6 +1,9 @@
 use std::array;
 
-use cochlea_features::{Audio as ProbeAudio, ProbeOpts, SegmentOpts, probe, segment_timeline};
+use cochlea_features::{
+    Audio as ProbeAudio, ProbeOpts, SegmentOpts, analyze_clipping, analyze_loudness,
+    analyze_silence, count_silent_segments, detect_onsets,
+};
 use kithara::platform::tokio::join;
 use kithara_integration_tests::{TestServerHelper, cochlea::percentile_f32};
 use kithara_test_fixtures::integration_fixtures::{
@@ -264,22 +267,74 @@ fn measure_cochlea(samples: &[f32]) -> (CochleaMetric, Vec<f64>) {
         channels: CHANNELS,
         sample_rate: SAMPLE_RATE,
     };
-    let report = probe(&audio, &ProbeOpts::default());
+    let loudness = analyze_loudness(&audio);
+    let clipping = analyze_clipping(&audio, loudness.true_peak_dbtp);
+    let silence = analyze_silence(
+        &audio.mono(),
+        SAMPLE_RATE,
+        ProbeOpts::default().silence_floor_dbfs,
+    );
+    let onsets = detect_onsets(&audio);
     let opts = SegmentOpts::default().with_window_ms(COCHLEA_WINDOW_MS);
-    let silent_buckets = segment_timeline(&audio, &opts)
-        .segments
-        .iter()
-        .filter(|segment| segment.silent)
-        .count();
+    let silent_buckets = count_silent_segments(&audio, &opts);
     let metric = CochleaMetric {
         silent_buckets,
-        onsets: report.onsets.count,
-        clipped_samples: report.clipping.clipped_samples,
-        true_peak_over_0dbtp: report.clipping.true_peak_over_0dbtp,
-        leading_silence_ms: report.silence.leading_ms,
-        trailing_silence_ms: report.silence.trailing_ms,
+        onsets: onsets.count,
+        clipped_samples: clipping.clipped_samples,
+        true_peak_over_0dbtp: clipping.true_peak_over_0dbtp,
+        leading_silence_ms: silence.leading_ms,
+        trailing_silence_ms: silence.trailing_ms,
     };
-    (metric, report.onsets.times_ms.clone())
+    (metric, onsets.times_ms)
+}
+
+#[kithara::test(native, flash(false))]
+fn focused_measurements_match_full_cochlea(quality_control_a: Vec<f32>) {
+    let audio = ProbeAudio {
+        samples: quality_control_a.clone(),
+        channels: CHANNELS,
+        sample_rate: SAMPLE_RATE,
+    };
+    let original = cochlea_features::probe(&audio, &ProbeOpts::default());
+    let timeline = cochlea_features::segment_timeline(
+        &audio,
+        &SegmentOpts::default().with_window_ms(COCHLEA_WINDOW_MS),
+    );
+    let (actual, onsets) = measure_cochlea(&quality_control_a);
+    assert_eq!(
+        (
+            actual.silent_buckets,
+            actual.onsets,
+            actual.clipped_samples,
+            actual.true_peak_over_0dbtp,
+            actual.leading_silence_ms.to_bits(),
+            actual.trailing_silence_ms.to_bits(),
+        ),
+        (
+            timeline
+                .segments
+                .iter()
+                .filter(|segment| segment.silent)
+                .count(),
+            original.onsets.count,
+            original.clipping.clipped_samples,
+            original.clipping.true_peak_over_0dbtp,
+            original.silence.leading_ms.to_bits(),
+            original.silence.trailing_ms.to_bits(),
+        ),
+    );
+    assert_eq!(
+        onsets
+            .iter()
+            .map(|value| value.to_bits())
+            .collect::<Vec<_>>(),
+        original
+            .onsets
+            .times_ms
+            .iter()
+            .map(|value| value.to_bits())
+            .collect::<Vec<_>>(),
+    );
 }
 
 fn cochlea_failures(

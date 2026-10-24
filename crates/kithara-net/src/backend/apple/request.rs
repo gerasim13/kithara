@@ -36,7 +36,6 @@ pub(super) struct AppleRequest {
     body: Option<Bytes>,
     headers: Option<Headers>,
     range: Option<RangeSpec>,
-    #[field(get, vis = "pub(super)")]
     url: Url,
 }
 

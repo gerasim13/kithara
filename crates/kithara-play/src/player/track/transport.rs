@@ -3,7 +3,7 @@ use kithara_command::{Rejection, Seq, When};
 use kithara_config::{ConfigOwner, LiveConfig};
 use kithara_render::{
     LaneCommand,
-    bridge::{DeckPart, Fade, PlaybackFault, Slot},
+    bridge::{DeckPart, Fade, PlaybackFault, Slot, SlotMark},
 };
 use kithara_signal::SessionFrame;
 use kithara_sync::SpeedCurve;
@@ -116,46 +116,21 @@ impl<S> PlayerImpl<S> {
             self.play = Some(at);
             return Ok(None);
         }
-        if let Some(resume) = self.resume.or_else(|| {
-            self.mark.filter(|_| {
-                matches!(
-                    self.status,
-                    TrackStatus::Loaded | TrackStatus::Paused { .. }
-                )
-            })
-        }) && resume.lane.segment == self.segment
-        {
-            let pending = self
-                .lane_commands
-                .iter()
-                .filter(|operation| operation.applied() != Some(false))
-                .any(|operation| {
-                    let pending = match operation.when {
-                        When::At(frame) => {
-                            frame.segment == resume.lane.segment && frame.frame > resume.lane.frame
-                        }
-                        When::Next | When::Deferred => operation.segment == resume.lane.segment,
-                    };
-                    if pending {
-                        tracing::debug!(
-                            item = u64::from(self.item),
-                            seq = operation.seq.get(),
-                            current_segment = self.segment.get(),
-                            applied = ?operation.applied(),
-                            requested_when = ?operation.when,
-                            paused_resume = ?resume,
-                            command = ?operation.command,
-                            "paused Play requires a new segment"
-                        );
-                    }
-                    pending
-                });
-            if pending {
-                self.segment(resume.position, None, out)?;
-                self.resume = None;
-                self.play = Some(at);
-                return Ok(None);
-            }
+        if let Some((resume, operation)) = self.pending_resume_command() {
+            tracing::debug!(
+                item = u64::from(self.item),
+                seq = operation.seq.get(),
+                current_segment = self.segment.get(),
+                applied = ?operation.applied(),
+                requested_when = ?operation.when,
+                paused_resume = ?resume,
+                command = ?operation.command,
+                "paused Play requires a new segment"
+            );
+            self.segment(resume.position, None, out)?;
+            self.resume = None;
+            self.play = Some(at);
+            return Ok(None);
         }
         if !self.attached() || self.ready != Some(self.segment) {
             self.play = Some(at);
@@ -169,6 +144,30 @@ impl<S> PlayerImpl<S> {
             }],
             out,
         )
+    }
+
+    pub(super) fn pending_resume_command(&self) -> Option<(SlotMark, &LaneOperation)> {
+        let resume = self.resume.or_else(|| {
+            self.mark.filter(|_| {
+                matches!(
+                    self.status,
+                    TrackStatus::Loaded | TrackStatus::Paused { .. }
+                )
+            })
+        })?;
+        if resume.lane.segment != self.segment {
+            return None;
+        }
+        self.lane_commands
+            .iter()
+            .filter(|operation| operation.applied() != Some(false))
+            .find(|operation| match operation.when {
+                When::At(frame) => {
+                    frame.segment == resume.lane.segment && frame.frame > resume.lane.frame
+                }
+                When::Next | When::Deferred => operation.segment == resume.lane.segment,
+            })
+            .map(|operation| (resume, operation))
     }
 
     pub(super) fn send_playback(

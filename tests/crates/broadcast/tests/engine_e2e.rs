@@ -1,8 +1,7 @@
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::NonZeroUsize;
 
 use kithara::{
     self,
-    audio::mock::TestPcmReader,
     broadcast::{Broadcast, BroadcastConfig, BroadcastHandle, BroadcastOutput},
     host::Tap,
     net::{HttpClient, NetOptions},
@@ -12,7 +11,7 @@ use kithara::{
         time::{Duration, WallInstant},
         tokio::task::spawn_blocking,
     },
-    play::Resource,
+    queue::TrackSource,
     signal::AudioSpec,
     worker::{Worker, WorkerConfig},
 };
@@ -20,10 +19,10 @@ use kithara_integration_tests::{
     bufpool_ext::pools,
     offline::{
         LOCAL_LOAD_DEADLINE, OfflinePlayer, OfflinePlayerOptions, append_source_loaded,
-        resource_from_reader,
+        asset_source,
     },
 };
-use kithara_test_fixtures::integration_fixtures::broadcast_tone;
+use kithara_test_fixtures::unit_fixtures::broadcast_tone_wav;
 use kithara_test_utils::wait_until;
 use url::Url;
 
@@ -37,16 +36,11 @@ const WINDOW: usize = 6;
 const PRIMING_SKIP_FRAMES: usize = 4_410;
 const MAX_BLOCKS: usize = 2_000;
 
-fn tone_resource(broadcast_tone: Vec<f32>) -> Resource {
-    let spec = AudioSpec::new(2, NonZeroU32::new(SESSION_RATE).expect("test rate"));
-    resource_from_reader(TestPcmReader::with_samples(spec, broadcast_tone))
-}
-
-async fn playing_harness(broadcast_tone: Vec<f32>) -> OfflinePlayer {
+async fn playing_harness() -> OfflinePlayer {
     let harness =
         OfflinePlayer::with_sample_rate(OfflinePlayerOptions::builder().build(), SESSION_RATE)
             .await;
-    let deck_source = harness.pcm_deck((tone_resource(broadcast_tone)).into());
+    let deck_source = TrackSource::Uri(asset_source(&broadcast_tone_wav()));
     let item = append_source_loaded(&harness, harness.player(), deck_source).await;
     harness
         .with_queue(move |player| {
@@ -221,8 +215,8 @@ impl Drop for OnAir {
 }
 
 #[kithara::test(tokio)]
-async fn the_session_renders_the_source_tone(broadcast_tone: Vec<f32>) {
-    let harness = playing_harness(broadcast_tone).await;
+async fn the_session_renders_the_source_tone() {
+    let harness = playing_harness().await;
     let rendered = render_blocks(&harness, 200).await;
     assert_carries_the_tone(
         &left_channel(&rendered),
@@ -234,11 +228,11 @@ async fn the_session_renders_the_source_tone(broadcast_tone: Vec<f32>) {
 }
 
 #[kithara::test(tokio, flash(false), timeout(Duration::from_secs(60)))]
-async fn the_engine_mix_reaches_an_http_client_as_the_source_tone(broadcast_tone: Vec<f32>) {
+async fn the_engine_mix_reaches_an_http_client_as_the_source_tone() {
     const ROOMY_RING: usize = MAX_BLOCKS * BLOCK_FRAMES * 2;
     const TONE_RENDER_FRAMES: usize = 110_250;
 
-    let harness = playing_harness(broadcast_tone).await;
+    let harness = playing_harness().await;
     let on_air = OnAir::start(&harness, ROOMY_RING, None).await;
 
     render_tone(&harness, TONE_RENDER_FRAMES).await;
@@ -273,14 +267,14 @@ async fn the_engine_mix_reaches_an_http_client_as_the_source_tone(broadcast_tone
 }
 
 #[kithara::test(tokio, flash(false), timeout(Duration::from_secs(60)))]
-async fn an_intake_gap_breaks_the_served_playlist(broadcast_tone: Vec<f32>) {
+async fn an_intake_gap_breaks_the_served_playlist() {
     const ROOMY_RING: usize = MAX_BLOCKS * BLOCK_FRAMES * 2;
     const GAP_AFTER_WRITES: usize = 100;
     const OVERRUN_FRAMES: usize = 110_250;
     const TAIL_FRAMES: usize = 8_820;
     const TAIL_TONE_FRAMES: usize = 4_410;
 
-    let harness = playing_harness(broadcast_tone).await;
+    let harness = playing_harness().await;
     let on_air = OnAir::start(&harness, ROOMY_RING, Some(GAP_AFTER_WRITES)).await;
 
     render_tone(&harness, OVERRUN_FRAMES).await;

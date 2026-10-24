@@ -68,7 +68,7 @@ impl IsolatorEq {
         })
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn process_sample(&mut self, input: f32) -> f32 {
         let input = sanitize_sample(input);
         self.gains.tick();
@@ -142,7 +142,7 @@ impl IsolatorEq {
 #[cfg(test)]
 mod tests {
     use kithara_dsp::param::SmoothingFilterCoeff;
-    use kithara_test_fixtures::unit_fixtures::eq_impulse;
+    use kithara_test_fixtures::{portable, unit_fixtures::eq_impulse};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -185,17 +185,14 @@ mod tests {
         let mut eq = IsolatorEq::new(&config, &bands, SAMPLE_RATE)
             .unwrap_or_else(|error| panic!("test isolator: {error}"));
         let rate: f32 = SAMPLE_RATE.as_();
-        let tone = |n: usize| {
-            let n: f32 = n.as_();
-            (n * TONE_HZ * std::f32::consts::TAU / rate).sin()
-        };
-        let mut previous = eq.process_sample(tone(0));
+        let tone = portable::eq_sine_440();
+        let mut previous = eq.process_sample(tone[0]);
         let mut max_step = 0.0_f32;
-        for n in 1..SAMPLE_RATE as usize {
+        for (n, sample) in tone.iter().enumerate().skip(1) {
             if n == CHANGE_AT {
                 eq.set_gain(1, GainDb::MIN);
             }
-            let out = eq.process_sample(tone(n));
+            let out = eq.process_sample(*sample);
             if n >= CHANGE_AT / 2 {
                 max_step = max_step.max((out - previous).abs());
             }

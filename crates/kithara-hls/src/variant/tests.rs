@@ -13,7 +13,7 @@ use kithara_drm::DecryptContext;
 use kithara_events::EventBus;
 use kithara_platform::{
     CancelToken,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 use kithara_storage::WaitOutcome;
@@ -24,7 +24,7 @@ use kithara_stream::{
 use kithara_test_utils::kithara;
 use url::Url;
 
-use super::{SizeDemand, VariantParts, segment_placeholder_size};
+use super::{DispatchTokens, SizeDemand, VariantParts, segment_placeholder_size};
 use crate::{
     HlsEvent,
     config::HlsConfig,
@@ -3014,7 +3014,9 @@ fn retire_lookahead_burns_fetches_beyond_the_owed_window() {
     let cmds = session.dispatch(&ctx, 10);
     assert_eq!(cmds.len(), 6, "precondition: every segment dispatches");
 
-    session.retire_lookahead();
+    for token in session.take_retired_lookahead(Duration::ZERO) {
+        token.cancel();
+    }
 
     for cmd in &cmds {
         let seg = seg_idx_by_url(&v, cmd.url());
@@ -3041,7 +3043,9 @@ fn retire_lookahead_spares_the_owed_window() {
     let cmds = session.dispatch(&ctx, 10);
     assert_eq!(cmds.len(), 6, "precondition: every segment dispatches");
 
-    session.retire_lookahead();
+    for token in session.take_retired_lookahead(Duration::ZERO) {
+        token.cancel();
+    }
 
     for cmd in &cmds {
         let seg = seg_idx_by_url(&v, cmd.url());
@@ -3055,6 +3059,46 @@ fn retire_lookahead_spares_the_owed_window() {
             "owed fetch for segment {seg} must stay live"
         );
     }
+}
+
+#[kithara::test]
+fn lookahead_registry_releases_completed_fetches_across_seeks() {
+    let ctx = test_ctx(4);
+    let variant = make_var(0, 0, &[100; 32], &ctx);
+    let cancel = CancelToken::never();
+    let lookahead = Mutex::default();
+    let mut completed = 0;
+
+    for segment in [0, 4, 8, 12, 16, 20, 24, 28, 0, 4] {
+        variant.rebuild(&ctx, segment);
+        let mut commands = variant.dispatch_from(
+            &ctx,
+            4,
+            u64::from(segment) * 100,
+            None,
+            true,
+            DispatchTokens {
+                metadata: cancel.clone(),
+                fetch: cancel.clone(),
+                lookahead: &lookahead,
+            },
+        );
+        assert!(
+            lookahead.lock().len() <= 2,
+            "only the current batch's two lookahead fetches may remain registered"
+        );
+        for command in &mut commands {
+            let mut writer = command.take_writer().expect("body writer");
+            writer(&[9; 100]).expect("body delivery");
+            command.take_on_complete().expect("fetch completion")(100, None, None);
+            completed += 1;
+        }
+    }
+    assert_eq!(
+        completed, 32,
+        "all segment bodies completed before seeking back"
+    );
+    assert!(lookahead.lock().is_empty());
 }
 
 /// A recoverably failed fetch re-enters the plan in plan order, not at the

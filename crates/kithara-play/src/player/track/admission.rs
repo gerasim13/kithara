@@ -51,6 +51,9 @@ impl<S> Track<S> for PlayerImpl<S> {
     }
 
     fn prepared_speed(&self) -> Option<&SpeedCurve> {
+        if self.pending_resume_command().is_some() {
+            return None;
+        }
         let consumed = self
             .resume
             .or(self.mark)
@@ -221,12 +224,11 @@ impl<S> Track<S> for PlayerImpl<S> {
         let basis = self.source_basis.ok_or(PlayError::Untimed)?;
         let endpoint = source_endpoint(basis, endpoint, sample_rate)?;
         let commands = self.planned_changes(mark.lane.segment, true)?;
-        let source = self.observed_source.ok_or(PlayError::Untimed)?;
         let plan = EndPlan {
             source: (
-                source.source_revision,
-                source.render_revision,
-                source.mapping_revision,
+                self.observed_source.map(|source| source.source_revision),
+                span.render_revision(),
+                span.mapping_revision(),
             ),
             basis,
             endpoint,
@@ -238,7 +240,7 @@ impl<S> Track<S> for PlayerImpl<S> {
             .projected_end
             .borrow()
             .as_ref()
-            .filter(|projected| projected.plan == plan)
+            .filter(|projected| projected.plan == plan && projected.frame >= mark.lane.frame)
             .map(|projected| projected.frame);
         let end = if let Some(end) = known {
             end
@@ -334,6 +336,39 @@ impl<S> PlayerImpl<S> {
             return Err(PlayError::Untimed);
         }
         Ok((mark, span, offset))
+    }
+
+    /// Walks the accepted plan from the observed mark to the lane frame
+    /// where the source reaches its endpoint.
+    fn project_end(
+        &self,
+        mark: SlotMark,
+        span: SourceSpan,
+        offset: u64,
+        plan: &EndPlan,
+        commands: &[(u64, Seq, PlannedChange<'_>)],
+    ) -> Result<u64, PlayError> {
+        let sample_rate = plan.sample_rate;
+        let mut trajectory = self.trajectory_at(mark, span, offset, sample_rate, commands)?;
+        let mut cursor = mark.lane.frame;
+        for (at, _, change) in commands.iter().filter(|(at, _, _)| *at > mark.lane.frame) {
+            if let Some(offset) = trajectory
+                .first_at_or_after(0, sample_rate, plan.endpoint, Some(at - cursor))
+                .map_err(|error| PlayError::Internal(error.to_string()))?
+            {
+                return cursor.checked_add(offset).ok_or(PlayError::Untimed);
+            }
+            trajectory
+                .advance_by(0, sample_rate, at - cursor)
+                .map_err(|error| PlayError::Internal(error.to_string()))?;
+            cursor = *at;
+            project_change(&mut trajectory, change, sample_rate)?;
+        }
+        let offset = trajectory
+            .first_at_or_after(0, sample_rate, plan.endpoint, None)
+            .map_err(|error| PlayError::Internal(error.to_string()))?
+            .ok_or(PlayError::Untimed)?;
+        cursor.checked_add(offset).ok_or(PlayError::Untimed)
     }
 
     fn trajectory_at(
@@ -438,39 +473,4 @@ fn project_change(
         }
     }
     Ok(())
-}
-
-impl<S> PlayerImpl<S> {
-    /// Walks the accepted plan from the segment start to the lane frame
-    /// where the source reaches its endpoint.
-    fn project_end(
-        &self,
-        mark: SlotMark,
-        span: SourceSpan,
-        offset: u64,
-        plan: &EndPlan,
-        commands: &[(u64, Seq, PlannedChange<'_>)],
-    ) -> Result<u64, PlayError> {
-        let sample_rate = plan.sample_rate;
-        let mut trajectory = self.trajectory_at(mark, span, offset, sample_rate, commands)?;
-        let mut cursor = mark.lane.frame;
-        for (at, _, change) in commands.iter().filter(|(at, _, _)| *at > mark.lane.frame) {
-            if let Some(offset) = trajectory
-                .first_at_or_after(0, sample_rate, plan.endpoint, Some(at - cursor))
-                .map_err(|error| PlayError::Internal(error.to_string()))?
-            {
-                return cursor.checked_add(offset).ok_or(PlayError::Untimed);
-            }
-            trajectory
-                .advance_by(0, sample_rate, at - cursor)
-                .map_err(|error| PlayError::Internal(error.to_string()))?;
-            cursor = *at;
-            project_change(&mut trajectory, change, sample_rate)?;
-        }
-        let offset = trajectory
-            .first_at_or_after(0, sample_rate, plan.endpoint, None)
-            .map_err(|error| PlayError::Internal(error.to_string()))?
-            .ok_or(PlayError::Untimed)?;
-        cursor.checked_add(offset).ok_or(PlayError::Untimed)
-    }
 }

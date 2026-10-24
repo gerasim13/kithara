@@ -6,20 +6,113 @@
 #[cfg(all(test, target_os = "android"))]
 use kithara_test_dylib as _;
 use kithara_test_fixtures::{
+    assets,
     fixtures::{
         ascending_pcm, ascending_wrap_pcm, descending_pcm, descending_wrap_pcm,
         direction_channel_less, direction_step, phase_endpoints, provenance_silence,
     },
-    integration_fixtures::encoder_saw_aac,
+    integration_fixtures::{cochlea_pulses, cochlea_silence, constant_half, encoder_saw_aac},
     signal::{
         FrameClass, Pcm, Replay, SAW_PERIOD, SignalDirection, ascending_phase_replays,
         classify_windows, detect_direction, phase::units,
     },
 };
 use kithara_test_utils::kithara;
+use num_traits::ToPrimitive;
 
 mod consts {
     pub(super) const WINDOW: usize = 64;
+}
+
+#[kithara::test(native)]
+fn prepared_constant_pcm_wav_matches_the_previous_deck_writer(constant_half: &'static [u8]) {
+    let mut expected = b"RIFF\0\0\0\0WAVEfmt \x10\0\0\0\x03\0".to_vec();
+    expected.extend_from_slice(&2_u16.to_le_bytes());
+    expected.extend_from_slice(&44_100_u32.to_le_bytes());
+    expected.extend_from_slice(&352_800_u32.to_le_bytes());
+    expected.extend_from_slice(&8_u16.to_le_bytes());
+    expected.extend_from_slice(&32_u16.to_le_bytes());
+    expected.extend_from_slice(b"data\0\0\0\0");
+    for sample in constant_half[..44_100 * size_of::<f32>()]
+        .as_chunks::<4>()
+        .0
+    {
+        expected.extend_from_slice(sample);
+        expected.extend_from_slice(sample);
+    }
+    let data_size = u32::try_from(expected.len() - 44).expect("one-second WAV data fits u32");
+    expected[4..8].copy_from_slice(&(data_size + 36).to_le_bytes());
+    expected[40..44].copy_from_slice(&data_size.to_le_bytes());
+    assert_eq!(expected.len(), 352_844);
+
+    let asset = assets::constant_half_wav_default();
+    let path = asset.path().expect("prepared float WAV is stored on disk");
+    assert_eq!(asset.bytes(), expected);
+    assert_eq!(
+        std::fs::read(path).expect("read prepared float WAV"),
+        expected
+    );
+}
+
+#[kithara::test(native)]
+#[case::cd_120(44_100, 120.0)]
+#[case::render_120(48_000, 120.0)]
+#[case::cd_127(44_100, 127.0)]
+#[case::render_127(48_000, 127.0)]
+#[case::cd_126(44_100, 126.0)]
+#[case::render_126(48_000, 126.0)]
+#[case::cd_128(44_100, 128.0)]
+#[case::render_128(48_000, 128.0)]
+#[case::cd_126_49(44_100, 126.49)]
+#[case::render_126_49(48_000, 126.49)]
+#[case::cd_127_51(44_100, 127.51)]
+#[case::render_127_51(48_000, 127.51)]
+#[case::half(48_000, 63.5)]
+fn prepared_pulses_preserve_the_original_sample_bits(#[case] sample_rate: u32, #[case] bpm: f64) {
+    let prepared = cochlea_pulses(sample_rate, bpm);
+    let beat_frames = f64::from(sample_rate) * 60.0 / bpm;
+    let leading_frames = usize::try_from(sample_rate).expect("sample rate fits usize") / 4;
+    let pulse_frames = usize::try_from(sample_rate).expect("sample rate fits usize") / 50;
+    let mut original = vec![
+        0.0_f32;
+        leading_frames
+            + (beat_frames * 6.0)
+                .ceil()
+                .to_usize()
+                .expect("finite pulse extent")
+    ];
+    for beat in 0..6 {
+        let start = leading_frames
+            + (f64::from(beat) * beat_frames)
+                .round()
+                .to_usize()
+                .expect("finite beat offset");
+        let amplitude = if beat % 4 == 0 { 0.9 } else { 0.7 };
+        for offset in 0..pulse_frames {
+            let phase =
+                std::f32::consts::TAU * 1_000.0 * offset.to_f32().expect("pulse offset fits f32")
+                    / sample_rate.to_f32().expect("rate fits f32");
+            original[start + offset] = amplitude
+                * phase.cos()
+                * (1.0
+                    - offset.to_f32().expect("pulse offset fits f32")
+                        / pulse_frames.to_f32().expect("pulse extent fits f32"));
+        }
+    }
+    assert_eq!(prepared.len(), original.len());
+    assert!(
+        prepared
+            .iter()
+            .zip(&original)
+            .all(|(actual, expected)| actual.to_bits() == expected.to_bits())
+    );
+}
+
+#[kithara::test(native)]
+fn prepared_oracle_silence_retains_its_full_extent() {
+    let silence = cochlea_silence();
+    assert_eq!(silence.len(), 144_000);
+    assert!(silence.iter().all(|sample| sample.to_bits() == 0));
 }
 
 #[kithara::test(native)]

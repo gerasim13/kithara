@@ -110,8 +110,6 @@ pub(super) async fn render_frames(
 }
 
 #[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(60)))]
-#[case::tunnel(tunnel_sources().await, Start::bar(0))]
-#[case::newtechno(newtechno_sources().await, NEWTECHNO_PHRASE)]
 #[case::tunnel_weak_beat(tunnel_sources().await, WEAK_BEAT)]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn sync_listening_mix_is_not_quieter_than_a_solo_deck(
@@ -146,22 +144,16 @@ async fn sync_listening_mix_is_not_quieter_than_a_solo_deck(
 }
 
 #[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
-#[case::tunnel_host_120(tunnel_sources().await, Start::bar(0), REAL_TRACK_SYNC, None)]
-#[case::tunnel_ride_to_96(tunnel_sources().await, Start::bar(0), REAL_TRACK_SYNC, Some(96.0))]
-#[case::tunnel_ride_to_127(tunnel_sources().await, Start::bar(0), REAL_TRACK_SYNC, Some(127.0))]
-#[case::tunnel_ride_to_145(tunnel_sources().await, Start::bar(0), REAL_TRACK_SYNC, Some(145.0))]
-#[case::tunnel_four_deck_host_120(tunnel_sources().await, Start::bar(0), REAL_TRACK_FOUR_DECK_SYNC, None)]
-#[case::newtechno_host_120(newtechno_sources().await, NEWTECHNO_PHRASE, REAL_TRACK_SYNC, None)]
-#[case::newtechno_ride_to_96(newtechno_sources().await, NEWTECHNO_PHRASE, REAL_TRACK_SYNC, Some(96.0))]
-#[case::newtechno_ride_to_127(newtechno_sources().await, NEWTECHNO_PHRASE, REAL_TRACK_SYNC, Some(127.0))]
-#[case::newtechno_ride_to_145(newtechno_sources().await, NEWTECHNO_PHRASE, REAL_TRACK_SYNC, Some(145.0))]
-#[case::newtechno_four_deck_host_120(newtechno_sources().await, NEWTECHNO_PHRASE, REAL_TRACK_FOUR_DECK_SYNC, None)]
+#[case::tunnel_tempo_targets(tunnel_sources().await, Start::bar(0), REAL_TRACK_SYNC, &[None, Some(96.0), Some(127.0), Some(145.0)])]
+#[case::tunnel_four_deck_host_120(tunnel_sources().await, Start::bar(0), REAL_TRACK_FOUR_DECK_SYNC, &[None])]
+#[case::newtechno_tempo_targets(newtechno_sources().await, NEWTECHNO_PHRASE, REAL_TRACK_SYNC, &[None, Some(96.0), Some(127.0), Some(145.0)])]
+#[case::newtechno_four_deck_host_120(newtechno_sources().await, NEWTECHNO_PHRASE, REAL_TRACK_FOUR_DECK_SYNC, &[None])]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn record_sync_listening_wavs(
     #[case] provider: PreparedSources,
     #[case] start: Start,
     #[case] case: SyncCase,
-    #[case] target_bpm: Option<f64>,
+    #[case] targets: &[Option<f64>],
 ) {
     let mut deck_reports = Vec::with_capacity(case.decks());
     let mut failures = Vec::new();
@@ -176,22 +168,24 @@ async fn record_sync_listening_wavs(
         failures.extend(capture.failures);
         hang_reset!();
     }
-    let mix = render_mix(case, &provider, start, target_bpm).await;
-    let mix_report = CochleaReport::measure(&mix.pcm, CHANNELS, case.sample_rate);
-    failures.extend(mix.failures);
-    failures.extend(mix_loudness_failures(
-        case.id(),
-        &mix_report,
-        &deck_reports,
-        LOUDNESS_TOLERANCE_LU,
-    ));
-    if mix_report.clipped_samples > 0 || mix_report.true_peak_over_0dbtp {
-        failures.push(format!("{}: mix clips: {mix_report:?}", case.id()));
+    for &target_bpm in targets {
+        let mix = render_mix(case, &provider, start, target_bpm).await;
+        let mix_report = CochleaReport::measure(&mix.pcm, CHANNELS, case.sample_rate);
+        failures.extend(mix.failures);
+        failures.extend(mix_loudness_failures(
+            case.id(),
+            &mix_report,
+            &deck_reports,
+            LOUDNESS_TOLERANCE_LU,
+        ));
+        if mix_report.clipped_samples > 0 || mix_report.true_peak_over_0dbtp {
+            failures.push(format!("{}: mix clips: {mix_report:?}", case.id()));
+        }
+        assert!(
+            failures.is_empty(),
+            "{} listening capture target={target_bpm:?} failed:\n{}\ndecks={deck_reports:?}\nmix={mix_report:?}",
+            case.id(),
+            failures.join("\n"),
+        );
     }
-    assert!(
-        failures.is_empty(),
-        "{} listening capture failed:\n{}\ndecks={deck_reports:?}\nmix={mix_report:?}",
-        case.id(),
-        failures.join("\n"),
-    );
 }

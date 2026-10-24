@@ -188,12 +188,19 @@ pub(crate) async fn network_guard(
     if exempt {
         return next.run(request).await;
     }
+    match offline_response(&state) {
+        Some(response) => response,
+        None => next.run(request).await,
+    }
+}
+
+pub(crate) fn offline_response(state: &TestServerState) -> Option<Response> {
     match state.network_mode() {
-        NetworkMode::Online => next.run(request).await,
+        NetworkMode::Online => None,
         NetworkMode::Unavailable => {
-            (StatusCode::SERVICE_UNAVAILABLE, "network offline").into_response()
+            Some((StatusCode::SERVICE_UNAVAILABLE, "network offline").into_response())
         }
-        NetworkMode::TransportFailure => severed_response(),
+        NetworkMode::TransportFailure => Some(severed_response()),
     }
 }
 

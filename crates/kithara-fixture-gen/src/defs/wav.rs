@@ -163,6 +163,69 @@ fn rhythm_wav(
     bytes
 }
 
+#[kithara::asset(
+    ext = "pcm-reference", content_type = "application/x-kithara-pcm-reference",
+    format = crate::reference::format, depends_on = ["rhythm_wav_{case}"]
+)]
+#[case::deck_a_120bpm_48k()]
+#[case::deck_b_120bpm_48k()]
+#[case::deck_c_120bpm_48k()]
+#[case::deck_d_120bpm_48k()]
+#[case::deck_b_one_frame_late_120bpm_48k()]
+#[case::deck_b_one_beat_bar_late_120bpm_48k()]
+#[case::deck_b_missing_beat_120bpm_48k()]
+fn authored_rhythm_wav(inputs: &[&[u8]]) -> Vec<u8> {
+    crate::reference::authored(inputs, None)
+}
+
+#[kithara::asset(
+    ext = "pcm-reference", content_type = "application/x-kithara-pcm-reference",
+    format = crate::reference::format, depends_on = ["rhythm_wav_deck_b_120bpm_48k"]
+)]
+#[case::default()]
+fn authored_mp3_clock(inputs: &[&[u8]]) -> Vec<u8> {
+    crate::reference::authored(inputs, Some(144_000))
+}
+
+#[kithara::asset(
+    ext = "json", content_type = "application/json",
+    depends_on = ["rhythm_wav_deck_b_120bpm_48k"]
+)]
+#[case::default()]
+fn source_markers_mp3_clock(_inputs: &[&[u8]]) -> Vec<u8> {
+    let (period, first, bar_phase, missing) =
+        rhythm_timing(48_000, 120.0, 0, RhythmControl::Aligned);
+    let mut beats = Vec::new();
+    let mut downbeats = Vec::new();
+    for (beat, frame) in (first..144_000).step_by(period).enumerate() {
+        if missing == Some(beat) {
+            continue;
+        }
+        beats.push(frame);
+        if beat % consts::BEATS_PER_BAR == bar_phase {
+            downbeats.push(frame);
+        }
+    }
+    serde_json::to_vec(&(beats, downbeats)).expect("authored source markers serialize")
+}
+
+fn rhythm_timing(
+    sample_rate: u32,
+    bpm: f64,
+    phase_frame: usize,
+    control: RhythmControl,
+) -> (usize, usize, usize, Option<usize>) {
+    let beat_frames: usize =
+        cast((f64::from(sample_rate) * consts::SECONDS_PER_MINUTE / bpm).round())
+            .expect("invariant: a fixture beat period fits usize");
+    let (bar_phase, missing) = match control {
+        RhythmControl::Aligned => (0, None),
+        RhythmControl::BarPhaseBeats(phase) => (phase, None),
+        RhythmControl::MissingBeat(missing) => (0, Some(missing)),
+    };
+    (beat_frames, beat_frames + phase_frame, bar_phase, missing)
+}
+
 pub(super) fn rhythm_pcm(
     sample_rate: u32,
     channels: u16,
@@ -172,19 +235,11 @@ pub(super) fn rhythm_pcm(
     phase_frame: usize,
     control: RhythmControl,
 ) -> Pcm {
-    let beat_frames: usize =
-        cast((f64::from(sample_rate) * consts::SECONDS_PER_MINUTE / bpm).round())
-            .expect("invariant: a fixture beat period fits usize");
-    let first_beat = beat_frames + phase_frame;
+    let (beat_frames, first_beat, bar_phase, missing_beat) =
+        rhythm_timing(sample_rate, bpm, phase_frame, control);
     let pulse_frames = usize::try_from(sample_rate).expect("invariant: a sample rate fits usize")
         * consts::PULSE_DURATION_MS
         / consts::MILLIS_PER_SECOND;
-    let (bar_phase, missing_beat) = match control {
-        RhythmControl::Aligned => (0, None),
-        RhythmControl::BarPhaseBeats(phase) => (phase, None),
-        RhythmControl::MissingBeat(missing) => (0, Some(missing)),
-    };
-
     Pcm::from_fn(sample_rate, channels, total_frames, |frame| {
         let Some(since_first) = frame.checked_sub(first_beat) else {
             return 0;

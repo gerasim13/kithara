@@ -4,6 +4,7 @@ use kithara_stretch::{ElasticCapabilities, ElasticError, ElasticRequest};
 use num_traits::ToPrimitive;
 
 use super::core::WarpRenderer;
+use crate::render::trajectory::Fraction;
 
 impl<S> WarpRenderer<S>
 where
@@ -28,16 +29,25 @@ where
             .map_err(|_| ElasticError::PoolCapacity)?;
         scratch.truncate(samples);
         let resident = self.residency.as_ref().ok_or(ElasticError::PoolCapacity)?;
+        let mut position = span.source_ratio_at(0);
         for frame in 0..frames {
-            let (numerator, denominator) = span
-                .source_ratio_at(
-                    u64::try_from(frame).map_err(|_| ElasticError::SampleCountOverflow)?,
-                )
+            let (numerator, denominator) = position.ok_or(ElasticError::SampleCountOverflow)?;
+            let endpoint = u64::try_from(frame)
+                .ok()
+                .and_then(|frame| frame.checked_add(1))
+                .and_then(|frame| span.source_ratio_at(frame))
                 .ok_or(ElasticError::SampleCountOverflow)?;
-            let speed = super::mapping::span_speed(
-                span,
-                u64::try_from(frame).map_err(|_| ElasticError::SampleCountOverflow)?,
-            )?;
+            let speed = Fraction {
+                numerator: endpoint.0,
+                denominator: endpoint.1,
+            }
+            .sub(Fraction {
+                numerator,
+                denominator,
+            })
+            .and_then(Fraction::as_f64)
+            .ok_or(ElasticError::SampleCountOverflow)?;
+            position = Some(endpoint);
             super::super::source_sample::source_frame(
                 resident,
                 (numerator, denominator),

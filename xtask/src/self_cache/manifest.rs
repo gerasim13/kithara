@@ -350,6 +350,8 @@ fn discover_package_roots(root: &Path) -> Result<Vec<PathBuf>> {
     command
         .current_dir(root)
         .manifest_path(root.join("Cargo.toml"))
+        .env("RUSTC_WRAPPER", "")
+        .env("RUSTC_WORKSPACE_WRAPPER", "")
         .other_options(vec!["--locked".to_owned()]);
     let metadata = command.exec().context("discover xtask source closure")?;
     let resolve = metadata

@@ -456,8 +456,11 @@ fn select_item_without_runtime_errors_without_bookkeeping() {
     );
     let dir = kithara_test_utils::temp_dir();
     let path = dir.path().join("selection.wav");
-    mock::write_pcm_wav(&path, &[0.25; 8_192], AudioSpec::new(2, mock::SAMPLE_RATE))
-        .expect("valid local PCM fixture");
+    std::fs::write(
+        &path,
+        kithara_test_fixtures::assets::fixed_constant_wav_cd_quarter_4096().bytes(),
+    )
+    .expect("valid local PCM fixture");
     let source = ResourceConfig::for_src(ResourceSrc::Path(path.clone()))
         .store(AssetStore::builder(pools()).build())
         .build();

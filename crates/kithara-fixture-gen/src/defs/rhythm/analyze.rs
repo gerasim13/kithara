@@ -1,6 +1,6 @@
 use std::{
     io::Cursor,
-    num::NonZeroUsize,
+    num::{NonZeroU32, NonZeroUsize},
     sync::{Mutex, OnceLock, PoisonError},
 };
 
@@ -13,8 +13,11 @@ use kithara_audio::{
     AudioControl, AudioRead, AudioReadError, AudioSession, ChunkOutcome, DecodeError, ReadOutcome,
     SeekOutcome,
 };
-use kithara_decode::{DecoderChunkOutcome, DecoderConfig, DecoderFactory, TrackMetadata};
+use kithara_decode::{
+    DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory, TrackMetadata,
+};
 use kithara_events::EventBus;
+use kithara_fixture_media::reference::AudioReference;
 use kithara_platform::{thread, time::Duration};
 use kithara_resampler::{NoResamplerBackend, rubato::RubatoBackend};
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
@@ -26,20 +29,35 @@ mod consts {
     pub(super) const CHUNK_FRAMES: usize = 4_096;
 }
 
-/// The analysis file a whole audio track carries: the production beat pass
-/// over the track decoded from `inputs[0]`, read against the rate the track
-/// was decoded at.
-///
-/// # Panics
-///
-/// When the track does not decode: a fixture that is no whole track is
-/// declared a `fragment` and never reaches here.
-pub(in crate::defs) fn analysed(inputs: &[&[u8]], hint: &str) -> Vec<u8> {
-    let track = inputs
-        .first()
-        .expect("invariant: an analysis depends on the track it analyses");
-    let reader = PcmReader::decode(track, hint)
-        .unwrap_or_else(|error| panic!("analysed {hint} track: {error}"));
+pub(in crate::defs) fn source_format() -> Vec<u8> {
+    let mut format = crate::reference::format();
+    format.extend_from_slice(
+        format!(
+            "analysis-source:v1;backend={};gapless=true;resampler=none;version={}",
+            DecoderBackend::default(),
+            env!("CARGO_PKG_VERSION")
+        )
+        .as_bytes(),
+    );
+    format
+}
+
+pub(in crate::defs) fn source_pcm(inputs: &[&[u8]], hint: &str) -> Vec<u8> {
+    let [track] = inputs else {
+        panic!("source PCM requires one encoded track");
+    };
+    let prepared = PcmReader::decode(track, hint)
+        .unwrap_or_else(|error| panic!("native {hint} fixture input: {error}"));
+    Vec::try_from(&prepared).unwrap_or_else(|error| panic!("native PCM fixture record: {error}"))
+}
+
+/// The beat pass over the complete prepared native source of a whole track.
+pub(in crate::defs) fn analysed(inputs: &[&[u8]]) -> Vec<u8> {
+    let [track] = inputs else {
+        panic!("an analysis requires one prepared source PCM record");
+    };
+    let prepared = AudioReference::from_bytes(track).expect("prepared analysis source PCM");
+    let reader = PcmReader::from(prepared);
     let rate = reader.spec.sample_rate;
     let (artifact, frames) = analyze(reader);
     analysis_file(artifact, frames, rate)
@@ -104,15 +122,15 @@ struct PcmReader {
 }
 
 impl PcmReader {
-    fn decode(bytes: &[u8], hint: &str) -> Result<Self, String> {
+    fn decode(bytes: &[u8], hint: &str) -> Result<AudioReference, String> {
         let config = DecoderConfig::<NoResamplerBackend, TestPools>::builder()
+            .gapless(true)
             .pools(pools())
             .build();
         let mut decoder =
             DecoderFactory::create_with_probe(Cursor::new(bytes.to_vec()), Some(hint), config)
                 .map_err(|error| format!("open: {error}"))?;
         let spec = decoder.spec();
-        let metadata = TrackMetadata::default();
         let mut samples = Vec::new();
         loop {
             match decoder
@@ -126,13 +144,11 @@ impl PcmReader {
                 DecoderChunkOutcome::Eof => break,
             }
         }
-        Ok(Self {
-            spec,
-            metadata,
+        Ok(AudioReference {
+            sample_rate: spec.sample_rate.get(),
+            channels: spec.channels,
             samples,
-            bus: EventBus::default(),
-            cursor: 0,
-            pools: pools(),
+            presentation_frames: None,
         })
     }
 
@@ -144,6 +160,22 @@ impl PcmReader {
 
     fn total_frames(&self) -> usize {
         self.samples.len() / usize::from(self.spec.channels)
+    }
+}
+
+impl From<AudioReference> for PcmReader {
+    fn from(prepared: AudioReference) -> Self {
+        Self {
+            spec: AudioSpec::new(
+                prepared.channels,
+                NonZeroU32::new(prepared.sample_rate).expect("validated native fixture rate"),
+            ),
+            metadata: TrackMetadata::default(),
+            samples: prepared.samples,
+            bus: EventBus::default(),
+            cursor: 0,
+            pools: pools(),
+        }
     }
 }
 
@@ -242,5 +274,83 @@ impl AudioControl for PcmReader {
             target,
             landed_at: self.position_at(self.cursor),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test]
+    fn native_source_record_and_analysis_reader_preserve_every_decoded_bit() {
+        let wav = crate::signal::wav(48_000, 2, 17, crate::signal::Wave::Sawtooth);
+        let decoded = PcmReader::decode(&wav, "wav").expect("native fixture decode");
+        let bytes = source_pcm(&[&wav], "wav");
+        let prepared = AudioReference::from_bytes(&bytes).expect("native fixture record");
+        assert_eq!((prepared.sample_rate, prepared.channels), (48_000, 2));
+        assert_eq!(prepared.presentation_frames, None);
+        assert_eq!(prepared.samples.len(), 34);
+        let bits = |samples: &[f32]| {
+            samples
+                .iter()
+                .map(|sample| sample.to_bits())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(bits(&prepared.samples), bits(&decoded.samples));
+        let mut reader = PcmReader::from(prepared);
+        let ChunkOutcome::Chunk(chunk) = reader.next_chunk().expect("analysis input PCM") else {
+            panic!("analysis reader retains all prepared frames");
+        };
+        assert_eq!(chunk.meta.frames, 17);
+        assert_eq!(chunk.meta.frame_offset, 0);
+        assert_eq!(bits(&chunk.samples), bits(&decoded.samples));
+        assert!(matches!(reader.next_chunk(), Ok(ChunkOutcome::Eof { .. })));
+    }
+
+    #[kithara::test]
+    fn the_build_decoder_profile_keys_both_source_and_analysis_formats() {
+        let source = source_format();
+        let profile = format!(
+            "analysis-source:v1;backend={};gapless=true;resampler=none;version={}",
+            DecoderBackend::default(),
+            env!("CARGO_PKG_VERSION")
+        );
+        assert!(source.starts_with(&crate::reference::format()));
+        assert!(source.ends_with(profile.as_bytes()));
+        let analysis = super::super::assets::analysed_format();
+        assert!(analysis.ends_with(&source));
+        for (producer, format) in [("source_pcm", source), ("analysis", analysis)] {
+            let original = crate::store::formatted_asset_id(producer, "track", &format);
+            let mut changed = format;
+            changed.extend_from_slice(b";profile-revision=2");
+            assert_ne!(
+                original,
+                crate::store::formatted_asset_id(producer, "track", &changed)
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn analysis_depends_on_the_same_prepared_source_as_warp() {
+        let find = |name| {
+            inventory::iter::<crate::registry::AssetDef>
+                .into_iter()
+                .find(|definition| definition.accessor_name() == name)
+                .expect("registered whole-track fixture dependency")
+        };
+        let original = find("drain_tone_default");
+        let source = find("source_pcm_drain_tone_default");
+        let analysis = find("analysis_drain_tone_default");
+        assert_eq!(source.dependencies, &["drain_tone_default"]);
+        assert_eq!(analysis.dependencies, &["source_pcm_drain_tone_default"]);
+        assert_eq!(source.optional, original.optional);
+        assert_eq!(analysis.optional, original.optional);
+        assert_eq!(source.env, original.env);
+        assert_eq!(analysis.env, original.env);
+        let source_format = source.format.expect("profile-keyed native source")();
+        let analysis_format = analysis.format.expect("profile-keyed analysis")();
+        assert!(analysis_format.ends_with(&source_format));
     }
 }
