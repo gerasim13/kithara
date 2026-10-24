@@ -914,6 +914,7 @@ mod tests {
                 "test",
                 "run",
                 "--touched",
+                "--selection-output=.ci-artifacts/junit/apple-test.selection.json",
                 "--flash=on",
                 "--no-block=on",
                 "--profile",

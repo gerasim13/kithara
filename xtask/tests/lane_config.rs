@@ -464,7 +464,12 @@ fn the_product_suite_lanes_differ_only_in_their_toggles_and_narrow_only_on_a_bra
                 branch
                     .iter()
                     .copied()
-                    .filter(|arg| *arg != "--touched")
+                    .filter(|arg| {
+                        *arg != "--touched"
+                            && !(name == "apple-test"
+                                && *arg
+                                    == "--selection-output=.ci-artifacts/junit/apple-test.selection.json")
+                    })
                     .collect::<Vec<_>>(),
                 args,
                 "lane `{name}` narrows a different command than it runs whole"
