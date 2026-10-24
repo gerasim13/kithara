@@ -38,6 +38,7 @@ mod red_stale_tmp_claim_bricks_segment;
 mod seek_past_eof;
 mod seek_variant_switch_after_eof;
 mod segment_boundary_strand;
+mod size_probe_resolves_exact_offsets;
 mod source_seek;
 mod sync_reader_hls_test;
 mod wait_range_contract;
