@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 
 #[derive(Debug)]
 pub(super) struct TestRequest {
@@ -18,6 +18,7 @@ pub(super) struct TestRequest {
     /// this one only takes tests away.
     pub(super) narrow: Option<String>,
     pub(super) expected_tests: Option<PathBuf>,
+    pub(super) selection_output: Option<PathBuf>,
     pub(super) passthrough: Vec<String>,
     pub(super) touched: bool,
 }
@@ -32,6 +33,7 @@ impl TestRequest {
             loom: None,
             narrow: None,
             expected_tests: None,
+            selection_output: None,
             passthrough: Vec::new(),
             flash: None,
             touched: false,
@@ -84,6 +86,9 @@ impl TestRequest {
                 "--expected-tests" => {
                     request.expect_tests(iter.next().map(String::as_str))?;
                 }
+                "--selection-output" => {
+                    request.select_to(iter.next().map(String::as_str))?;
+                }
                 "--net-backend" => {
                     let value = iter
                         .next()
@@ -116,6 +121,9 @@ impl TestRequest {
                 _ if arg.starts_with("--expected-tests=") => {
                     request.expect_tests(arg.strip_prefix("--expected-tests="))?;
                 }
+                _ if arg.starts_with("--selection-output=") => {
+                    request.select_to(arg.strip_prefix("--selection-output="))?;
+                }
                 _ if arg.starts_with("--net-backend=") => {
                     let value = arg.trim_start_matches("--net-backend=");
                     request.net_backend = Some(value.to_owned());
@@ -127,6 +135,17 @@ impl TestRequest {
             request.validate_expected_selection()?;
         }
         Ok(request)
+    }
+
+    fn select_to(&mut self, value: Option<&str>) -> Result<()> {
+        if self.selection_output.is_some() {
+            bail!("--selection-output may be supplied only once");
+        }
+        let path = value
+            .filter(|path| !path.trim().is_empty() && !path.starts_with('-'))
+            .context("--selection-output needs a path")?;
+        self.selection_output = Some(PathBuf::from(path));
+        Ok(())
     }
 
     fn expect_tests(&mut self, value: Option<&str>) -> Result<()> {
@@ -163,5 +182,52 @@ fn parse_toggle(name: &str, value: &str) -> Result<bool> {
         "on" | "true" => Ok(true),
         "off" | "false" => Ok(false),
         _ => bail!("unsupported {name} mode: {value}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selection_output_is_consumed_before_forwarding_runner_arguments() {
+        for args in [
+            vec!["--selection-output=selection.json", "--profile", "ci"],
+            vec!["--selection-output", "selection.json", "--profile", "ci"],
+        ] {
+            let request =
+                TestRequest::parse(&args.into_iter().map(str::to_owned).collect::<Vec<_>>())
+                    .unwrap();
+            assert_eq!(
+                request.selection_output,
+                Some(PathBuf::from("selection.json"))
+            );
+            assert_eq!(request.passthrough, ["--profile", "ci"]);
+        }
+    }
+
+    #[test]
+    fn selection_output_requires_one_unambiguous_path() {
+        for args in [
+            vec!["--selection-output"],
+            vec!["--selection-output="],
+            vec!["--selection-output", " "],
+            vec!["--selection-output", "--profile", "ci"],
+            vec![
+                "--selection-output=one.json",
+                "--selection-output",
+                "two.json",
+            ],
+            vec![
+                "--selection-output",
+                "one.json",
+                "--selection-output=two.json",
+            ],
+        ] {
+            assert!(
+                TestRequest::parse(&args.into_iter().map(str::to_owned).collect::<Vec<_>>())
+                    .is_err()
+            );
+        }
     }
 }

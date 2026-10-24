@@ -2,6 +2,7 @@ use std::num::NonZeroU128;
 
 use num_traits::Float;
 
+/// A nonnegative fraction with coprime numerator and denominator.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Ratio {
     pub(super) numerator: u128,
@@ -40,15 +41,19 @@ impl Ratio {
             .checked_mul(quotient(denominator.get(), self.denominator))
     }
 
-    pub(super) fn common(self, other: Self) -> Option<NonZeroU128> {
-        let common = NonZeroU128::new(divisor(self.denominator.get(), other.denominator.get()))?;
-        NonZeroU128::new(
-            quotient(self.denominator.get(), common).checked_mul(other.denominator.get())?,
-        )
+    pub(super) fn common(first: NonZeroU128, second: NonZeroU128) -> Option<NonZeroU128> {
+        let common = NonZeroU128::new(divisor(first.get(), second.get()))?;
+        NonZeroU128::new(quotient(first.get(), common).checked_mul(second.get())?)
     }
 
     pub(super) fn add(self, other: Self) -> Option<Self> {
-        let denominator = self.common(other)?;
+        if other.numerator == 0 {
+            return Some(self);
+        }
+        if self.numerator == 0 {
+            return Some(other);
+        }
+        let denominator = Self::common(self.denominator, other.denominator)?;
         Self::new(
             self.at(denominator)?.checked_add(other.at(denominator)?)?,
             denominator,
@@ -56,7 +61,10 @@ impl Ratio {
     }
 
     pub(super) fn sub(self, other: Self) -> Option<Self> {
-        let denominator = self.common(other)?;
+        if other.numerator == 0 {
+            return Some(self);
+        }
+        let denominator = Self::common(self.denominator, other.denominator)?;
         Self::new(
             self.at(denominator)?.checked_sub(other.at(denominator)?)?,
             denominator,
@@ -64,15 +72,22 @@ impl Ratio {
     }
 
     pub(super) fn mul(self, other: Self) -> Option<Self> {
+        if self.numerator == self.denominator.get() {
+            return Some(other);
+        }
+        if other.numerator == other.denominator.get() {
+            return Some(self);
+        }
         let first = NonZeroU128::new(divisor(self.numerator, other.denominator.get()))?;
         let second = NonZeroU128::new(divisor(other.numerator, self.denominator.get()))?;
-        Self::new(
-            quotient(self.numerator, first).checked_mul(quotient(other.numerator, second))?,
-            NonZeroU128::new(
+        Some(Self {
+            numerator: quotient(self.numerator, first)
+                .checked_mul(quotient(other.numerator, second))?,
+            denominator: NonZeroU128::new(
                 quotient(self.denominator.get(), second)
                     .checked_mul(quotient(other.denominator.get(), first))?,
             )?,
-        )
+        })
     }
 
     pub(super) fn nearest_q32(self) -> Option<Self> {
@@ -177,5 +192,107 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[kithara::test]
+    fn reduced_products_preserve_exact_cancellation_and_overflow() {
+        let ratio = |numerator, denominator| {
+            Ratio::new(
+                numerator,
+                NonZeroU128::new(denominator).expect("positive divisor"),
+            )
+            .expect("representable ratio")
+        };
+        for first in [0, 1, 2, 3, 7, 31] {
+            for first_denominator in [1, 2, 3, 7, 31] {
+                for second in [0, 1, 2, 3, 7, 31] {
+                    for second_denominator in [1, 2, 3, 7, 31] {
+                        let expected =
+                            ratio(first * second, first_denominator * second_denominator);
+                        assert_eq!(
+                            ratio(first, first_denominator).mul(ratio(second, second_denominator)),
+                            Some(expected),
+                        );
+                    }
+                }
+            }
+        }
+        let zero = ratio(0, 1);
+        let full_width = ratio(u128::MAX, u128::MAX - 1);
+        assert_eq!(zero.mul(full_width), Some(zero));
+        assert_eq!(full_width.mul(zero), Some(zero));
+        assert_eq!(
+            full_width.mul(ratio(u128::MAX - 1, u128::MAX)),
+            Some(ratio(1, 1)),
+        );
+        assert_eq!(
+            ratio(u128::MAX, 2).mul(ratio(2, u128::MAX)),
+            Some(ratio(1, 1)),
+        );
+        assert_eq!(ratio(u128::MAX, 1).mul(ratio(2, 1)), None);
+        assert_eq!(ratio(1, u128::MAX).mul(ratio(1, 2)), None);
+    }
+
+    #[kithara::test]
+    fn finite_float_ratios_keep_coprime_components() {
+        let one = Ratio::new(1, NonZeroU128::MIN).expect("unit ratio");
+        for value in [
+            0.0,
+            -0.0,
+            0.5,
+            1.5,
+            0.1,
+            2.0_f64.powi(-127),
+            2.0_f64.powi(127),
+        ] {
+            let ratio = Ratio::try_from(value).expect("representable float ratio");
+            assert_eq!(divisor(ratio.numerator, ratio.denominator.get()), 1);
+            assert_eq!(ratio.mul(one), Some(ratio));
+            assert_eq!(one.mul(ratio), Some(ratio));
+        }
+        for value in [
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            -1.0,
+            f64::MIN_POSITIVE,
+            f64::MAX,
+        ] {
+            assert!(Ratio::try_from(value).is_err());
+        }
+    }
+
+    #[kithara::test]
+    fn rational_identities_preserve_full_width_values_and_failure_boundaries() {
+        let ratio = |numerator, denominator| {
+            Ratio::new(
+                numerator,
+                NonZeroU128::new(denominator).expect("positive divisor"),
+            )
+            .expect("representable ratio")
+        };
+        let zero = ratio(0, 1);
+        let unit = ratio(1, 1);
+        for value in [
+            zero,
+            unit,
+            ratio(u128::MAX, u128::MAX - 1),
+            ratio(u128::MAX, 1),
+            ratio(1, u128::MAX),
+            Ratio::try_from(0.1).expect("finite dyadic ratio"),
+        ] {
+            assert_eq!(zero.add(value), Some(value));
+            assert_eq!(value.add(zero), Some(value));
+            assert_eq!(value.sub(zero), Some(value));
+            assert_eq!(unit.mul(value), Some(value));
+            assert_eq!(value.mul(unit), Some(value));
+        }
+        assert_eq!(zero.sub(unit), None);
+        assert_eq!(ratio(u128::MAX, 1).add(unit), None);
+        let first = ratio(1, u128::MAX);
+        let second = ratio(1, u128::MAX - 1);
+        assert_eq!(first.add(second), None);
+        assert_eq!(first.sub(second), None);
+        assert_eq!(second.sub(first), None);
     }
 }

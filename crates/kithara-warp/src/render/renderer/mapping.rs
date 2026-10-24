@@ -6,7 +6,7 @@ use kithara_stretch::ElasticError;
 
 use super::{super::trajectory::Fraction, core::WarpRenderer};
 
-fn fraction(position: (u128, NonZeroU128)) -> Fraction {
+pub(super) fn fraction(position: (u128, NonZeroU128)) -> Fraction {
     Fraction {
         numerator: position.0,
         denominator: position.1,

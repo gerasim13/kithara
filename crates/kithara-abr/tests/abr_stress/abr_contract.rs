@@ -35,7 +35,7 @@ async fn auto_commit_flips_active_variant() {
         "a claim must not flip current_variant - commit_pending does"
     );
 
-    assert!(state.publisher().commit_pending(claim, Instant::now()));
+    assert!(state.commit_pending(claim, Instant::now()));
     assert_eq!(
         state.current_variant_index(),
         VariantIndex::new(3),
@@ -62,7 +62,7 @@ async fn manual_set_mode_uses_same_commit_path() {
     let claim = state
         .claim_pending_decision(state.current_variant_index())
         .expect("manual commit must travel the same boundary path as auto");
-    assert!(state.publisher().commit_pending(claim, Instant::now()));
+    assert!(state.commit_pending(claim, Instant::now()));
 
     assert!(claim.decision().changed());
     assert_eq!(claim.decision().target(), VariantIndex::new(2));
@@ -98,7 +98,7 @@ async fn peek_pending_decision_returns_none_during_seek() {
     let claim = state
         .claim_pending_decision(state.current_variant_index())
         .expect("unlock releases the fence — same pending intent must surface");
-    assert!(state.publisher().commit_pending(claim, Instant::now()));
+    assert!(state.commit_pending(claim, Instant::now()));
     assert!(claim.decision().changed());
     assert_eq!(claim.decision().target(), VariantIndex::new(2));
 }
@@ -147,7 +147,6 @@ fn published_rescue_switch_lifts_the_escape_from_the_new_variant() {
         .throughput_safety_factor(1.0)
         .build();
     let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(2)))));
-    let publisher = state.publisher();
     let view = AbrView {
         settings: &settings,
         variants: &variants,
@@ -165,7 +164,7 @@ fn published_rescue_switch_lifts_the_escape_from_the_new_variant() {
     let stale = state
         .claim_pending_decision(VariantIndex::new(0))
         .expect("a claim formed from another variant still names the live request");
-    assert!(!publisher.commit_pending(stale, Instant::now()));
+    assert!(!state.commit_pending(stale, Instant::now()));
     assert!(
         state.is_escaping(),
         "a refused stale claim must keep the escape mark"
@@ -177,7 +176,7 @@ fn published_rescue_switch_lifts_the_escape_from_the_new_variant() {
         .claim_pending_decision(state.current_variant_index())
         .expect("the rescue request must be claimable from the stalled variant");
     state.lock();
-    assert!(!publisher.commit_pending(claim, Instant::now()));
+    assert!(!state.commit_pending(claim, Instant::now()));
     assert!(
         state.is_escaping(),
         "a commit refused under the lock must keep the escape mark"
@@ -188,7 +187,7 @@ fn published_rescue_switch_lifts_the_escape_from_the_new_variant() {
     let claim = state
         .claim_pending_decision(state.current_variant_index())
         .expect("the rescue request must outlive the lock");
-    assert!(publisher.commit_pending(claim, Instant::now()));
+    assert!(state.commit_pending(claim, Instant::now()));
     assert_eq!(state.current_variant_index(), VariantIndex::new(1));
     assert_eq!(state.pending_target(), None);
     assert!(

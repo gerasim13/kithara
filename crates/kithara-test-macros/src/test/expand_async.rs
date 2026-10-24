@@ -327,7 +327,9 @@ pub(crate) fn emit_browser_test(
                 &serial_attr,
             ));
         } else {
-            let native_body_held = quote! { #test_setup #preamble #ambient #(#body_stmts)* };
+            let sync_body =
+                super::shared::wrap_with_sync_participation(&quote! { #(#body_stmts)* }, args);
+            let native_body_held = quote! { #test_setup #preamble #ambient #sync_body };
             let native_with_timeout =
                 wrap_with_timeout(&native_body_held, &args.timeout, false, fn_name);
             let native_wrapped = finalize_body(&native_with_timeout, args, fn_name, false);

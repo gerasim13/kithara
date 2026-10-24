@@ -3,31 +3,18 @@
 //! A deck plays the item it was given and nothing else on its own: past the
 //! item's end it still leads that item until its owner selects another.
 
-use std::num::NonZeroU32;
-
 use kithara::{
-    audio::mock::TestPcmReader,
     events::TrackId,
-    queue::{ActionAtItemEnd, Transition},
-    signal::AudioSpec,
+    queue::{ActionAtItemEnd, TrackSource, Transition},
 };
 use kithara_integration_tests::offline::{OfflinePlayer, OfflinePlayerOptions};
+use kithara_test_fixtures::assets;
 
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
-/// A tenth of a second, so the item ends a few blocks in.
-const ITEM_FRAMES: usize = 4_410;
 /// Several times the item, so the deck renders well past its end.
 const BLOCKS: usize = 40;
 const LEVEL: f32 = 0.25;
-
-fn constant_item(value: f32) -> kithara_integration_tests::mock::PcmDeck {
-    let spec = AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate"));
-    kithara_integration_tests::mock::PcmDeck::new(Box::new(TestPcmReader::with_samples(
-        spec,
-        vec![value; ITEM_FRAMES],
-    )))
-}
 
 #[kithara::test(tokio)]
 async fn a_bare_deck_keeps_its_item_past_the_end() {
@@ -40,8 +27,13 @@ async fn a_bare_deck_keeps_its_item_past_the_end() {
     )
     .await;
     let item = TrackId::allocate();
-    let deck = constant_item(LEVEL);
-    let source = deck.source();
+    let source = TrackSource::Uri(
+        assets::fixed_constant_wav_cd_quarter_4410()
+            .path()
+            .expect("prepared quarter WAV")
+            .to_string_lossy()
+            .into_owned(),
+    );
     let mut events = harness.player().subscribe();
     harness
         .with_queue(move |player| {

@@ -1,19 +1,16 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::num::NonZeroU32;
-
 use cochlea_features::{Audio as CochleaAudio, SegmentOpts, segment_timeline};
 use kithara::{
-    audio::mock::TestPcmReader,
     platform::time::{Duration, WallInstant},
-    signal::AudioSpec,
+    queue::TrackSource,
     warp::{StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
     cochlea::{marked_rhythm_markers, synchronization_failures},
-    offline::{OfflinePlayer, OfflinePlayerOptions, append_source_loaded, resource_from_reader},
+    offline::{OfflinePlayer, OfflinePlayerOptions, append_source_loaded, asset_source},
 };
-use kithara_test_fixtures::integration_fixtures::constant_half;
+use kithara_test_fixtures::{assets, unit_fixtures::cochlea_control_wav};
 use num_traits::AsPrimitive;
 
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
@@ -23,29 +20,7 @@ async fn render_tempo_control(
     decorated: bool,
     live_rate: bool,
 ) -> Vec<f32> {
-    let period = f64::from(sample_rate) * 0.5;
     let sample_rate_frames: usize = sample_rate.as_();
-    let frames = sample_rate_frames * 24;
-    let source = (0..frames)
-        .map(|frame| {
-            let frame: f64 = frame.as_();
-            let beat = frame / period;
-            let phase = beat.fract();
-            let ordinal: usize = beat.floor().as_();
-            let level = if ordinal.is_multiple_of(4) { 0.9 } else { 0.7 };
-            if decorated && ordinal.is_multiple_of(3) && (0.3..0.306).contains(&phase) {
-                0.65
-            } else if phase < 0.12 {
-                (level * (1.0 - phase / 0.12)).as_()
-            } else {
-                0.0
-            }
-        })
-        .collect();
-    let spec = AudioSpec::new(
-        CHANNELS,
-        NonZeroU32::new(sample_rate).expect("control rate"),
-    );
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
@@ -56,8 +31,7 @@ async fn render_tempo_control(
     )
     .await;
     let _ = harness.render(BLOCK_FRAMES).await;
-    let deck =
-        harness.pcm_deck(resource_from_reader(TestPcmReader::with_samples(spec, source)).into());
+    let deck = TrackSource::Uri(asset_source(&cochlea_control_wav(sample_rate, decorated)));
     let id = harness
         .with_queue(move |player| {
             if !live_rate {
@@ -177,7 +151,22 @@ async fn tempo_oracle_distinguishes_a_decorated_capture(
         accepted,
         "{played_bpm} BPM at {sample_rate}: {failures:?}"
     );
-    if !accepted {
+    if accepted {
+        let shifted = [vec![0.0; usize::from(CHANNELS)], capture.clone()].concat();
+        let failures = synchronization_failures(
+            "one frame",
+            &[&capture, &shifted],
+            CHANNELS,
+            sample_rate,
+            127.0,
+        );
+        assert!(
+            failures
+                .iter()
+                .any(|failure| failure.contains("beat phase spread is 1 frame")),
+            "{failures:?}"
+        );
+    } else {
         assert!(
             failures.iter().any(|failure| failure.contains("tempo")),
             "wrong-rate decorated control must fail its tempo measurement: {failures:?}"
@@ -194,27 +183,6 @@ async fn tempo_oracle_preserves_the_live_rate_boundary(#[case] sample_rate: u32)
     assert!(failures.is_empty(), "{failures:?}");
 }
 
-#[kithara::test(tokio, multi_thread)]
-#[case::cd_rate(44_100)]
-#[case::render_rate(48_000)]
-async fn decorated_render_rejects_a_one_frame_phase_error(#[case] sample_rate: u32) {
-    let capture = render_tempo_control(sample_rate, 127.0, true, false).await;
-    let shifted = [vec![0.0; usize::from(CHANNELS)], capture.clone()].concat();
-    let failures = synchronization_failures(
-        "one frame",
-        &[&capture, &shifted],
-        CHANNELS,
-        sample_rate,
-        127.0,
-    );
-    assert!(
-        failures
-            .iter()
-            .any(|failure| failure.contains("beat phase spread is 1 frame")),
-        "{failures:?}"
-    );
-}
-
 const SAMPLE_RATE: u32 = 48_000;
 const CHANNELS: u16 = 2;
 const BLOCK_FRAMES: usize = 512;
@@ -225,20 +193,16 @@ const SEGMENT_WINDOW_MS: f64 = 20.0;
 const SAMPLE_SILENCE_THRESHOLD: f32 = 1.0e-4;
 
 #[kithara_test_utils::kithara::hang_watchdog]
-async fn render_no_switch_control(constant_half: &'static [u8]) -> Vec<f32> {
-    let spec = AudioSpec::new(
-        CHANNELS,
-        NonZeroU32::new(SAMPLE_RATE).expect("test sample rate is non-zero"),
-    );
+async fn render_no_switch_control() -> Vec<f32> {
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
+            .block_on_underrun(true)
             .build(),
         SAMPLE_RATE,
     )
     .await;
-    let deck_source = harness
-        .pcm_deck((resource_from_reader(TestPcmReader::with_pcm(spec, 3.0, constant_half))).into());
+    let deck_source = asset_source(&assets::fixed_constant_wav_render_half_144000());
     let deck_id = append_source_loaded(&harness, harness.player(), deck_source).await;
     harness
         .with_queue(move |player| {
@@ -319,10 +283,8 @@ fn cochlea_silent_segments(samples: &[f32], start_frame: usize, end_frame: usize
 }
 
 #[kithara::test(tokio)]
-async fn cochlea_oracle_rejects_click_and_pause_in_rendered_no_switch_control(
-    constant_half: &'static [u8],
-) {
-    let control = render_no_switch_control(constant_half).await;
+async fn cochlea_oracle_rejects_click_and_pause_in_rendered_no_switch_control() {
+    let control = render_no_switch_control().await;
     let pause_end = SEAM_FRAME + PAUSE_FRAMES;
     let channels = usize::from(CHANNELS);
 

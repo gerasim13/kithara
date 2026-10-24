@@ -299,6 +299,33 @@ impl Capture {
         Ok(())
     }
 
+    pub(super) fn command_boundary(
+        &self,
+        retained: Range<i64>,
+        previous: u64,
+        revision: u64,
+        expected: i64,
+    ) -> Result<(), String> {
+        let issued = retained.start;
+        let mut first_changed = None;
+        for (start, interval) in self.covered(retained)? {
+            let start = start.max(issued);
+            let actual = interval.source.render_revision();
+            if start < expected && actual != previous {
+                return Err("consumed source law changed before the admitted lane frame".to_owned());
+            }
+            if actual == revision {
+                first_changed = Some(first_changed.map_or(start, |first: i64| first.min(start)));
+            }
+        }
+        if first_changed != Some(expected) {
+            return Err(format!(
+                "new source law first consumed at {first_changed:?}, expected {expected}"
+            ));
+        }
+        Ok(())
+    }
+
     pub(super) fn covered(&self, retained: Range<i64>) -> Result<BTreeMap<i64, Interval>, String> {
         let mut selected = BTreeMap::new();
         let mut cursor = retained.start;
@@ -382,4 +409,72 @@ pub(super) fn check_trace_negatives(
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    fn revision_capture(first_new: u64) -> Capture {
+        let rate = NonZeroU32::new(48_000).expect("test sample rate");
+        let identity = SourceIdentity {
+            spec: AudioSpec::new(CHANNELS, rate),
+            source_revision: 7,
+            media_origin: Some(Duration::ZERO),
+        };
+        Capture {
+            sample_rate: rate.get(),
+            intervals: [(0, first_new, 1), (first_new, 130, 2)]
+                .into_iter()
+                .map(|(start, end, revision)| {
+                    (
+                        i64::try_from(start).expect("test frame"),
+                        Interval {
+                            identity,
+                            source: SourceSpan::new(start, end, rate, end - start)
+                                .expect("test source span")
+                                .with_render_revision(revision),
+                        },
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    #[kithara::test(native)]
+    #[case::early(126, false)]
+    #[case::exact(127, true)]
+    #[case::late(128, false)]
+    fn command_revision_uses_the_consumed_frame_boundary(
+        #[case] first_new: u64,
+        #[case] accepted: bool,
+    ) {
+        let capture = revision_capture(first_new);
+        let result = capture.command_boundary(125..129, 1, 2, 127);
+        assert_eq!(result.is_ok(), accepted, "{result:?}");
+        if first_new < 127 {
+            assert!(
+                result
+                    .unwrap_err()
+                    .contains("before the admitted lane frame")
+            );
+        } else if first_new > 127 {
+            assert!(result.unwrap_err().contains("first consumed at Some(128)"));
+        }
+    }
+
+    #[kithara::test(native)]
+    fn command_boundary_requires_complete_native_coverage() {
+        let mut capture = revision_capture(127);
+        capture.intervals.remove(&0);
+        assert!(capture.command_boundary(0..129, 1, 2, 127).is_err());
+        let mut capture = revision_capture(127);
+        let previous = capture.intervals.get_mut(&0).expect("previous interval");
+        previous.source = SourceSpan::new(0, 128, previous.source.sample_rate(), 128)
+            .expect("overlapping source span")
+            .with_render_revision(1);
+        assert!(capture.command_boundary(0..129, 1, 2, 127).is_err());
+    }
 }

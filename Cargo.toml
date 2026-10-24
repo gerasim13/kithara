@@ -399,7 +399,7 @@ cbc = "0.2.1"
 
 # CLI
 clap = { version = "4.6", features = ["derive", "env"] }
-cochlea-features = "0.7.0"
+cochlea-features = { git = "https://github.com/gerasim13/cochlea.git", rev = "a088af3343910e1284c598090258e6804b7fc5cb" }
 cochlea-render = "0.7.0"
 cochlea-score = "0.7.0"
 core-foundation = "0.10"
@@ -439,6 +439,7 @@ hex = "0.4"
 hls_m3u8 = "0.7.0"
 # 0.23.2 introduced an Android thread-profiler compilation regression.
 hotpath = "=0.23.1"
+http = "1.5.0"
 humantime = "2.4.0"
 humantime-serde = "1.1.1"
 # Optional: unify lint settings later via workspace.metadata or deny.toml.
@@ -524,7 +525,7 @@ serde_json = "1.0"
 # maintained continuation of `serde_yaml`, which `serde_yml` itself forked.
 serde_yaml_ng = { package = "yaml_serde", version = "0.10.7" }
 serial_test = "4.0.1"
-sha2 = "0.11"
+sha2 = "0.11.1"
 signal-hook = "0.4"
 # Time-stretch backends: C++ FFI, native-only, behind `stretch-*` features.
 signalsmith-stretch = "0.1.3"

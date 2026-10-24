@@ -1,4 +1,4 @@
-use super::binding::BindingSide;
+use super::binding::{BindingSide, read_kind};
 use crate::{
     expand::ControlSite,
     interact::recognizers::Edge,
@@ -117,6 +117,21 @@ pub(crate) const fn primary(control: &ControlNode) -> Option<(Gesture, ValueKind
         | ControlNode::Custom { .. }
         | ControlNode::Shader { .. } => return None,
     })
+}
+
+pub(super) fn read_slots(
+    site: ControlSite<'_>,
+) -> impl Iterator<Item = (&BindingRef, Option<ValueKind>)> + '_ {
+    [
+        (site.status, Some(ValueKind::Text)),
+        (site.query, Some(ValueKind::Text)),
+        (site.scope, Some(ValueKind::Scalar)),
+        (site.zoom, Some(ValueKind::Scalar)),
+        (site.active, Some(ValueKind::Bool)),
+        (site.read, read_kind(site.control)),
+    ]
+    .into_iter()
+    .filter_map(|(binding, kind)| binding.map(|binding| (binding, kind)))
 }
 
 pub(crate) fn write_slots(site: ControlSite<'_>) -> Vec<WriteSlot<'_>> {

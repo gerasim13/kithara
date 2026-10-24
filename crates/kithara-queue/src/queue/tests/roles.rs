@@ -14,7 +14,7 @@ use kithara_test_utils::{TestTempDir, kithara};
 use super::super::slots::Role;
 use crate::{
     ActionAtItemEnd, Queue, QueueCommand, TrackSource, Transition,
-    mock::{TestPools, pending_selection, with_outbox},
+    mock::{TestPools, fixture_uri, pending_selection, with_outbox},
 };
 
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
@@ -240,13 +240,7 @@ async fn track_state_is_leading() {
             QueueCommand::Append {
                 position: kithara_play::Position::ZERO,
                 id: preloaded,
-                source: TrackSource::Uri(
-                    dir.path()
-                        .join("entry.wav")
-                        .to_str()
-                        .expect("fixture path")
-                        .to_owned(),
-                ),
+                source: TrackSource::Uri(fixture_uri(dir.path(), "entry.wav")),
             },
             out,
         )

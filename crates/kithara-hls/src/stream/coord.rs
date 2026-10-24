@@ -3,7 +3,7 @@
 use std::ops::Range;
 
 use delegate::delegate;
-use kithara_abr::{AbrHandle, AbrPublisher};
+use kithara_abr::{AbrHandle, AbrState};
 use kithara_assets::{AssetScope, ResourceKey};
 use kithara_bufpool::HasPool;
 use kithara_events::DeferredBus;
@@ -61,7 +61,7 @@ where
     pub(crate) cancel: CancelToken,
     pub(crate) config: Arc<HlsConfig<S>>,
     pub(crate) look_ahead_segments: Option<usize>,
-    pub(super) abr_publisher: AbrPublisher,
+    pub(super) abr_state: Arc<AbrState>,
     /// One authoritative active session and at most one exact incoming session.
     pub(super) sessions: SessionSlots<S>,
     /// Backing playhead state — the coord owns the `Arc` directly and
@@ -81,7 +81,7 @@ where
         playhead: Arc<PlayheadState>,
         writer: ActivityWriter,
         abr: AbrHandle,
-        abr_publisher: AbrPublisher,
+        abr_state: Arc<AbrState>,
         variants: Arc<[Arc<HlsVariant<S>>]>,
     ) -> Self {
         assert!(
@@ -113,7 +113,7 @@ where
             activity,
             activity_writer: Mutex::new(Some(writer)),
             abr,
-            abr_publisher,
+            abr_state,
             variants,
             cancel: env.cancel,
             scope: env.scope,
@@ -320,7 +320,6 @@ where
             pub(crate) fn reset_for_seek(&self);
         }
         to self.active().as_ref() {
-            pub(crate) fn download_head(&self) -> u32;
             pub(crate) fn format_change_segment_range(&self) -> StreamResult<Range<u64>>;
         }
     }
@@ -499,7 +498,7 @@ pub(super) mod tests {
     use kithara_platform::{
         CancelScope,
         sync::{Arc, Mutex, Notify, mpsc},
-        time::{Instant, timeout},
+        time::timeout,
         tokio::{runtime::Handle, task::spawn_blocking_on},
     };
     use kithara_stream::{
@@ -618,7 +617,6 @@ pub(super) mod tests {
             .into_variant(1, &ctx),
         ]);
         let abr_state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
-        let abr_publisher = abr_state.publisher();
         let peer: Arc<dyn Abr> = Arc::new(Unimock::new((
             AbrMock::cancel
                 .each_call(matching!())
@@ -643,7 +641,7 @@ pub(super) mod tests {
             Arc::new(PlayheadState::new()),
             ActivityWriter::new(),
             handle,
-            abr_publisher,
+            Arc::clone(&abr_state),
             variants,
         ));
         (coord, bus, ctx, abr_state, v0_slots)
@@ -779,17 +777,6 @@ pub(super) mod tests {
     }
 
     #[kithara::test]
-    fn variant_switch_target_keeps_flushing_seek_target_after_decoder_applies() {
-        let playhead = PlayheadState::new();
-        playhead.set_position(Duration::from_secs(9));
-
-        assert_eq!(
-            variant_switch_target_time(&playhead, Some(Duration::from_secs(5))),
-            Duration::from_secs(5)
-        );
-    }
-
-    #[kithara::test]
     fn variant_switch_target_ignores_completed_seek_target() {
         let playhead = PlayheadState::new();
 
@@ -809,17 +796,6 @@ pub(super) mod tests {
         assert_eq!(
             variant_switch_target_time(&playhead, Some(Duration::from_secs(12))),
             Duration::from_secs(12)
-        );
-    }
-
-    #[kithara::test]
-    fn variant_switch_target_keeps_the_seek_target_over_a_named_landing() {
-        let playhead = PlayheadState::new();
-        playhead.set_position(Duration::from_secs(9));
-
-        assert_eq!(
-            variant_switch_target_time(&playhead, Some(Duration::from_secs(5))),
-            Duration::from_secs(5)
         );
     }
 
@@ -1002,6 +978,7 @@ pub(super) mod tests {
             coord.promote_planned_variant(transition),
             VariantPromotion::Deferred
         );
+        assert_eq!(coord.variant_index(), 0);
 
         renew_switch_intent(&abr_state);
         assert_eq!(
@@ -1010,11 +987,13 @@ pub(super) mod tests {
         );
         assert_eq!(coord.sessions.resident_count(), 1);
         assert_eq!(coord.variant_index(), 0);
+        assert_eq!(abr_state.current_variant_index(), VariantIndex::new(0));
+        assert!(coord.sessions.incoming_session().is_none());
     }
 
     #[kithara::test]
     fn incoming_session_does_not_publish_variant_or_cursor_before_promotion() {
-        let (coord, _bus, _ctx, _abr_state) = switch_coord();
+        let (coord, _bus, _ctx, abr_state) = switch_coord();
         coord.set_position(17);
 
         let transition = prepare_incoming(&coord, incremental_profile(32))
@@ -1036,6 +1015,7 @@ pub(super) mod tests {
         assert!(coord.abort_variant(transition));
         assert_eq!(coord.sessions.resident_count(), 1);
         assert_eq!(coord.variant_index(), 0);
+        assert_eq!(abr_state.current_variant_index(), VariantIndex::new(0));
         assert_eq!(coord.position(), 17);
     }
 
@@ -1066,47 +1046,9 @@ pub(super) mod tests {
         ));
     }
 
-    #[kithara::test]
-    fn exact_session_resolution_follows_the_committed_abr_selector_before_collapse() {
-        let (coord, _bus, _ctx, _abr_state) = switch_coord();
-        prepare_incoming(&coord, incremental_profile(32))
-            .expect("prepare incoming")
-            .expect("pending switch");
-        let claim = coord
-            .abr
-            .claim_pending_decision()
-            .expect("prepared transition keeps its exact claim");
-
-        assert!(coord.abr_publisher.commit_pending(claim, Instant::now()));
-
-        assert_eq!(
-            coord.active_session().variant_index(),
-            1,
-            "the committed ABR selector must resolve through the resident pair before collapse"
-        );
-    }
-
-    #[kithara::test]
-    fn exact_session_resolution_retries_a_stale_selector_snapshot() {
-        let (coord, _bus, _ctx, _abr_state) = switch_coord();
-        prepare_incoming(&coord, incremental_profile(32))
-            .expect("prepare incoming")
-            .expect("pending switch");
-        let mut selector_observations = [0, 1, 1, 1].into_iter();
-
-        let resolved = coord.sessions.active(|| {
-            selector_observations
-                .next()
-                .expect("resolver performs two selector reads per attempt")
-        });
-
-        assert_eq!(resolved.variant_index(), 1);
-        assert_eq!(selector_observations.next(), None);
-    }
-
     #[kithara::test(tokio)]
     async fn incoming_readiness_tracks_required_bytes_not_delivery_chunks() {
-        let (coord, _bus, ctx, _abr_state) = switch_coord();
+        let (coord, _bus, ctx, abr_state) = switch_coord();
         coord.set_position(17);
         let profile = ReaderProfile::new(
             ReaderInput::InitOnly,
@@ -1171,6 +1113,8 @@ pub(super) mod tests {
         );
         assert_eq!(coord.sessions.resident_count(), 1);
         assert_eq!(coord.variant_index(), 1);
+        assert_eq!(abr_state.current_variant_index(), VariantIndex::new(1));
+        assert_eq!(coord.abr.current_variant_index(), Some(1));
         assert_eq!(coord.position(), first.len() as u64);
 
         let mut second = [0_u8; 8];
@@ -1218,21 +1162,6 @@ pub(super) mod tests {
             .pop()
             .expect("evicted incoming reader segment must be re-planned");
         assert_eq!(refetch.url().as_str(), "https://example.com/v1-seg0.m4s");
-    }
-
-    #[kithara::test]
-    fn promotion_requires_the_exact_taken_reader() {
-        let (coord, _bus, _ctx, _abr_state) = switch_coord();
-        let transition = prepare_incoming(&coord, incremental_profile(32))
-            .expect("prepare incoming")
-            .expect("pending switch");
-
-        assert_eq!(
-            coord.promote_planned_variant(transition),
-            VariantPromotion::Deferred
-        );
-        assert_eq!(coord.variant_index(), 0);
-        assert!(coord.abort_variant(transition));
     }
 
     #[kithara::test]
@@ -1324,8 +1253,8 @@ pub(super) mod tests {
     }
 
     #[kithara::test]
-    fn locked_exact_intent_keeps_its_incoming_session() {
-        let (coord, _bus, _ctx, _abr_state) = switch_coord();
+    fn a_locked_transition_keeps_its_incoming_and_defers_promotion() {
+        let (coord, _bus, ctx, abr_state) = switch_coord();
         let plan = coord
             .plan_variant_reader(None)
             .expect("plan incoming")
@@ -1337,6 +1266,7 @@ pub(super) mod tests {
             .expect("prepare incoming")
             .expect("pending switch");
         coord.playhead_write().set_position(Duration::from_secs(9));
+        take_ready_incremental_reader(&coord, &ctx, transition);
 
         coord.abr.lock();
         let locked = coord
@@ -1351,6 +1281,13 @@ pub(super) mod tests {
             Some(transition)
         );
         assert!(coord.has_incoming());
+        assert_eq!(
+            coord.promote_planned_variant(transition),
+            VariantPromotion::Deferred
+        );
+        assert_eq!(coord.variant_index(), 0);
+        assert_eq!(abr_state.current_variant_index(), VariantIndex::new(0));
+        assert_eq!(coord.sessions.resident_count(), 2);
 
         coord.abr.unlock();
         let ready = coord
@@ -1364,6 +1301,31 @@ pub(super) mod tests {
                 .expect("unlocked preparation probe"),
             Some(transition)
         );
+        assert_eq!(
+            coord.promote_planned_variant(transition),
+            VariantPromotion::Promoted
+        );
+        assert_eq!(coord.variant_index(), 1);
+        assert_eq!(abr_state.current_variant_index(), VariantIndex::new(1));
+        assert_eq!(coord.sessions.resident_count(), 1);
+    }
+
+    #[kithara::test]
+    fn a_withdrawn_abr_request_drops_the_incoming_and_keeps_the_pair() {
+        let (coord, _bus, _ctx, abr_state) = switch_coord();
+        let transition = prepare_incoming(&coord, incremental_profile(32))
+            .expect("prepare incoming")
+            .expect("pending switch");
+        assert!(abr_state.abort_pending(transition.id().abr_ticket()));
+
+        assert_eq!(
+            coord.plan_variant_reader(None).expect("withdrawn request"),
+            None
+        );
+        assert_eq!(abr_state.current_variant_index(), VariantIndex::new(0));
+        assert_eq!(coord.variant_index(), 0);
+        assert_eq!(coord.sessions.resident_count(), 1);
+        assert!(coord.sessions.incoming_session().is_none());
     }
 
     #[kithara::test]
@@ -1437,34 +1399,8 @@ pub(super) mod tests {
     }
 
     #[kithara::test]
-    fn a_settled_seek_stops_refusing_a_switch_plan_before_the_next_peer_poll() {
-        let (coord, _bus, _ctx, _abr_state) = switch_coord();
-        coord.prepare_for_seek();
-        assert!(!coord.abr.is_locked());
-
-        let plan = coord
-            .plan_variant_reader(None)
-            .expect("plan after the seek settled")
-            .expect("a settled seek must not refuse the pending switch");
-
-        assert_eq!(plan.transition().incoming_variant(), VariantIndex::new(1));
-    }
-
-    #[kithara::test]
-    fn a_live_seek_refuses_a_switch_plan_without_a_peer_poll() {
-        let (coord, _bus, _ctx, _abr_state) = switch_coord();
-        coord.prepare_for_seek();
-        let plan = coord
-            .plan_variant_reader(None)
-            .expect("plan after synchronous seek")
-            .expect("selection survives seek");
-        assert_eq!(plan.transition().incoming_variant(), VariantIndex::new(1));
-        assert!(!coord.abr.is_locked());
-    }
-
-    #[kithara::test]
     fn ready_stale_plan_drops_old_epoch_incoming_without_deleting_selection() {
-        let (coord, _bus, _ctx, _abr_state) = switch_coord();
+        let (coord, _bus, _ctx, abr_state) = switch_coord();
         let transition = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
             .expect("pending switch");
@@ -1473,6 +1409,8 @@ pub(super) mod tests {
             .claim_pending_decision()
             .expect("selection remains pending");
         coord.prepare_for_seek();
+        assert_eq!(coord.variant_index(), 0);
+        assert_eq!(abr_state.current_variant_index(), VariantIndex::new(0));
         assert!(matches!(
             coord
                 .take_prepared_variant_reader(transition)
@@ -1847,46 +1785,15 @@ pub(super) mod tests {
     }
 
     #[kithara::test]
-    fn seek_replaces_the_session_without_deleting_manual_selection() {
-        let (coord, _bus, _ctx, _abr_state) = switch_coord();
-        let claim = coord
-            .abr
-            .claim_pending_decision()
-            .expect("manual selection claim");
-        let stale = prepare_incoming(&coord, incremental_profile(32))
-            .expect("prepare incoming")
-            .expect("pending switch");
-
-        let retired = coord.sessions.incoming_session().expect("prepared session");
-        coord.prepare_for_seek();
-
-        assert_eq!(coord.abr.claim_pending_decision(), Some(claim));
-        let replacement = prepare_incoming(&coord, incremental_profile(32))
-            .expect("prepare replacement")
-            .expect("manual selection survives seek");
-        assert_eq!(replacement.id().abr_ticket(), stale.id().abr_ticket());
-        assert!(matches!(
-            retired.wait_range(0..1, Some(Duration::ZERO), None),
-            Ok(WaitOutcome::Interrupted)
-        ));
-        assert!(!Arc::ptr_eq(
-            &retired,
-            &coord
-                .sessions
-                .incoming_session()
-                .expect("replacement session")
-        ));
-    }
-
-    #[kithara::test]
-    fn seek_replaces_the_session_without_deleting_automatic_selection() {
+    #[case::manual(false)]
+    #[case::automatic(true)]
+    fn seek_replaces_the_session_without_deleting_the_selection(#[case] automatic: bool) {
         let (coord, _bus, _ctx, abr_state) = switch_coord();
-        abr_state.set_mode(AbrMode::Auto(Some(VariantIndex::new(0))));
-        abr_state.request_target(VariantIndex::new(1), AbrReason::UpSwitch);
-        let claim = coord
-            .abr
-            .claim_pending_decision()
-            .expect("automatic selection claim");
+        if automatic {
+            abr_state.set_mode(AbrMode::Auto(Some(VariantIndex::new(0))));
+            abr_state.request_target(VariantIndex::new(1), AbrReason::UpSwitch);
+        }
+        let claim = coord.abr.claim_pending_decision().expect("selection claim");
         let stale = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
             .expect("pending switch");
@@ -1897,7 +1804,7 @@ pub(super) mod tests {
         assert_eq!(coord.abr.claim_pending_decision(), Some(claim));
         let replacement = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare replacement")
-            .expect("automatic selection survives seek");
+            .expect("selection survives seek");
         assert_eq!(replacement.id().abr_ticket(), stale.id().abr_ticket());
         assert!(matches!(
             retired.wait_range(0..1, Some(Duration::ZERO), None),
@@ -2027,6 +1934,55 @@ pub(super) mod tests {
                     .expect("segment cmd carries a cancel token")
                     .is_cancelled(),
                 "outgoing look-ahead fetch for segment {seg} must be retired"
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn preparing_a_transition_keeps_fetches_the_reader_now_owes() {
+        let (coord, _bus, ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
+        coord.variants[0].rebuild(&ctx, 0);
+        let commands = coord.dispatch_active(&ctx, 6);
+        assert_eq!(commands.len(), 6);
+
+        coord.set_position(300);
+        assert_eq!(coord.find_at_offset(300), Some((3, 300, 100)));
+        prepare_incoming(&coord, incremental_profile(32))
+            .expect("prepare incoming")
+            .expect("pending switch");
+
+        for command in &commands {
+            let segment = v0_seg_idx(command);
+            if (3..=4).contains(&segment) {
+                assert!(
+                    !command.cancel().expect("fetch cancellation").is_cancelled(),
+                    "segment {segment} became owed after its initial look-ahead dispatch"
+                );
+            }
+        }
+    }
+
+    #[kithara::test]
+    fn dispatch_started_before_prepare_retires_lookahead_before_publication() {
+        let (coord, _bus, ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
+        coord.variants[0].rebuild(&ctx, 0);
+        let session = coord.active_session();
+        assert!(!coord.has_incoming());
+
+        prepare_incoming(&coord, incremental_profile(32))
+            .expect("prepare incoming")
+            .expect("pending switch");
+
+        let commands = session.dispatch(&ctx, 6);
+        assert_eq!(commands.len(), 6);
+        coord.retire_outgoing_lookahead(&session);
+
+        for command in &commands {
+            let segment = v0_seg_idx(command);
+            assert_eq!(
+                command.cancel().expect("fetch cancellation").is_cancelled(),
+                segment > 1,
+                "publication must recheck a transition installed after dispatch began"
             );
         }
     }
@@ -2312,99 +2268,26 @@ pub(super) mod tests {
     }
 
     #[kithara::test]
-    fn sync_abr_lock_locks_abr_while_a_seek_is_pending() {
+    #[case::no_holder(false)]
+    #[case::other_holder(true)]
+    fn prepare_for_seek_leaves_the_abr_lock_to_its_holder(#[case] other_holder: bool) {
         let (coord, _bus, _ctx, _abr) = switch_coord();
-        coord.prepare_for_seek();
-
-        coord.prepare_for_seek();
-
-        assert!(!coord.abr.is_locked());
-    }
-
-    /// The seek lock is taken through the coord, so it is released through
-    /// the coord: the setup mirrors the production sequence rather than
-    /// reaching past it into the shared counter.
-    #[kithara::test]
-    fn sync_abr_lock_unlocks_abr_once_no_seek_is_pending() {
-        let (coord, _bus, _ctx, _abr) = switch_coord();
-        coord.prepare_for_seek();
-        coord.prepare_for_seek();
-
-        coord.prepare_for_seek();
-
-        assert!(!coord.abr.is_locked());
-    }
-
-    #[kithara::test]
-    fn sync_abr_lock_waits_for_first_post_seek_output() {
-        let (coord, _bus, _ctx, _abr) = switch_coord();
-        coord.prepare_for_seek();
-        coord.prepare_for_seek();
-
-        coord.prepare_for_seek();
-        assert!(!coord.abr.is_locked());
-
-        assert!(coord.take_activity_writer().is_some());
-        coord.prepare_for_seek();
-        assert!(!coord.abr.is_locked());
-    }
-
-    /// `AbrState::unlock` decrements a shared counter under a
-    /// `debug_assert!(prev > 0)`, and `AbrHandle::lock` is public: releasing a
-    /// level this coord did not take unlocks ABR for whoever is still holding
-    /// it, and a second such release trips the assert.
-    #[kithara::test]
-    fn sync_abr_lock_leaves_a_level_it_did_not_take_alone() {
-        let (coord, _bus, _ctx, _abr) = switch_coord();
-        coord.abr.lock();
-
-        coord.prepare_for_seek();
-
-        assert!(coord.abr.is_locked());
-    }
-
-    #[kithara::test]
-    fn sync_abr_lock_leaves_a_quiet_coord_unlocked() {
-        let (coord, _bus, _ctx, _abr) = switch_coord();
-
-        coord.prepare_for_seek();
-
-        assert!(!coord.abr.is_locked());
-    }
-
-    #[kithara::test]
-    fn sync_abr_lock_keeps_a_pending_seek_locked() {
-        let (coord, _bus, _ctx, _abr) = switch_coord();
-        coord.prepare_for_seek();
-        coord.abr.lock();
-
-        coord.prepare_for_seek();
-
-        assert!(coord.abr.is_locked());
-    }
-
-    #[kithara::test]
-    fn variant_control_abort_retires_a_live_transition() {
-        let (coord, _bus, _ctx, _abr) = switch_coord();
-        let transition = prepare_incoming(&coord, incremental_profile(32))
-            .expect("prepare incoming")
-            .expect("pending switch");
-
-        assert!(VariantControl::abort_variant(coord.as_ref(), transition));
-    }
-
-    #[kithara::test]
-    fn variant_control_abort_rejects_a_superseded_transition() {
-        let (coord, _bus, _ctx, abr_state) = switch_coord();
-        let stale = prepare_incoming(&coord, incremental_profile(32))
-            .expect("prepare incoming")
-            .expect("pending switch");
-        renew_switch_intent(&abr_state);
-        prepare_incoming(&coord, incremental_profile(32))
-            .expect("prepare replacement")
-            .expect("replacement switch");
-
-        assert!(!VariantControl::abort_variant(coord.as_ref(), stale));
+        if other_holder {
+            coord.abr.lock();
+            coord.prepare_for_seek();
+            assert!(coord.abr.is_locked());
+            coord.abr.unlock();
+            assert!(!coord.abr.is_locked());
+        } else {
+            coord.prepare_for_seek();
+            coord.prepare_for_seek();
+            assert!(!coord.abr.is_locked());
+            let plan = coord
+                .plan_variant_reader(None)
+                .expect("plan after seek")
+                .expect("selection survives seek");
+            assert_eq!(plan.transition().incoming_variant(), VariantIndex::new(1));
+        }
     }
 
     #[kithara::test]

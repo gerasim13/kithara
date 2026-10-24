@@ -2,7 +2,15 @@ use kithara_bufpool::{HasPool, SampleBuffer};
 use kithara_signal::SourceSpan;
 use kithara_stretch::{ElasticEngine, ElasticError, ElasticRequest};
 
-use super::{super::trajectory::Fraction, core::WarpRenderer, mapping::span_speed};
+use super::{
+    super::trajectory::Fraction,
+    core::WarpRenderer,
+    mapping::{fraction, span_speed},
+};
+
+#[cfg(all(test, feature = "stretch-signalsmith"))]
+#[path = "tests/projected_tests.rs"]
+mod tests;
 
 pub(in crate::render) struct Projection {
     pub(in crate::render) engines: [Box<dyn ElasticEngine>; 2],
@@ -192,44 +200,6 @@ fn prime_projection_followers(
 }
 
 impl<S: HasPool<f32>> WarpRenderer<S> {
-    fn projection_positions(
-        &self,
-        resident: &super::residency::SourceResidency,
-        span: SourceSpan,
-        offset: i64,
-        nominal: Option<SourceSpan>,
-        frame: u64,
-    ) -> Result<(Option<Fraction>, Option<Fraction>), ElasticError> {
-        let position = match nominal {
-            None => resident.history_position(offset.unsigned_abs()),
-            Some(nominal) => Some(
-                self.map_nominal_position(
-                    span.start(),
-                    nominal
-                        .source_ratio_at(frame)
-                        .ok_or(ElasticError::SampleCountOverflow)?,
-                )?,
-            ),
-        };
-        let next = if let Some(nominal) = nominal {
-            Some(
-                self.map_nominal_position(
-                    span.start(),
-                    nominal
-                        .source_ratio_at(frame + 1)
-                        .ok_or(ElasticError::SampleCountOverflow)?,
-                )?,
-            )
-        } else {
-            None
-        };
-        let fraction = |(numerator, denominator)| Fraction {
-            numerator,
-            denominator,
-        };
-        Ok((position.map(fraction), next.map(fraction)))
-    }
-
     fn project_source_segment(
         &mut self,
         span: SourceSpan,
@@ -239,18 +209,41 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     ) -> Result<(), ElasticError> {
         let channels = usize::from(self.spec.channels);
         let resident = self.residency.as_ref().ok_or(ElasticError::PoolCapacity)?;
+        if output.is_empty() {
+            return Ok(());
+        }
+        let source_start = span.start();
+        let mut position = nominal
+            .map(|nominal| {
+                self.map_nominal_position(
+                    source_start,
+                    nominal
+                        .source_ratio_at(0)
+                        .ok_or(ElasticError::SampleCountOverflow)?,
+                )
+            })
+            .transpose()?;
         for (frame, output) in output.enumerate() {
             let frame_offset =
                 i64::try_from(frame).map_err(|_| ElasticError::SampleCountOverflow)?;
-            let (position, next) = self.projection_positions(
-                resident,
-                span,
-                offset
-                    .checked_add(frame_offset)
-                    .ok_or(ElasticError::SampleCountOverflow)?,
-                nominal,
-                u64::try_from(frame).map_err(|_| ElasticError::SampleCountOverflow)?,
-            )?;
+            let offset = offset
+                .checked_add(frame_offset)
+                .ok_or(ElasticError::SampleCountOverflow)?;
+            let frame = u64::try_from(frame).map_err(|_| ElasticError::SampleCountOverflow)?;
+            let next = nominal
+                .map(|nominal| {
+                    self.map_nominal_position(
+                        source_start,
+                        nominal
+                            .source_ratio_at(frame + 1)
+                            .ok_or(ElasticError::SampleCountOverflow)?,
+                    )
+                })
+                .transpose()?;
+            let current = match nominal {
+                Some(_) => position,
+                None => resident.history_position(offset.unsigned_abs()),
+            };
             let pending = self
                 .pending_source
                 .as_mut()
@@ -258,12 +251,13 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             let output = output * channels;
             sample_projected_frame(
                 resident,
-                position,
-                next,
+                current.map(fraction),
+                next.map(fraction),
                 span,
                 self.terminal_source_end,
                 &mut pending[output..output + channels],
             )?;
+            position = next;
         }
         Ok(())
     }
@@ -328,15 +322,11 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
 
     fn render_projected_frame(
         &mut self,
-        span: SourceSpan,
+        speed: f64,
         frame: usize,
         channels: usize,
         stages: usize,
     ) -> Result<(), ElasticError> {
-        let speed = span_speed(
-            span,
-            u64::try_from(frame).map_err(|_| ElasticError::SampleCountOverflow)?,
-        )?;
         let factors = pitch_factors(speed, stages);
         self.apply_pitch(factors[0])?;
         let input = self
@@ -413,8 +403,20 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             self.prime_projected(span, stages)?;
         }
         let frames = self.prepare_projected_output(span, lookahead, channels)?;
+        let mut position = span.source_ratio_at(0).map(fraction);
         for frame in 0..frames {
-            self.render_projected_frame(span, frame, channels, stages)?;
+            let next = u64::try_from(frame)
+                .ok()
+                .and_then(|frame| frame.checked_add(1))
+                .and_then(|frame| span.source_ratio_at(frame))
+                .map(fraction);
+            let speed = position
+                .zip(next)
+                .and_then(|(position, next)| next.sub(position))
+                .and_then(Fraction::as_f64)
+                .ok_or(ElasticError::SampleCountOverflow)?;
+            self.render_projected_frame(speed, frame, channels, stages)?;
+            position = next;
         }
         self.clear_pending_source();
         self.active = true;

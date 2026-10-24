@@ -1,6 +1,7 @@
 use std::{
     fs,
     path::{Path, PathBuf},
+    process::Command,
     sync::{Mutex, MutexGuard, OnceLock, PoisonError},
 };
 
@@ -14,6 +15,20 @@ fn runtime_scenario_guard() -> MutexGuard<'static, ()> {
         .get_or_init(|| Mutex::new(()))
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
+}
+
+fn prepare_runtime_test(root: &Path, package: &str) {
+    let output = Command::new("cargo")
+        .args(["test", "-p", package, "--test", "architecture", "--no-run"])
+        .current_dir(root)
+        .output()
+        .expect("compile runtime fixture");
+    assert!(
+        output.status.success(),
+        "runtime fixture {package}: {}\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 fn copy_tree(source: &Path, target: &Path) {
@@ -749,6 +764,7 @@ fn configured_runtime_scenario_enriches_the_same_graph() {
     )
     .expect("static metrics JSON");
 
+    prepare_runtime_test(temp.path(), "flow");
     kithara_devtools::run(&viz_command("auto"), &ctx).expect("runtime viz run");
 
     let document = fs::read_to_string(&output).expect("architecture document");
@@ -869,6 +885,7 @@ timeout_secs = 30
     let manifest_path = temp.path().join("Cargo.toml");
     let ctx = Ctx::load_from_manifest(&manifest_path).expect("load fixture context");
 
+    prepare_runtime_test(temp.path(), "harness");
     kithara_devtools::run(&workspace_lod_command_with_runtime("3", "auto"), &ctx)
         .expect("runtime evidence from excluded harness");
 

@@ -1,32 +1,26 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::{num::NonZeroU32, sync::Mutex};
+use std::num::NonZeroU32;
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::mock::TestPcmReader,
     host::{
         HostConfig, HostOwned, HostSettings, HostSettingsChange, HostSettingsControl,
         MetronomeConfigControl, Tap,
     },
     platform::time::{self, Duration},
     play::{PlayError, PlayWorker, PlayWorkerConfig, ResourcePrep, SessionDuckingMode},
-    queue::{Queue, QueueConfig, QueueControl, QueueError, QueueSettings, Transition},
-    signal::{AudioSpec, SessionFrame},
+    queue::{Queue, QueueConfig, QueueControl, QueueError, QueueSettings, TrackSource, Transition},
+    signal::SessionFrame,
 };
 use kithara_command::When;
 use kithara_config::Configure;
 use kithara_integration_tests::{
     audio_artifact::{AudioArtifactTap, artifact_label},
-    mock::PcmDeck,
-    offline::OfflineHostHarness,
+    offline::{OfflineHostHarness, asset_source},
 };
 use kithara_test_fixtures::{
-    analysis_beat_fixtures::sine_440_long,
-    integration_fixtures::{
-        constant_four, constant_quiet, constant_three, constant_two, constant_unity,
-    },
-    signal::peak,
+    analysis_beat_fixtures::sine_440_long, asset::Asset, assets, signal::peak,
 };
 use kithara_test_utils::{
     TestTempDir,
@@ -36,7 +30,6 @@ use num_traits::AsPrimitive;
 
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
-const TRACK_SECS: f64 = 30.0;
 const SETTLE_BLOCKS: usize = 60;
 const MEASURE_BLOCKS: usize = 15;
 const TOL: f32 = 2.0e-3;
@@ -56,10 +49,12 @@ const RING_OVERFILL: usize = 64;
 
 #[kithara::test(tokio)]
 async fn removing_a_non_last_offline_deck_settles_without_render_and_preserves_the_survivor(
-    constant_two: &'static [u8],
+    constant_two: Asset,
 ) {
     let mut harness = MixHarness::new(2).await;
-    harness.play(&[constant_two, constant_two]).await;
+    harness
+        .play(&[constant_two, assets::fixed_constant_wav_cd_fifth_1323000()])
+        .await;
     assert!(
         harness.steady_peak().await > 0.1,
         "both decks sound before removal"
@@ -82,7 +77,6 @@ async fn removing_a_non_last_offline_deck_settles_without_render_and_preserves_t
 struct MixHarness {
     host: OfflineHostHarness<TestPools>,
     players: Vec<HostOwned<Queue<TestPools>>>,
-    pcm_decks: Mutex<Vec<PcmDeck>>,
     _store_dir: TestTempDir,
 }
 
@@ -130,7 +124,6 @@ impl MixHarness {
         Self {
             host,
             players,
-            pcm_decks: Mutex::new(Vec::new()),
             _store_dir: store_dir,
         }
     }
@@ -142,31 +135,16 @@ impl MixHarness {
             .expect("set session ducking");
     }
 
-    async fn play(&self, values: &[&'static [u8]]) {
-        self.play_readers(
-            values
-                .iter()
-                .map(|value| TestPcmReader::with_pcm(spec(), TRACK_SECS, value))
-                .collect(),
-        )
-        .await;
-    }
-
-    async fn play_readers(&self, readers: Vec<TestPcmReader>) {
+    async fn play(&self, values: &[Asset]) {
         let players: Vec<_> = self
             .players
             .iter()
             .map(|player| player.control().clone())
             .collect();
-        let decks: Vec<_> = readers
-            .into_iter()
-            .map(|reader| PcmDeck::new(Box::new(reader)))
+        let sources: Vec<_> = values
+            .iter()
+            .map(|asset| TrackSource::Uri(asset_source(asset)))
             .collect();
-        let sources: Vec<_> = decks.iter().map(PcmDeck::source).collect();
-        self.pcm_decks
-            .lock()
-            .expect("PCM deck retention")
-            .extend(decks);
         let selected = self
             .host
             .run(move || {
@@ -256,12 +234,10 @@ impl MixHarness {
         let Self {
             host,
             players,
-            pcm_decks,
             _store_dir,
         } = self;
         drop(players);
         host.close().await;
-        drop(pcm_decks);
         drop(_store_dir);
     }
 }
@@ -272,8 +248,29 @@ fn fill_the_deck(player: &QueueControl<TestPools>) -> Option<QueueError> {
     (0..RING_OVERFILL).find_map(|_| player.set_eq_gain(0, 0.0).err())
 }
 
-fn spec() -> AudioSpec {
-    AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("sample rate"))
+#[kithara::fixture]
+fn constant_four() -> Asset {
+    assets::fixed_constant_wav_cd_two_fifths_1323000()
+}
+
+#[kithara::fixture]
+fn constant_three() -> Asset {
+    assets::fixed_constant_wav_cd_three_tenths_1323000()
+}
+
+#[kithara::fixture]
+fn constant_two() -> Asset {
+    assets::fixed_constant_wav_cd_fifth_1323000()
+}
+
+#[kithara::fixture]
+fn constant_quiet() -> Asset {
+    assets::fixed_constant_wav_cd_tenth_1323000()
+}
+
+#[kithara::fixture]
+fn constant_unity() -> Asset {
+    assets::fixed_constant_wav_cd_unity_1323000()
 }
 
 fn assert_near(actual: f32, expected: f32, what: &str) {
@@ -370,7 +367,7 @@ async fn an_eq_layout_and_gain_show_once_the_mixer_applies_them() {
     "four-player sum"
 )]
 async fn players_render_exact_weighted_sum(
-    #[case] sources: Vec<&'static [u8]>,
+    #[case] sources: Vec<Asset>,
     #[case] values: &[f32],
     #[case] levels: &[f32],
     #[case] label: &str,
@@ -386,10 +383,10 @@ async fn players_render_exact_weighted_sum(
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
 async fn zeroed_players_are_silent_and_gains_are_independent(
-    constant_four: &'static [u8],
-    constant_three: &'static [u8],
-    constant_two: &'static [u8],
-    constant_quiet: &'static [u8],
+    constant_four: Asset,
+    constant_three: Asset,
+    constant_two: Asset,
+    constant_quiet: Asset,
 ) {
     let values = [constant_four, constant_three, constant_two, constant_quiet];
     let levels = [1.0, 0.0, 0.0, 0.0];
@@ -403,8 +400,8 @@ async fn zeroed_players_are_silent_and_gains_are_independent(
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
-async fn limiter_holds_the_ceiling_when_players_overload_the_sum(constant_unity: &'static [u8]) {
-    let values = [constant_unity; 4];
+async fn limiter_holds_the_ceiling_when_players_overload_the_sum() {
+    let values = [(); 4].map(|()| constant_unity());
     let levels = [1.0_f32; 4];
 
     let raw: f32 = values.len().as_();
@@ -429,7 +426,7 @@ async fn limiter_holds_the_ceiling_when_players_overload_the_sum(constant_unity:
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
-async fn sub_threshold_mix_passes_through_untouched(constant_four: &'static [u8]) {
+async fn sub_threshold_mix_passes_through_untouched(constant_four: Asset) {
     let harness = MixHarness::new(1).await;
     harness.apply(&[1.0]).await.expect("apply mix");
     harness.play(&[constant_four]).await;
@@ -450,7 +447,7 @@ async fn sub_threshold_mix_passes_through_untouched(constant_four: &'static [u8]
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
-async fn single_player_without_a_mix_is_unchanged(constant_four: &'static [u8]) {
+async fn single_player_without_a_mix_is_unchanged(constant_four: Asset) {
     let harness = MixHarness::new(1).await;
     harness.play(&[constant_four]).await;
     assert_near(
@@ -462,10 +459,7 @@ async fn single_player_without_a_mix_is_unchanged(constant_four: &'static [u8]) 
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
-async fn rejected_mix_changes_no_rendered_gain(
-    constant_four: &'static [u8],
-    constant_two: &'static [u8],
-) {
+async fn rejected_mix_changes_no_rendered_gain(constant_four: Asset, constant_two: Asset) {
     let values = [constant_four, constant_two];
     let harness = MixHarness::new(values.len()).await;
     harness.apply(&[0.5, 0.25]).await.expect("apply mix");
@@ -488,9 +482,9 @@ async fn rejected_mix_changes_no_rendered_gain(
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
-async fn a_mix_level_outlives_clearing_the_deck(constant_four: &'static [u8]) {
+async fn a_mix_level_outlives_clearing_the_deck(constant_four: Asset) {
     let harness = MixHarness::new(1).await;
-    harness.play(&[constant_four]).await;
+    harness.play(std::slice::from_ref(&constant_four)).await;
     harness.apply(&[0.5]).await.expect("apply mix");
     assert_near(
         harness.steady_peak().await,
@@ -499,7 +493,7 @@ async fn a_mix_level_outlives_clearing_the_deck(constant_four: &'static [u8]) {
     );
 
     harness.remove_all_items().await;
-    harness.play(&[constant_four]).await;
+    harness.play(std::slice::from_ref(&constant_four)).await;
     assert_near(
         harness.steady_peak().await,
         0.2,
@@ -510,7 +504,7 @@ async fn a_mix_level_outlives_clearing_the_deck(constant_four: &'static [u8]) {
 
 /// Closing a player silences its deck though the Host still holds it.
 #[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
-async fn closing_a_playing_deck_silences_it(constant_four: &'static [u8]) {
+async fn closing_a_playing_deck_silences_it(constant_four: Asset) {
     let harness = MixHarness::new(1).await;
     harness.play(&[constant_four]).await;
     assert_near(harness.steady_peak().await, 0.4, "the deck plays its track");
@@ -532,7 +526,7 @@ async fn closing_a_playing_deck_silences_it(constant_four: &'static [u8]) {
 /// A deck that refuses the clear a close sends keeps its player open and
 /// playing, so a later close still silences it.
 #[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
-async fn a_refused_close_leaves_the_player_open(constant_four: &'static [u8]) {
+async fn a_refused_close_leaves_the_player_open(constant_four: Asset) {
     let harness = MixHarness::new(1).await;
     harness.play(&[constant_four]).await;
     assert_near(harness.steady_peak().await, 0.4, "the deck plays its track");
@@ -573,7 +567,7 @@ async fn a_refused_close_leaves_the_player_open(constant_four: &'static [u8]) {
 /// Removing every item takes effect only when the deck takes the clear: a
 /// refused clear leaves the player its track and the deck playing it.
 #[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
-async fn a_refused_clear_keeps_the_track_the_deck_plays(constant_four: &'static [u8]) {
+async fn a_refused_clear_keeps_the_track_the_deck_plays(constant_four: Asset) {
     let harness = MixHarness::new(1).await;
     harness.play(&[constant_four]).await;
     assert_near(harness.steady_peak().await, 0.4, "the deck plays its track");
@@ -615,7 +609,7 @@ async fn a_refused_clear_keeps_the_track_the_deck_plays(constant_four: &'static 
 }
 
 #[kithara::test(tokio)]
-async fn session_mix_does_not_mirror_player_content_volume(constant_four: &'static [u8]) {
+async fn session_mix_does_not_mirror_player_content_volume(constant_four: Asset) {
     let harness = MixHarness::new(1).await;
     harness.play(&[constant_four]).await;
     harness.apply(&[0.5]).await.expect("apply mix");
@@ -632,7 +626,7 @@ async fn session_mix_does_not_mirror_player_content_volume(constant_four: &'stat
 /// before it as it was and lowers the output after it.
 #[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
 async fn ducking_set_for_a_frame_inside_a_block_leaves_the_frames_before_it_alone(
-    constant_four: &'static [u8],
+    constant_four: Asset,
 ) {
     let harness = MixHarness::new(1).await;
     harness.play(&[constant_four]).await;
@@ -693,9 +687,7 @@ async fn ducking_lowers_and_restores_the_session_output(sine_440_long: Vec<f32>)
         u16::try_from(CHANNELS).expect("channel count"),
     )
     .expect("listening artifact");
-    harness
-        .play_readers(vec![TestPcmReader::with_samples(spec(), tone)])
-        .await;
+    harness.play(&[assets::metronome_sine_wav_full()]).await;
 
     let mut levels = Vec::new();
     for (mode, label) in [

@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    panic::Location,
     sync::{
         RwLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -10,7 +11,7 @@ use kithara::platform::{
     flash,
     sync::Arc,
     time::{Duration, sleep},
-    tokio::{sync::watch, task::spawn},
+    tokio::sync::watch,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -48,6 +49,10 @@ pub enum Delivery {
         chunk: usize,
         delay_ms: u64,
     },
+    /// Deliver a prefix, then withhold the remaining body until the test releases it.
+    Gated {
+        after_bytes: usize,
+    },
 }
 
 /// How every data route answers while the server-wide outage switch is thrown.
@@ -80,6 +85,7 @@ pub struct FixtureBehavior {
 struct BehaviorEntry {
     behavior: FixtureBehavior,
     hits: AtomicU64,
+    body_gate: Option<Arc<Gate>>,
 }
 
 pub(crate) struct Gate {
@@ -111,6 +117,10 @@ impl Gate {
 
     pub(crate) fn requested(&self) -> u64 {
         self.requested.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn pending(&self) -> usize {
+        self.released.receiver_count()
     }
 }
 
@@ -279,11 +289,14 @@ impl TestServerState {
     pub(crate) fn insert_behavior(&self, behavior: FixtureBehavior) -> String {
         let token = Uuid::new_v4().to_string();
         let mut map = self.behaviors.write().expect("behaviors poisoned");
+        let body_gate =
+            matches!(behavior.delivery, Delivery::Gated { .. }).then(|| Arc::new(Gate::new()));
         map.insert(
             token.clone(),
             Arc::new(BehaviorEntry {
                 behavior,
                 hits: AtomicU64::new(0),
+                body_gate,
             }),
         );
         token
@@ -292,6 +305,15 @@ impl TestServerState {
     pub(crate) fn get_behavior(&self, token: &str) -> Option<FixtureBehavior> {
         let map = self.behaviors.read().expect("behaviors poisoned");
         map.get(token).map(|e| e.behavior.clone())
+    }
+
+    pub(crate) fn behavior_body_gate(&self, token: &str) -> Option<Arc<Gate>> {
+        self.behaviors
+            .read()
+            .expect("behaviors poisoned")
+            .get(token)?
+            .body_gate
+            .clone()
     }
 
     pub(crate) fn bump_behavior(&self, token: &str) -> u64 {
@@ -380,9 +402,7 @@ impl TestServerState {
             .get(hls_token)
             .is_some_and(|hls| hls.flash);
         flash::with_ambient(ambient, async {
-            spawn(response_delay(duration))
-                .await
-                .expect("response delay task must complete");
+            flash::participate(response_delay(duration), Location::caller()).await;
         })
         .await;
     }
@@ -467,6 +487,42 @@ impl TestServerState {
 mod tests {
 
     use super::*;
+
+    #[cfg(feature = "flash")]
+    #[kithara::test(tokio, flash(true))]
+    async fn dropping_response_delay_removes_its_timer() {
+        let state = TestServerState::new();
+        let token = state.insert_hls_spec(HlsSpec::default()).unwrap();
+        let _real_io = flash::real_io();
+        let mut delay = Box::pin(state.delay_response(&token, Duration::from_secs(30)));
+        assert!(futures::poll!(delay.as_mut()).is_pending());
+        let pending_delay = || {
+            flash::hang_dump("response delay cancellation")
+                .lines()
+                .any(|line| line.contains("timed id=") && line.contains("test_server_state.rs"))
+        };
+        kithara_test_utils::wait_until(
+            Duration::from_secs(1),
+            "response delay armed",
+            pending_delay,
+        )
+        .await
+        .unwrap();
+        drop(delay);
+        let mut after = String::new();
+        kithara_test_utils::wait_until(Duration::from_secs(1), "complete engine snapshot", || {
+            after = flash::hang_dump("after response cancellation");
+            !after.contains("engine core lock held")
+        })
+        .await
+        .unwrap();
+        assert!(
+            !after
+                .lines()
+                .any(|line| line.contains("timed id=") && line.contains("test_server_state.rs")),
+            "dropping a response must remove its pending delay: {after}",
+        );
+    }
 
     #[kithara::test(native, flash(false))]
     fn behavior_register_returns_token_and_counts_start_at_zero() {

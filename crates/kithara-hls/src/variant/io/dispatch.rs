@@ -1,7 +1,12 @@
+use std::collections::BTreeMap;
+
 use kithara_assets::AssetsError;
 use kithara_bufpool::HasPool;
 use kithara_download::{FetchCmd, RequestPriority};
-use kithara_platform::{CancelToken, sync::Arc};
+use kithara_platform::{
+    CancelToken,
+    sync::{Arc, Mutex},
+};
 use kithara_storage::StorageError;
 use kithara_test_utils::kithara;
 use tracing::{debug, warn};
@@ -13,13 +18,12 @@ use crate::{
 };
 
 /// The cancellation scopes one dispatch rides. `metadata` survives seek rearming;
-/// `fetch` covers owed work — inits and segments inside the owed window; `lookahead` covers an
-/// audible session's prefetches past it, so a variant transition can retire
-/// them without touching what playback waits on.
-pub(crate) struct DispatchTokens {
+/// `fetch` covers owed work; `lookahead` registers individual children for
+/// prefetches past it, so transitions retire them against the current debt.
+pub(crate) struct DispatchTokens<'a> {
     pub(crate) metadata: CancelToken,
     pub(crate) fetch: CancelToken,
-    pub(crate) lookahead: CancelToken,
+    pub(crate) lookahead: &'a Mutex<BTreeMap<u32, CancelToken>>,
 }
 
 /// What a dispatch-side acquire failure does to the slot.
@@ -64,8 +68,8 @@ where
     ///
     /// Owed fetches ride `tokens.fetch`; an audible session's prefetches past
     /// the owed window (the playing segment and the next) ride
-    /// `tokens.lookahead`, which a variant transition retires to free
-    /// downloader capacity without touching what playback waits on.
+    /// individual children registered in `tokens.lookahead`, which a variant
+    /// transition retires without touching what playback waits on.
     ///
     /// A construction bound is a hard debt: fetches up to it must land for the build to finish, so
     /// look-ahead-only caps step aside within that window; a popped entry already requeued by a
@@ -78,13 +82,18 @@ where
         position: u64,
         construction_segment_end: Option<u32>,
         audible: bool,
-        tokens: DispatchTokens,
+        tokens: DispatchTokens<'_>,
     ) -> Vec<FetchCmd> {
         let DispatchTokens {
             metadata,
             fetch: cancel,
             lookahead,
         } = tokens;
+        lookahead.lock().retain(|segment, _| {
+            self.segments
+                .get(*segment as usize)
+                .is_some_and(|entry| entry.state().is_downloading())
+        });
         let mut out: Vec<FetchCmd> = Vec::new();
         let mut deferred: Vec<(PlannedFetch, PlanRevision)> = Vec::new();
         let wait_end = self.read_wait_end();
@@ -188,7 +197,9 @@ where
                 PlannedFetch::Init => self.build_fetch_cmd(ctx, entry, handle, cancel.clone()),
                 PlannedFetch::Segment(seg_idx) => {
                     let token = if beyond_owed(seg_idx) {
-                        lookahead.clone()
+                        let token = cancel.child();
+                        lookahead.lock().insert(seg_idx, token.clone());
+                        token
                     } else {
                         cancel.clone()
                     };

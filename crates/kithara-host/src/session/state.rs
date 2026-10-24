@@ -138,24 +138,35 @@ impl RootView {
         stream_shape: Option<StreamShape>,
         sample_rate: SessionSampleRate,
     ) {
-        let snapshot = self.root.load();
-        self.root.store(Arc::new(RootSnapshot {
-            applied: snapshot.applied,
-            settings,
-            decks: snapshot.decks.clone(),
-            grid: root.grid.clone(),
-        }));
+        {
+            let snapshot = self.root.load();
+            if snapshot.settings != settings || snapshot.grid != root.grid {
+                let next = RootSnapshot {
+                    applied: snapshot.applied,
+                    settings,
+                    decks: snapshot.decks.clone(),
+                    grid: root.grid.clone(),
+                };
+                drop(snapshot);
+                self.root.store(Arc::new(next));
+            }
+        }
         self.output.publish(sample_rate, stream_shape);
     }
 
-    pub(crate) fn publish_decks(&self, decks: Box<[BeatGridId]>) {
+    pub(crate) fn publish_decks(&self, decks: impl Iterator<Item = BeatGridId> + Clone) {
         let snapshot = self.root.load();
-        self.root.store(Arc::new(RootSnapshot {
+        if decks.clone().eq(snapshot.decks.iter().copied()) {
+            return;
+        }
+        let next = RootSnapshot {
             applied: snapshot.applied,
-            decks,
+            decks: decks.collect(),
             grid: snapshot.grid.clone(),
             settings: snapshot.settings,
-        }));
+        };
+        drop(snapshot);
+        self.root.store(Arc::new(next));
     }
 
     /// Whether the deck `grid_id` is in the session.
@@ -516,6 +527,75 @@ mod tests {
         HostCommand, HostOwner,
         mock::{TestState, ask, registration, render_block, test_state},
     };
+
+    #[kithara::test]
+    fn unchanged_root_and_topology_reuse_snapshots_without_hiding_changes() {
+        let rate = NonZeroU32::new(48_000).expect("sample rate");
+        let id = BeatGridId::allocate().expect("grid identity");
+        let mut root = HostRoot::new(id, rate);
+        let settings = HostSettings::default();
+        let view = RootView::new(&root, settings);
+        let output_rate = SessionSampleRate::new(None, rate.get());
+        let original = view.root.load_full();
+        view.publish(&root, settings, None, output_rate);
+        view.publish_decks(std::iter::empty());
+        assert!(Arc::ptr_eq(&original, &view.root.load_full()));
+        view.publish(
+            &root,
+            settings,
+            None,
+            SessionSampleRate::new(Some(48_000), 48_000),
+        );
+        assert!(Arc::ptr_eq(&original, &view.root.load_full()));
+        assert_eq!(view.output.get().sample_rate.measured, Some(48_000));
+
+        let changed_settings = HostSettings::builder().sample_rate(rate).build();
+        view.publish(&root, changed_settings, None, output_rate);
+        let configured = view.root.load_full();
+        assert!(!Arc::ptr_eq(&original, &configured));
+        assert_eq!(configured.settings, changed_settings);
+        assert_eq!(original.settings, settings);
+
+        let next_revision = root
+            .grid()
+            .revision()
+            .checked_next()
+            .expect("grid revision");
+        root.publish_unavailable(
+            BeatGridStamp::new(id, next_revision),
+            rate,
+            SessionEpoch::new(1),
+        );
+        view.publish(&root, changed_settings, None, output_rate);
+        let rerouted = view.root.load_full();
+        assert!(!Arc::ptr_eq(&configured, &rerouted));
+        assert_eq!(rerouted.grid.stamp(), root.grid().stamp());
+        assert_eq!(rerouted.grid.axis(), root.grid().axis());
+        assert_ne!(configured.grid.stamp(), rerouted.grid.stamp());
+
+        let second = BeatGridId::allocate().expect("second grid identity");
+        let mut previous = rerouted;
+        for ids in [
+            vec![id],
+            vec![id, second],
+            vec![second, id],
+            vec![second],
+            vec![],
+        ] {
+            view.publish_decks(ids.iter().copied());
+            let published = view.root.load_full();
+            assert!(!Arc::ptr_eq(&previous, &published));
+            assert_eq!(published.decks.as_ref(), ids);
+            assert_eq!(published.grid.stamp(), root.grid().stamp());
+            assert_eq!(published.settings, changed_settings);
+            view.publish_decks(ids.iter().copied());
+            view.publish(&root, changed_settings, None, output_rate);
+            assert!(Arc::ptr_eq(&published, &view.root.load_full()));
+            previous = published;
+        }
+        assert!(original.decks.is_empty());
+        assert_eq!(original.grid.revision(), BeatGridRevision::first());
+    }
 
     fn canonical_decks(state: &mut TestState) -> Vec<BeatGridId> {
         let mut decks = Vec::new();

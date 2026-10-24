@@ -13,6 +13,11 @@ pub mod net {
     pub use super::backend::net::{TcpListener, TcpStream};
 }
 
+#[cfg(all(feature = "tokio-process", not(target_arch = "wasm32")))]
+pub mod process {
+    pub use super::backend::process::Command;
+}
+
 pub mod runtime {
     pub use super::backend::runtime::*;
 }

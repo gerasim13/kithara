@@ -97,6 +97,7 @@ async fn render_committed_queue(
     expected: (TrackId, usize),
 ) -> Vec<f32> {
     let mut events: EventReceiver<QueueEvent> = queue.subscribe();
+    let mut loads: EventReceiver<TestEvent> = queue.subscribe();
     let mut pcm = Vec::new();
     let mut committed = false;
     let mut ended = 0;
@@ -104,6 +105,17 @@ async fn render_committed_queue(
         pcm.extend(render_loop(queue, harness, 1).await);
         while let Ok(envelope) = events.try_recv() {
             match envelope.event {
+                QueueEvent::TrackStatusChanged {
+                    id,
+                    status: TrackStatus::Pending,
+                } if id == expected.0 => {
+                    // Unpaced offline callbacks otherwise outrun the announced successor reload.
+                    wait_for_loader_done_event(&mut loads, queue, id, LOCAL_LOAD_DEADLINE)
+                        .await
+                        .expect(
+                            "the announced successor reload completes before rendering resumes",
+                        );
+                }
                 QueueEvent::CurrentTrackAdvance { id: Some(id), .. } if id == expected.0 => {
                     assert!(!committed, "the expected track becomes current once");
                     assert_eq!(queue.current().map(|entry| entry.id), Some(id));
@@ -1317,18 +1329,6 @@ async fn a_consumed_successor_reloads_its_lead_in_session_time_before_the_end() 
     harness.close().await;
 }
 
-/// Replay regression: after a full cf=0 playthrough every track is
-/// `Consumed`. A second pass over the same queue must still
-/// auto-advance — i.e. the tick must respawn the `Consumed` next-track
-/// via the loader path so the advance has a resource again. Before the
-/// fix, the queue stopped after the first track on every replay.
-///
-/// Drives the full production code path: the second `select` of track A
-/// hits the `Consumed` branch in `Queue::select` (which respawns via
-/// `spawn_apply_after_load`), then within the prefetch lead of A's end
-/// the tick respawns `Consumed` track B. We pre-supply fresh
-/// `Resource`s to the loader so spawn completes synthetically, mirroring
-/// what a real network loader would deliver on a replay.
 #[kithara::test(tokio, flash(false))]
 async fn cf_zero_replay_after_full_playthrough_still_advances() {
     const TRACK_SECS: f64 = 0.4;

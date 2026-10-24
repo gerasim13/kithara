@@ -20,7 +20,7 @@ use kithara_play::{
     Player, ResourcePrep, mock::DeckRig,
 };
 use kithara_queue::{Queue, QueueCommand, QueueConfig, TrackId, Transition};
-use kithara_signal::{AudioSpec, FrameCount, SessionFrame};
+use kithara_signal::{FrameCount, SessionFrame};
 use kithara_test_utils::{
     TestTempDir,
     bufpool::{TestPools, pools},
@@ -79,8 +79,11 @@ fn seated_queue(
     start_deck(session);
     let directory = TestTempDir::new();
     let path = directory.path().join("ring-clock.wav");
-    kithara_play::mock::write_pcm_wav(&path, &[0.5; 8_192], AudioSpec::new(2, session_rate()))
-        .expect("write seated queue fixture");
+    std::fs::write(
+        &path,
+        kithara_test_fixtures::assets::fixed_constant_wav_render_half_4096().bytes(),
+    )
+    .expect("write seated queue fixture");
     let prep = ResourcePrep::builder()
         .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
         .build();

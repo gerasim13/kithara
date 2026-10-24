@@ -5,7 +5,6 @@ use std::{
 
 use kithara::{
     assets::{AssetResource, AssetSource, AssetStore, ReadSide, ResourceKey},
-    audio::mock::TestPcmReader,
     broadcast::{Broadcast, BroadcastConfig},
     encode::EncodeConfig,
     events::TrackId,
@@ -19,22 +18,21 @@ use kithara::{
         time::{Duration, WallInstant},
         tokio::task::spawn_blocking,
     },
-    queue::Transition,
+    queue::{TrackSource, Transition},
     record::{
         LiveRecorder, LiveRecordingConfig, LiveRecordingHandle, LiveRecordingReport,
         PartSinkFactory, RecordingConfig,
     },
-    signal::AudioSpec,
     worker::{Worker, WorkerConfig},
 };
 use kithara_app::recording::{AssetPartSink, AssetPartSinkError};
 use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
     memory_asset_store,
-    offline::{LOCAL_LOAD_DEADLINE, OfflinePlayer, OfflinePlayerOptions},
+    offline::{LOCAL_LOAD_DEADLINE, OfflinePlayer, OfflinePlayerOptions, asset_source},
     waits::wait_for_loader_done_event,
 };
-use kithara_test_fixtures::integration_fixtures::broadcast_tone;
+use kithara_test_fixtures::unit_fixtures::broadcast_tone_wav;
 use url::Url;
 
 use super::origin::Playlist;
@@ -70,19 +68,11 @@ impl PartSinkFactory for AssetFactory {
     }
 }
 
-fn tone_reader(broadcast_tone: Vec<f32>) -> TestPcmReader {
-    let spec = AudioSpec::new(
-        CHANNELS,
-        NonZeroU32::new(OLD_RATE).expect("test rate is non-zero"),
-    );
-    TestPcmReader::with_samples(spec, broadcast_tone)
-}
-
-async fn playing_harness(broadcast_tone: Vec<f32>) -> OfflinePlayer {
+async fn playing_harness() -> OfflinePlayer {
     let harness =
         OfflinePlayer::with_sample_rate(OfflinePlayerOptions::builder().build(), OLD_RATE).await;
     let id = TrackId::allocate();
-    let source = harness.pcm_deck(Box::new(tone_reader(broadcast_tone)));
+    let source = TrackSource::Uri(asset_source(&broadcast_tone_wav()));
     let mut events = harness.player().subscribe();
     harness
         .with_queue(move |queue| {
@@ -141,8 +131,8 @@ fn wav_rate(store: &AssetStore<TestPools>, key: &ResourceKey) -> u32 {
 }
 
 #[kithara::test(tokio, flash(false), timeout(Duration::from_secs(60)))]
-async fn route_change_continues_recording_and_broadcast_in_new_segments(broadcast_tone: Vec<f32>) {
-    let harness = playing_harness(broadcast_tone).await;
+async fn route_change_continues_recording_and_broadcast_in_new_segments() {
+    let harness = playing_harness().await;
     let pools = pools();
     let worker = Worker::new(WorkerConfig::new());
     let store = memory_asset_store();

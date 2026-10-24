@@ -40,7 +40,6 @@ kithara-test-utils = { workspace = true }
 # range tracking + sync primitives (wasm32-compatible)
 arc-swap = { workspace = true }
 
-crossbeam-queue = { workspace = true }
 delegate = { workspace = true }
 derive-where = { workspace = true }
 derive_more = { workspace = true }

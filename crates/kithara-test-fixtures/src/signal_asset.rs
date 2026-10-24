@@ -222,7 +222,7 @@ impl SignalAsset {
     }
 }
 
-#[cfg(all(test, feature = "native-fixtures", not(target_arch = "wasm32")))]
+#[cfg(all(test, feature = "signal", not(target_arch = "wasm32")))]
 mod tests {
     use kithara_test_utils::kithara;
 

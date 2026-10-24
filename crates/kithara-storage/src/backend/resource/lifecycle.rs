@@ -36,7 +36,7 @@ impl<D: DriverIo> ResourceCore<D> {
         if let Some(committed_len) = self.inner.driver.committed_len() {
             return range.end <= committed_len;
         }
-        range_covered_by(&self.inner.available_snapshot.load(), &range)
+        range_covered_by(&self.inner.available.load(), &range)
     }
 
     pub(super) fn fail_inner(&self, reason: String) {
@@ -81,16 +81,17 @@ impl<D: DriverIo> ResourceCore<D> {
             if let Some(len) = final_len
                 && len > 0
             {
-                state.available.insert(0..len);
-                if let Some(window) = self.inner.driver.valid_window() {
-                    if window.start > 0 {
-                        state.available.remove(0..window.start);
+                self.inner.edit_available(state, |available| {
+                    available.insert(0..len);
+                    if let Some(window) = self.inner.driver.valid_window() {
+                        if window.start > 0 {
+                            available.remove(0..window.start);
+                        }
+                        if window.end < len {
+                            available.remove(window.end..len);
+                        }
                     }
-                    if window.end < len {
-                        state.available.remove(window.end..len);
-                    }
-                }
-                self.inner.publish_available(state);
+                });
             }
         }
         self.inner.gate.notify_all();
@@ -116,11 +117,15 @@ impl<D: DriverIo> ResourceCore<D> {
         if from >= upper {
             return None;
         }
-        state
+        let gap = self
+            .inner
             .available
+            .load()
             .gaps(&(from..upper))
             .next()
-            .map(|gap| gap.start..gap.end.min(upper))
+            .map(|gap| gap.start..gap.end.min(upper));
+        drop(state);
+        gap
     }
 
     /// A new write generation starts armed: `abandon` only waives the anti-hang stamp for the
