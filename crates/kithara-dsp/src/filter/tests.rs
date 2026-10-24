@@ -1,6 +1,6 @@
 use std::num::NonZeroUsize;
 
-use kithara_test_fixtures::signal::Wave;
+use kithara_test_fixtures::portable::sine_440;
 use kithara_test_utils::kithara;
 
 use super::{Biquad, Coefficients, FilterError, Hertz, Type};
@@ -18,10 +18,6 @@ const REFERENCE: [f64; 5] = [
 ];
 /// A settled filter matches the long-run steady state this closely.
 const SETTLED: f32 = 1.0e-6;
-const SINE: Wave = Wave::Sine {
-    hz: 440.0,
-    peak: i16::MAX,
-};
 
 fn design(sample_rate: f64, cutoff: f64, q: f64) -> Coefficients<f64> {
     Coefficients::from_params(
@@ -37,10 +33,11 @@ fn low_pass(cutoff: f64) -> Coefficients<f64> {
     design(RATE, cutoff, Q)
 }
 
-fn stereo(frames: usize, wave: Wave) -> Vec<Vec<f32>> {
-    let plane: Vec<f32> = (0..frames)
-        .map(|frame| f32::from(wave.sample(frame, 48_000)) / 32_768.0)
-        .collect();
+fn stereo(frames: usize) -> Vec<Vec<f32>> {
+    let plane = sine_440()
+        .get(..frames)
+        .expect("prepared frame extent")
+        .to_vec();
     vec![plane.clone(), plane]
 }
 
@@ -126,16 +123,16 @@ fn settle_reaches_the_long_run_steady_state() {
 #[kithara::test]
 fn silence_resets_to_the_state_of_a_fresh_filter() {
     let mut used = built(1_000.0);
-    let mut burst = stereo(256, SINE);
+    let mut burst = stereo(256);
     used.process(&mut burst, 0..256).expect("shape matches");
     let mut quiet = vec![vec![0.0_f32; 1_024]; 2];
     used.process(&mut quiet, 0..1_024).expect("shape matches");
     let mut silence = vec![vec![0.0_f32; 64]; 2];
     used.process(&mut silence, 0..64).expect("shape matches");
 
-    let mut after = stereo(256, SINE);
+    let mut after = stereo(256);
     used.process(&mut after, 0..256).expect("shape matches");
-    let mut fresh = stereo(256, SINE);
+    let mut fresh = stereo(256);
     built(1_000.0)
         .process(&mut fresh, 0..256)
         .expect("shape matches");
@@ -165,8 +162,8 @@ fn a_quiet_call_shorter_than_the_section_memory_keeps_the_state() {
 fn an_empty_range_keeps_the_state() {
     let mut probed = built(1_000.0);
     let mut plain = built(1_000.0);
-    let mut left = stereo(256, SINE);
-    let mut right = stereo(256, SINE);
+    let mut left = stereo(256);
+    let mut right = stereo(256);
     probed.process(&mut left, 0..128).expect("shape matches");
     probed
         .process(&mut left, 128..128)
@@ -179,7 +176,7 @@ fn an_empty_range_keeps_the_state() {
 #[kithara::test]
 fn samples_outside_the_range_keep_their_bits() {
     let mut filter = built(1_000.0);
-    let original = stereo(64, SINE);
+    let original = stereo(64);
     let mut planes = original.clone();
     filter.process(&mut planes, 16..48).expect("shape matches");
     for (plane, source) in planes.iter().zip(&original) {

@@ -1,43 +1,18 @@
 use std::num::NonZeroU16;
 
-use bytes::Bytes;
 use url::Url;
 
-use crate::{
-    error::{NetError, truncate_error_body},
-    types::Headers,
-};
+use crate::{error::NetError, types::Headers};
 
-pub(crate) fn status_error(url: Url, status: u16, body: &Bytes) -> NetError {
-    let body = if body.is_empty() {
-        None
-    } else {
-        Some(truncate_error_body(
-            String::from_utf8_lossy(body).into_owned(),
-            "...",
-        ))
-    };
+pub(crate) fn status_error(url: Url, status: u16, body: String) -> NetError {
     match NonZeroU16::new(status) {
         Some(status) => NetError::Status {
             status,
-            body,
             url: Some(url),
+            body: Some(body),
         },
         None => NetError::Network(format!("unexpected zero HTTP status for {url}")),
     }
-}
-
-/// The `content-encoding` value when it names any coding besides `identity`:
-/// a success body that carries one reached the caller still encoded.
-pub(crate) fn non_identity_content_encoding(pairs: &[(String, String)]) -> Option<&str> {
-    pairs.iter().find_map(|(key, value)| {
-        (key.eq_ignore_ascii_case("content-encoding")
-            && value
-                .split(',')
-                .map(str::trim)
-                .any(|coding| !coding.eq_ignore_ascii_case("identity")))
-        .then_some(value.as_str())
-    })
 }
 
 /// A 206 to a probe states the representation total in content-range alone.

@@ -2,7 +2,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_dsp::interp::Interpolation;
 use kithara_test_fixtures::{
-    signal::Wave,
+    portable::glide_two_tones,
     unit_fixtures::{glide_alias, glide_quadratic, glide_transition, glide_unity},
 };
 use kithara_test_utils::kithara;
@@ -52,20 +52,7 @@ const CHUNKING_TOLERANCE: f32 = 1.0e-4;
 const CONSTANT_TOLERANCE: f32 = 1.0e-6;
 
 fn two_tones(frames: usize) -> Vec<f32> {
-    let low = Wave::Sine {
-        hz: 1_000.0,
-        peak: i16::MAX / 2,
-    };
-    let high = Wave::Sine {
-        hz: 30_000.0,
-        peak: i16::MAX / 2,
-    };
-    (0..frames)
-        .map(|frame| {
-            (f32::from(low.sample(frame, 96_000)) + f32::from(high.sample(frame, 96_000)))
-                / 32_768.0
-        })
-        .collect()
+    glide_two_tones()[..frames].to_vec()
 }
 
 fn stream_through(chunk: usize, input: &[f32]) -> Vec<f32> {

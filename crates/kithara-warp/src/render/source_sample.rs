@@ -116,10 +116,43 @@ mod tests {
 
     #[kithara::test]
     fn downsampling_keeps_the_mapped_source_coordinate() {
+        const MONO: [f32; 64] = {
+            let mut samples = [0.0; 64];
+            let mut frame = 0;
+            let mut value = 0.0;
+            while frame < samples.len() {
+                samples[frame] = value;
+                value += 1.0 / 64.0;
+                frame += 1;
+            }
+            samples
+        };
+        const STEREO: [f32; 128] = {
+            let mut samples = [0.0; 128];
+            let mut frame = 0;
+            while frame < MONO.len() {
+                samples[frame * 2] = MONO[frame];
+                samples[frame * 2 + 1] = -MONO[frame];
+                frame += 1;
+            }
+            samples
+        };
+        const QUAD: [f32; 256] = {
+            let mut samples = [0.0; 256];
+            let mut frame = 0;
+            while frame < MONO.len() {
+                samples[frame * 4] = MONO[frame];
+                samples[frame * 4 + 1] = -MONO[frame];
+                samples[frame * 4 + 2] = 0.5;
+                samples[frame * 4 + 3] = -0.75;
+                frame += 1;
+            }
+            samples
+        };
+
         let pools = pools();
         let mut resident =
             SourceResidency::prepare(&pools, None, 32, 64, 0, 1).expect("retained source history");
-        let samples: Vec<_> = (0..64_u16).map(|frame| f32::from(frame) / 64.0).collect();
         resident
             .append(
                 AudioChunkInfo {
@@ -127,7 +160,7 @@ mod tests {
                     frames: 64,
                     ..AudioChunkInfo::default()
                 },
-                &samples,
+                &MONO,
             )
             .expect("exact mapped source span");
         let mut output = [0.0];
@@ -135,16 +168,10 @@ mod tests {
             .expect("all filter taps are in the resident source window");
         let actual = output[0];
         assert_eq!(actual, 0.25);
-        for channel_count in [2, 4] {
+        for (channel_count, samples) in [(2, &STEREO[..]), (4, &QUAD[..])] {
             let channels = usize::from(channel_count);
             let mut resident = SourceResidency::prepare(&pools, None, 32, 64, 0, channels)
                 .expect("independent channel history");
-            let samples: Vec<_> = (0..64_u16)
-                .flat_map(|frame| {
-                    let value = f32::from(frame) / 64.0;
-                    [value, -value, 0.5, -0.75].into_iter().take(channels)
-                })
-                .collect();
             resident
                 .append(
                     AudioChunkInfo {
@@ -155,7 +182,7 @@ mod tests {
                         frames: 64,
                         ..AudioChunkInfo::default()
                     },
-                    &samples,
+                    samples,
                 )
                 .expect("distinct interleaved channels");
             for speed in [0.25, 1.0, 4.0] {

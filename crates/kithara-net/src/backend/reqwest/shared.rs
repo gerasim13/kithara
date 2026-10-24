@@ -1,16 +1,5 @@
-use bytes::Bytes;
-use url::Url;
-
-use super::{Client, ClientBuilder, RequestBuilder};
+use super::ClientBuilder;
 use crate::types::Compression;
-
-pub(crate) fn head_request(client: &Client, url: &Url) -> RequestBuilder {
-    client.head(url.as_str())
-}
-
-pub(crate) fn post_request(client: &Client, url: &Url, body: Bytes) -> RequestBuilder {
-    client.post(url.as_str()).body(body)
-}
 
 /// A native compression transform. Request code owns the exact header because
 /// browser emulation may add one independently of the enabled decoders.

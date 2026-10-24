@@ -410,7 +410,7 @@ async fn a_cued_sync_installs_mapped_pcm_before_anything_sounds(
         .into_iter()
         .map(|(snapshot, _)| snapshot)
         .find(|snapshot| snapshot.track.item == item)
-        .expect("owner linked track");
+        .expect("owner reports the paused linked track");
     assert_eq!(snapshot.sync, SyncStatus::On);
     assert!(
         !snapshot.track.pending_lane,
@@ -670,7 +670,7 @@ async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
                 .into_iter()
                 .map(|(snapshot, _)| snapshot)
                 .find(|snapshot| snapshot.track.item == item)
-                .expect("owner successor linked snapshot");
+                .expect("owner reports the successor linked track");
             assert_eq!(snapshot.sync, SyncStatus::On);
             assert!(!snapshot.track.pending_lane, "successor segment is Ready");
             hang_reset!();

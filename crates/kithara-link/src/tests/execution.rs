@@ -12,11 +12,12 @@ use kithara_play::{
 };
 use kithara_render::{
     Dispatched, DispatcherCommand, LaneApplied, LaneCommand, LaneFrame, LaneProtocol,
-    bridge::{DeckMixSettings, DeckProtocol, DeckSnapshot, Slot, SlotMark},
+    bridge::{DeckMixSettings, DeckPart, DeckProtocol, DeckSnapshot, Slot, SlotMark},
     rt::DeckMixerConfig,
 };
 use kithara_signal::{AudioChunkInfo, AudioSpec, FrameCount, SegmentId, SessionFrame};
 use kithara_sync::SpeedCurve;
+use kithara_test_fixtures::assets;
 use kithara_test_utils::{
     TestTempDir,
     bufpool::{TestPools, pools},
@@ -24,7 +25,7 @@ use kithara_test_utils::{
 };
 
 use super::{
-    fixtures::{answer, grid, load, loaded, position, trajectory},
+    fixtures::{answer, grid, load, loaded, position, source_grid, trajectory},
     host_fixture::{host, register},
 };
 use crate::{
@@ -56,8 +57,8 @@ fn settle(
 async fn a_lane_dropped_before_its_turn_is_reported_only_by_its_cancellation() {
     let directory = TestTempDir::new();
     let path = directory.path().join("track.wav");
-    let samples = vec![0.25; usize::try_from(mock::SAMPLE_RATE.get()).expect("sample rate") * 2];
-    mock::write_pcm_wav(&path, &samples, AudioSpec::new(2, mock::SAMPLE_RATE)).expect("local WAV");
+    std::fs::write(&path, assets::fixed_constant_wav_cd_quarter_44100().bytes())
+        .expect("local WAV");
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
     let config: ResourceConfig<TestPools> = ResourceConfig::for_src(ResourceSrc::Path(path))
         .store(AssetStore::builder(pools()).build())
@@ -353,8 +354,7 @@ async fn native_linked(
     Seq,
 ) {
     let path = directory.path().join("paused.wav");
-    let samples = vec![0.25; usize::try_from(mock::SAMPLE_RATE.get()).expect("rate") * 2];
-    mock::write_pcm_wav(&path, &samples, AudioSpec::new(2, mock::SAMPLE_RATE)).expect("WAV");
+    std::fs::write(&path, assets::fixed_constant_wav_cd_quarter_44100().bytes()).expect("WAV");
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
     let config: ResourceConfig<TestPools> = ResourceConfig::for_src(ResourceSrc::Path(path))
         .store(AssetStore::builder(pools()).build())
@@ -483,16 +483,33 @@ fn native_marked<R>(
     segment: SegmentId,
     run: impl FnOnce(&mut Outbox<'_, TestPools>) -> R,
 ) -> R {
+    native_marked_at(
+        rig,
+        SlotMark {
+            session: SessionFrame::new(0),
+            lane: LaneFrame { segment, frame: 0 },
+            position: position(0),
+        },
+        run,
+    )
+}
+
+fn native_marked_at<R>(
+    rig: &mut DeckRig<TestPools>,
+    mark: SlotMark,
+    run: impl FnOnce(&mut Outbox<'_, TestPools>) -> R,
+) -> R {
     let output = mock::output(None).get();
+    let spec = AudioSpec::new(2, mock::SAMPLE_RATE);
     let mut snapshot = DeckSnapshot::new(DeckMixerConfig::default());
-    snapshot.slots[0].mark = Some(SlotMark {
-        session: SessionFrame::new(0),
-        lane: LaneFrame { segment, frame: 0 },
-        position: position(0),
-    });
+    snapshot.slots[0].mark = Some(mark);
+    snapshot.slots[0].position = mark.position.as_secs_f64();
     snapshot.slots[0].source = Some(AudioChunkInfo {
-        spec: AudioSpec::new(2, mock::SAMPLE_RATE),
-        segment,
+        spec,
+        segment: mark.lane.segment,
+        timestamp: mark.position,
+        end_timestamp: mark.position,
+        frame_offset: spec.frame_at(mark.position).expect("native mark frame"),
         media_origin: Some(position(0)),
         visible_origin: Some(position(0)),
         media_end: Some(position(48_000)),
@@ -501,7 +518,7 @@ fn native_marked<R>(
     let pass = DeckPass {
         mix: DeckMixSettings::default(),
         suspended: false,
-        now: SessionFrame::new(0),
+        now: mark.session,
         delivery: FrameCount::new(0),
         output: &output,
         deck: &snapshot,
@@ -522,12 +539,30 @@ fn native_settle(
         .commands
         .iter()
         .fold(current, |segment, command| match command {
-            kithara_render::bridge::DeckPart::Adopt { segment, .. } if applied => *segment,
+            DeckPart::Adopt { segment, .. } if applied => *segment,
             _ => segment,
         });
+    native_settle_at(
+        deck,
+        rig,
+        SlotMark {
+            session: SessionFrame::new(0),
+            lane: LaneFrame { segment, frame: 0 },
+            position: position(0),
+        },
+        receipt,
+    );
+}
+
+fn native_settle_at(
+    deck: &mut Linked<PlayerImpl<TestPools>>,
+    rig: &mut DeckRig<TestPools>,
+    mark: SlotMark,
+    receipt: Receipt<DeckProtocol>,
+) -> kithara_play::Settled {
     let seq = receipt.seq();
     let (outcome, mut batch) = receipt.into();
-    native_marked(rig, segment, |out| {
+    native_marked_at(rig, mark, |out| {
         deck.settle(
             TrackReceipt::Deck {
                 seq,
@@ -536,10 +571,10 @@ fn native_settle(
             },
             out,
         )
-    });
+    })
 }
 
-async fn paused_future_speed(
+async fn native_synced(
     directory: &TestTempDir,
 ) -> (
     Linked<PlayerImpl<TestPools>>,
@@ -564,6 +599,211 @@ async fn paused_future_speed(
         deck.entry(Bound::AtOrAfter(SessionFrame::new(0))),
         Some(SessionFrame::new(0))
     );
+    (deck, rig, inbox, segment)
+}
+
+#[derive(Clone, Copy)]
+enum EntryDelivery {
+    Adoption,
+    WithdrawnStart,
+    Ready,
+}
+
+#[kithara::test(tokio)]
+#[case::adopt_start_ready([EntryDelivery::Adoption, EntryDelivery::WithdrawnStart, EntryDelivery::Ready], false)]
+#[case::adopt_ready_start([EntryDelivery::Adoption, EntryDelivery::Ready, EntryDelivery::WithdrawnStart], false)]
+#[case::start_adopt_ready([EntryDelivery::WithdrawnStart, EntryDelivery::Adoption, EntryDelivery::Ready], false)]
+#[case::start_ready_adopt([EntryDelivery::WithdrawnStart, EntryDelivery::Ready, EntryDelivery::Adoption], false)]
+#[case::ready_adopt_start([EntryDelivery::Ready, EntryDelivery::Adoption, EntryDelivery::WithdrawnStart], false)]
+#[case::ready_start_adopt([EntryDelivery::Ready, EntryDelivery::WithdrawnStart, EntryDelivery::Adoption], false)]
+#[case::stale_after_new_start([EntryDelivery::Adoption, EntryDelivery::Ready, EntryDelivery::WithdrawnStart], true)]
+async fn a_seek_before_a_queued_start_keeps_the_latest_cue_without_another_play(
+    #[case] order: [EntryDelivery; 3],
+    #[case] late_stale: bool,
+) {
+    let directory = TestTempDir::new();
+    let (mut deck, mut rig, mut inbox, current) = native_synced(&directory).await;
+    let mut now = SessionFrame::new(24_000);
+    let old_start = native_marked(&mut rig, current, |out| {
+        deck.apply(TrackCommand::Play { at: When::At(now) }, out)
+    })
+    .expect("queued Play")
+    .expect("actual queued Start");
+    assert_eq!(deck.snapshot().as_ref().status, TrackStatus::Loaded);
+    let cue = position(12_000);
+    let seek = native_marked(&mut rig, current, |out| {
+        deck.apply(TrackCommand::Seek { to: cue }, out)
+    })
+    .expect("Seek before Start")
+    .expect("actual segment adoption");
+    inbox.drain();
+    let due = inbox
+        .next_due(
+            LaneFrame {
+                segment: current,
+                frame: 0,
+            },
+            1,
+        )
+        .expect("native Seek");
+    let [LaneCommand::Segment { id, from, .. }] = due.commands() else {
+        panic!("Seek prepares one native segment");
+    };
+    assert_eq!(*from, cue);
+    let replacement = *id;
+    assert_ne!(replacement, current);
+    let mut ready = Some(due);
+    let mut adoption = None;
+    let mut withdrawn = None;
+    for receipt in rig.block(now, 0.0).expect("Adopt and withdrawn Start") {
+        if receipt.seq() == old_start {
+            assert!(matches!(
+                receipt.outcome(),
+                Outcome::Rejected(Rejection::Stale)
+            ));
+            assert!(withdrawn.replace(receipt).is_none());
+        } else {
+            assert_eq!(receipt.seq(), seek);
+            assert!(matches!(receipt.outcome(), Outcome::Applied { .. }));
+            assert!(receipt.batch().commands.iter().any(|part| matches!(part,
+                DeckPart::Adopt { slot, segment } if *slot == Slot::new(0) && *segment == replacement
+            )));
+            assert!(adoption.replace(receipt).is_none());
+        }
+    }
+    assert!(adoption.is_some() && withdrawn.is_some());
+    let prospective = crate::entry(
+        &trajectory(120.0, 4),
+        &source_grid(&grid(24_000, 0, None, 48_000)),
+        cue,
+        Bound::AtOrAfter(now),
+    )
+    .expect("source-aligned entry before Ready");
+    let mut mark = SlotMark {
+        session: now,
+        lane: LaneFrame {
+            segment: current,
+            frame: 0,
+        },
+        position: position(0),
+    };
+    native_marked_at(&mut rig, mark, |out| deck.tick(now, out));
+    assert!(deck.snapshot().as_ref().pending_lane);
+    assert!(
+        rig.block(prospective, 0.0)
+            .expect("unready entry")
+            .is_empty()
+    );
+    now = prospective + FrameCount::new(1);
+    mark.session = now;
+    let mut ready_applied = false;
+    for delivery in order {
+        match delivery {
+            EntryDelivery::Adoption => {
+                native_settle_at(&mut deck, &mut rig, mark, adoption.take().expect("Adopt"));
+            }
+            EntryDelivery::WithdrawnStart if !late_stale => {
+                assert!(matches!(
+                    native_settle_at(
+                        &mut deck,
+                        &mut rig,
+                        mark,
+                        withdrawn.take().expect("old Start")
+                    ),
+                    kithara_play::Settled::Pending
+                ));
+            }
+            EntryDelivery::WithdrawnStart => {}
+            EntryDelivery::Ready => {
+                ready.take().expect("current Ready").apply(LaneApplied {
+                    source_basis: None,
+                    engine_latency: FrameCount::new(0),
+                    ready: Some(replacement),
+                });
+                ready_applied = true;
+            }
+        }
+        native_marked_at(&mut rig, mark, |out| deck.tick(now, out));
+        if ready_applied {
+            assert_eq!(deck.snapshot().as_ref().position, cue);
+            mark.lane.segment = replacement;
+            mark.position = cue;
+        } else {
+            assert_eq!(deck.snapshot().as_ref().position, position(0));
+            let prospective = crate::entry(
+                &trajectory(120.0, 4),
+                &source_grid(&grid(24_000, 0, None, 48_000)),
+                cue,
+                Bound::AtOrAfter(now),
+            )
+            .expect("source-aligned entry without Ready");
+            assert!(
+                rig.block(prospective, 0.0)
+                    .expect("unready entry after receipt")
+                    .is_empty()
+            );
+            now = prospective + FrameCount::new(1);
+            mark.session = now;
+        }
+        assert!(
+            rig.block(now, cue.as_secs_f64())
+                .expect("before entry")
+                .is_empty()
+        );
+        assert_eq!(deck.snapshot().as_ref().status, TrackStatus::Loaded);
+    }
+    let entry = deck
+        .entry(Bound::AtOrAfter(now))
+        .expect("current cue entry");
+    assert!(entry > now);
+    assert!(
+        rig.block(entry - FrameCount::new(1), cue.as_secs_f64())
+            .expect("before Start")
+            .is_empty()
+    );
+    let mut receipts = rig.block(entry, cue.as_secs_f64()).expect("new Start");
+    assert_eq!(receipts.len(), 1, "one Start without another Play");
+    let started = receipts.pop().expect("new Start receipt");
+    assert_ne!(started.seq(), old_start);
+    assert!(matches!(started.outcome(), Outcome::Applied { at, .. } if *at == entry));
+    assert!(
+        matches!(started.batch().commands.as_slice(), [DeckPart::Start { slot, .. }] if *slot == Slot::new(0))
+    );
+    mark.session = entry;
+    native_settle_at(&mut deck, &mut rig, mark, started);
+    if late_stale {
+        assert!(matches!(
+            native_settle_at(
+                &mut deck,
+                &mut rig,
+                mark,
+                withdrawn.take().expect("late old Start")
+            ),
+            kithara_play::Settled::Pending
+        ));
+    }
+    let snapshot = deck.snapshot();
+    assert_eq!(
+        snapshot.as_ref().status,
+        TrackStatus::Playing { since: entry }
+    );
+    assert_eq!(snapshot.as_ref().position, cue);
+    assert_eq!(
+        snapshot.as_ref().mark.expect("current mark").lane.segment,
+        replacement
+    );
+}
+
+async fn paused_future_command(
+    directory: &TestTempDir,
+    jump: bool,
+) -> (
+    Linked<PlayerImpl<TestPools>>,
+    DeckRig<TestPools>,
+    Inbox<LaneProtocol>,
+    SegmentId,
+) {
+    let (mut deck, mut rig, inbox, segment) = native_synced(directory).await;
     native_marked(&mut rig, segment, |out| {
         deck.apply(TrackCommand::Play { at: When::Next }, out)
     })
@@ -576,20 +816,25 @@ async fn paused_future_speed(
         deck.snapshot().as_ref().status,
         TrackStatus::Playing { .. }
     ));
-    let speed = native_marked(&mut rig, segment, |out| {
-        deck.apply(
+    let pending = native_marked(&mut rig, segment, |out| {
+        let command = if jump {
+            TrackCommand::Jump {
+                to: position(24_000),
+                at: SessionFrame::new(100_000),
+            }
+        } else {
             TrackCommand::SetSpeed {
                 speed: SpeedCurve::Approach(
                     kithara_signal::ExponentialApproach::new(1.0, 0.9, 220.5).expect("law"),
                 ),
                 at: When::At(SessionFrame::new(100_000)),
-            },
-            out,
-        )
+            }
+        };
+        deck.apply(command, out)
     })
-    .expect("future speed")
+    .expect("future command")
     .expect("future sequence");
-    assert_eq!(deck.speed_applied(speed), None);
+    assert_eq!(deck.speed_applied(pending), None);
     native_marked(&mut rig, segment, |out| {
         deck.apply(TrackCommand::Pause { at: When::Next }, out)
     })
@@ -611,13 +856,16 @@ async fn paused_future_speed(
 }
 
 #[kithara::test(tokio)]
-#[case::direct_play(false)]
-#[case::owner_preparation(true)]
-async fn a_ready_paused_native_segment_can_rebind_while_a_future_speed_is_pending(
+#[case::direct_play_speed(false, false)]
+#[case::direct_play_jump(false, true)]
+#[case::owner_preparation_speed(true, false)]
+#[case::owner_preparation_jump(true, true)]
+async fn a_ready_paused_native_segment_can_rebind_while_a_future_command_is_pending(
     #[case] prepare: bool,
+    #[case] jump: bool,
 ) {
     let directory = TestTempDir::new();
-    let (mut deck, mut rig, mut inbox, current) = paused_future_speed(&directory).await;
+    let (mut deck, mut rig, mut inbox, current) = paused_future_command(&directory, jump).await;
     if prepare {
         assert!(
             !native_marked(&mut rig, current, |out| deck
@@ -635,7 +883,7 @@ async fn a_ready_paused_native_segment_can_rebind_while_a_future_speed_is_pendin
     let replacement = native_ready(&mut inbox, current);
     assert_ne!(
         replacement, current,
-        "the future speed cannot block entry rebinding"
+        "the future command cannot block entry rebinding"
     );
     for receipt in rig.block(SessionFrame::new(0), 0.0).expect("adopt") {
         native_settle(&mut deck, &mut rig, replacement, receipt);
@@ -680,9 +928,11 @@ async fn a_ready_paused_native_segment_can_rebind_while_a_future_speed_is_pendin
 }
 
 #[kithara::test(tokio)]
-async fn an_old_native_ready_cannot_resume_the_waiting_linked_replacement() {
+#[case::future_speed(false)]
+#[case::future_jump(true)]
+async fn an_old_native_ready_cannot_resume_the_waiting_linked_replacement(#[case] jump: bool) {
     let directory = TestTempDir::new();
-    let (mut deck, mut rig, mut inbox, current) = paused_future_speed(&directory).await;
+    let (mut deck, mut rig, mut inbox, current) = paused_future_command(&directory, jump).await;
     native_marked(&mut rig, current, |out| {
         deck.cue(position(0), SpeedCurve::Constant(1.0), out)
     })
@@ -708,7 +958,7 @@ async fn an_old_native_ready_cannot_resume_the_waiting_linked_replacement() {
                 .batch()
                 .commands
                 .iter()
-                .any(|command| matches!(command, kithara_render::bridge::DeckPart::Start { .. }))
+                .any(|command| matches!(command, DeckPart::Start { .. }))
         );
         native_settle(&mut deck, &mut rig, current, receipt);
     }

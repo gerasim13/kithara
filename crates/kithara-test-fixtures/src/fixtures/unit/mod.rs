@@ -11,10 +11,16 @@ mod trim;
 mod warp;
 
 pub use accelerate::{accelerate_ramp, accelerate_wave};
+#[cfg(feature = "encoded")]
+pub use audio::decoder_opus_packet;
 pub use audio::{
     RoutePcm, blend_identity, blend_incoming, blend_join_frame, blend_multichannel, blend_outgoing,
-    blend_outgoing_constant, blend_signed_frame, cursor_half, decode_negative_quarter,
-    decode_quarter, route_pcm,
+    blend_outgoing_constant, blend_signed_frame, broadcast_tone_wav, cochlea_control_wav,
+    cursor_half, decode_negative_quarter, decode_quarter, host_manual_incoming,
+    host_manual_outgoing, host_metronome_held, host_metronome_tone, metronome_sine_wav,
+    render_chirp, render_crossfade_incoming, render_crossfade_outgoing, render_readiness_pcm,
+    render_seek_after, render_seek_before, render_sine, route_pcm, stretch_kick_body,
+    warp_native_tone,
 };
 pub use beat::{
     click_silence_4s, click_silence_20s, click_silence_half, clicks_75_20s, clicks_90_20s,

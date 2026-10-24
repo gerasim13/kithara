@@ -421,6 +421,43 @@ fn fixture_metadata_does_not_inherit_compiler_wrappers() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn source_discovery_keeps_compiler_wrappers_for_builds_only() -> Result<()> {
+    for variable in ["RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER"] {
+        let fixture = Fixture::new()?;
+        let wrapper = fixture.fake_bin.join("compiler-wrapper");
+        let log = fixture.root.join("metadata-wrapper.log");
+        let build_log = fixture.root.join("build-wrappers.log");
+        write_executable(
+            &wrapper,
+            "#!/bin/sh\nprintf 'metadata invoked compiler wrapper\n' > \"$SELF_CACHE_WRAPPER_LOG\"\nexit 91\n",
+        )?;
+        write_executable(
+            &fixture.bootstrap_cargo,
+            r#"#!/bin/sh
+set -eu
+printf '%s\n' "${RUSTC_WRAPPER-}" "${RUSTC_WORKSPACE_WRAPPER-}" > "$SELF_CACHE_BUILD_WRAPPERS"
+printf '%s\n' "$SELF_CACHE_BOOTSTRAP_ARTIFACT"
+"#,
+        )?;
+        let output = fixture
+            .bootstrap_command()
+            .env(variable, &wrapper)
+            .env("SELF_CACHE_WRAPPER_LOG", &log)
+            .env("SELF_CACHE_BUILD_WRAPPERS", &build_log)
+            .output()?;
+        assert_success(&output);
+        assert!(!log.exists(), "source discovery invoked {variable}");
+        let expected = if variable == "RUSTC_WRAPPER" {
+            format!("{}\n\n", wrapper.display())
+        } else {
+            format!("\n{}\n", wrapper.display())
+        };
+        assert_eq!(fs::read_to_string(build_log)?, expected);
+    }
+    Ok(())
+}
+
 /// A command whose stdout is its answer keeps it clean while it waits: the
 /// wait is announced on stderr.
 #[test]

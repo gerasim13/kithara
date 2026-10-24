@@ -425,9 +425,11 @@ mod tests {
     }
 
     fn write_second(output: &mut impl LiveOutput) {
-        let left = vec![consts::AMPLITUDE; consts::BROADCAST_SAMPLE_RATE];
-        let right = vec![-consts::AMPLITUDE; consts::BROADCAST_SAMPLE_RATE];
-        output.write_stereo(left.len(), &left, &right);
+        static LEFT: [f32; consts::BROADCAST_SAMPLE_RATE] =
+            [consts::AMPLITUDE; consts::BROADCAST_SAMPLE_RATE];
+        static RIGHT: [f32; consts::BROADCAST_SAMPLE_RATE] =
+            [-consts::AMPLITUDE; consts::BROADCAST_SAMPLE_RATE];
+        output.write_stereo(LEFT.len(), &LEFT, &RIGHT);
     }
 
     #[kithara::test(native, flash(false))]

@@ -6,8 +6,11 @@ async fn load_track_propagates_host_sample_rate() {
     let rate = NonZeroU32::new(host_rate).expect("host rate");
     let dir = TestTempDir::new();
     let path = dir.path().join("rate.wav");
-    mock::write_pcm_wav(&path, &[0.5; 2_048], AudioSpec::new(2, mock::SAMPLE_RATE))
-        .expect("float WAV fixture");
+    std::fs::write(
+        &path,
+        kithara_test_fixtures::assets::fixed_constant_wav_cd_half_1024().bytes(),
+    )
+    .expect("float WAV fixture");
     let pools = pools();
     let prep = crate::ResourcePrep::builder()
         .worker(crate::PlayWorker::new(

@@ -29,6 +29,13 @@ fn native_keylock_preserves_the_physical_source_frequency(#[case] quantum: usize
         .render_quantum_frames(NonZeroUsize::new(128).expect("quantum"))
         .build();
     let mut renderer = Warp::new((), &config).renderer(spec, pools());
+    let tone = kithara_test_fixtures::unit_fixtures::warp_native_tone();
+    renderer.prepare_engine_latency(spec).expect("service");
+    let rendered_bound = (WARMUP_FRAMES + CAPTURE_FRAMES).next_multiple_of(128);
+    let lookahead = renderer
+        .projection_lookahead()
+        .expect("projection lookahead");
+    assert!(rendered_bound + lookahead <= tone.len() / 2);
     let mut source = 0;
     let mut capture = Vec::new();
     while capture.len() < WARMUP_FRAMES + CAPTURE_FRAMES {
@@ -51,15 +58,8 @@ fn native_keylock_preserves_the_physical_source_frequency(#[case] quantum: usize
             )
             .expect("source quantum")
             .get();
-        let samples = (0..frames)
-            .flat_map(|frame| {
-                let position = source + u64::try_from(frame).expect("frame");
-                let phase = position.to_f64().expect("position") * std::f64::consts::TAU * 440.0
-                    / f64::from(SAMPLE_RATE);
-                let sample = (0.48 * phase.sin()).to_f32().expect("sample");
-                [sample; 2]
-            })
-            .collect::<Vec<_>>();
+        let start = usize::try_from(source).expect("source frame") * 2;
+        let samples = &tone[start..start + frames * 2];
         let output = renderer
             .render_quantum(AudioChunk::new(
                 AudioChunkInfo {
@@ -68,7 +68,7 @@ fn native_keylock_preserves_the_physical_source_frequency(#[case] quantum: usize
                     frames: u32::try_from(frames).expect("frames"),
                     ..Default::default()
                 },
-                sample_buffer(&renderer.pools, &samples),
+                sample_buffer(&renderer.pools, samples),
             ))
             .continue_value()
             .expect("prepared shape")

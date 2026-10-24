@@ -241,8 +241,8 @@ impl FlushHub {
 
     /// Lazily spawn the background flush worker (idempotent). Called on
     /// the first source registration, mirroring other long-lived runtime
-    /// worker lazy-start. The thread is torn down by [`FlushHub`]'s
-    /// `Drop`.
+    /// worker lazy-start. Final hub destruction cancels the worker without
+    /// waiting; source operations retain the hub until they finish.
     pub(crate) fn start_worker(self: &Arc<Self>) {
         self.worker.start_with(self);
     }
@@ -416,6 +416,68 @@ mod tests {
             1,
             "second flush is no-op when clean"
         );
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(2)))]
+    fn durable_checkpoint_supersedes_a_stale_worker_snapshot() {
+        struct Source {
+            dirty: AtomicBool,
+            current: AtomicUsize,
+            persisted: AtomicUsize,
+            durable: AtomicBool,
+            snapshot: Sender<()>,
+            release: Mutex<mpsc::Receiver<()>>,
+            flushed: Sender<()>,
+        }
+        impl Flushable for Source {
+            fn dirty(&self) -> &AtomicBool {
+                &self.dirty
+            }
+            fn flush(&self) -> AssetsResult<()> {
+                let snapshot = self.current.load(Ordering::Acquire);
+                self.snapshot.send(()).unwrap();
+                self.release.lock().recv().unwrap();
+                self.persisted.store(snapshot, Ordering::Release);
+                self.flushed.send(()).unwrap();
+                Ok(())
+            }
+            fn flush_durable(&self) -> AssetsResult<()> {
+                self.persisted
+                    .store(self.current.load(Ordering::Acquire), Ordering::Release);
+                self.durable.store(true, Ordering::Release);
+                Ok(())
+            }
+            fn name(&self) -> &'static str {
+                "stale-worker"
+            }
+        }
+
+        let hub = FlushHub::new(CancelToken::never(), fast_policy());
+        let (snapshot, captured) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        let (flushed, completion) = mpsc::channel();
+        let source = Arc::new(Source {
+            dirty: AtomicBool::new(true),
+            current: AtomicUsize::new(1),
+            persisted: AtomicUsize::new(0),
+            durable: AtomicBool::new(false),
+            snapshot,
+            release: Mutex::new(released),
+            flushed,
+        });
+        hub.register(Arc::downgrade(&source) as Weak<dyn Flushable>);
+        hub.signal();
+        captured.recv().unwrap();
+        source.current.store(2, Ordering::Release);
+        release.send(()).unwrap();
+        completion.recv().unwrap();
+        assert_eq!(source.persisted.load(Ordering::Acquire), 1);
+        assert!(!source.dirty.load(Ordering::Acquire));
+
+        hub.flush_now().unwrap();
+
+        assert_eq!(source.persisted.load(Ordering::Acquire), 2);
+        assert!(source.durable.load(Ordering::Acquire));
     }
 
     #[kithara::test(timeout(Duration::from_secs(2)))]
@@ -636,7 +698,7 @@ mod tests {
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
-    fn repeated_hub_drop_joins_cleanly() {
+    fn repeated_hub_drop_cancels_cleanly() {
         for _ in 0..20 {
             let hub = FlushHub::new(CancelToken::never(), fast_policy());
             let src = CountingSource::new("churn");
@@ -646,5 +708,26 @@ mod tests {
                 hub.signal();
             }
         }
+    }
+
+    #[kithara::test(native, tokio, timeout(Duration::from_secs(2)))]
+    async fn dropping_the_last_hub_does_not_block_an_async_poll() {
+        let _mode = kithara_platform::no_block::force_panic_mode();
+        let hub = FlushHub::new(CancelToken::never(), fast_policy());
+        let source = CountingSource::new("async-drop");
+        hub.register(Arc::downgrade(&source) as Weak<dyn Flushable>);
+        let weak = Arc::downgrade(&hub);
+
+        drop(hub);
+
+        assert!(
+            weak.upgrade().is_none(),
+            "the final external owner was dropped"
+        );
+        assert_eq!(
+            source.flush_count(),
+            0,
+            "dropping a clean hub writes nothing"
+        );
     }
 }

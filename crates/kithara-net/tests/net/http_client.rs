@@ -30,7 +30,7 @@ use kithara_net::{
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Notify},
-    time::{Duration, sleep},
+    time::{Duration, WallInstant, sleep},
 };
 use kithara_test_utils::{TestHttpServer, bufpool::pools, kithara};
 use url::Url;
@@ -121,20 +121,23 @@ async fn slow_headers_endpoint() -> impl IntoResponse {
 }
 
 async fn slow_body_endpoint() -> impl IntoResponse {
-    let stream = stream::iter(vec![
+    let mut chunks = vec![
         Ok::<_, axum::BoxError>(Bytes::from("Hello")),
         Ok(Bytes::from(", ")),
         Ok(Bytes::from("World")),
         Ok(Bytes::from("!")),
-    ])
-    .then(|chunk| async move {
-        sleep(Duration::from_millis(200)).await;
-        chunk
-    });
+    ]
+    .into_iter();
+    let stream =
+        stream::iter(chunks.next()).chain(stream::unfold(chunks, |mut chunks| async move {
+            sleep(Duration::from_millis(200)).await;
+            chunks.next().map(|chunk| (chunk, chunks))
+        }));
 
     Response::builder()
         .status(StatusCode::OK)
-        .header("Content-Type", "application/octet-stream")
+        // NSURLSession buffers a tiny untyped body before reporting its response head.
+        .header(header::CONTENT_TYPE, "application/octet-stream")
         .body(Body::from_stream(stream))
         .unwrap()
 }
@@ -658,38 +661,60 @@ enum TimeoutOp {
     GetRange { start: u64, end: Option<u64> },
 }
 
+#[derive(Default)]
+struct HeadArrivals(Mutex<Vec<Duration>>);
+
+impl NetObserver for HeadArrivals {
+    fn first_byte(&self, elapsed: Duration, _status: u16, _partial: bool) {
+        self.0.lock().unwrap().push(elapsed);
+    }
+}
+
 #[kithara::test(tokio, timeout(Duration::from_secs(2)), hang_timeout_secs(1))]
 #[case::slow_alive_stream_completes(
     "/slow-body",
     Duration::from_millis(400),
     TimeoutOp::Stream,
-    Ok(&b"Hello, World!"[..])
+    Ok(&b"Hello, World!"[..]),
+    1
+)]
+#[case::slow_alive_whole_body_completes(
+    "/slow-body",
+    Duration::from_millis(400),
+    TimeoutOp::GetBytes,
+    Ok(&b"Hello, World!"[..]),
+    1
 )]
 #[case::body_silence_times_out_on_get_bytes(
     "/slow-body",
     Duration::from_millis(50),
     TimeoutOp::GetBytes,
-    Err(NetError::Timeout)
+    Err(NetError::Timeout),
+    1
 )]
 #[case::header_silence_times_out_on_stream(
     "/slow-headers",
     Duration::from_millis(100),
     TimeoutOp::Stream,
-    Err(NetError::Timeout)
+    Err(NetError::Timeout),
+    0
 )]
 #[case::header_silence_times_out_on_range(
     "/slow-headers",
     Duration::from_millis(100),
     TimeoutOp::GetRange { start: 0, end: Some(10) },
-    Err(NetError::Timeout)
+    Err(NetError::Timeout),
+    0
 )]
 async fn inactivity_timeout_bounds_silence_not_total_time(
     #[case] path: &str,
     #[case] inactivity: Duration,
     #[case] op: TimeoutOp,
     #[case] expected: Result<&'static [u8], NetError>,
+    #[case] expected_heads: usize,
 ) {
     let server = TestServer::new(test_router()).await;
+    let arrivals = Arc::new(HeadArrivals::default());
     let client = HttpClient::new(
         NetOptions::builder()
             .inactivity_timeout(inactivity)
@@ -697,8 +722,10 @@ async fn inactivity_timeout_bounds_silence_not_total_time(
             .build(),
         pools(),
         CancelToken::never(),
-    );
+    )
+    .with_observer(Some(Observer(arrivals.clone())));
     let url = server.url(path);
+    let wall = WallInstant::now();
 
     let result = match op {
         TimeoutOp::GetBytes => client
@@ -711,10 +738,19 @@ async fn inactivity_timeout_bounds_silence_not_total_time(
         }
     };
 
+    assert_eq!(arrivals.0.lock().unwrap().len(), expected_heads);
     match (&result, &expected) {
         (Ok(body), Ok(expected_body)) => assert_eq!(body.as_slice(), *expected_body),
-        (Err(NetError::Timeout), Err(NetError::Timeout)) => {}
-        _ => panic!("expected {expected:?}, got {result:?}"),
+        (Err(NetError::Timeout), Err(NetError::Timeout)) => {
+            assert!(
+                wall.elapsed() >= inactivity,
+                "real I/O timed out prematurely"
+            );
+        }
+        _ => panic!(
+            "expected {expected:?}, got {result:?}; response heads: {:?}",
+            arrivals.0.lock().unwrap()
+        ),
     }
 }
 

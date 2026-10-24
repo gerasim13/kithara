@@ -25,6 +25,23 @@ fn create_player() {
 }
 
 #[kithara::test]
+fn process_host_reuses_a_released_slot_at_capacity() {
+    crate::mock::offline();
+    let mut players: Vec<_> = (0..8)
+        .map(|_| AudioPlayer::new(FfiPlayerConfig::for_test()).expect("admit a supported player"))
+        .collect();
+    assert!(matches!(
+        AudioPlayer::new(FfiPlayerConfig::for_test()),
+        Err(FfiError::Internal { description }) if description == "all scope slots are in use"
+    ));
+
+    drop(players.pop());
+    players.push(AudioPlayer::new(FfiPlayerConfig::for_test()).expect("reuse the released slot"));
+    assert_eq!(players.len(), 8);
+    assert!(players.iter().all(|player| player.items().is_empty()));
+}
+
+#[kithara::test]
 fn playing_rate_roundtrip() {
     crate::mock::offline();
     let player = AudioPlayer::new(FfiPlayerConfig::for_test()).expect("create player");
