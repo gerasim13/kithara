@@ -33,6 +33,7 @@ use crate::bufpool_ext::{TestPools, pools};
 pub(super) const SAMPLE_RATE: u32 = 44_100;
 pub(super) const CHANNELS: u16 = 2;
 pub(super) const BLOCK_FRAMES: usize = 512;
+pub(super) const MAX_SWITCH_FRAMES: usize = 44_100;
 pub(super) const SINE_HZ: f64 = 441.0;
 const SEGMENT_SECS: f64 = 0.5;
 const SEGMENTS_PER_VARIANT: usize = 16;
@@ -263,7 +264,8 @@ fn capture_frame_target() -> i64 {
 pub(super) fn observation_frames() -> usize {
     usize::try_from(SAMPLE_RATE)
         .expect("fixture sample rate fits usize")
-        .saturating_mul(2)
+        .saturating_mul(5)
+        / 2
 }
 
 /// Audio the observation window must still hold after the target decoder
@@ -676,7 +678,7 @@ pub(super) async fn render_switch(
     );
     let target_decoder_frame = target_event.frame_end;
     assert!(
-        target_decoder_frame.saturating_add(heard_after_switch_frames()) <= observation_frames,
+        target_decoder_frame <= MAX_SWITCH_FRAMES,
         "{} switched too late to be heard: target_event_frame={target_decoder_frame}, window={observation_frames}",
         transition.label,
     );
