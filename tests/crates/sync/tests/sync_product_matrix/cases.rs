@@ -29,37 +29,45 @@ pub(crate) const CUE: Start = Start::Seconds(5.25);
 
 /// The beat grid every synthetic rhythm fixture was rendered on.
 pub(crate) fn synthetic_grid() -> ArtifactSource<BeatGridModel> {
-    let spacing = SECONDS_PER_MINUTE / START_BPM;
-    let beats = (0..SYNTHETIC_BEATS)
-        .map(|ordinal| GridBeat {
-            at: f64::from(ordinal) * spacing,
-            ordinal: i64::from(ordinal),
-            confidence: Some(1.0),
-        })
-        .collect();
-    let model = BeatGridModel::try_from(RawBeatGrid {
-        schema_version: SCHEMA_VERSION,
-        model_id: "synthetic-rhythm".to_owned(),
-        revision: 1,
-        state: BeatGridState::Final,
-        duration: None,
-        bpm: START_BPM,
-        beats,
-        downbeats: (1..SYNTHETIC_BEATS)
-            .step_by(4)
-            .map(|ordinal| kithara::beat::GridDownbeat {
-                at: f64::from(ordinal) * spacing,
-                beat_ordinal: i64::from(ordinal),
-                confidence: Some(1.0),
-            })
-            .collect(),
-        meter: Some(kithara::sync::Meter {
-            beats_per_bar: std::num::NonZeroU16::new(4).expect("fixture meter"),
-            origin_beat_ordinal: 1,
-        }),
-    })
-    .expect("synthetic rhythm beats form a valid grid");
+    let model =
+        serde_json::from_slice(kithara_test_fixtures::assets::synthetic_grid_default().bytes())
+            .expect("prepared synthetic rhythm grid");
     ArtifactSource::Value(Arc::new(model))
+}
+
+#[kithara::test(native)]
+fn prepared_synthetic_grid_preserves_the_authored_score() {
+    let ArtifactSource::Value(model) = synthetic_grid() else {
+        panic!("synthetic grid is a prepared value");
+    };
+    let raw = model.as_raw();
+    assert_eq!(raw.schema_version, SCHEMA_VERSION);
+    assert_eq!(raw.model_id, "synthetic-rhythm");
+    assert_eq!(raw.revision, 1);
+    assert_eq!(raw.state, BeatGridState::Final);
+    assert_eq!(raw.duration, None);
+    assert_eq!(raw.bpm, START_BPM);
+    assert_eq!(raw.beats.len(), SYNTHETIC_BEATS as usize);
+    for (beat, ordinal) in raw.beats.iter().zip(0..SYNTHETIC_BEATS) {
+        assert_eq!(
+            beat.at.to_bits(),
+            (f64::from(ordinal) * SECONDS_PER_MINUTE / START_BPM).to_bits()
+        );
+        assert_eq!(beat.ordinal, i64::from(ordinal));
+        assert_eq!(beat.confidence, Some(1.0));
+    }
+    let meter = raw.meter.expect("synthetic meter");
+    assert_eq!(meter.beats_per_bar.get(), 4);
+    assert_eq!(meter.origin_beat_ordinal, 1);
+    assert_eq!(raw.downbeats.len(), 6);
+    for (beat, ordinal) in raw.downbeats.iter().zip((1..SYNTHETIC_BEATS).step_by(4)) {
+        assert_eq!(
+            beat.at.to_bits(),
+            (f64::from(ordinal) * SECONDS_PER_MINUTE / START_BPM).to_bits()
+        );
+        assert_eq!(beat.beat_ordinal, i64::from(ordinal));
+        assert_eq!(beat.confidence, Some(1.0));
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -204,7 +212,6 @@ impl SyncCase {
         self.decks
     }
 
-    #[cfg(not(target_os = "android"))]
     pub(crate) const fn id(self) -> &'static str {
         self.id
     }

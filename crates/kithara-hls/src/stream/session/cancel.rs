@@ -1,41 +1,48 @@
-use kithara_platform::{CancelToken, sync::RwLock};
+use std::collections::BTreeMap;
+
+use kithara_platform::{CancelToken, sync::Mutex};
 
 use crate::variant::DispatchTokens;
 
-/// Cancel hierarchy of one session: `root` → `fetch` → `lookahead`.
+/// Cancel hierarchy of one session: `root` -> `fetch` -> per-segment lookahead.
 ///
 /// Exact size discovery rides `root`; `fetch` keeps immutable body fetches live
-/// across seeks. Its `lookahead` child covers prefetches past the owed window,
-/// which a variant transition can retire without cancelling owed bytes.
+/// across seeks. Lookahead children can be retired against the reader's current
+/// owed window, including fetches that became owed after their dispatch.
 pub(super) struct SessionCancel {
     pub(super) root: CancelToken,
     fetch: CancelToken,
-    lookahead: RwLock<CancelToken>,
+    lookahead: Mutex<BTreeMap<u32, CancelToken>>,
 }
 
 impl SessionCancel {
     pub(super) fn new(root: CancelToken) -> Self {
         let fetch = root.child();
-        let lookahead = RwLock::new(fetch.child());
         Self {
             root,
             fetch,
-            lookahead,
+            lookahead: Mutex::default(),
         }
     }
 
-    pub(super) fn dispatch_tokens(&self) -> DispatchTokens {
+    pub(super) fn dispatch_tokens(&self) -> DispatchTokens<'_> {
         DispatchTokens {
             metadata: self.root.clone(),
             fetch: self.fetch.clone(),
-            lookahead: self.lookahead.read().clone(),
+            lookahead: &self.lookahead,
         }
     }
 
-    pub(super) fn retire_lookahead(&self) {
-        self.lookahead.read().cancel();
-        let next = self.fetch.child();
-        *self.lookahead.write() = next;
+    pub(super) fn take_retired_lookahead(&self, owed_end: Option<u32>) -> Vec<CancelToken> {
+        let mut retired: Vec<CancelToken> = Vec::new();
+        self.lookahead.lock().retain(|segment, token| {
+            let owed = owed_end.is_some_and(|last| *segment <= last);
+            if !owed {
+                retired.push(token.clone());
+            }
+            owed
+        });
+        retired
     }
 
     delegate::delegate! {

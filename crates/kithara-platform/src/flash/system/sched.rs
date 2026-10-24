@@ -1,11 +1,9 @@
-use std::{
-    backtrace::Backtrace, panic::Location, sync::atomic::AtomicBool, task::Waker,
-    time::Duration as StdDuration,
-};
+use std::{panic::Location, sync::atomic::AtomicBool, task::Waker, time::Duration as StdDuration};
 
 use super::{
     Clock, Core, CvDesc, CvId, FlashInner, Registry, WaiterId,
-    credit::{self, AsyncHandle, AsyncKey, HeldSlot, WaitGuard},
+    credit::{AsyncHandle, AsyncKey, HeldSlot, WaitGuard},
+    entry::{Entry, ParkRole, Parked, WaitKind},
     gate::TaskGate,
     inner::TaskRecord,
     state::{AtomicTaskState, ParkOutcome, TaskDiag, TaskState, WakeOutcome},
@@ -23,113 +21,20 @@ pub(crate) mod consts {
     pub(crate) const MAX_PACE_LAG_NANOS: u64 = 50_000_000;
 }
 
-/// What kind of waiter an [`Entry`] is, so a signal targets the right group.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum WaitKind {
-    /// A timed waiter with no early-wake channel: woken solely by the engine
-    /// crossing its deadline. Used by the test harness `park_for` and by the
-    /// async `sleep` future (`register_sleep_async`).
-    Timed,
-    /// An unparkable thread park (`park_timeout`): woken by the deadline OR by
-    /// [`FlashInner::unpark`] targeting this thread id.
-    Thread(ThreadKey),
-    /// A condvar waiter: woken by the deadline (when timed) OR by
-    /// [`FlashInner::signal_condvar`] for this condvar id.
-    Condvar(CvId),
-}
-
-/// Where a deadline-less waiter parked, for the hang dump. Only `indef` entries
-/// carry it: a timed waiter is released by the engine crossing its deadline, so
-/// its parking site names nothing the deadline does not already name.
-pub(super) struct Parked {
-    /// The stack that parked, only under `KITHARA_FLASH_SYNC_BT`. Unlike the
-    /// dump's own backtrace this belongs to the waiter, not to the watchdog that
-    /// took the snapshot, so it names the frame that owes the wait.
-    pub(super) stack: Option<Backtrace>,
-    /// The OS thread that parked. Read for SYNC waiters — an async waiter's
-    /// parking thread is merely whichever worker polled it. Against
-    /// [`Registry::bridged`] it says whether the wait is held from INSIDE an
-    /// async poll, i.e. whether it strands the tasks that thread owes a poll.
-    pub(super) thread: ThreadKey,
-}
-
-impl Parked {
-    /// Capture the current parking site. Callers MUST call this BEFORE taking
-    /// the `core` lock: a stack walk under `core` would hold the whole engine
-    /// for its duration.
-    fn here() -> Self {
-        Self {
-            thread: credit::current_thread_key(),
-            stack: diag::parked_backtrace(),
-        }
-    }
-}
-
-/// What a timed park's deadline MEANS to the engine.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::flash) enum ParkRole {
-    /// The deadline is the event: nothing else releases this waiter on time,
-    /// so the clock owes it a stop.
-    Deadline,
-    /// The deadline is a BACKSTOP under a [`WaitGate`](crate::sync::WaitGate)
-    /// edge: the waiter expects a signal and carries a timeout only so a
-    /// missed edge cannot wedge it. Re-checking the edge when nothing has
-    /// happened observes nothing, so the clock bounds such a park instead of
-    /// stopping at it.
-    Backstop,
-}
-
-/// A parked waiter's wake handle plus the group it belongs to.
-pub(super) struct Entry {
-    /// `Some` for deadline-less waiters only. See [`Parked`].
-    pub(super) parked: Option<Parked>,
-    /// What this entry's deadline means. A [`ParkRole::Backstop`] entry never
-    /// becomes the advance target while some other deadline exists; a jump that
-    /// passes it still wakes it.
-    pub(super) role: ParkRole,
-    pub(super) kind: WaitKind,
-    pub(super) wake: Wake,
-}
-
-impl Entry {
-    /// A waiter whose deadline is only a backstop under an edge. See
-    /// [`ParkRole::Backstop`].
-    fn backstop(kind: WaitKind, wake: Wake) -> Self {
-        Self {
-            kind,
-            wake,
-            role: ParkRole::Backstop,
-            parked: None,
-        }
-    }
-
-    /// A waiter with NO deadline: only a matching signal frees it, so when one
-    /// of these pins quiescence its parking site IS the diagnosis.
-    fn indef(kind: WaitKind, wake: Wake, parked: Parked) -> Self {
-        Self {
-            kind,
-            wake,
-            role: ParkRole::Deadline,
-            parked: Some(parked),
-        }
-    }
-
-    /// A waiter the engine itself will release by crossing its deadline, so no
-    /// parking site is recorded.
-    fn timed(kind: WaitKind, wake: Wake) -> Self {
-        Self {
-            kind,
-            wake,
-            role: ParkRole::Deadline,
-            parked: None,
-        }
-    }
-}
-
 impl Registry {
     /// Retain each grant in its task record or as an untracked active credit
     /// before publication. Unique async receipts settle their creating owner.
-    fn account_woken(&mut self, woken: &[Wake]) {
+    fn account_woken(&mut self, clock: &Clock, woken: &[Wake]) {
+        if !woken.is_empty() {
+            clock.post();
+        }
+        self.account_poll_woken(woken);
+    }
+
+    /// [`Self::account_woken`] for polls woken by their own deadline: they
+    /// leave [`Clock::posts`] alone, so pollers alone never owe each other a
+    /// stop.
+    fn account_poll_woken(&mut self, woken: &[Wake]) {
         for w in woken {
             match w.task().and_then(|(id, _)| self.task_diag.get_mut(&id)) {
                 Some(task) => task.grants += 1,
@@ -301,7 +206,10 @@ impl Core {
 
     /// Releases yielders immediately when timed parks are only edge backstops.
     /// Otherwise advances to the next owed stop, waking its waiting yielders too.
-    /// Both ordinary sleeps and gate polls owe a stop.
+    /// Ordinary sleeps owe a stop; a gate poll owes one once something it may
+    /// observe happened after it last checked ([`ParkRole::Poll`]). A yielder
+    /// beside a poll is not released in place: it waits for the poll's
+    /// deadline, which is where the work it yields to becomes visible.
     fn try_advance_once(&mut self, clock: &Clock) -> WakeBatch {
         let paced = self.sched.real_io != 0 && self.sched.pace_anchor.is_some();
         if self.registry.active != 0
@@ -322,21 +230,12 @@ impl Core {
                 .into_values()
                 .collect();
             self.sched.advance_counts.yield_releases += 1;
-            self.registry.account_woken(&woken);
+            self.registry.account_woken(clock, &woken);
             return WakeBatch(woken);
         }
-        let Some((&(earliest, _), _)) = self.sched.timed.iter().next() else {
+        let Some(min) = self.advance_target(paced, clock.posts()) else {
             self.sched.advance_counts.no_deadline += 1;
             return WakeBatch(Vec::new());
-        };
-        let min = if paced {
-            earliest
-        } else {
-            self.sched
-                .timed
-                .iter()
-                .find(|(_, e)| e.role != ParkRole::Backstop)
-                .map_or(earliest, |(&(deadline, _), _)| deadline)
         };
         if paced {
             if self.pace_owed(min) > 0 {
@@ -357,20 +256,48 @@ impl Core {
         self.sched.advance_counts.advances += 1;
         #[cfg(test)]
         self.sched.advance_log.push(min);
+        WakeBatch(self.release_due(clock, min))
+    }
+
+    /// Where the next advance lands: the earliest deadline when paced or when
+    /// a yielder waits for whatever comes due first, else the first one that
+    /// owes a stop, else the earliest. `None` when nothing is timed.
+    fn advance_target(&self, paced: bool, posts: u64) -> Option<u64> {
+        let (&(earliest, _), _) = self.sched.timed.iter().next()?;
+        if paced || !self.sched.yielders.is_empty() {
+            return Some(earliest);
+        }
+        let owed = self
+            .sched
+            .timed
+            .iter()
+            .find(|(_, e)| e.role.owes_stop(posts))
+            .map(|(&(deadline, _), _)| deadline);
+        Some(owed.unwrap_or(earliest))
+    }
+
+    /// Pop every timed waiter due at `min` plus all yielders and account
+    /// them. Polls woken by their own deadline are accounted apart so they
+    /// leave [`Clock::posts`] alone.
+    fn release_due(&mut self, clock: &Clock, min: u64) -> Vec<Wake> {
         let mut woken: Vec<Wake> = Vec::new();
+        let mut polls: Vec<Wake> = Vec::new();
         while let Some((&(d, _), _)) = self.sched.timed.iter().next() {
             if d > min {
                 break;
             }
             if let Some((_, entry)) = self.sched.timed.pop_first() {
-                woken.push(entry.wake);
+                match entry.role {
+                    ParkRole::Poll(_) => polls.push(entry.wake),
+                    ParkRole::Deadline | ParkRole::Backstop => woken.push(entry.wake),
+                }
             }
         }
-        for (_, wake) in std::mem::take(&mut self.sched.yielders) {
-            woken.push(wake);
-        }
-        self.registry.account_woken(&woken);
-        WakeBatch(woken)
+        woken.extend(std::mem::take(&mut self.sched.yielders).into_values());
+        self.registry.account_woken(clock, &woken);
+        self.registry.account_poll_woken(&polls);
+        woken.extend(polls);
+        woken
     }
 }
 
@@ -418,6 +345,7 @@ impl FlashInner {
         let delta = crate::flash::duration_to_nanos(d);
         let token = Token::new();
         let mut s = self.core.lock();
+        let wait = self.enter_wait_locked(&mut s);
         let deadline = self.clock.now_nanos().saturating_add(delta);
         let id = s.registry.fresh_id();
         s.bound_pace_lag(&self.clock);
@@ -425,7 +353,6 @@ impl FlashInner {
             (deadline, id),
             Entry::timed(WaitKind::Timed, Wake::Sync(Arc::clone(&token))),
         );
-        let wait = self.enter_wait_locked(&mut s);
         let adv = s.try_advance(&self.clock);
         drop(s);
         adv.fire();
@@ -454,21 +381,18 @@ impl FlashInner {
         if s.sched.unpark_pending.remove(&thread_id) {
             return;
         }
+        let wait = self.enter_wait_locked(&mut s);
         let deadline = self.clock.now_nanos().saturating_add(delta);
         let id = s.registry.fresh_id();
         s.bound_pace_lag(&self.clock);
         s.sched.timed.insert(
             (deadline, id),
-            match role {
-                ParkRole::Deadline => {
-                    Entry::timed(WaitKind::Thread(thread_id), Wake::Sync(Arc::clone(&token)))
-                }
-                ParkRole::Backstop => {
-                    Entry::backstop(WaitKind::Thread(thread_id), Wake::Sync(Arc::clone(&token)))
-                }
-            },
+            Entry::with_role(
+                WaitKind::Thread(thread_id),
+                Wake::Sync(Arc::clone(&token)),
+                role,
+            ),
         );
-        let wait = self.enter_wait_locked(&mut s);
         let adv = s.try_advance(&self.clock);
         drop(s);
         adv.fire();
@@ -488,6 +412,7 @@ impl FlashInner {
         let delta = crate::flash::duration_to_nanos(d);
         let token = Token::new();
         let mut s = self.core.lock();
+        let wait = self.enter_wait_locked(&mut s);
         let deadline = self.clock.now_nanos().saturating_add(delta);
         let id = s.registry.fresh_id();
         s.bound_pace_lag(&self.clock);
@@ -495,7 +420,6 @@ impl FlashInner {
             (deadline, id),
             Entry::timed(WaitKind::Timed, Wake::Sync(Arc::clone(&token))),
         );
-        let wait = self.enter_wait_locked(&mut s);
         let adv = s.try_advance(&self.clock);
         drop(s);
         adv.fire();
@@ -519,7 +443,8 @@ impl FlashInner {
         if let Some(key) = key
             && let Some(entry) = s.sched.timed.remove(&key)
         {
-            s.registry.account_woken(std::slice::from_ref(&entry.wake));
+            s.registry
+                .account_woken(&self.clock, std::slice::from_ref(&entry.wake));
             drop(s);
             entry.wake.fire();
             return;
@@ -546,9 +471,9 @@ impl FlashInner {
             std::thread::yield_now();
             return;
         }
+        let wait = self.enter_wait_locked(&mut s);
         let id = s.registry.fresh_id();
         s.sched.yielders.insert(id, Wake::Sync(Arc::clone(&token)));
-        let wait = self.enter_wait_locked(&mut s);
         let adv = s.try_advance(&self.clock);
         drop(s);
         adv.fire();
@@ -575,6 +500,7 @@ impl FlashInner {
     ) -> (Arc<Token>, WakeBatch, WaitGuard<'_>) {
         let token = Token::new();
         let mut s = self.core.lock();
+        let wait = self.enter_wait_locked(&mut s);
         let deadline_nanos = deadline_nanos.max(self.clock.now_nanos());
         let id = s.registry.fresh_id();
         s.bound_pace_lag(&self.clock);
@@ -582,7 +508,6 @@ impl FlashInner {
             (deadline_nanos, id),
             Entry::timed(WaitKind::Condvar(cvid), Wake::Sync(Arc::clone(&token))),
         );
-        let wait = self.enter_wait_locked(&mut s);
         let adv = s.try_advance(&self.clock);
         drop(s);
         (token, adv, wait)
@@ -597,6 +522,7 @@ impl FlashInner {
         let token = Token::new();
         let parked = Parked::here();
         let mut s = self.core.lock();
+        let wait = self.enter_wait_locked(&mut s);
         let id = s.registry.fresh_id();
         s.sched.indef.insert(
             id,
@@ -606,7 +532,6 @@ impl FlashInner {
                 parked,
             ),
         );
-        let wait = self.enter_wait_locked(&mut s);
         let adv = s.try_advance(&self.clock);
         drop(s);
         (token, adv, wait)
@@ -679,7 +604,7 @@ impl FlashInner {
                 woken.push(entry.wake);
             }
         }
-        s.registry.account_woken(&woken);
+        s.registry.account_woken(&self.clock, &woken);
         drop(s);
         for t in woken {
             t.fire();
@@ -855,6 +780,7 @@ impl FlashInner {
     ) -> WakeOutcome {
         let mut s = self.core.lock();
         if state.compare_exchange(TaskState::Parked, TaskState::Runnable) {
+            self.clock.post();
             s.registry.active_async += 1;
             s.registry.active_async_holders.insert(id, loc);
             WakeOutcome::Resumed
@@ -937,7 +863,7 @@ impl FlashInner {
         if woken.is_empty() {
             return;
         }
-        s.registry.account_woken(&woken);
+        s.registry.account_woken(&self.clock, &woken);
         drop(s);
         for w in woken {
             w.fire();
@@ -964,7 +890,7 @@ impl FlashInner {
         if woken.is_empty() {
             s.sched.notify_permits.insert(cvid);
         } else {
-            s.registry.account_woken(&woken);
+            s.registry.account_woken(&self.clock, &woken);
         }
         drop(s);
         for t in woken {

@@ -232,18 +232,10 @@ async fn a_crossfade_start_follows_the_incoming_gains(constant_half: &'static [u
     const END: usize = FADE_AT + FADE_FRAMES + BLOCK;
     let settings =
         CrossfadeSettings::new(4.0, CrossfadeCurve::EqualPower, 0.7, 0.3).expect("four seconds");
-    let outgoing: Vec<_> = (0..END)
-        .flat_map(|frame| {
-            let sample = 0.25 + cast::<usize, f32>(frame % 97).expect("fixture frame") * 0.0005;
-            [sample, sample]
-        })
-        .collect();
-    let incoming: Vec<_> = (0..END)
-        .flat_map(|frame| {
-            let sample = 0.125 + cast::<usize, f32>(frame % 89).expect("fixture frame") * 0.0007;
-            [sample, sample]
-        })
-        .collect();
+    let outgoing = kithara_test_fixtures::unit_fixtures::render_crossfade_outgoing();
+    let incoming = kithara_test_fixtures::unit_fixtures::render_crossfade_incoming();
+    assert_eq!(outgoing.len(), END * 2);
+    assert_eq!(incoming.len(), END * 2);
     let (mut mixer, mut ends) = mixer_without_declick();
     let attached = send_on(
         &mut ends,

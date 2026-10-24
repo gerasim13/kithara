@@ -25,9 +25,10 @@ use kithara_platform::{
 };
 use kithara_test_utils::TestHttpServer;
 
-use super::client::HttpClient;
 use crate::{
+    HttpClient,
     error::NetError,
+    observe::{NetObserver, Observer},
     test_pools::pools,
     types::{Compression, Headers, NetOptions, RangeSpec, RetryPolicy},
 };
@@ -54,7 +55,9 @@ fn respond(status: StatusCode, headers: &[(&str, &str)], body: impl Into<Body>) 
     headers
         .iter()
         .fold(
-            Response::builder().status(status),
+            Response::builder()
+                .status(status)
+                .header("Content-Type", "application/octet-stream"),
             |builder, (key, value)| builder.header(*key, *value),
         )
         .body(body.into())
@@ -77,18 +80,17 @@ fn truncated(head: Builder, sent: Bytes, linger: Duration) -> Response {
         kithara_platform::time::sleep(linger).await;
         Err::<Bytes, _>(io::Error::other("connection dropped mid-body"))
     });
-    head.body(Body::from_stream(stream::iter([Ok(sent)]).chain(dropped)))
+    head.header("Content-Type", "application/octet-stream")
+        .body(Body::from_stream(stream::iter([Ok(sent)]).chain(dropped)))
         .expect("truncated response")
 }
 
-/// Sends the head and never a byte of the body.
-fn stalled_head() -> Response {
-    Response::new(Body::from_stream(
-        stream::pending::<Result<Bytes, io::Error>>(),
-    ))
+/// Never sends response headers.
+async fn stalled_head() -> Response {
+    futures::future::pending().await
 }
 
-fn fast_options(max_retries: u32) -> NetOptions {
+fn retry_options(max_retries: u32) -> NetOptions {
     NetOptions::builder()
         .retry_policy(RetryPolicy {
             max_retries,
@@ -133,34 +135,6 @@ async fn collect(mut stream: crate::ByteStream) -> Result<Bytes, NetError> {
         out.extend_from_slice(chunk?.as_ref());
     }
     Ok(Bytes::from(out))
-}
-
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
-async fn apple_get_bytes_retries_503_until_ok() {
-    let counter = Arc::new(AtomicU32::new(0));
-    let seen = Arc::clone(&counter);
-    let server = serve(move || {
-        let seen = Arc::clone(&seen);
-        async move {
-            let attempt = seen.fetch_add(1, Ordering::SeqCst);
-            if attempt < 2 {
-                respond(StatusCode::SERVICE_UNAVAILABLE, &[], "busy")
-            } else {
-                respond(StatusCode::OK, &[], "ok")
-            }
-        }
-    })
-    .await;
-    let url = server.url(PROBE);
-
-    let client = HttpClient::new(fast_options(3), pools(), CancelToken::never());
-    let body = client
-        .get_bytes(url, None)
-        .await
-        .expect("get_bytes retries 503");
-
-    assert_eq!(&body[..], b"ok");
-    assert_eq!(counter.load(Ordering::SeqCst), 3);
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
@@ -267,14 +241,15 @@ async fn apple_identity_stream_rejects_nonidentity_content_encoding() {
     })
     .await;
     let url = server.url(PROBE);
-    let client = HttpClient::new(fast_options(0), pools(), CancelToken::never());
+    let client = HttpClient::new(retry_options(0), pools(), CancelToken::never());
 
     let Err(error) = client.stream(url.clone(), None).await else {
         panic!("encoded bytes must not reach an identity stream");
     };
 
     assert!(
-        matches!(error, NetError::Decode(detail) if detail.contains(url.as_str()) && detail.contains("gzip"))
+        matches!(&error, NetError::Decode(detail) if detail.contains(url.as_str()) && detail.contains("gzip")),
+        "identity stream returned {error:?}"
     );
 }
 
@@ -289,7 +264,7 @@ async fn apple_head_backfills_content_length_from_content_range() {
     })
     .await;
 
-    let client = HttpClient::new(fast_options(0), pools(), CancelToken::never());
+    let client = HttpClient::new(retry_options(0), pools(), CancelToken::never());
     let headers = client.head(server.url(PROBE), None).await.expect("head");
 
     assert_eq!(headers.get("content-length"), Some("1234"));
@@ -299,7 +274,7 @@ async fn apple_head_backfills_content_length_from_content_range() {
 async fn apple_range_rejects_partial_without_content_range() {
     let server = serve(|| async { respond(StatusCode::PARTIAL_CONTENT, &[], "part") }).await;
     let url = server.url(PROBE);
-    let client = HttpClient::new(fast_options(0), pools(), CancelToken::never());
+    let client = HttpClient::new(retry_options(0), pools(), CancelToken::never());
 
     let Err(error) = client
         .get_range(url, RangeSpec::new(0, Some(3)), None)
@@ -322,7 +297,7 @@ async fn apple_range_rejects_partial_without_content_length() {
     })
     .await;
     let url = server.url(PROBE);
-    let client = HttpClient::new(fast_options(0), pools(), CancelToken::never());
+    let client = HttpClient::new(retry_options(0), pools(), CancelToken::never());
 
     let Err(error) = client
         .get_range(url, RangeSpec::new(0, Some(3)), None)
@@ -331,7 +306,10 @@ async fn apple_range_rejects_partial_without_content_length() {
         panic!("partial range without content-length must fail before body delivery");
     };
 
-    assert!(matches!(error, NetError::Decode(detail) if detail.contains("content-length")));
+    assert!(
+        matches!(&error, NetError::Decode(detail) if detail.contains("content-length")),
+        "range without Content-Length returned {error:?}"
+    );
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
@@ -364,7 +342,7 @@ async fn apple_resume_rejects_a_different_content_range() {
         }
     })
     .await;
-    let client = HttpClient::new(fast_options(1), pools(), CancelToken::never());
+    let client = HttpClient::new(retry_options(1), pools(), CancelToken::never());
     let stream = client
         .stream(server.url(PROBE), None)
         .await
@@ -415,7 +393,7 @@ async fn apple_resume_rejects_a_conflicting_representation_total() {
         }
     })
     .await;
-    let client = HttpClient::new(fast_options(1), pools(), CancelToken::never());
+    let client = HttpClient::new(retry_options(1), pools(), CancelToken::never());
     let stream = client
         .stream(server.url(PROBE), None)
         .await
@@ -443,11 +421,11 @@ async fn apple_ignored_range_resume_continues_after_discovering_total() {
     let seen = Arc::clone(&requests);
     let server = serve(move |headers: HeaderMap| {
         let body = body.clone();
-        let attempt = seen.fetch_add(1, Ordering::SeqCst);
+        seen.fetch_add(1, Ordering::SeqCst);
         async move {
-            if attempt > 0 {
+            let range = request_header(&headers, "range").expect("range header");
+            if range.ends_with('-') {
                 let start = range_start(&headers).expect("resumed range start");
-                let range = request_header(&headers, "range").expect("range header");
                 assert_eq!(range, format!("bytes={start}-"));
                 let end_exclusive = BODY_LEN;
                 let end = end_exclusive.saturating_sub(1);
@@ -458,16 +436,21 @@ async fn apple_ignored_range_resume_continues_after_discovering_total() {
                     body.slice(start..end_exclusive),
                 )
             } else {
-                truncated(
-                    Response::builder(),
-                    body.slice(..FIRST_WRITE_LEN),
-                    Duration::from_millis(60),
+                assert_eq!(range, format!("bytes=0-{REQUEST_END}"));
+                let first = body.slice(..FIRST_WRITE_LEN);
+                respond(
+                    StatusCode::OK,
+                    &[],
+                    Body::from_stream(
+                        stream::once(async move { Ok::<_, io::Error>(first) })
+                            .chain(stream::pending()),
+                    ),
                 )
             }
         }
     })
     .await;
-    let client = HttpClient::new(fast_options(2), pools(), CancelToken::never());
+    let client = HttpClient::new(retry_options(2), pools(), CancelToken::never());
     let stream = client
         .get_range(
             server.url(PROBE),
@@ -491,7 +474,7 @@ async fn apple_open_ended_stream_delivers_chunks() {
     let server =
         serve(|| async { respond(StatusCode::OK, &[], unsized_body(&[b"abc", b"def"])) }).await;
 
-    let client = HttpClient::new(fast_options(0), pools(), CancelToken::never());
+    let client = HttpClient::new(retry_options(0), pools(), CancelToken::never());
     let stream = client
         .stream(server.url(PROBE), None)
         .await
@@ -550,7 +533,7 @@ async fn apple_short_body_yields_before_premature_eof_under_flash() {
     })
     .await;
 
-    let client = HttpClient::new(fast_options(1), pools(), CancelToken::never());
+    let client = HttpClient::new(retry_options(1), pools(), CancelToken::never());
     let stream = client
         .stream(server.url(PROBE), None)
         .await
@@ -577,7 +560,7 @@ async fn apple_short_body_yields_before_premature_eof_under_flash() {
 
 #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 async fn apple_stream_head_stall_times_out() {
-    let server = serve(|| async { stalled_head() }).await;
+    let server = serve(stalled_head).await;
     let url = server.url(PROBE);
 
     let client = HttpClient::new(stream_options(300), pools(), CancelToken::never());
@@ -591,7 +574,7 @@ async fn apple_stream_head_stall_times_out() {
 
 #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 async fn apple_stream_observes_cancellation() {
-    let server = serve(|| async { stalled_head() }).await;
+    let server = serve(stalled_head).await;
     let url = server.url(PROBE);
 
     let cancel = CancelToken::root();
@@ -607,4 +590,62 @@ async fn apple_stream_observes_cancellation() {
         Err(error) => assert!(matches!(error, NetError::Cancelled)),
         Ok(_) => panic!("head wait must observe cancellation"),
     }
+}
+
+#[derive(Default)]
+struct AttemptLog {
+    first_bytes: Mutex<Vec<u16>>,
+    retries: Mutex<Vec<(u32, u32, NetError)>>,
+    exhausted: Mutex<Vec<(u32, u64, NetError)>>,
+}
+
+impl NetObserver for AttemptLog {
+    fn first_byte(&self, _ttfb: Duration, status: u16, _partial: bool) {
+        self.first_bytes.lock().push(status);
+    }
+
+    fn retrying(&self, attempt: u32, max_retries: u32, error: &NetError, _backoff: Duration) {
+        self.retries
+            .lock()
+            .push((attempt, max_retries, error.clone()));
+    }
+
+    fn retry_exhausted(&self, max_retries: u32, consumed: u64, error: &NetError) {
+        self.exhausted
+            .lock()
+            .push((max_retries, consumed, error.clone()));
+    }
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
+async fn apple_observed_handle_reports_every_attempt() {
+    let server = serve(|| async { StatusCode::INTERNAL_SERVER_ERROR }).await;
+    let url = server.url(PROBE);
+    let mut options = retry_options(2);
+    options.inactivity_timeout = Duration::from_secs(2);
+    let client = HttpClient::new(options, pools(), CancelToken::never());
+
+    let log = Arc::new(AttemptLog::default());
+    let observed = client.with_observer(Some(Observer(log.clone())));
+    observed
+        .get_bytes(url.clone(), None)
+        .await
+        .expect_err("HTTP 500 exhausts retries");
+    assert_eq!(*log.first_bytes.lock(), [500, 500, 500]);
+    assert!(matches!(log.retries.lock().as_slice(),
+        [(1, 2, NetError::Status { status: first, .. }),
+         (2, 2, NetError::Status { status: second, .. })]
+        if first.get() == 500 && second.get() == 500));
+    assert!(matches!(log.exhausted.lock().as_slice(),
+        [(2, 0, NetError::Status { status, .. })] if status.get() == 500));
+    client
+        .get_bytes(url, None)
+        .await
+        .expect_err("base request also fails");
+    assert_eq!(*log.first_bytes.lock(), [500, 500, 500]);
+    assert!(matches!(log.retries.lock().as_slice(),
+        [(1, 2, NetError::Status { status: first, .. }),
+         (2, 2, NetError::Status { status: second, .. })]
+        if first.get() == 500 && second.get() == 500));
+    assert_eq!(log.exhausted.lock().len(), 1);
 }

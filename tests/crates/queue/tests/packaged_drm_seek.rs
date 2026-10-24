@@ -4,6 +4,7 @@
 use kithara::{
     abr::AbrMode,
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
+    bufpool::PoolRegion,
     decode::DecoderBackend,
     download::{Downloader, DownloaderConfig},
     events::{EventReceiver, TrackId},
@@ -11,7 +12,7 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        time::{Duration, Instant, timeout},
+        time::{Duration, Instant, WallInstant, timeout},
     },
     play::{PlayWorker, PlayWorkerConfig, policy::DomainKeyPolicy},
     queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackStatus, Transition},
@@ -26,7 +27,7 @@ use kithara_integration_tests::{
     fixture_protocol::DelayRule,
     kithara, mixed_codec_ladder_encrypted,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE, app_disk_asset_store, app_track_source},
-    waits::{wait_for_position_at_least, wait_for_position_near},
+    waits::{wait_for_position_at_least, wait_for_position_event, wait_for_position_near_event},
 };
 use kithara_test_utils::{TestTempDir, Xorshift64, temp_dir};
 use url::Url;
@@ -109,12 +110,19 @@ async fn delayed_drm_track() -> (TestServerHelper, Url) {
     drm_source(Some(150)).await
 }
 
-#[kithara_test_utils::kithara::flash(io)]
 #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
-async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, temp: TestTempDir) {
+async fn run_seek_scenario(
+    url: &Url,
+    backend: DecoderBackend,
+    abr: AbrMode,
+    temp: TestTempDir,
+    make_client: impl FnOnce(NetOptions, PoolRegion<AppPools>, CancelToken) -> HttpClient,
+) {
+    let wall = WallInstant::now();
+    let clock = Instant::now();
     let pools = app_pools(&PoolsSection::default()).expect("build app pool region");
     let net = NetOptions::builder().is_insecure(true).build();
-    let client = HttpClient::new(net, pools.clone(), CancelToken::never());
+    let client = make_client(net, pools.clone(), CancelToken::never());
     let downloader = Downloader::new(DownloaderConfig::for_client(client.clone()).build());
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
     let shutdown = CancelToken::never();
@@ -195,18 +203,19 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
         // Through the host owner, as the app seeks and as every other
         // control call here does. Called directly, the seek waits for the
         // queue's owner inside the test's own poll.
+        let mut seek_rx = queue.subscribe();
         queue.run(move |q| q.seek(target)).await.expect("seek");
         hang_reset!();
-        wait_for_position_near(&queue, target, 1.0, Duration::from_secs(5))
-            .await
-            .unwrap_or_else(|e| panic!("seek #{i} to {target:.1}s fail: {e}"));
+        let before =
+            wait_for_position_near_event(&mut seek_rx, &queue, target, 1.0, Duration::from_secs(5))
+                .await
+                .unwrap_or_else(|e| panic!("seek #{i} to {target:.1}s fail: {e}"));
         hang_reset!();
-        let before = queue.position_seconds().unwrap_or(0.0);
-        wait_for_position_at_least(&queue, before + 0.5, Duration::from_secs(5))
-            .await
-            .unwrap_or_else(|e| panic!("seek #{i} hang: {e}"));
+        let after =
+            wait_for_position_event(&mut seek_rx, &queue, before + 0.5, Duration::from_secs(5))
+                .await
+                .unwrap_or_else(|e| panic!("seek #{i} hang: {e}"));
         hang_reset!();
-        let after = queue.position_seconds().unwrap_or(0.0);
         assert!(
             after - before >= 0.5,
             "seek #{i} hang: {before:.2}→{after:.2}"
@@ -216,6 +225,11 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
     queue.run(move |q| q.remove(id)).await.expect("remove");
     tick_handle.stop().await;
     queue.close().await;
+    eprintln!(
+        "DRM_SEEK_TIMING wall_ns={} clock_ns={}",
+        wall.elapsed().as_nanos(),
+        clock.elapsed().as_nanos(),
+    );
 }
 
 #[kithara::test(
@@ -244,7 +258,7 @@ async fn drm_seek_resumes(
     temp_dir: TestTempDir,
 ) {
     let (_helper, url) = drm_track;
-    run_seek_scenario(&url, backend, abr, temp_dir).await;
+    run_seek_scenario(&url, backend, abr, temp_dir, HttpClient::new).await;
 }
 
 // flash(false): the e2e this mirrors runs real-clock; the stall window is
@@ -276,7 +290,7 @@ async fn drm_seek_resumes_realtime(
     temp_dir: TestTempDir,
 ) {
     let (_helper, url) = drm_track;
-    run_seek_scenario(&url, backend, abr, temp_dir).await;
+    run_seek_scenario(&url, backend, abr, temp_dir, HttpClient::new).await;
 }
 
 #[kithara::test(
@@ -304,6 +318,39 @@ async fn drm_seek_resumes_delayed_cdn(
     #[case] abr: AbrMode,
     temp_dir: TestTempDir,
 ) {
+    let (helper, url) = delayed_drm_track;
+    run_seek_scenario(&url, backend, abr, temp_dir, |options, _pools, cancel| {
+        helper.modeled_client(options, cancel)
+    })
+    .await;
+}
+
+#[kithara::test(
+    tracing("kithara_queue=debug,kithara_hls=debug,kithara_audio=debug"),
+    tokio,
+    flash(false)
+)]
+#[case::symphonia_auto(DecoderBackend::Symphonia, AbrMode::Auto(None))]
+#[case::symphonia_locked_low(DecoderBackend::Symphonia, AbrMode::manual(0))]
+#[case::symphonia_locked_high(DecoderBackend::Symphonia, AbrMode::manual(2))]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::apple_auto(DecoderBackend::Apple, AbrMode::Auto(None))
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::apple_locked_low(DecoderBackend::Apple, AbrMode::manual(0))
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::apple_locked_high(DecoderBackend::Apple, AbrMode::manual(2))
+)]
+async fn drm_seek_resumes_delayed_cdn_realtime(
+    #[future(awt)] delayed_drm_track: (TestServerHelper, Url),
+    #[case] backend: DecoderBackend,
+    #[case] abr: AbrMode,
+    temp_dir: TestTempDir,
+) {
     let (_helper, url) = delayed_drm_track;
-    run_seek_scenario(&url, backend, abr, temp_dir).await;
+    run_seek_scenario(&url, backend, abr, temp_dir, HttpClient::new).await;
 }

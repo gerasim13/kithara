@@ -91,3 +91,22 @@ pub fn cochlea_control() -> Vec<f32> {
 pub fn cochlea_loudness() -> Vec<f32> {
     samples(&assets::cochlea_signal_loudness())
 }
+
+/// Prepared six-beat input at one of the declared rates and tempos.
+/// # Panics
+/// Panics when the requested input is undeclared or unavailable.
+#[must_use]
+pub fn cochlea_pulses(sample_rate: u32, bpm: f64) -> Vec<f32> {
+    let tempo = bpm.to_string().replace('.', "_");
+    let name = format!("cochlea_pulses_rate_{sample_rate}_bpm_{tempo}");
+    let asset =
+        assets::by_name(&name).unwrap_or_else(|| panic!("no prepared pulse fixture `{name}`"));
+    samples(&asset)
+}
+
+/// Prepared three seconds of mono silence at 48000 Hz.
+#[kithara::fixture]
+#[must_use]
+pub fn cochlea_silence() -> Vec<f32> {
+    samples(&assets::cochlea_silence_default())
+}

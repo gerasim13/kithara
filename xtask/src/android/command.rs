@@ -263,7 +263,7 @@ fn run_clippy(root: &Path, android: &AndroidConfig, tools: &ToolsConfig) -> Resu
 
     println!("==> Linting the Android backends");
 
-    let features = device_features(BuildProfile::Release);
+    let features = device_features(BuildProfile::Release).replace("kithara-ffi/", "");
 
     let mut cmd = cargo_ndk(api_level)?;
     cmd.arg("clippy");

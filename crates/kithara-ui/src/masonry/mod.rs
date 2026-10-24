@@ -2,6 +2,7 @@
 
 pub(crate) mod engine;
 pub(crate) mod event;
+pub mod external;
 pub(crate) mod grip;
 pub(crate) mod hosted;
 pub(crate) mod paint;

@@ -35,11 +35,11 @@ impl VariantInput {
     /// Panics when the codec is not AAC LC, HE-AAC, HE-AAC v2, or FLAC.
     #[must_use]
     pub fn key(&self) -> String {
-        let codec = match self.codec {
-            AudioCodec::AacLc => "aac-lc",
-            AudioCodec::AacHe => "aac-he",
-            AudioCodec::AacHeV2 => "aac-he-v2",
-            AudioCodec::Flac => "flac",
+        let (version, codec) = match self.codec {
+            AudioCodec::AacLc => ("v1", "aac-lc"),
+            AudioCodec::AacHe => ("v2", "aac-he"),
+            AudioCodec::AacHeV2 => ("v2", "aac-he-v2"),
+            AudioCodec::Flac => ("v1", "flac"),
             _ => panic!("unsupported HLS fixture codec"),
         };
         let signal = match self.signal {
@@ -77,7 +77,7 @@ impl VariantInput {
             GaplessEncoding::Both => "both",
         };
         format!(
-            "v1/{codec}/{}/{}/{}/{}/{}/{}/{}/{}/{}/{gapless}/{signal}",
+            "{version}/{codec}/{}/{}/{}/{}/{}/{}/{}/{}/{}/{gapless}/{signal}",
             self.sample_rate,
             self.channels,
             self.content_frames,
@@ -145,5 +145,22 @@ mod tests {
         let tone = variant.key();
         variant.signal = Wave::sine(f64::from_bits(440.0f64.to_bits() + 1));
         assert_ne!(variant.key(), tone);
+    }
+
+    #[kithara::test]
+    #[case(AudioCodec::AacLc, "v1/aac-lc")]
+    #[case(AudioCodec::AacHe, "v2/aac-he")]
+    #[case(AudioCodec::AacHeV2, "v2/aac-he-v2")]
+    #[case(AudioCodec::Flac, "v1/flac")]
+    fn variant_key_pins_the_encoded_revision(
+        mut variant: VariantInput,
+        #[case] codec: AudioCodec,
+        #[case] prefix: &str,
+    ) {
+        variant.codec = codec;
+        assert_eq!(
+            variant.key(),
+            format!("{prefix}/44100/2/180224/22/0/128000/44100/0/0/edts/saw")
+        );
     }
 }

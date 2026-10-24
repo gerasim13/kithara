@@ -3,7 +3,7 @@ use std::num::NonZeroU32;
 use kithara_decode::{DecodeError, DecodeResult, DecoderSeekOutcome};
 use kithara_platform::{sync::mpsc, time::Duration};
 use kithara_signal::{AudioSpec, FrameCount, rescale_frame_ceil};
-use kithara_stream::{PendingReason, VariantTransition};
+use kithara_stream::{OutgoingDisposition, PendingReason, VariantTransition};
 use kithara_test_utils::kithara;
 use tracing::{debug, trace};
 
@@ -379,6 +379,7 @@ impl super::core::ActiveDecode {
             outgoing_gap: self.active.timeline_gap(),
             outgoing_origin: self.active.comparison_origin(gapless_mode)?,
             outgoing_exhausted: self.active.is_source_exhausted(),
+            outgoing_disposition: self.incoming_transition()?.outgoing_disposition(),
             join_frames: self.blender.join_frame_count(),
             gapless_mode,
         })
@@ -426,15 +427,9 @@ impl super::core::ActiveDecode {
         } else {
             *frontier
         };
-        let mut readiness = promotion_readiness(
-            active,
-            blender,
-            generation,
-            candidate,
-            target.outgoing_origin,
-            incoming_origin,
-            target.gapless_mode,
-        );
+        target.frontier = candidate;
+        let mut readiness =
+            promotion_readiness(active, blender, generation, target, incoming_origin);
         if matches!(readiness, PromotionReadiness::AwaitingOutgoingFrontier)
             && observed_frontier_is_later(
                 candidate,
@@ -444,15 +439,8 @@ impl super::core::ActiveDecode {
             )
         {
             candidate = outgoing_frontier;
-            readiness = promotion_readiness(
-                active,
-                blender,
-                generation,
-                candidate,
-                target.outgoing_origin,
-                incoming_origin,
-                target.gapless_mode,
-            );
+            target.frontier = candidate;
+            readiness = promotion_readiness(active, blender, generation, target, incoming_origin);
         }
         if matches!(
             readiness,
@@ -479,7 +467,6 @@ impl super::core::ActiveDecode {
             }
             return outcome;
         }
-        target.frontier = candidate;
         let Some(IncomingDecode::Priming {
             transition,
             generation,
@@ -557,24 +544,12 @@ pub(super) fn promotion_readiness(
     active: &DecoderGeneration,
     blender: &GaplessBlender,
     generation: &DecoderGeneration,
-    outgoing_frontier: OutgoingFrontier,
-    outgoing_origin: u64,
+    target: IncomingPreparation,
     incoming_origin: u64,
-    gapless_mode: kithara_decode::GaplessMode,
 ) -> PromotionReadiness {
     if !blender.is_steady() {
-        return PromotionReadiness::NeedIncoming;
+        return PromotionReadiness::AwaitingOutgoingFrontier;
     }
-    let target = IncomingPreparation {
-        frontier: outgoing_frontier,
-        outgoing_spec: active.blender_profile().spec(),
-        outgoing_profile: active.gapless_profile(),
-        outgoing_gap: active.timeline_gap(),
-        outgoing_origin,
-        outgoing_exhausted: active.is_source_exhausted(),
-        join_frames: blender.join_frame_count(),
-        gapless_mode,
-    };
     let readiness = incoming_readiness(generation, target, incoming_origin);
     let PromotionReadiness::Ready(mut span) = readiness else {
         return readiness;
@@ -687,16 +662,20 @@ pub(super) fn incoming_readiness(
         else {
             return PromotionReadiness::NeedIncoming;
         };
-        let join = match same_spec_join(
-            generation,
-            active_spec,
-            incoming_next,
-            outgoing_first,
-            outgoing_next,
-            target.join_frames,
-        ) {
-            Ok(join) => join,
-            Err(verdict) => return verdict,
+        let join = if target.outgoing_disposition == OutgoingDisposition::Abandoned {
+            PromotionJoin::HardCut
+        } else {
+            match same_spec_join(
+                generation,
+                active_spec,
+                incoming_next,
+                outgoing_first,
+                outgoing_next,
+                target.join_frames,
+            ) {
+                Ok(join) => join,
+                Err(verdict) => return verdict,
+            }
         };
         (incoming_next, join)
     } else {

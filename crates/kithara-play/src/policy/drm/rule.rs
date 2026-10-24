@@ -73,8 +73,10 @@ impl DomainKeyRule {
 
     pub(super) fn prepare(&self, key_url: &Url) -> PreparedKeyRequest {
         let request = (self.key_request_factory)();
-        let mut headers = self.headers.clone().unwrap_or_default();
-        headers.extend(request.headers);
+        let mut headers = self.resource_headers().unwrap_or_default();
+        for (name, value) in request.headers {
+            headers.insert(name, value);
+        }
 
         let mut url = key_url.clone();
         if let Some(query_params) = self.query_params.as_ref() {
@@ -86,7 +88,14 @@ impl DomainKeyRule {
             }
         }
 
-        PreparedKeyRequest::new(url, headers, request.processor)
+        PreparedKeyRequest::new(
+            url,
+            headers
+                .iter()
+                .map(|(name, value)| (name.to_owned(), value.to_owned()))
+                .collect(),
+            request.processor,
+        )
     }
 
     pub(super) fn resource_headers(&self) -> Option<Headers> {

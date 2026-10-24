@@ -412,7 +412,13 @@ impl FrameCodec for AppleCodec {
             });
         }
 
-        if self.codec == AudioCodec::Mp3 && self.output_origin.is_none() {
+        let lossless_rate_conversion = matches!(
+            self.codec,
+            AudioCodec::Pcm | AudioCodec::Flac | AudioCodec::Alac
+        ) && self.spec.sample_rate.get() != self.source_sample_rate;
+        if self.output_origin.is_none()
+            && (self.codec == AudioCodec::Mp3 || lossless_rate_conversion)
+        {
             self.output_origin = Some(pts);
             self.decoded_pts = Some(pts);
         }

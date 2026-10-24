@@ -2,6 +2,7 @@ use std::num::NonZeroU128;
 
 use num_traits::Float;
 
+/// A nonnegative fraction with coprime numerator and denominator.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Ratio {
     pub(super) numerator: u128,
@@ -18,31 +19,41 @@ pub(super) fn divisor(mut first: u128, mut second: u128) -> u128 {
     first
 }
 
+fn quotient(numerator: u128, denominator: NonZeroU128) -> u128 {
+    if denominator.get().is_power_of_two() {
+        numerator >> denominator.get().trailing_zeros()
+    } else {
+        numerator / denominator.get()
+    }
+}
+
 impl Ratio {
     pub(super) fn new(numerator: u128, denominator: NonZeroU128) -> Option<Self> {
-        let common = divisor(numerator, denominator.get());
+        let common = NonZeroU128::new(divisor(numerator, denominator.get()))?;
         Some(Self {
-            numerator: numerator / common,
-            denominator: NonZeroU128::new(denominator.get() / common)?,
+            numerator: quotient(numerator, common),
+            denominator: NonZeroU128::new(quotient(denominator.get(), common))?,
         })
     }
 
     pub(super) fn at(self, denominator: NonZeroU128) -> Option<u128> {
         self.numerator
-            .checked_mul(denominator.get().checked_div(self.denominator.get())?)
+            .checked_mul(quotient(denominator.get(), self.denominator))
     }
 
-    pub(super) fn common(self, other: Self) -> Option<NonZeroU128> {
-        NonZeroU128::new(
-            self.denominator
-                .get()
-                .checked_div(divisor(self.denominator.get(), other.denominator.get()))?
-                .checked_mul(other.denominator.get())?,
-        )
+    pub(super) fn common(first: NonZeroU128, second: NonZeroU128) -> Option<NonZeroU128> {
+        let common = NonZeroU128::new(divisor(first.get(), second.get()))?;
+        NonZeroU128::new(quotient(first.get(), common).checked_mul(second.get())?)
     }
 
     pub(super) fn add(self, other: Self) -> Option<Self> {
-        let denominator = self.common(other)?;
+        if other.numerator == 0 {
+            return Some(self);
+        }
+        if self.numerator == 0 {
+            return Some(other);
+        }
+        let denominator = Self::common(self.denominator, other.denominator)?;
         Self::new(
             self.at(denominator)?.checked_add(other.at(denominator)?)?,
             denominator,
@@ -50,7 +61,10 @@ impl Ratio {
     }
 
     pub(super) fn sub(self, other: Self) -> Option<Self> {
-        let denominator = self.common(other)?;
+        if other.numerator == 0 {
+            return Some(self);
+        }
+        let denominator = Self::common(self.denominator, other.denominator)?;
         Self::new(
             self.at(denominator)?.checked_sub(other.at(denominator)?)?,
             denominator,
@@ -58,14 +72,22 @@ impl Ratio {
     }
 
     pub(super) fn mul(self, other: Self) -> Option<Self> {
-        let first = divisor(self.numerator, other.denominator.get());
-        let second = divisor(other.numerator, self.denominator.get());
-        Self::new(
-            (self.numerator / first).checked_mul(other.numerator / second)?,
-            NonZeroU128::new(
-                (self.denominator.get() / second).checked_mul(other.denominator.get() / first)?,
+        if self.numerator == self.denominator.get() {
+            return Some(other);
+        }
+        if other.numerator == other.denominator.get() {
+            return Some(self);
+        }
+        let first = NonZeroU128::new(divisor(self.numerator, other.denominator.get()))?;
+        let second = NonZeroU128::new(divisor(other.numerator, self.denominator.get()))?;
+        Some(Self {
+            numerator: quotient(self.numerator, first)
+                .checked_mul(quotient(other.numerator, second))?,
+            denominator: NonZeroU128::new(
+                quotient(self.denominator.get(), second)
+                    .checked_mul(quotient(other.denominator.get(), first))?,
             )?,
-        )
+        })
     }
 
     pub(super) fn nearest_q32(self) -> Option<Self> {
@@ -102,7 +124,7 @@ impl Ratio {
     }
 
     pub(super) fn source_frame(self) -> Option<u64> {
-        u64::try_from(self.numerator / self.denominator.get()).ok()
+        u64::try_from(quotient(self.numerator, self.denominator)).ok()
     }
 }
 
@@ -135,5 +157,142 @@ impl TryFrom<f64> for Ratio {
             numerator,
             denominator,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test]
+    fn source_quotients_match_full_width_integer_division() {
+        let numerators = [0, 1, 3, u128::from(u64::MAX), 1 << 64, 1 << 127, u128::MAX];
+        for bits in 0..u128::BITS {
+            let denominator = NonZeroU128::new(1 << bits).expect("positive dyadic divisor");
+            for numerator in numerators.into_iter().chain([
+                denominator.get() - 1,
+                denominator.get(),
+                denominator.get() + 1,
+            ]) {
+                assert_eq!(
+                    quotient(numerator, denominator),
+                    numerator / denominator.get(),
+                    "numerator={numerator}, denominator={denominator}",
+                );
+            }
+        }
+        for denominator in [3, 5, 44100, u128::from(u64::MAX), u128::MAX] {
+            let denominator = NonZeroU128::new(denominator).expect("positive general divisor");
+            for numerator in numerators {
+                assert_eq!(
+                    quotient(numerator, denominator),
+                    numerator / denominator.get()
+                );
+            }
+        }
+    }
+
+    #[kithara::test]
+    fn reduced_products_preserve_exact_cancellation_and_overflow() {
+        let ratio = |numerator, denominator| {
+            Ratio::new(
+                numerator,
+                NonZeroU128::new(denominator).expect("positive divisor"),
+            )
+            .expect("representable ratio")
+        };
+        for first in [0, 1, 2, 3, 7, 31] {
+            for first_denominator in [1, 2, 3, 7, 31] {
+                for second in [0, 1, 2, 3, 7, 31] {
+                    for second_denominator in [1, 2, 3, 7, 31] {
+                        let expected =
+                            ratio(first * second, first_denominator * second_denominator);
+                        assert_eq!(
+                            ratio(first, first_denominator).mul(ratio(second, second_denominator)),
+                            Some(expected),
+                        );
+                    }
+                }
+            }
+        }
+        let zero = ratio(0, 1);
+        let full_width = ratio(u128::MAX, u128::MAX - 1);
+        assert_eq!(zero.mul(full_width), Some(zero));
+        assert_eq!(full_width.mul(zero), Some(zero));
+        assert_eq!(
+            full_width.mul(ratio(u128::MAX - 1, u128::MAX)),
+            Some(ratio(1, 1)),
+        );
+        assert_eq!(
+            ratio(u128::MAX, 2).mul(ratio(2, u128::MAX)),
+            Some(ratio(1, 1)),
+        );
+        assert_eq!(ratio(u128::MAX, 1).mul(ratio(2, 1)), None);
+        assert_eq!(ratio(1, u128::MAX).mul(ratio(1, 2)), None);
+    }
+
+    #[kithara::test]
+    fn finite_float_ratios_keep_coprime_components() {
+        let one = Ratio::new(1, NonZeroU128::MIN).expect("unit ratio");
+        for value in [
+            0.0,
+            -0.0,
+            0.5,
+            1.5,
+            0.1,
+            2.0_f64.powi(-127),
+            2.0_f64.powi(127),
+        ] {
+            let ratio = Ratio::try_from(value).expect("representable float ratio");
+            assert_eq!(divisor(ratio.numerator, ratio.denominator.get()), 1);
+            assert_eq!(ratio.mul(one), Some(ratio));
+            assert_eq!(one.mul(ratio), Some(ratio));
+        }
+        for value in [
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            -1.0,
+            f64::MIN_POSITIVE,
+            f64::MAX,
+        ] {
+            assert!(Ratio::try_from(value).is_err());
+        }
+    }
+
+    #[kithara::test]
+    fn rational_identities_preserve_full_width_values_and_failure_boundaries() {
+        let ratio = |numerator, denominator| {
+            Ratio::new(
+                numerator,
+                NonZeroU128::new(denominator).expect("positive divisor"),
+            )
+            .expect("representable ratio")
+        };
+        let zero = ratio(0, 1);
+        let unit = ratio(1, 1);
+        for value in [
+            zero,
+            unit,
+            ratio(u128::MAX, u128::MAX - 1),
+            ratio(u128::MAX, 1),
+            ratio(1, u128::MAX),
+            Ratio::try_from(0.1).expect("finite dyadic ratio"),
+        ] {
+            assert_eq!(zero.add(value), Some(value));
+            assert_eq!(value.add(zero), Some(value));
+            assert_eq!(value.sub(zero), Some(value));
+            assert_eq!(unit.mul(value), Some(value));
+            assert_eq!(value.mul(unit), Some(value));
+        }
+        assert_eq!(zero.sub(unit), None);
+        assert_eq!(ratio(u128::MAX, 1).add(unit), None);
+        let first = ratio(1, u128::MAX);
+        let second = ratio(1, u128::MAX - 1);
+        assert_eq!(first.add(second), None);
+        assert_eq!(first.sub(second), None);
+        assert_eq!(second.sub(first), None);
     }
 }

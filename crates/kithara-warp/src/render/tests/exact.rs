@@ -13,7 +13,7 @@ use crate::{GridSegment, RegionPlan, WarpConfig};
 #[kithara::test]
 #[case::resample(StretchKind::Glide)]
 #[case::signalsmith(StretchKind::Signalsmith)]
-#[case::bungee(StretchKind::Bungee)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 #[kithara::hang_watchdog]
 fn region_boundaries_publish_exact_phase_under_every_output_budget(#[case] backend: StretchKind) {
     let mut render = |budgets: &[usize]| {
@@ -59,7 +59,7 @@ fn region_boundaries_publish_exact_phase_under_every_output_budget(#[case] backe
 #[kithara::test]
 #[case::resample(StretchKind::Glide)]
 #[case::signalsmith(StretchKind::Signalsmith)]
-#[case::bungee(StretchKind::Bungee)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn fractional_region_crossing_is_an_exact_single_frame_run(#[case] backend: StretchKind) {
     let mut renderer = renderer(
         &WarpConfig::builder()
@@ -91,7 +91,7 @@ fn fractional_region_crossing_is_an_exact_single_frame_run(#[case] backend: Stre
 #[kithara::test]
 #[case::resample(StretchKind::Glide)]
 #[case::signalsmith(StretchKind::Signalsmith)]
-#[case::bungee(StretchKind::Bungee)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 #[kithara::hang_watchdog]
 fn a_ramp_in_a_region_keeps_the_exact_scaled_integral(#[case] backend: StretchKind) {
     let mut renderer = renderer(
@@ -134,6 +134,7 @@ fn a_ramp_in_a_region_keeps_the_exact_scaled_integral(#[case] backend: StretchKi
     }
 }
 
+#[cfg(all(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 #[kithara::test]
 #[kithara::hang_watchdog]
 fn interrupted_backend_crossfades_keep_the_current_curve_and_phase() {
@@ -634,7 +635,7 @@ fn mapped_varispeed_filters_above_the_output_nyquist() {
 
 #[kithara::test]
 #[case::signalsmith(StretchKind::Signalsmith)]
-#[case::bungee(StretchKind::Bungee)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn primed_native_unity_keeps_the_physical_impulse_at_its_source_frame(
     #[case] backend: StretchKind,
 ) {
@@ -686,7 +687,7 @@ fn assert_positions(output: &AudioChunk, at: usize, expected: impl Fn(usize) -> 
 #[case::identity(StretchKind::Identity)]
 #[case::resample(StretchKind::Glide)]
 #[case::signalsmith(StretchKind::Signalsmith)]
-#[case::bungee(StretchKind::Bungee)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn every_engine_publishes_its_output_source_mapping(#[case] backend: StretchKind) {
     let config = WarpConfig::builder().backend(backend).speed(1.0).build();
     let mut renderer = renderer(&config);
@@ -704,7 +705,7 @@ fn every_engine_publishes_its_output_source_mapping(#[case] backend: StretchKind
 
 #[kithara::test]
 #[case::signalsmith(StretchKind::Signalsmith)]
-#[case::bungee(StretchKind::Bungee)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn an_unbounded_output_budget_stays_within_the_resident_shape(#[case] backend: StretchKind) {
     let mut renderer = renderer(
         &WarpConfig::builder()
@@ -758,7 +759,7 @@ fn a_tighter_budget_replans_a_cached_quantum_before_rendering() {
 
 #[kithara::test]
 #[case::signalsmith(StretchKind::Signalsmith)]
-#[case::bungee(StretchKind::Bungee)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn switching_to_keylock_retains_the_full_reprime_history(#[case] backend: StretchKind) {
     let mut renderer = renderer(
         &WarpConfig::builder()
@@ -799,6 +800,7 @@ fn switching_to_keylock_retains_the_full_reprime_history(#[case] backend: Stretc
     assert!(output.samples.iter().all(|sample| sample.is_finite()));
 }
 
+#[cfg(all(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 #[kithara::test]
 #[kithara::hang_watchdog]
 fn native_replacement_is_source_aligned_and_quantum_independent() {
@@ -841,7 +843,7 @@ fn native_replacement_is_source_aligned_and_quantum_independent() {
 #[kithara::test]
 #[case::resample(StretchKind::Glide)]
 #[case::signalsmith(StretchKind::Signalsmith)]
-#[case::bungee(StretchKind::Bungee)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn fractional_mapping_continues_through_speed_and_backend_changes(#[case] backend: StretchKind) {
     let config = WarpConfig::builder()
         .backend(backend)
@@ -940,7 +942,7 @@ fn curve_output(
 
 #[kithara::test]
 #[case::signalsmith(StretchKind::Signalsmith)]
-#[case::bungee(StretchKind::Bungee)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn native_curves_are_exact_and_partition_independent(#[case] backend: StretchKind) {
     for (curve, integral) in [
         (steps(), steps_integral as fn(usize) -> f64),
@@ -960,7 +962,7 @@ fn native_curves_are_exact_and_partition_independent(#[case] backend: StretchKin
 
 #[kithara::test]
 #[case::signalsmith(StretchKind::Signalsmith)]
-#[case::bungee(StretchKind::Bungee)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn native_minimum_speed_keeps_exact_positions(#[case] backend: StretchKind) {
     let config = WarpConfig::builder()
         .backend(backend)
@@ -980,7 +982,7 @@ fn native_minimum_speed_keeps_exact_positions(#[case] backend: StretchKind) {
 
 #[kithara::test]
 #[case::signalsmith(StretchKind::Signalsmith)]
-#[case::bungee(StretchKind::Bungee)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn native_pitch_cascade_reports_its_full_latency(#[case] backend: StretchKind) {
     let mut single = renderer(
         &WarpConfig::builder()
@@ -1007,7 +1009,7 @@ fn native_pitch_cascade_reports_its_full_latency(#[case] backend: StretchKind) {
 
 #[kithara::test]
 #[case::signalsmith(StretchKind::Signalsmith)]
-#[case::bungee(StretchKind::Bungee)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn replacing_a_curve_during_drain_applies_at_the_next_frame(#[case] backend: StretchKind) {
     let config = WarpConfig::builder()
         .backend(backend)
@@ -1034,7 +1036,7 @@ fn replacing_a_curve_during_drain_applies_at_the_next_frame(#[case] backend: Str
 
 #[kithara::test]
 #[case::signalsmith(StretchKind::Signalsmith)]
-#[case::bungee(StretchKind::Bungee)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn repriming_reads_the_published_history_not_the_replacement_curve(#[case] backend: StretchKind) {
     let config = WarpConfig::builder()
         .backend(backend)
@@ -1140,7 +1142,7 @@ fn replacing_a_ramp_preserves_its_exact_current_speed_and_position() {
 
 #[kithara::test]
 #[case::signalsmith(StretchKind::Signalsmith)]
-#[case::bungee(StretchKind::Bungee)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn eof_drain_obeys_each_output_budget_and_keeps_mapping(#[case] backend: StretchKind) {
     let config = WarpConfig::builder()
         .backend(backend)
@@ -1210,7 +1212,7 @@ fn resampled_pcm_uses_the_published_fractional_phase() {
 
 #[kithara::test]
 #[case::signalsmith(StretchKind::Signalsmith)]
-#[case::bungee(StretchKind::Bungee)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn backend_retirement_does_not_blend_old_control_pcm_into_mapped_output(
     #[case] backend: StretchKind,
 ) {
@@ -1240,7 +1242,7 @@ fn backend_retirement_does_not_blend_old_control_pcm_into_mapped_output(
 #[kithara::test]
 #[case::resample(StretchKind::Glide)]
 #[case::signalsmith(StretchKind::Signalsmith)]
-#[case::bungee(StretchKind::Bungee)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn terminal_quantum_and_drain_do_not_map_padding_as_source(#[case] backend: StretchKind) {
     let config = WarpConfig::builder()
         .backend(backend)

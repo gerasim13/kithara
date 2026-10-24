@@ -10,3 +10,5 @@
 use kithara_test_dylib as _;
 
 mod http_client;
+#[cfg(all(feature = "flash", not(target_arch = "wasm32")))]
+mod supplied_transport;

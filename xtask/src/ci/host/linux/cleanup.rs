@@ -182,8 +182,9 @@ mod tests {
 
     /// The budget is held over every directory a job of either layout builds
     /// in, and nothing else: every directory a runner binds in, except Cargo's
-    /// home and the checkouts, and each xtask bootstrap the previous layout
-    /// keeps under its cache root.
+    /// home, the checkouts and kache's directory, which kache holds to its own
+    /// budget, and each xtask bootstrap the previous layout keeps under its
+    /// cache root.
     #[test]
     fn the_budget_covers_every_directory_a_job_builds_in() {
         use std::collections::BTreeSet;
@@ -202,7 +203,11 @@ mod tests {
             for (source, at) in Container::mounts(&host, runner) {
                 let source = PathBuf::from(source);
                 let at = Path::new(at);
-                if source.is_absolute() && at != home && !checkouts.starts_with(at) {
+                if source.is_absolute()
+                    && at != home
+                    && at != Path::new(consts::KACHE_MOUNT)
+                    && !checkouts.starts_with(at)
+                {
                     expected.insert(source.clone());
                 }
                 if let Ok(below) = layout.named.cache_root.strip_prefix(at) {

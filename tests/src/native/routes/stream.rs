@@ -157,6 +157,9 @@ async fn serve_media_segment(
                 if let Some(gate) = state.segment_gate(hls_spec, variant, segment) {
                     gate.mark_requested();
                     gate.wait_until_released().await;
+                    if let Some(response) = super::control::offline_response(state) {
+                        return response;
+                    }
                 }
                 let delay_ms = fixture.segment_delay_ms(variant, segment);
                 if delay_ms > 0 {

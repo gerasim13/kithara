@@ -711,49 +711,25 @@ fn every_lane_run_through_just_builds_in_a_root_beside_its_own_checkout() {
     }
 }
 
-/// The macOS host takes one job at a time per registration, so a job bound to
-/// one is checked out at the same path every time and finds the build root
-/// beside that checkout as its lane left it. A job any registration may take
-/// lands at whichever path is free, and its lane builds cold in the other
-/// root. A registration carries the host's tag with its number.
 #[test]
-fn every_job_on_the_macos_host_is_bound_to_one_of_its_registrations() {
-    const HOST: &str = "kithara-macos";
+fn macos_review_jobs_can_use_either_native_registration() {
     let config = GitlabConfig::load(workspace_root());
-    let mut bound = 0;
-    for document in &config.documents {
-        for (name, job) in mapping(document, "a GitLab pipeline file") {
-            let (Some(name), Some(job)) = (name.as_str(), job.as_mapping()) else {
-                continue;
-            };
-            if !job.contains_key("script") {
-                continue;
-            }
-            let tags: Vec<String> = config
-                .effective_value(name, "tags")
-                .and_then(|tags| tags.as_sequence().cloned())
-                .into_iter()
-                .flatten()
-                .filter_map(|tag| tag.as_str().map(str::to_owned))
-                .collect();
-            if !tags.iter().any(|tag| tag.starts_with(HOST)) {
-                continue;
-            }
-            let registration = match tags.as_slice() {
-                [tag] => tag
-                    .strip_prefix(HOST)
-                    .and_then(|number| number.strip_prefix('-'))
-                    .and_then(|number| number.parse::<usize>().ok()),
-                _ => None,
-            };
+    let registrations = [
+        ["kithara-macos", "kithara-macos-1"],
+        ["kithara-macos", "kithara-macos-2"],
+    ];
+    for job in ["apple:lint", "apple:test", "verdict"] {
+        let tags = config.effective_value(job, "tags").expect("job has tags");
+        let tags = tags.as_sequence().expect("job tags are a sequence");
+        assert!(!tags.is_empty(), "`{job}` must select the native pool");
+        for registration in registrations {
             assert!(
-                registration.is_some_and(|number| number >= 1),
-                "`{name}` may take any macOS registration: {tags:?}"
+                tags.iter()
+                    .all(|tag| tag.as_str().is_some_and(|tag| registration.contains(&tag))),
+                "`{job}` cannot use free registration {registration:?}: {tags:?}"
             );
-            bound += 1;
         }
     }
-    assert!(bound > 0, "no job runs on the macOS host");
 }
 
 #[test]

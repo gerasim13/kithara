@@ -40,24 +40,15 @@ enum SourceSize {
 struct DataSourceCtx {
     source: BoxedSource,
     error: Option<io::Error>,
-    /// Container recognition sees only the separately supplied init segment.
-    init_end: Option<u64>,
     size: SourceSize,
 }
 
 impl MediaDataSource for DataSourceCtx {
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> Option<usize> {
-        let available = self.init_end.map_or(buf.len(), |end| {
-            usize::try_from(end.saturating_sub(offset))
-                .map_or(buf.len(), |bytes| bytes.min(buf.len()))
-        });
-        if available == 0 {
-            return Some(0);
-        }
         let result = self
             .source
             .seek(SeekFrom::Start(offset))
-            .and_then(|_| self.source.read(&mut buf[..available]));
+            .and_then(|_| self.source.read(buf));
         match result {
             Ok(read) => Some(read),
             Err(error) => {
@@ -68,9 +59,6 @@ impl MediaDataSource for DataSourceCtx {
     }
 
     fn size(&self) -> Option<u64> {
-        if let Some(end) = self.init_end {
-            return Some(end);
-        }
         match &self.size {
             SourceSize::Fixed(size) => *size,
             SourceSize::Published(length) => match length.load(Ordering::Acquire) {
@@ -113,7 +101,6 @@ impl AndroidMediaExtractor {
     pub(crate) fn open(
         mut source: BoxedSource,
         byte_len: Option<Arc<AtomicU64>>,
-        init_end: Option<u64>,
     ) -> DecodeResult<Self> {
         let size = match byte_len {
             Some(length) => SourceSize::Published(length),
@@ -122,7 +109,6 @@ impl AndroidMediaExtractor {
         let ctx = DataSourceCtx {
             source,
             size,
-            init_end,
             error: None,
         };
 
@@ -235,7 +221,6 @@ impl AndroidMediaExtractor {
         Ok(Some((landed_at, landed_byte)))
     }
 
-    /// Track selection can cache EOF at the init boundary.
     pub(crate) fn select_audio_track(&mut self) -> DecodeResult<(TrackFormatInfo, OwnedFormat)> {
         for i in 0..self.inner.track_count() {
             let (info, format) = self.track_info(i)?;
@@ -247,9 +232,6 @@ impl AndroidMediaExtractor {
                         encoding: output.pcm_encoding,
                         spec: output_spec(&output)?,
                     });
-                }
-                if self.inner.source_mut().init_end.take().is_some() {
-                    self.cursor = SampleCursor::Recover { at: Duration::ZERO };
                 }
                 return Ok((info, format));
             }

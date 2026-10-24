@@ -82,6 +82,10 @@ impl Container<'_> {
                     .into_owned(),
                 consts::BUILD_SLOTS_MOUNT,
             ),
+            (
+                Self::kache(host, runner).to_string_lossy().into_owned(),
+                consts::KACHE_MOUNT,
+            ),
             ("kithara-ci-fixtures".to_owned(), "/cache/fixtures"),
             // Every runner shares the one directory `production/main` claims
             // lane directories in, as main mounts it.
@@ -105,6 +109,13 @@ impl Container<'_> {
     pub(super) fn build_slots(host: &LinuxHost, runner: &LinuxRunner) -> PathBuf {
         host.cache_root
             .join(consts::BUILD_SLOTS_DIR)
+            .join(runner.cache_trust.as_str())
+    }
+
+    /// Where the runners of one trust keep kache's host file and store.
+    pub(super) fn kache(host: &LinuxHost, runner: &LinuxRunner) -> PathBuf {
+        host.cache_root
+            .join(consts::KACHE_DIR)
             .join(runner.cache_trust.as_str())
     }
 
@@ -141,6 +152,8 @@ impl Container<'_> {
             .map(|entry| (*entry).to_owned())
             .collect();
         environment.extend([
+            // Containers own CPU admission; their kache store is shared.
+            "KACHE_SCHEDULER=0".to_owned(),
             format!("CARGO_HOME={}", consts::CARGO_HOME_MOUNT),
             format!("CARGO_TARGET_DIR={}", root.display()),
             format!("{}={}", consts::BUILD_SLOTS_ENV, consts::BUILD_SLOTS_MOUNT),
@@ -148,6 +161,12 @@ impl Container<'_> {
             format!(
                 "KITHARA_XTASK_TARGET={}",
                 root.join(consts::XTASK_BUILD).display()
+            ),
+            format!(
+                "KACHE_HOST_CONFIG={}",
+                Path::new(consts::KACHE_MOUNT)
+                    .join(consts::KACHE_HOST_FILE)
+                    .display()
             ),
             format!(
                 "SCCACHE_IDLE_TIMEOUT={SCCACHE_IDLE_TIMEOUT}",
@@ -353,6 +372,47 @@ pub(crate) mod tests {
                     second.name
                 );
             }
+        }
+    }
+
+    /// Every compile in a container reaches kache's store and remote through
+    /// the host file the runner writes, whatever command started it: a stress
+    /// run or the xtask bootstrap compiled cold into a store thrown away with
+    /// the container. The store is one per trust, as the Cargo home is.
+    #[test]
+    fn every_compile_reaches_its_trusts_kache() {
+        let mut host = host_fixture();
+        host.runners[0].cache_trust = CacheTrust::Trusted;
+        let store =
+            |runner: &LinuxRunner| mounted_at(&host, runner, Path::new(consts::KACHE_MOUNT));
+
+        for runner in &host.runners {
+            assert_eq!(
+                told(runner, "KACHE_HOST_CONFIG"),
+                Path::new(consts::KACHE_MOUNT).join(consts::KACHE_HOST_FILE),
+                "{}",
+                runner.name
+            );
+            assert_eq!(
+                store(runner),
+                host.cache_root
+                    .join(consts::KACHE_DIR)
+                    .join(runner.cache_trust.as_str())
+                    .to_string_lossy()
+            );
+        }
+    }
+
+    #[test]
+    fn containers_own_compiler_cpu_admission() {
+        for runner in &host_fixture().runners {
+            assert!(
+                Container::environment(runner)
+                    .iter()
+                    .any(|entry| entry == "KACHE_SCHEDULER=0"),
+                "{} shares kache's CPU scheduler with other containers",
+                runner.name
+            );
         }
     }
 

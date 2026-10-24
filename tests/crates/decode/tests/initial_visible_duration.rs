@@ -85,7 +85,7 @@ async fn initial_visible_duration_matches_the_built_ruler_before_eof(#[case] ass
 
     #[cfg(not(target_os = "android"))]
     if asset == SignalAsset::PROFILE_M4A_AAC_44100_2CH {
-        assert_complete_aac_presentation(&body, url.clone()).await;
+        assert_complete_aac_presentation(asset, &body, url.clone()).await;
     }
 
     let file = FileConfig::for_src(url.into())
@@ -235,12 +235,13 @@ async fn initial_visible_duration_matches_the_built_ruler_before_eof(#[case] ass
 
 #[cfg(not(target_os = "android"))]
 #[kithara::hang_watchdog]
-async fn assert_complete_aac_presentation(bytes: &[u8], url: url::Url) {
+async fn assert_complete_aac_presentation(asset: SignalAsset, bytes: &[u8], url: url::Url) {
     let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("AAC fixture rate"));
     let origin = spec.duration_for(1_024).expect("MP4 edit origin");
     let endpoint = Duration::from_secs(6);
-    let reference = kithara_integration_tests::pcm_oracle::decode_native(bytes)
-        .await
+    let fixture =
+        kithara_test_fixtures::assets::by_name(asset.name()).expect("registered AAC fixture");
+    let reference = kithara_integration_tests::pcm_oracle::prepared_native(&fixture)
         .expect("independent native FFmpeg AAC decode");
     assert_eq!((reference.sample_rate, reference.channels), (44_100, 2));
     assert_eq!(reference.samples.len(), 264_600 * 2);
@@ -384,11 +385,17 @@ async fn assert_complete_aac_presentation(bytes: &[u8], url: url::Url) {
     DecoderBackend::default()
 )]
 #[case::aac(SignalAsset::PROFILE_M4A_AAC_44100_2CH, DecoderBackend::default())]
-#[case::symphonia_mp3(
-    SignalAsset::PROFILE_MP3_LIBMP3LAME_44100_2CH,
-    DecoderBackend::Symphonia
+#[cfg_attr(
+    not(target_os = "android"),
+    case::symphonia_mp3(
+        SignalAsset::PROFILE_MP3_LIBMP3LAME_44100_2CH,
+        DecoderBackend::Symphonia
+    )
 )]
-#[case::symphonia_aac(SignalAsset::PROFILE_M4A_AAC_44100_2CH, DecoderBackend::Symphonia)]
+#[cfg_attr(
+    not(target_os = "android"),
+    case::symphonia_aac(SignalAsset::PROFILE_M4A_AAC_44100_2CH, DecoderBackend::Symphonia)
+)]
 async fn preloaded_original_pcm_preserves_its_origin_through_the_first_raw_seek(
     #[case] asset: SignalAsset,
     #[case] backend: DecoderBackend,
@@ -424,9 +431,12 @@ async fn preloaded_original_pcm_preserves_its_origin_through_the_first_raw_seek(
     else {
         panic!("initial decoder must report its backend");
     };
+    #[cfg(not(target_os = "android"))]
     if matches!(backend, DecoderBackend::Symphonia) {
         assert_eq!(actual, ObservedBackend::Symphonia);
     }
+    #[cfg(target_os = "android")]
+    assert_eq!(actual, ObservedBackend::Android);
     let mut audio_events = audio.events::<AudioEvent>();
     let reference_file = FileConfig::for_src(server.signal(asset).into())
         .store(

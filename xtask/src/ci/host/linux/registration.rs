@@ -8,8 +8,14 @@ use reqwest::{
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-use super::profile::{LinuxHost, LinuxRunner, WindowsGuest};
-use crate::{ci::cache::client_environment, consts};
+use super::{
+    container::Container,
+    profile::{LinuxHost, LinuxRunner, WindowsGuest},
+};
+use crate::{
+    ci::{cache::client_environment, kache},
+    consts,
+};
 
 #[derive(Deserialize)]
 struct Registration {
@@ -88,6 +94,7 @@ pub(super) fn configure(host: &LinuxHost, runner: &LinuxRunner, env_file: &Path)
         env_file,
         &runtime_environment(runner, &config.encoded_jit_config)?,
     )?;
+    write_kache(host, runner)?;
     info!(runner = runner.name, "runner configuration written");
     Ok(())
 }
@@ -115,6 +122,35 @@ fn runtime_environment(runner: &LinuxRunner, jit_config: &str) -> Result<String>
         writeln!(contents, "{name}={value}")?;
     }
     Ok(contents)
+}
+
+/// Write kache's host file for `runner`'s trust: on every start, as the store
+/// environment is, so a bucket or budget the host changed reaches the next job.
+///
+/// Every runner of a trust writes the same file, and they start together, so
+/// it is replaced whole: a container never reads half of one.
+pub(super) fn write_kache(host: &LinuxHost, runner: &LinuxRunner) -> Result<()> {
+    let store = client_environment(&runner.sccache_s3_env_file).with_context(|| {
+        format!(
+            "reading the S3 cache environment for Linux runner {}",
+            runner.name
+        )
+    })?;
+    let contents = kache::host_config(
+        &store,
+        &Path::new(consts::KACHE_MOUNT).join(consts::KACHE_STORE),
+        &host.compiler_cache_size,
+    )?;
+    let directory = Container::kache(host, runner);
+    fs::create_dir_all(&directory).with_context(|| format!("creating {}", directory.display()))?;
+    let mut staged = tempfile::NamedTempFile::new_in(&directory)
+        .with_context(|| format!("staging kache's host file in {}", directory.display()))?;
+    std::io::Write::write_all(&mut staged, contents.as_bytes())?;
+    let path = directory.join(consts::KACHE_HOST_FILE);
+    staged
+        .persist(&path)
+        .with_context(|| format!("writing {}", path.display()))?;
+    super::permissions::set_mode(&path, consts::WORLD_READABLE)
 }
 
 /// Mint the token a machine registers itself with, once.
@@ -257,9 +293,12 @@ fn write_secret(path: &Path, contents: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Registration, is_prunable, runtime_environment};
+    use super::{Registration, is_prunable, runtime_environment, write_kache};
     use crate::{
-        ci::{environment::CacheTrust, host::linux::profile::tests::host_fixture},
+        ci::{
+            environment::CacheTrust,
+            host::linux::{container::Container, profile::tests::host_fixture},
+        },
         consts,
     };
 
@@ -322,6 +361,39 @@ mod tests {
         );
         assert!(review.contains("KITHARA_CACHE_TRUST=review\n"), "{review}");
         assert!(!review.contains("KITHARA_CACHE_TRUST=trusted"), "{review}");
+    }
+
+    /// A runner's start leaves kache's host file where its container mounts
+    /// its trust's kache directory: the trust's bucket and a store inside the
+    /// mount, held to the profile's budget.
+    #[test]
+    fn a_runner_start_names_its_trusts_kache() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let mut host = host_fixture();
+        host.cache_root = directory.path().join("cache");
+        host.runners[0].sccache_s3_env_file = host_store(directory.path());
+
+        write_kache(&host, &host.runners[0]).expect("the host file is written");
+
+        let written = std::fs::read_to_string(
+            Container::kache(&host, &host.runners[0]).join(consts::KACHE_HOST_FILE),
+        )
+        .expect("the host file is readable");
+        let config: toml::Table = toml::from_str(&written).expect("the host file is TOML");
+        let cache = config["cache"].as_table().expect("a cache table");
+        assert_eq!(
+            cache["local_store"].as_str().map(std::path::PathBuf::from),
+            Some(std::path::Path::new(consts::KACHE_MOUNT).join(consts::KACHE_STORE))
+        );
+        assert_eq!(
+            cache["local_max_size"].as_str(),
+            Some(host.compiler_cache_size.as_str())
+        );
+        assert_eq!(
+            cache["remote"]["bucket"].as_str(),
+            Some("kithara-review"),
+            "{written}"
+        );
     }
 
     fn runner(status: &str, busy: bool) -> Registration {

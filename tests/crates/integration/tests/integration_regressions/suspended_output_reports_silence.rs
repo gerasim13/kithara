@@ -1,10 +1,10 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::num::NonZeroU32;
-
-use kithara::{events::TrackId, play::InterruptionKind, signal::AudioSpec};
-use kithara_integration_tests::offline::{OfflinePlayer, OfflinePlayerOptions};
-use kithara_test_fixtures::integration_fixtures::constant_half;
+use kithara::play::InterruptionKind;
+use kithara_integration_tests::offline::{
+    OfflinePlayer, OfflinePlayerOptions, append_source_loaded,
+};
+use kithara_test_fixtures::assets;
 
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
@@ -17,10 +17,8 @@ const WARMUP_BLOCKS: usize = 8;
 /// what an interrupted output does, and the first render afterwards is the
 /// output coming back.
 #[kithara::test(tokio)]
-async fn a_suspended_output_reports_silence_until_the_rt_processor_runs_again(
-    constant_half: &'static [u8],
-) {
-    let harness = loaded_harness(constant_half).await;
+async fn a_suspended_output_reports_silence_until_the_rt_processor_runs_again() {
+    let harness = loaded_harness().await;
     assert_eq!(harness.player().rate(), 1.0);
     assert!(harness.player().is_playing());
 
@@ -80,20 +78,18 @@ async fn a_suspended_output_reports_silence_until_the_rt_processor_runs_again(
     harness.close().await;
 }
 
-async fn loaded_harness(constant_half: &'static [u8]) -> OfflinePlayer {
+async fn loaded_harness() -> OfflinePlayer {
     let harness =
         OfflinePlayer::with_sample_rate(OfflinePlayerOptions::builder().build(), SAMPLE_RATE).await;
-    let deck_source = harness.pcm_deck(Box::new(kithara::audio::mock::TestPcmReader::with_pcm(
-        AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate")),
-        1.0,
-        constant_half,
-    )));
+    let deck_source = assets::constant_half_wav_default()
+        .path()
+        .expect("prepared float WAV has a store path")
+        .to_str()
+        .expect("UTF-8 fixture path")
+        .to_owned();
+    let deck_id = append_source_loaded(&harness, harness.player(), deck_source).await;
     harness
         .with_queue(move |player| {
-            let deck_id = TrackId::allocate();
-            player
-                .append_with_id(deck_id, deck_source)
-                .expect("append PCM deck");
             player
                 .select(deck_id, kithara::queue::Transition::None)
                 .expect("select the item");

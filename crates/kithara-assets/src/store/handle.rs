@@ -211,19 +211,6 @@ where
         delegate_to_store!(self, open_resource, key, identity)
     }
 
-    /// Open a resource with processing context.
-    ///
-    /// # Errors
-    /// Returns `AssetsError` if the resource cannot be opened.
-    pub fn open_resource_with_ctx(
-        &self,
-        key: &ResourceKey,
-        identity: Option<&RequestIdentity>,
-        ctx: Option<ProcessCtx>,
-    ) -> AssetsResult<AssetReader<S>> {
-        delegate_to_store!(self, open_resource_with_ctx, key, identity, ctx)
-    }
-
     /// Remove a single resource from the store. The concrete store
     /// dispatches through the canonical asset deleter
     /// channel, which atomically clears the matching

@@ -69,6 +69,7 @@ pub(super) fn prepare(
     fs::write(
         evidence.join("package-selection.json"),
         serde_json::to_vec_pretty(&serde_json::json!({
+            "scope": "component-coverage",
             "lane": android.test_lane,
             "packages": super::command_packages(&command)?,
         }))?,
@@ -366,10 +367,45 @@ fn loaded_images(
     binaries
         .into_iter()
         .map(|(binary, library)| {
-            let transport = binding.binds(&staged_library(libraries, &library))?;
-            Ok((binary, Image { library, transport }))
+            let staged = staged_library(libraries, &library);
+            let transport = binding.binds(&staged)?;
+            let executable = is_executable(tools, &staged, Some(cancel))?;
+            if executable && transport {
+                bail!(
+                    "{} needs host transport without an Android context",
+                    staged.display()
+                );
+            }
+            Ok((
+                binary,
+                Image {
+                    library,
+                    transport,
+                    executable,
+                },
+            ))
         })
         .collect()
+}
+
+fn is_executable(tools: &Path, image: &Path, cancel: Option<&child::Cancel>) -> Result<bool> {
+    let output = child::output(
+        Command::new(tools.join("llvm-readobj"))
+            .arg("--program-headers")
+            .arg(image),
+        cancel,
+        Duration::from_secs(60),
+    )?;
+    if !output.status.success() {
+        bail!(
+            "reading {} program headers failed: {}",
+            image.display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(String::from_utf8(output.stdout)?
+        .lines()
+        .any(|line| line.trim() == "Type: PT_INTERP (0x3)"))
 }
 
 struct Configured {
@@ -415,6 +451,8 @@ fn configure(
         .open(cache.join("run.lock"))?;
     let lease = FileLock::try_exclusive(lock)
         .context("another Android baseline owns this native build cache")?;
+    let linker = cache.join("linker.sh");
+    fs::copy(source.join("native/linker.sh"), &linker)?;
     let cargo_target = cache.join("cargo");
     let mut metadata_command = Command::new("cargo");
     metadata_command
@@ -469,7 +507,7 @@ fn configure(
     environment.remove(&format!("CARGO_TARGET_{target_key}_RUNNER"));
     environment.insert(
         format!("CARGO_TARGET_{target_key}_LINKER"),
-        source.join("native/linker.sh").display().to_string(),
+        linker.display().to_string(),
     );
     environment.insert(
         "KITHARA_ANDROID_LINK_CONFIG".into(),
@@ -546,6 +584,15 @@ fn install(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn packaged_images_retain_their_elf_runtime() {
+        let tool = crate::sysroot::tool("llvm-readobj").expect("llvm-tools are installed");
+        let tools = tool.parent().expect("LLVM tool directory");
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/android-runtime");
+        assert!(is_executable(tools, &fixtures.join("executable.so"), None).unwrap());
+        assert!(!is_executable(tools, &fixtures.join("context.so"), None).unwrap());
+    }
 
     fn inventory(entries: &str) -> BinaryList {
         serde_json::from_str(&format!(r#"{{"rust-binaries": {{{entries}}}}}"#))

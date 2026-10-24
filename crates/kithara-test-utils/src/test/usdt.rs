@@ -222,6 +222,12 @@ pub fn last(probe: &str) -> Option<ProbeEvent> {
     lock(&STATE).tally(probe).map(|tally| tally.latest)
 }
 
+/// Number of firings of `probe`, including any past the history cap.
+#[must_use]
+pub fn count(probe: &str) -> usize {
+    lock(&STATE).tally(probe).map_or(0, |tally| tally.fired)
+}
+
 /// Every firing of `probe` recorded by the live [`Scope`], in order. Fails
 /// only when that probe overflowed, whatever the other probes did.
 #[must_use]
@@ -448,7 +454,7 @@ impl Visit for FieldVisitor<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_EVENTS, events, events_of, recorded, scope};
+    use super::{MAX_EVENTS, count, events, events_of, recorded, scope};
 
     fn fire(probe: &'static str, value: u64) {
         tracing::event!(target: "kithara_test_probe", tracing::Level::TRACE, probe = probe, value = value);
@@ -458,8 +464,10 @@ mod tests {
     fn a_scope_records_every_probe_in_order() {
         crate::test::setup_tracing();
         let trace = scope();
+        assert_eq!(count("first"), 0);
         fire("first", 1);
         fire("second", 2);
+        assert_eq!(count("first"), 1);
 
         let events = trace.events();
         drop(trace);
@@ -478,6 +486,7 @@ mod tests {
         }
 
         let last = trace.last("tick");
+        assert_eq!(count("tick"), MAX_EVENTS + 1);
         drop(trace);
 
         assert_eq!(

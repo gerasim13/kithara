@@ -1,36 +1,29 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::num::NonZeroU32;
-
 use kithara::{
     self,
     events::TrackId,
     host::Tap,
     play::{PlayError, Resource, SessionError},
-    signal::AudioSpec,
+    queue::TrackSource,
 };
-use kithara_integration_tests::offline::{
-    OfflinePlayer, OfflinePlayerOptions, resource_from_reader,
+use kithara_integration_tests::{
+    bufpool_ext::TestPools,
+    offline::{OfflinePlayer, OfflinePlayerOptions, asset_source},
 };
-use kithara_test_fixtures::integration_fixtures::constant_half;
+use kithara_test_fixtures::assets;
 
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
-const TRACK_SECS: f64 = 0.1;
 const BLOCKS: usize = 20;
 pub(super) const ROOMY_CAPACITY: usize = 65_536;
 
-fn make_resource(constant_half: &'static [u8]) -> Resource {
-    let spec = AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate"));
-    resource_from_reader(kithara::audio::mock::TestPcmReader::with_pcm(
-        spec,
-        TRACK_SECS,
-        constant_half,
-    ))
-}
-
-async fn play_constant(harness: OfflinePlayer, constant_half: &'static [u8]) -> OfflinePlayer {
-    play_resource(harness, move || make_resource(constant_half)).await
+async fn play_constant(harness: OfflinePlayer) -> OfflinePlayer {
+    play_source(
+        harness,
+        asset_source(&assets::fixed_constant_wav_cd_half_4410()).into(),
+    )
+    .await
 }
 
 /// Queues the resource `make` builds on `harness`'s player, plays it and
@@ -40,6 +33,13 @@ pub(super) async fn play_resource(
     make: impl FnOnce() -> Resource + Send + 'static,
 ) -> OfflinePlayer {
     let deck_source = harness.pcm_deck((make()).into());
+    play_source(harness, deck_source).await
+}
+
+pub(super) async fn play_source(
+    harness: OfflinePlayer,
+    deck_source: TrackSource<TestPools>,
+) -> OfflinePlayer {
     let deck_id = harness
         .with_queue(move |player| {
             let deck_id = TrackId::allocate();
@@ -65,10 +65,10 @@ pub(super) async fn play_resource(
     harness
 }
 
-pub(super) async fn playing_harness(constant_half: &'static [u8]) -> OfflinePlayer {
+pub(super) async fn playing_harness() -> OfflinePlayer {
     let harness =
         OfflinePlayer::with_sample_rate(OfflinePlayerOptions::builder().build(), SAMPLE_RATE).await;
-    play_constant(harness, constant_half).await
+    play_constant(harness).await
 }
 
 pub(super) async fn render_blocks(harness: &OfflinePlayer, blocks: usize) -> Vec<f32> {
@@ -80,8 +80,8 @@ pub(super) async fn render_blocks(harness: &OfflinePlayer, blocks: usize) -> Vec
     rendered
 }
 
-async fn render_with_tap(constant_half: &'static [u8]) -> (Vec<f32>, Vec<f32>, u64) {
-    let harness = playing_harness(constant_half).await;
+async fn render_with_tap() -> (Vec<f32>, Vec<f32>, u64) {
+    let harness = playing_harness().await;
     let mut tap = harness
         .host()
         .attach_tap(Tap::Master, ROOMY_CAPACITY)
@@ -95,8 +95,8 @@ async fn render_with_tap(constant_half: &'static [u8]) -> (Vec<f32>, Vec<f32>, u
 }
 
 #[kithara::test(tokio)]
-async fn zero_output_sink_is_processed_beside_graph_out(constant_half: &'static [u8]) {
-    let (rendered, tapped, drops) = render_with_tap(constant_half).await;
+async fn zero_output_sink_is_processed_beside_graph_out() {
+    let (rendered, tapped, drops) = render_with_tap().await;
 
     assert_eq!(
         rendered.len(),
@@ -112,8 +112,8 @@ async fn zero_output_sink_is_processed_beside_graph_out(constant_half: &'static 
 }
 
 #[kithara::test(tokio)]
-async fn mix_tap_matches_graph_out_bit_exactly(constant_half: &'static [u8]) {
-    let (rendered, tapped, _) = render_with_tap(constant_half).await;
+async fn mix_tap_matches_graph_out_bit_exactly() {
+    let (rendered, tapped, _) = render_with_tap().await;
 
     assert!(
         rendered.iter().any(|sample| sample.abs() > 0.0),
@@ -127,7 +127,7 @@ async fn mix_tap_matches_graph_out_bit_exactly(constant_half: &'static [u8]) {
 }
 
 #[kithara::test(tokio)]
-async fn a_tap_armed_before_playback_reaches_the_graph_it_waits_for(constant_half: &'static [u8]) {
+async fn a_tap_armed_before_playback_reaches_the_graph_it_waits_for() {
     let harness =
         OfflinePlayer::with_sample_rate(OfflinePlayerOptions::builder().build(), SAMPLE_RATE).await;
     let mut tap = harness
@@ -137,7 +137,7 @@ async fn a_tap_armed_before_playback_reaches_the_graph_it_waits_for(constant_hal
         .expect("arm the mix tap before a session output exists");
     assert!(tap.drain().is_empty(), "an idle session feeds nothing");
 
-    let deck_source = harness.pcm_deck((make_resource(constant_half)).into());
+    let deck_source = asset_source(&assets::fixed_constant_wav_cd_half_4410());
     let deck_id = harness
         .with_queue(move |player| {
             let deck_id = TrackId::allocate();
@@ -169,8 +169,8 @@ async fn a_tap_armed_before_playback_reaches_the_graph_it_waits_for(constant_hal
 }
 
 #[kithara::test(tokio)]
-async fn the_tap_keeps_feeding_across_a_device_route_restart(constant_half: &'static [u8]) {
-    let harness = playing_harness(constant_half).await;
+async fn the_tap_keeps_feeding_across_a_device_route_restart() {
+    let harness = playing_harness().await;
     let mut tap = harness
         .host()
         .attach_tap(Tap::Master, ROOMY_CAPACITY)
@@ -199,10 +199,10 @@ async fn the_tap_keeps_feeding_across_a_device_route_restart(constant_half: &'st
 }
 
 #[kithara::test(tokio)]
-async fn mix_tap_overflow_drops_exactly_the_capacity_deficit(constant_half: &'static [u8]) {
+async fn mix_tap_overflow_drops_exactly_the_capacity_deficit() {
     const TIGHT_CAPACITY: usize = 2_048;
 
-    let harness = playing_harness(constant_half).await;
+    let harness = playing_harness().await;
     let mut tap = harness
         .host()
         .attach_tap(Tap::Master, TIGHT_CAPACITY)
@@ -227,8 +227,8 @@ async fn mix_tap_overflow_drops_exactly_the_capacity_deficit(constant_half: &'st
 }
 
 #[kithara::test(tokio)]
-async fn second_enable_is_rejected_and_disable_releases_the_writer(constant_half: &'static [u8]) {
-    let harness = playing_harness(constant_half).await;
+async fn second_enable_is_rejected_and_disable_releases_the_writer() {
+    let harness = playing_harness().await;
     let tap = harness
         .host()
         .attach_tap(Tap::Master, ROOMY_CAPACITY)
@@ -267,8 +267,8 @@ async fn second_enable_is_rejected_and_disable_releases_the_writer(constant_half
 }
 
 #[kithara::test(tokio)]
-async fn the_master_and_output_taps_run_together(constant_half: &'static [u8]) {
-    let harness = playing_harness(constant_half).await;
+async fn the_master_and_output_taps_run_together() {
+    let harness = playing_harness().await;
     let mut master = harness
         .host()
         .attach_tap(Tap::Master, ROOMY_CAPACITY)

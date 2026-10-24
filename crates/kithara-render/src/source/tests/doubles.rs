@@ -20,12 +20,6 @@ use kithara_warp::StretchKind;
     feature = "stretch-glide"
 ))]
 use kithara_warp::WarpCapabilities;
-#[cfg(any(
-    feature = "stretch-signalsmith",
-    feature = "stretch-bungee",
-    feature = "stretch-glide"
-))]
-use num_traits::AsPrimitive;
 
 use super::{consts, *};
 use crate::{LaneCommand, LaneProtocol};
@@ -663,19 +657,9 @@ pub(in crate::source) fn emit(
 /// frequency of its own, so audio rendered from another frame decorrelates.
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 pub(in crate::source) fn chirp(frames: usize) -> Vec<f32> {
-    let rate = 44_100.0_f64;
-    let length: f64 = frames.as_();
-    let span = length / rate;
-    (0..frames)
-        .flat_map(|frame| {
-            let frame: f64 = frame.as_();
-            let time = frame / rate;
-            let phase = std::f64::consts::TAU
-                * time.mul_add(220.0, (1_760.0 - 220.0) / (2.0 * span) * time * time);
-            let sample: f32 = (0.5 * phase.sin()).as_();
-            [sample, sample]
-        })
-        .collect()
+    let signal = kithara_test_fixtures::unit_fixtures::render_chirp();
+    assert_eq!(signal.len(), frames * 2);
+    signal
 }
 
 /// A lane frame as an index into [`lane_pcm`].
@@ -733,12 +717,7 @@ pub(in crate::source) fn alignment(
 /// sine's own step.
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 pub(in crate::source) fn sine(frames: usize) -> Vec<f32> {
-    (0..frames)
-        .flat_map(|frame| {
-            let frame: f64 = frame.as_();
-            let phase = std::f64::consts::TAU * 440.0 * frame / 44_100.0;
-            let sample: f32 = (0.5 * phase.sin()).as_();
-            [sample, sample]
-        })
-        .collect()
+    let signal = kithara_test_fixtures::unit_fixtures::render_sine();
+    assert_eq!(signal.len(), frames * 2);
+    signal
 }

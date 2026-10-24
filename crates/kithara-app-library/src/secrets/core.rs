@@ -27,32 +27,44 @@ impl Secrets {
     /// [`SecretError::Unsupported`].
     #[must_use]
     pub fn native(overlay: Option<&Path>) -> Self {
-        cfg_select! {
-            any(feature = "keystore", target_arch = "wasm32") => {
-                let _ = overlay;
-                cfg_select! {
-                    all(feature = "keystore", target_os = "macos") => {
-                        Self::new(apple_native_keyring_store::keychain::Store::new())
-                    }
-                    all(feature = "keystore", target_os = "windows") => {
-                        Self::new(windows_native_keyring_store::Store::new())
-                    }
-                    all(
-                        feature = "keystore",
-                        unix,
-                        not(any(target_os = "macos", target_os = "ios", target_os = "android"))
-                    ) => Self::new(dbus_secret_service_keyring_store::Store::new()),
-                    _ => Self {
-                        store: Err(SecretError::Unsupported),
-                    },
+        #[cfg(any(feature = "keystore", target_arch = "wasm32"))]
+        {
+            let _ = overlay;
+            #[cfg(all(feature = "keystore", target_os = "macos"))]
+            {
+                Self::new(apple_native_keyring_store::keychain::Store::new())
+            }
+            #[cfg(all(feature = "keystore", target_os = "windows"))]
+            {
+                Self::new(windows_native_keyring_store::Store::new())
+            }
+            #[cfg(all(
+                feature = "keystore",
+                unix,
+                not(any(target_os = "macos", target_os = "ios", target_os = "android"))
+            ))]
+            {
+                Self::new(dbus_secret_service_keyring_store::Store::new())
+            }
+            #[cfg(not(all(
+                feature = "keystore",
+                any(target_os = "macos", target_os = "windows", unix),
+                not(any(target_os = "ios", target_os = "android"))
+            )))]
+            {
+                Self {
+                    store: Err(SecretError::Unsupported),
                 }
             }
-            _ => overlay.map_or(
+        }
+        #[cfg(not(any(feature = "keystore", target_arch = "wasm32")))]
+        {
+            overlay.map_or(
                 Self {
                     store: Err(SecretError::Unsupported),
                 },
                 |path| Self::new(Ok(super::file::Store::new(path))),
-            ),
+            )
         }
     }
 

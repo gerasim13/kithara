@@ -1,15 +1,8 @@
-#[cfg(feature = "render")]
-use {
-    kithara_bufpool::{HasPool, PoolRegion},
-    kithara_signal::AudioSpec,
-};
+use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_signal::AudioSpec;
 
 use super::WarpConfig;
-use crate::RenderPublisher;
-#[cfg(feature = "render")]
-use crate::RenderReader;
-#[cfg(feature = "render")]
-use crate::WarpRenderer;
+use crate::{RenderPublisher, RenderReader, WarpRenderer};
 
 /// Resident warp actuator around one decoded-audio source.
 ///
@@ -21,7 +14,6 @@ use crate::WarpRenderer;
 pub struct Warp<S> {
     config: WarpConfig,
     publisher: Option<RenderPublisher>,
-    #[cfg(feature = "render")]
     reader: RenderReader,
     #[field(get, get_mut)]
     source: S,
@@ -32,11 +24,9 @@ impl<S> Warp<S> {
     #[must_use]
     pub fn new(source: S, config: &WarpConfig) -> Self {
         let publisher = RenderPublisher::default();
-        #[cfg(feature = "render")]
         let reader = publisher.reader();
         Self {
             source,
-            #[cfg(feature = "render")]
             reader,
             config: config.clone(),
             publisher: Some(publisher),
@@ -44,7 +34,6 @@ impl<S> Warp<S> {
     }
 
     /// Creates the worker-side renderer paired with this Warp facade.
-    #[cfg(feature = "render")]
     #[must_use]
     pub fn renderer<P>(&self, spec: AudioSpec, pools: PoolRegion<P>) -> WarpRenderer<P>
     where

@@ -390,11 +390,9 @@ dependencies = [
 [[package]]
 name = "askama_derive"
 version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "129397200fe83088e8a68407a8e2b1f826cf0086b21ccdb866a722c8bcd3a94f"
+source = "git+https://github.com/gerasim13/askama?rev=8031efd8e5089b654bd9e750cb367a594d6edf7e#8031efd8e5089b654bd9e750cb367a594d6edf7e"
 dependencies = [
  "askama_parser",
- "basic-toml",
  "memchr",
  "proc-macro2",
  "quote",
@@ -402,13 +400,13 @@ dependencies = [
  "serde",
  "serde_derive",
  "syn 2.0.119",
+ "toml 1.1.7+spec-1.1.0",
 ]
 
 [[package]]
 name = "askama_parser"
 version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d6ab5630b3d5eaf232620167977f95eb51f3432fc76852328774afbd242d4358"
+source = "git+https://github.com/gerasim13/askama?rev=8031efd8e5089b654bd9e750cb367a594d6edf7e#8031efd8e5089b654bd9e750cb367a594d6edf7e"
 dependencies = [
  "memchr",
  "serde",
@@ -642,15 +640,6 @@ name = "base64"
 version = "0.23.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
-
-[[package]]
-name = "basic-toml"
-version = "0.1.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba62675e8242a4c4e806d12f11d136e626e6c8361d6b829310732241652a178a"
-dependencies = [
- "serde",
-]
 
 [[package]]
 name = "bevy_ecs"
@@ -1481,8 +1470,7 @@ dependencies = [
 [[package]]
 name = "cochlea-features"
 version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "795aca1c0e2aafba56811f86fb3a79ed450263104504dea6fe2e28322630d356"
+source = "git+https://github.com/gerasim13/cochlea.git?rev=a088af3343910e1284c598090258e6804b7fc5cb#a088af3343910e1284c598090258e6804b7fc5cb"
 dependencies = [
  "ebur128",
  "hound",
@@ -4811,7 +4799,7 @@ dependencies = [
  "rkyv",
  "same-file",
  "serde",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "tempfile",
  "thiserror 2.0.21",
  "tracing",
@@ -4900,7 +4888,7 @@ dependencies = [
  "rten-tensor",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "smallvec",
  "thiserror 2.0.21",
  "unimock",
@@ -5057,7 +5045,10 @@ dependencies = [
  "serde",
  "smallvec",
  "symphonia",
+ "symphonia-codec-aac",
+ "symphonia-codec-pcm",
  "symphonia-core",
+ "symphonia-format-riff",
  "thiserror 2.0.21",
  "tracing",
  "unimock",
@@ -5125,7 +5116,7 @@ dependencies = [
  "same-file",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "syn 3.0.6",
  "tempfile",
  "toml 1.1.7+spec-1.1.0",
@@ -5232,6 +5223,7 @@ dependencies = [
  "bon",
  "delegate",
  "derive-where",
+ "fearless_simd",
  "fieldwork",
  "firewheel",
  "kithara-bufpool",
@@ -5239,6 +5231,7 @@ dependencies = [
  "kithara-derive",
  "kithara-dsp",
  "kithara-effects",
+ "kithara-fixture-media",
  "kithara-resampler",
  "kithara-signal",
  "kithara-test-fixtures",
@@ -5380,6 +5373,7 @@ dependencies = [
  "kithara-integration-tests",
  "kithara-test-fixtures",
  "kithara-test-utils",
+ "num-traits",
  "reqwest",
  "serde",
  "serde_json",
@@ -5460,8 +5454,10 @@ dependencies = [
  "kithara-analysis",
  "kithara-audio",
  "kithara-bufpool",
+ "kithara-core-test-fixtures",
  "kithara-decode",
  "kithara-drm",
+ "kithara-effects",
  "kithara-encode",
  "kithara-events",
  "kithara-fixture-gen",
@@ -5472,11 +5468,12 @@ dependencies = [
  "kithara-stream",
  "kithara-test-macros",
  "kithara-test-utils",
- "kithara-workspace-hack",
  "num-traits",
+ "opus",
  "rayon",
  "reqwest",
- "sha2 0.11.0",
+ "serde_json",
+ "sha2 0.11.1",
  "tempfile",
  "thiserror 2.0.21",
  "tiny_http",
@@ -5496,12 +5493,12 @@ dependencies = [
  "kithara-platform",
  "kithara-stream",
  "kithara-test-utils",
- "kithara-workspace-hack",
  "num-traits",
  "serde",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "tempfile",
  "thiserror 2.0.21",
+ "wasm-bindgen-test",
 ]
 
 [[package]]
@@ -5568,6 +5565,7 @@ dependencies = [
  "kithara-stream",
  "kithara-test-utils",
  "kithara-workspace-hack",
+ "portable-atomic",
  "serde",
  "tempfile",
  "thiserror 2.0.21",
@@ -5615,6 +5613,7 @@ dependencies = [
  "kithara-dsp",
  "kithara-effects",
  "kithara-events",
+ "kithara-fixture-media",
  "kithara-host",
  "kithara-output",
  "kithara-platform",
@@ -5624,6 +5623,7 @@ dependencies = [
  "kithara-signal",
  "kithara-sync",
  "kithara-test-dylib",
+ "kithara-test-fixtures",
  "kithara-test-utils",
  "kithara-warp",
  "kithara-worker",
@@ -5662,6 +5662,7 @@ version = "0.0.1-alpha5"
 dependencies = [
  "aes 0.9.3",
  "anyhow",
+ "async-trait",
  "axum",
  "base64 0.23.1",
  "bon",
@@ -5698,11 +5699,12 @@ dependencies = [
  "ringbuf",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tower-http 0.7.1",
+ "tower-service",
  "tracing",
  "tracing-log",
  "unimock",
@@ -5734,6 +5736,7 @@ dependencies = [
  "kithara-render",
  "kithara-signal",
  "kithara-sync",
+ "kithara-test-fixtures",
  "kithara-test-utils",
  "kithara-warp",
  "kithara-workspace-hack",
@@ -5779,6 +5782,7 @@ dependencies = [
  "fieldwork",
  "futures",
  "hotpath",
+ "http",
  "humantime-serde",
  "kithara-apple",
  "kithara-bufpool",
@@ -5829,6 +5833,7 @@ dependencies = [
  "derive_more",
  "fieldwork",
  "futures",
+ "gloo-timers",
  "js-sys",
  "kithara-platform",
  "kithara-test-dylib",
@@ -5903,7 +5908,7 @@ dependencies = [
  "num-traits",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "thiserror 2.0.21",
  "tracing",
  "unimock",
@@ -5959,6 +5964,7 @@ dependencies = [
  "kithara-signal",
  "kithara-stream",
  "kithara-sync",
+ "kithara-test-fixtures",
  "kithara-test-utils",
  "kithara-warp",
  "kithara-worker",
@@ -6124,7 +6130,6 @@ name = "kithara-storage"
 version = "0.0.1-alpha5"
 dependencies = [
  "arc-swap",
- "crossbeam-queue",
  "delegate",
  "derive-where",
  "derive_more",
@@ -6246,6 +6251,7 @@ dependencies = [
  "kithara-test-fixtures",
  "kithara-test-utils",
  "num-traits",
+ "ringbuf",
  "serde_json",
 ]
 
@@ -6265,8 +6271,10 @@ version = "0.0.1-alpha5"
 dependencies = [
  "hls_m3u8",
  "kithara-analysis",
+ "kithara-core-test-fixtures",
  "kithara-decode",
  "kithara-drm",
+ "kithara-effects",
  "kithara-fixture-gen",
  "kithara-fixture-media",
  "kithara-platform",
@@ -6275,7 +6283,6 @@ dependencies = [
  "kithara-test-dylib",
  "kithara-test-macros",
  "kithara-test-utils",
- "kithara-workspace-hack",
  "num-traits",
  "reqwest",
  "serde",
@@ -6284,13 +6291,13 @@ dependencies = [
  "thiserror 2.0.21",
  "tiny_http",
  "toml 1.1.7+spec-1.1.0",
+ "wasm-bindgen-test",
 ]
 
 [[package]]
 name = "kithara-test-macros"
 version = "0.0.1-alpha5"
 dependencies = [
- "kithara-workspace-hack",
  "proc-macro2",
  "quote",
  "syn 3.0.6",
@@ -6342,6 +6349,7 @@ dependencies = [
  "kithara-apple",
  "kithara-derive",
  "kithara-platform",
+ "kithara-test-fixtures",
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-ui",
@@ -6365,6 +6373,7 @@ dependencies = [
  "unicode-segmentation",
  "velato",
  "vello",
+ "vello_encoding",
  "wgpu 26.0.1",
  "window_clipboard",
  "winit",
@@ -6576,7 +6585,6 @@ dependencies = [
 name = "kithara-workspace-hack"
 version = "0.0.1-alpha5"
 dependencies = [
- "ahash",
  "aho-corasick",
  "arrayvec",
  "audioadapter-buffers",
@@ -6599,7 +6607,6 @@ dependencies = [
  "dispatch2",
  "either",
  "errno",
- "fastrand",
  "firewheel",
  "firewheel-core",
  "firewheel-graph",
@@ -6607,13 +6614,12 @@ dependencies = [
  "form_urlencoded",
  "futures-channel",
  "futures-core",
- "futures-io",
  "futures-sink",
+ "futures-task",
  "futures-util",
  "getrandom 0.3.4",
  "getrandom 0.4.3",
  "half",
- "hashbrown 0.14.5",
  "hashbrown 0.16.1",
  "hashbrown 0.17.1",
  "hyper",
@@ -6665,8 +6671,6 @@ dependencies = [
  "time",
  "tokio",
  "tokio-util",
- "toml_datetime 1.1.2+spec-1.1.0",
- "toml_parser",
  "tower",
  "tower-http 0.6.11",
  "tracing",
@@ -6679,7 +6683,6 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "winnow 1.0.4",
  "zerocopy",
  "zeroize",
  "zstd-sys",
@@ -9552,9 +9555,9 @@ checksum = "eec689c0bc40ff2458a5977b6619cb718087084a18e02a131c599b62d05e1a5f"
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.15"
+version = "0.103.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
+checksum = "4443b1b6d39d7c663139942cc4558262562d2c84123bb6282ef177009ca8b281"
 dependencies = [
  "aws-lc-rs",
  "ring",
@@ -9895,9 +9898,9 @@ dependencies = [
 
 [[package]]
 name = "sha2"
-version = "0.11.0"
+version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "446ba717509524cb3f22f17ecc096f10f4822d76ab5c0b9822c5f9c284e825f4"
+checksum = "47d7069beb7d6ac7b9acd1039986e73443f24234f41074da099d6f994ac9ad19"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.3.1",
@@ -10574,13 +10577,13 @@ dependencies = [
 
 [[package]]
 name = "thirtyfour"
-version = "0.37.5"
+version = "0.37.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "28b596eb866a1a2bac3e8e17080b8f21739e1bdb0b5479fe5c70d14375362a92"
+checksum = "d1bf50fc14946e7a1ea6b1eea2daee2a6a92be91d17853184489bde0dfe349d9"
 dependencies = [
  "arc-swap",
  "async-trait",
- "base64 0.22.1",
+ "base64 0.23.1",
  "bytes",
  "cfg-if",
  "const_format",
@@ -10589,6 +10592,7 @@ dependencies = [
  "indexmap",
  "pastey 0.2.3",
  "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "serde_repr",
@@ -10600,17 +10604,18 @@ dependencies = [
  "tokio-tungstenite",
  "tracing",
  "url",
+ "webpki-roots",
 ]
 
 [[package]]
 name = "thirtyfour-macros"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d712d0fd1988fb67a3fd89d10ead116544448bad01e43d326bd64dd8e09b5ea4"
+checksum = "94196cd236b8087d4059b7cfba1e1c864f20262ecb38aa7b1da9e66d6f07ab77"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.6",
 ]
 
 [[package]]
@@ -10802,9 +10807,9 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 
 [[package]]
 name = "tokio"
-version = "1.53.2"
+version = "1.53.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e95f91fcc7a621e8b030f6aa23c71fe9838ae2fb4d8118b75602a328f5144044"
+checksum = "ce3335fa71841cda333a58d7615b03901380ecf09d59b3296d21f8bbac0dde4e"
 dependencies = [
  "bytes",
  "libc",
@@ -10872,8 +10877,7 @@ dependencies = [
 [[package]]
 name = "tokio-tungstenite"
 version = "0.30.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "17a073bfed563fa236697a068031408a93cd9522e08abf9933ead3e73411bd71"
+source = "git+https://github.com/gerasim13/tokio-tungstenite?rev=5a3397227ea4bfaca922fda85168ecdc733ac622#5a3397227ea4bfaca922fda85168ecdc733ac622"
 dependencies = [
  "futures-util",
  "log",
@@ -10882,7 +10886,6 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tungstenite",
- "webpki-roots 0.26.11",
 ]
 
 [[package]]
@@ -11916,7 +11919,7 @@ dependencies = [
 [[package]]
 name = "wasm_safe_thread"
 version = "0.1.1"
-source = "git+https://github.com/gerasim13/wasm_safe_thread?rev=e9b92b93a23f1c6d802a6b4eb7a06f440507e0c9#e9b92b93a23f1c6d802a6b4eb7a06f440507e0c9"
+source = "git+https://github.com/gerasim13/wasm_safe_thread?rev=02470f5b4094773daba114639e0ff02951da5a62#02470f5b4094773daba114639e0ff02951da5a62"
 dependencies = [
  "continue",
  "js-sys",
@@ -12124,27 +12127,18 @@ dependencies = [
 
 [[package]]
 name = "webpki-root-certs"
-version = "1.0.9"
+version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b96554aa2acc8ccdb7e1c9a58a7a68dd5d13bccc69cd124cb09406db612a1c9b"
+checksum = "58ec80e73fd8baf57bf0d9615554c75348bda990d6d5bbeab964dd068319fecb"
 dependencies = [
  "rustls-pki-types",
 ]
 
 [[package]]
 name = "webpki-roots"
-version = "0.26.11"
+version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
-dependencies = [
- "webpki-roots 1.0.9",
-]
-
-[[package]]
-name = "webpki-roots"
-version = "1.0.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7dcd9d09a39985f5344844e66b0c530a33843579125f23e21e9f0f220850f22a"
+checksum = "1c1c8e20c8a38fc7d65abfe74eb7280e4aa667e8eec8bc84996d2874810748d9"
 dependencies = [
  "rustls-pki-types",
 ]
@@ -13091,7 +13085,7 @@ dependencies = [
  "rustdoc-types",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "signal-hook",
  "syn 3.0.6",
  "tempfile",

@@ -7,7 +7,6 @@
 //! wall-clock guess. The `deadline` argument bounds only a non-progress watchdog
 //! that returns `Err` (callers `.expect()` it); it is never an early-success
 //! path that lets a later assertion pass on timeout.
-#![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
     audio::AudioEvent,
@@ -88,8 +87,6 @@ where
 /// met. The bus event is the primary sink-truth signal; `position_seconds()` is
 /// re-checked on the same virtual poll cadence so a dropped / delayed broadcast
 /// receiver cannot turn already-reached playback state into a timeout.
-#[kithara::flash(io)]
-#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 pub async fn wait_for_position_event<S>(
     rx: &mut EventReceiver<TestEvent>,
     queue: &QueueControl<S>,
@@ -105,27 +102,18 @@ where
         return Ok(pos);
     }
     let min_ms = (min_secs * 1000.0) as u64;
-    let mut high_water = 0;
     timeout(deadline, async {
         loop {
-            hang_tick!(format!(
-                "waiting for rendered position {min_secs}; current={:?}",
-                queue.position_seconds()
-            ));
             if let Some(pos) = queue.position_seconds()
                 && pos >= min_secs
             {
                 return Ok(pos);
             }
-            match timeout(POLL_TICK.min(__hang_detector.remaining()), rx.recv())
+            match timeout(POLL_TICK, rx.recv())
                 .await
                 .map(|r| r.map(|env| env.event))
             {
                 Ok(Ok(TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. }))) => {
-                    if position_ms > high_water {
-                        high_water = position_ms;
-                        hang_reset!();
-                    }
                     if position_ms >= min_ms {
                         return Ok(position_ms as f64 / 1000.0);
                     }
@@ -181,8 +169,6 @@ where
 /// hiding an already-near position; it is the cache being unable to say
 /// whether the seek has landed, so there is nothing here for a cache read to
 /// fall back to.
-#[kithara::flash(io)]
-#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 pub async fn wait_for_position_near_event<S>(
     rx: &mut EventReceiver<TestEvent>,
     queue: &QueueControl<S>,
@@ -193,31 +179,21 @@ pub async fn wait_for_position_near_event<S>(
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    let mut closest = f64::INFINITY;
     timeout(deadline, async {
         loop {
-            hang_tick!(format!(
-                "waiting for rendered seek {target} +/- {tolerance}; current={:?}",
-                queue.position_seconds()
-            ));
-            match timeout(POLL_TICK.min(__hang_detector.remaining()), rx.recv())
+            match timeout(POLL_TICK, rx.recv())
                 .await
                 .map(|r| r.map(|env| env.event))
             {
                 Ok(Ok(TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. }))) => {
                     let pos = position_ms as f64 / 1000.0;
                     let distance = (pos - target).abs();
-                    if distance < closest {
-                        closest = distance;
-                        hang_reset!();
-                    }
                     if distance < tolerance {
                         return Ok(pos);
                     }
                 }
                 Ok(Ok(TestEvent::Audio(AudioEvent::SeekComplete { position, .. }))) => {
                     let pos = position.as_secs_f64();
-                    hang_reset!();
                     if (pos - target).abs() < tolerance {
                         return Ok(pos);
                     }
@@ -236,16 +212,9 @@ where
     })?
 }
 
-/// Wait for the first bus event matching `pred`, recv-driven.
-///
-/// Parks on the broadcast `recv` so the engine advances the virtual clock; the
-/// platform `timeout(deadline, ...)` is the backstop — under flash it fires when
-/// the system quiesces with the event still unseen, on native it is a real
-/// bound. `Lagged` is tolerated (mirrors other multi-subscriber tests); `Closed`
-/// is an error. This is the generic primitive behind the typed
-/// [`wait_for_position_event`] / [`wait_for_loader_done_event`].
+/// Wait for a matching event within `deadline`; lag is tolerated and a closed
+/// bus returns an error.
 #[kithara::flash(io)]
-#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 pub async fn wait_for_event(
     rx: &mut EventReceiver<TestEvent>,
     what: &str,
@@ -254,14 +223,9 @@ pub async fn wait_for_event(
 ) -> Result<(), String> {
     timeout(deadline, async {
         loop {
-            hang_tick!(format!("waiting for {what}"));
-            let Ok(received) = timeout(__hang_detector.remaining(), rx.recv()).await else {
-                hang_tick!(format!("waiting for {what}"));
-                continue;
-            };
+            let received = rx.recv().await;
             match received {
                 Ok(ev) if pred(&ev.event) => {
-                    hang_reset!();
                     return Ok(());
                 }
                 Ok(_) | Err(RecvError::Lagged(_)) => {}
@@ -316,21 +280,9 @@ where
     }
 }
 
-/// Wait until `track_id`'s loader finishes, driven by
-/// `QueueEvent::TrackStatusChanged`. Loading can include real file I/O, so the
-/// virtual deadline advances at real pace while the load is in flight. A
-/// fast-path and `Lagged` re-read guard against an already-terminal status or
-/// a dropped event.
-///
-/// Runs under the hang watchdog: a load whose status stops changing fails
-/// with its last status once the watchdog budget passes, instead of waiting
-/// out `deadline`. Every status change of the track is progress.
-///
-/// # Panics
-///
-/// Panics when the track's status does not change within the watchdog budget.
+/// Wait for the requested loader's terminal status within `deadline`.
+/// Loading includes real I/O and need not publish intermediate status changes.
 #[kithara::flash(io)]
-#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 pub async fn wait_for_loader_done_event<S>(
     rx: &mut EventReceiver<TestEvent>,
     queue: &QueueControl<S>,
@@ -345,17 +297,14 @@ where
     {
         return res;
     }
-    let stalled = |queue: &QueueControl<S>| {
-        format!(
-            "track {track_id:?} loader status stayed {:?}",
-            queue.track(track_id).map(|entry| entry.status)
-        )
-    };
     timeout(deadline, async {
         loop {
-            hang_tick!(stalled(queue));
-            let Ok(received) = timeout(__hang_detector.remaining(), rx.recv()).await else {
-                hang_tick!(stalled(queue));
+            if let Some(entry) = queue.track(track_id)
+                && let Some(res) = loader_outcome(&entry.status)
+            {
+                return res;
+            }
+            let Ok(received) = timeout(POLL_TICK, rx.recv()).await else {
                 continue;
             };
             match received.map(|env| env.event) {
@@ -365,19 +314,8 @@ where
                     if let Some(res) = loader_outcome(&status) {
                         return res;
                     }
-                    hang_reset!();
                 }
-                Ok(_) => {
-                    hang_tick!(stalled(queue));
-                }
-                Err(RecvError::Lagged(_)) => {
-                    if let Some(entry) = queue.track(track_id)
-                        && let Some(res) = loader_outcome(&entry.status)
-                    {
-                        return res;
-                    }
-                    hang_tick!(stalled(queue));
-                }
+                Ok(_) | Err(RecvError::Lagged(_)) => {}
                 Err(RecvError::Closed) => return Err("event stream closed".to_string()),
             }
         }
@@ -489,5 +427,68 @@ pub async fn render_until_position(
             );
         }
         sleep(Duration::from_millis(TICK_MS)).await;
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use kithara::{events::EventBus, platform::time::WallInstant};
+
+    use super::*;
+    use crate::{HlsFixtureBuilder, TestServerHelper, offline::OfflinePlayerOptions};
+
+    #[kithara::test(tokio)]
+    async fn loader_completion_wins_when_its_notification_is_missing() {
+        let helper = TestServerHelper::new().await;
+        let fixture = helper
+            .create_hls(
+                HlsFixtureBuilder::new()
+                    .variant_count(1)
+                    .segments_per_variant(4)
+                    .segment_duration_secs(1.0)
+                    .packaged_audio_aac_lc(44_100, 2),
+            )
+            .await
+            .expect("HLS fixture");
+        let init = helper.register_init_gate(fixture.token(), 0);
+        let harness =
+            OfflinePlayer::with_sample_rate(OfflinePlayerOptions::builder().build(), 44_100).await;
+        let url = fixture.master_url().to_string();
+        let id = harness
+            .with_queue(move |queue| {
+                let id = queue.append(url).expect("append gated track");
+                queue
+                    .select(id, kithara::queue::Transition::None)
+                    .expect("select gated track");
+                id
+            })
+            .await;
+        assert!(matches!(
+            harness.player().track(id).expect("queued track").status,
+            TrackStatus::Pending | TrackStatus::Loading | TrackStatus::Slow
+        ));
+
+        {
+            let unrelated_bus = EventBus::new(4);
+            let mut receiver = unrelated_bus.subscribe();
+            let mut waiting = std::pin::pin!(wait_for_loader_done_event(
+                &mut receiver,
+                harness.player(),
+                id,
+                Duration::from_secs(2),
+            ));
+            assert!(futures::poll!(waiting.as_mut()).is_pending());
+            init.release();
+            harness
+                .render_until_current(id, 512, WallInstant::now() + Duration::from_secs(1))
+                .await;
+            wait_for_loader_done(harness.player(), id, Duration::from_secs(1))
+                .await
+                .expect("the authoritative loader state completes");
+            waiting
+                .await
+                .expect("a completed load needs no notification");
+        }
+        harness.close().await;
     }
 }

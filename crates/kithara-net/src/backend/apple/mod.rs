@@ -5,7 +5,7 @@ mod response;
 mod session;
 mod stream;
 
-pub use client::HttpClient;
+pub(crate) use client::Transport;
 
 #[cfg(all(test, feature = "client-apple", target_os = "macos"))]
 mod tests;

@@ -263,15 +263,6 @@ impl<'a> HostStorage<'a> {
             (final_pressure, final_volume) = self.worst_pressure()?;
         }
         if final_pressure == Pressure::Reject {
-            // The Linux guest has already been trimmed and its build cache held
-            // to its size, so what remains is its images and the cache inside
-            // that bound. Recycling reaches that state at the cost of a cold
-            // image build, which is reserved for the point where new jobs are
-            // already being refused.
-            self.recycle_linux_guest();
-            (final_pressure, final_volume) = self.worst_pressure()?;
-        }
-        if final_pressure == Pressure::Reject {
             self.prune_host_trees("cache/trusted", Duration::ZERO)?;
             self.prune_retired_caches(Duration::ZERO)?;
             (final_pressure, final_volume) = self.worst_pressure()?;
@@ -897,9 +888,7 @@ impl<'a> HostStorage<'a> {
     /// is a sparse file that grows to its high-water mark and keeps every block
     /// it has ever written. Measured on 2026-08-11 it held 77 GB for 25 GB of
     /// images and build cache — fifty gigabytes of blocks the guest had already
-    /// released. A discard is what tells the host they are free, and it is the
-    /// step between pruning, which frees nothing here, and recycling, which
-    /// costs a cold image build.
+    /// released. A discard returns these blocks without destroying the runtime.
     fn trim_linux_guest(&self) {
         let colima = self.config.host.brew_tool("colima");
         if !colima.is_file() {
@@ -922,65 +911,6 @@ impl<'a> HostStorage<'a> {
         {
             warn!(%error, "could not trim the Linux guest's disk");
         }
-    }
-
-    /// Delete the Linux guest and the disk it kept, so the space is allocated
-    /// again from nothing.
-    ///
-    /// The agent runs `colima start` in the foreground, so the process ends
-    /// with the guest and launchd starts a fresh one. The images inside are
-    /// rebuilt, which is the cost.
-    ///
-    /// Deleting the instance alone reclaims almost nothing: lima keeps the data
-    /// disk as a named volume so that it survives a recreated guest, and the
-    /// disk is where the space goes. It is sparse, so it grows with every write
-    /// and never shrinks when the guest deletes. On 2026-08-07 the instance held
-    /// 2 GB and the disk held 95 GB.
-    ///
-    /// Both are attempted even if the first fails: with the instance already
-    /// gone, deleting the disk is exactly what still has to happen.
-    fn recycle_linux_guest(&self) {
-        let colima = self.config.host.brew_tool("colima");
-        if !colima.is_file() {
-            return;
-        }
-        info!("recycling the Linux guest to reclaim volume space");
-        if let Err(error) = self.process.run(
-            &colima.display().to_string(),
-            &[
-                "delete",
-                "--force",
-                "--profile",
-                self.config.host.colima_profile.as_str(),
-            ],
-            "recycle the Linux guest",
-        ) {
-            warn!(%error, "could not recycle the Linux guest");
-        }
-
-        let limactl = self.config.host.brew_tool("limactl");
-        if !limactl.is_file() {
-            warn!("limactl is absent, so the guest's data disk stays allocated");
-            return;
-        }
-        let home = self.host_root.join("home").join(&self.config.host.ci_user);
-        let mut command = self.process.command(limactl);
-        command.env("LIMA_HOME", home.join(".colima/_lima")).args([
-            "disk",
-            "delete",
-            &self.linux_guest_disk(),
-        ]);
-        if let Err(error) = self
-            .process
-            .run_command(&mut command, "delete the Linux guest's data disk")
-        {
-            warn!(%error, "could not delete the Linux guest's data disk");
-        }
-    }
-
-    /// colima names the disk after the profile it belongs to.
-    fn linux_guest_disk(&self) -> String {
-        format!("colima-{}", self.config.host.colima_profile)
     }
 
     fn is_removable(&self, target: &Path) -> bool {
@@ -1307,7 +1237,7 @@ mod tests {
         let storage = HostStorage::for_test(&cfg, &process).unwrap();
         // The volume this replaces a proportional rule for: 279 GB total with
         // 170 used never came within a hundred of a 285 reject threshold, so
-        // cleanup stayed `Normal` and never recycled the guest, while jobs were
+        // cleanup stayed `Normal`, while jobs were
         // already being refused for free space. Judged by what is left, a
         // volume half the quota's size reaches every step.
         let half = |available| Volume {
@@ -1388,6 +1318,42 @@ mod tests {
         let trim =
             position("return the Linux guest's freed blocks").expect("the guest was trimmed");
         assert!(prune < trim, "the trim ran before the prune it hands back");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reject_cleanup_preserves_shared_runtime() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut cfg = config(directory.path());
+        cfg.host.brew_root = directory.path().join("brew");
+        let bin = cfg.host.brew_root.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let runtime = directory.path().join("shared-runtime");
+        fs::write(&runtime, b"cache service and CI images").unwrap();
+        for tool in ["colima", "limactl"] {
+            install_script(
+                &bin.join(tool),
+                "#!/bin/sh\ncase \" $* \" in *\" delete \"*) rm -- \"$RUNTIME_MARKER\";; esac\n",
+            );
+        }
+        let process = Process::new(
+            directory.path(),
+            BTreeMap::from([(
+                OsString::from("RUNTIME_MARKER"),
+                runtime.as_os_str().to_owned(),
+            )]),
+        );
+        let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
+        storage.set_available_sequence([0; 8]);
+
+        let result = storage.cleanup();
+
+        assert_eq!(
+            fs::read(&runtime).unwrap(),
+            b"cache service and CI images",
+            "disk pressure must not destroy the shared runtime"
+        );
+        assert!(result.is_err(), "unresolved disk pressure must be reported");
     }
 
     #[test]

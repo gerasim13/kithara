@@ -49,18 +49,14 @@ impl ActiveDecode {
             return None;
         };
         let gapless_mode = self.gapless_mode();
-        let (outgoing_origin, incoming_origin) = self
-            .active
-            .comparison_origin(gapless_mode)
-            .zip(incoming_origin(&self.active, generation, gapless_mode))?;
+        let target = self.incoming_preparation(*frontier)?;
+        let incoming_origin = incoming_origin(&self.active, generation, gapless_mode)?;
         match promotion_readiness(
             &self.active,
             &self.blender,
             generation,
-            *frontier,
-            outgoing_origin,
+            target,
             incoming_origin,
-            gapless_mode,
         ) {
             PromotionReadiness::AwaitingOutgoingPcm { first } => Some(first),
             _ => None,
@@ -81,16 +77,14 @@ impl ActiveDecode {
                 return None;
             };
             let gapless_mode = self.gapless_mode();
-            let outgoing_origin = self.active.comparison_origin(gapless_mode)?;
+            let target = self.incoming_preparation(*frontier)?;
             let incoming_origin = incoming_origin(&self.active, generation, gapless_mode)?;
             let PromotionReadiness::Ready(span) = promotion_readiness(
                 &self.active,
                 &self.blender,
                 generation,
-                *frontier,
-                outgoing_origin,
+                target,
                 incoming_origin,
-                gapless_mode,
             ) else {
                 return None;
             };
@@ -201,9 +195,8 @@ impl ActiveDecode {
             return false;
         }
         let gapless_mode = self.gapless_mode();
-        let Some((outgoing_origin, incoming_origin)) = self
-            .active
-            .comparison_origin(gapless_mode)
+        let Some((target, incoming_origin)) = self
+            .incoming_preparation(*frontier)
             .zip(incoming_origin(&self.active, generation, gapless_mode))
         else {
             return false;
@@ -213,10 +206,8 @@ impl ActiveDecode {
                 &self.active,
                 &self.blender,
                 generation,
-                *frontier,
-                outgoing_origin,
+                target,
                 incoming_origin,
-                gapless_mode,
             ),
             PromotionReadiness::AwaitingOutgoingFrontier
         )
@@ -229,7 +220,7 @@ pub(crate) mod preparation {
     };
     use kithara_platform::sync::mpsc;
     use kithara_signal::AudioSpec;
-    use kithara_stream::PendingReason;
+    use kithara_stream::{OutgoingDisposition, PendingReason};
 
     use super::super::transition::{
         IncomingPrime, OutgoingFrontier, PromotionReadiness, classify_incoming_preparation,
@@ -273,6 +264,7 @@ pub(crate) mod preparation {
         pub(in crate::pipeline::decode) outgoing_gap: u64,
         pub(in crate::pipeline::decode) outgoing_origin: u64,
         pub(in crate::pipeline::decode) outgoing_exhausted: bool,
+        pub(in crate::pipeline::decode) outgoing_disposition: OutgoingDisposition,
         pub(in crate::pipeline::decode) join_frames: u64,
         pub(in crate::pipeline::decode) gapless_mode: GaplessMode,
     }

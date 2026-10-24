@@ -295,10 +295,9 @@ mod tests {
         let worker = worker();
         let dir = TestTempDir::new();
         let path = dir.path().join("direct.wav");
-        crate::mock::write_pcm_wav(
+        std::fs::write(
             &path,
-            &vec![0.5; 8_192],
-            kithara_signal::AudioSpec::new(2, crate::mock::SAMPLE_RATE),
+            kithara_test_fixtures::assets::fixed_constant_wav_cd_half_4096().bytes(),
         )
         .expect("direct float WAV");
         let file_bus = EventBus::new(32);

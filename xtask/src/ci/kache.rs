@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     ffi::OsString,
     fs,
     path::{Path, PathBuf},
@@ -13,11 +14,11 @@ use crate::consts;
 
 /// The kache one CI job compiles through.
 ///
-/// kache's daemon takes its remote only from a configuration file, so the job
-/// writes one into a directory of its own, which is also where the daemon
-/// keeps its socket and the job's events. The remote is the bucket the job's
-/// credentials name, the one sccache shares its compiles through: each scope
-/// reads what its own jobs wrote and never another scope's.
+/// The job writes a configuration file into a directory of its own, which is
+/// also where the daemon keeps its socket and the job's events. The remote is
+/// not the job's: kache reads it from its host layer, which the runner writes
+/// for its scope, and the job's file outranks that layer key by key only
+/// where it names a key.
 pub(crate) struct KacheJob {
     directory: PathBuf,
 }
@@ -29,11 +30,7 @@ pub(crate) struct LocalStore<'a> {
 }
 
 impl KacheJob {
-    pub(crate) fn prepare(
-        directory: PathBuf,
-        store: Option<LocalStore<'_>>,
-        lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<Self> {
+    pub(crate) fn prepare(directory: PathBuf, store: Option<LocalStore<'_>>) -> Result<Self> {
         let job = Self { directory };
         let runtime = job.directory.join("runtime");
         // A directory left by a job that died under the same name holds a
@@ -43,21 +40,13 @@ impl KacheJob {
             .with_context(|| format!("creating kache's directory {}", runtime.display()))?;
         let mut cache = toml::Table::new();
         cache.insert("runtime_dir".into(), path_value(&runtime)?);
+        cache.insert(
+            "daemon_idle_timeout_secs".into(),
+            consts::KACHE_DAEMON_IDLE_SECS.into(),
+        );
         if let Some(store) = store {
             cache.insert("local_store".into(), path_value(store.directory)?);
             cache.insert("local_max_size".into(), store.max_size.into());
-        }
-        let present = |name: &str| lookup(name).filter(|value| !value.is_empty());
-        if let (Some(bucket), Some(endpoint)) =
-            (present("SCCACHE_BUCKET"), present("SCCACHE_ENDPOINT"))
-        {
-            let mut remote = toml::Table::new();
-            remote.insert("type".into(), "s3".into());
-            remote.insert("bucket".into(), bucket.into());
-            remote.insert("endpoint".into(), endpoint.into());
-            remote.insert("region".into(), consts::CACHE_REGION.into());
-            remote.insert("prefix".into(), consts::KACHE_PREFIX.into());
-            cache.insert("remote".into(), remote.into());
         }
         let mut config = toml::Table::new();
         config.insert("cache".into(), cache.into());
@@ -111,6 +100,42 @@ impl KacheJob {
     }
 }
 
+/// The kache host layer a runner gives every compile of its jobs, named by
+/// `KACHE_HOST_CONFIG`: the store compiles land in when no job places them
+/// itself, and the remote of the scope `environment` holds the credentials of.
+///
+/// The remote has to be in a file. kache strips a remote named only in the
+/// environment from a daemon it starts itself, because that daemon outlives
+/// the compile that started it, and the daemon then uploads nothing. A job's
+/// own configuration outranks this layer key by key, so a job that places its
+/// store keeps that choice and still shares through this remote. The
+/// credentials stay in the environment, which the daemon inherits.
+pub(crate) fn host_config(
+    environment: &BTreeMap<String, String>,
+    store: &Path,
+    max_size: &str,
+) -> Result<String> {
+    let value = |name: &str| {
+        environment
+            .get(name)
+            .with_context(|| format!("the cache environment has no {name}"))
+            .map(String::as_str)
+    };
+    let mut remote = toml::Table::new();
+    remote.insert("type".into(), "s3".into());
+    remote.insert("bucket".into(), value("SCCACHE_BUCKET")?.into());
+    remote.insert("endpoint".into(), value("SCCACHE_ENDPOINT")?.into());
+    remote.insert("region".into(), value("SCCACHE_REGION")?.into());
+    remote.insert("prefix".into(), consts::KACHE_PREFIX.into());
+    let mut cache = toml::Table::new();
+    cache.insert("local_store".into(), path_value(store)?);
+    cache.insert("local_max_size".into(), max_size.into());
+    cache.insert("remote".into(), remote.into());
+    let mut config = toml::Table::new();
+    config.insert("cache".into(), cache.into());
+    Ok(toml::to_string(&config)?)
+}
+
 fn path_value(path: &Path) -> Result<toml::Value> {
     Ok(path
         .to_str()
@@ -126,61 +151,85 @@ impl Drop for KacheJob {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, ffi::OsStr};
+    use std::{collections::BTreeMap, ffi::OsStr};
 
     use super::*;
-
-    fn lookup(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
-        let pairs = pairs
-            .iter()
-            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
-            .collect::<HashMap<_, _>>();
-        move |name| pairs.get(name).cloned()
-    }
 
     fn written(job: &KacheJob) -> toml::Table {
         toml::from_str(&fs::read_to_string(job.config()).unwrap()).unwrap()
     }
 
-    fn store(credentials: &str) -> [(&'static str, String); 2] {
-        [
-            ("SCCACHE_BUCKET", credentials.to_owned()),
-            (
-                "SCCACHE_ENDPOINT",
-                "http://kithara-ci-cache:9000".to_owned(),
-            ),
-        ]
+    /// The remote is the runner's to name, in kache's host layer, which a
+    /// job's own file outranks key by key: a remote named here would be one
+    /// more place the bucket is spelled, and only lanes would see it.
+    #[test]
+    fn a_jobs_own_file_leaves_the_remote_to_its_runner() {
+        let directory = tempfile::tempdir().unwrap();
+
+        let job = KacheJob::prepare(directory.path().join("job"), None).unwrap();
+
+        let config = written(&job);
+        let cache = config["cache"].as_table().unwrap();
+        assert!(!cache.contains_key("remote"), "{cache:?}");
+        assert!(!cache.contains_key("local_store"), "{cache:?}");
     }
 
-    /// A job keeps kache's objects in the bucket its credentials write, as
-    /// sccache does: a remote the job may only read would never fill, because
-    /// no host runs every lane as a protected branch's push.
+    fn store_environment(bucket: &str) -> BTreeMap<String, String> {
+        [
+            ("SCCACHE_BUCKET", bucket),
+            ("SCCACHE_ENDPOINT", "http://kithara-ci-cache:9000"),
+            ("SCCACHE_REGION", consts::CACHE_REGION),
+            ("AWS_ACCESS_KEY_ID", "key-id"),
+            ("AWS_SECRET_ACCESS_KEY", "secret-key"),
+        ]
+        .into_iter()
+        .map(|(name, value)| (name.to_owned(), value.to_owned()))
+        .collect()
+    }
+
+    /// kache drops a remote named only in the environment from the daemon it
+    /// starts itself, so the daemon would run local-only and upload nothing.
+    /// The host layer is a file the daemon reads, so every compile a runner
+    /// serves shares through the scope's bucket, whatever command started it.
     #[test]
-    fn every_job_shares_its_compiles_through_its_own_scopes_bucket() {
-        let directory = tempfile::tempdir().unwrap();
-        for credentials in ["kithara-trusted", "kithara-review"] {
-            let pairs = store(credentials);
-            let pairs = pairs
-                .iter()
-                .map(|(name, value)| (*name, value.as_str()))
-                .collect::<Vec<_>>();
+    fn a_runners_compiles_share_through_its_scopes_bucket() {
+        for bucket in ["kithara-trusted", "kithara-review"] {
+            let rendered = host_config(
+                &store_environment(bucket),
+                Path::new("/cache/kache/store"),
+                "50G",
+            )
+            .unwrap();
 
-            let job = KacheJob::prepare(directory.path().join(credentials), None, &lookup(&pairs))
-                .unwrap();
-
-            let config = written(&job);
+            let config: toml::Table = toml::from_str(&rendered).unwrap();
             let cache = config["cache"].as_table().unwrap();
-            assert!(!cache.contains_key("remote_readonly"), "{credentials}");
+            assert_eq!(cache["local_store"].as_str(), Some("/cache/kache/store"));
+            assert_eq!(cache["local_max_size"].as_str(), Some("50G"));
             let remote = cache["remote"].as_table().unwrap();
-            assert_eq!(remote["type"].as_str(), Some("s3"));
-            assert_eq!(remote["bucket"].as_str(), Some(credentials));
-            assert_eq!(remote["prefix"].as_str(), Some(consts::KACHE_PREFIX));
+            assert_eq!(remote["type"].as_str(), Some("s3"), "{bucket}");
+            assert_eq!(remote["bucket"].as_str(), Some(bucket));
             assert_eq!(
                 remote["endpoint"].as_str(),
                 Some("http://kithara-ci-cache:9000")
             );
             assert_eq!(remote["region"].as_str(), Some(consts::CACHE_REGION));
+            assert_eq!(remote["prefix"].as_str(), Some(consts::KACHE_PREFIX));
         }
+    }
+
+    /// The file is readable by every job the runner serves; the credentials
+    /// stay in the environment, which the daemon inherits.
+    #[test]
+    fn a_runners_kache_file_carries_no_credentials() {
+        let rendered = host_config(
+            &store_environment("kithara-review"),
+            Path::new("/cache/kache/store"),
+            "50G",
+        )
+        .unwrap();
+
+        assert!(!rendered.contains("key-id"), "{rendered}");
+        assert!(!rendered.contains("secret-key"), "{rendered}");
     }
 
     #[test]
@@ -194,7 +243,6 @@ mod tests {
                 directory: &store_root,
                 max_size: "4G",
             }),
-            &lookup(&[]),
         )
         .unwrap();
 
@@ -209,6 +257,19 @@ mod tests {
         );
     }
 
+    /// A cancelled job is killed before it can stop its daemon, which kache
+    /// detaches from the job; only the daemon itself can end it then.
+    #[test]
+    fn a_daemon_whose_job_never_stops_it_exits_once_idle() {
+        let directory = tempfile::tempdir().unwrap();
+
+        let job = KacheJob::prepare(directory.path().join("job"), None).unwrap();
+
+        let config = written(&job);
+        let timeout = config["cache"]["daemon_idle_timeout_secs"].as_integer();
+        assert!(timeout.is_some_and(|seconds| seconds > 0), "{timeout:?}");
+    }
+
     /// A `CMake` build reaches kache as its compiler launcher, never as its
     /// compiler: a build directory another job configured with the real
     /// compiler would otherwise see the compiler change, and `CMake` then
@@ -218,7 +279,7 @@ mod tests {
     fn a_job_compiles_through_kache_and_hands_on_to_sccache() {
         let directory = tempfile::tempdir().unwrap();
         let tools = ToolsConfig::default();
-        let job = KacheJob::prepare(directory.path().join("job"), None, &lookup(&[])).unwrap();
+        let job = KacheJob::prepare(directory.path().join("job"), None).unwrap();
 
         let environment = job.environment(&tools);
 
@@ -248,7 +309,7 @@ mod tests {
     #[test]
     fn kache_sees_no_ci_system_whose_policy_would_keep_a_job_read_only() {
         let directory = tempfile::tempdir().unwrap();
-        let job = KacheJob::prepare(directory.path().join("job"), None, &lookup(&[])).unwrap();
+        let job = KacheJob::prepare(directory.path().join("job"), None).unwrap();
 
         let environment = job.environment(&ToolsConfig::default());
 
@@ -269,7 +330,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let own = directory.path().join("job");
 
-        drop(KacheJob::prepare(own.clone(), None, &lookup(&[])).unwrap());
+        drop(KacheJob::prepare(own.clone(), None).unwrap());
 
         assert!(!own.exists());
     }

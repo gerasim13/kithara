@@ -1,4 +1,4 @@
-use std::panic::catch_unwind;
+use std::panic::{catch_unwind, resume_unwind};
 
 use super::{super::transition::wait_for_retired_decoder, *};
 use crate::pipeline::stream::shared::SharedStream;
@@ -138,7 +138,7 @@ async fn decoder_readers_have_isolated_construction_gates() {
                     let _nested = initial_gate.nonblocking();
                     assert!(!initial_gate.is_armed());
                     assert_eq!(rebuild_gate.is_armed(), other_armed);
-                    panic!("nested probe unwinds inside an active scope");
+                    resume_unwind(Box::new("nested probe unwinds inside an active scope"));
                 });
                 assert!(nested_unwind.is_err());
                 assert!(!initial_gate.is_armed());
@@ -151,7 +151,7 @@ async fn decoder_readers_have_isolated_construction_gates() {
                 let _nested = initial_gate.nonblocking();
                 assert!(!initial_gate.is_armed());
                 assert_eq!(rebuild_gate.is_armed(), other_armed);
-                panic!("nested probe scopes unwind together");
+                resume_unwind(Box::new("nested probe scopes unwind together"));
             });
             assert!(unwind.is_err());
             assert_eq!(initial_gate.is_armed(), armed);

@@ -5,6 +5,13 @@ use crate::{common::time::Instant, loom::sync as backend};
 pub struct Condvar(backend::Condvar);
 
 impl Condvar {
+    /// Current time in this condition variable's deadline clock.
+    #[inline]
+    #[must_use]
+    pub fn instant(&self) -> Instant {
+        Instant::now()
+    }
+
     #[inline]
     #[must_use]
     pub fn wait<'a, T>(&self, guard: MutexGuard<'a, T>) -> MutexGuard<'a, T> {

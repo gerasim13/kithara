@@ -174,7 +174,14 @@ at_least_one_of = [
 
 [[health.feature_invariants]]
 when_feature = "stretch-signalsmith"
-at_least_one_of = [["stretch-signalsmith", "stretch-bungee"]]
+at_least_one_of = [
+  [
+    "stretch-signalsmith",
+    "stretch-bungee",
+    "stretch-glide",
+    "stretch-identity",
+  ],
+]
 
 # `ffmpeg` names only kithara-encode. Without an encode backend the crate
 # encodes nothing and says so with compile_error!, so the empty combination is
@@ -206,10 +213,11 @@ when_feature = "beat-backend"
 never = ["beat-backend"]
 
 # `beat-nn` scopes this rule to both crates and is invalid without model bytes.
-# Full-int8 is excluded because its model cannot be produced on CI runners.
+# Full-int8 cannot be produced on CI runners. CUDA needs a model and is checked
+# with each supported model by the product-context recipe.
 [[health.feature_invariants]]
 when_feature = "beat-nn"
-never = ["beat-nn", "beat-nn-full-int8"]
+never = ["beat-nn", "beat-nn-full-int8", "beat-cuda"]
 mutually_exclusive = [["beat-nn-small", "beat-nn-full"]]
 
 # kithara-beat embeds one model and says so with compile_error!.
@@ -1679,12 +1687,13 @@ steps = [
     "chrome",
     "webcodecs",
     "include",
-  ], label = "Chromium WebCodecs tests" },
+  ], label = "Chromium WebCodecs tests", env = { CHROMEDRIVER_ARGS = "--verbose --log-path={root}/target/web-chromium.log" } },
 ]
 role = "gate"
 kinds = ["platforms", "main", "nightly"]
 kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 60
+artifact = { name = "web-chromium-driver", path = "target/web-chromium.log", when = "failure" }
 
 # Nightly here, not on the push gate: the full integration suite does not
 # compile for wasm32 today. The lane reports the break every night instead of
@@ -2364,13 +2373,9 @@ timeout_minutes = 90
 # GitLab already runs its own equivalents of these six under other names; the
 # GitHub fleet's own gate has no such lane yet, so each is reachable only by
 # name until a kind schedules it.
-# This lane records the dependency source layer every other lane restores. It
-# is the right one: a Linux runner is handed `KITHARA_CACHE_TRUST` and the
-# matching cache credentials together, so on the default branch its scope and
-# its keys agree. A Mac host carries one credential set for every lane it runs,
-# which is why publishing from `apple-lint` wrote the trusted bucket with
-# review keys and was refused on every run. Sources are platform-independent,
-# so one object serves both fleets.
+# This lane records the dependency source layer the lanes of its scope
+# restore: on the default branch it publishes into its own scope's bucket.
+# Sources are platform-independent, so one object serves both fleets.
 [ext.ci.lanes.linux-lint]
 cache_group = "linux"
 label = "Linux"

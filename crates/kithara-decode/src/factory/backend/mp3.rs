@@ -15,7 +15,7 @@ use kithara_stream::{
     AudioCodec, ContainerFormat, MediaInfo, NotReadyCause, PendingReason, ReaderControl,
     SourcePhase, StreamPending,
 };
-use kithara_test_fixtures::{assets::rhythm_mp3_deck_a_120bpm_48k, signal::rms};
+use kithara_test_fixtures::{assets, assets::rhythm_mp3_deck_a_120bpm_48k, signal::rms};
 use kithara_test_utils::kithara;
 
 use crate::{
@@ -40,41 +40,11 @@ mod consts {
 #[case(true)]
 fn mp3_in_wave_matches_elementary_audio_and_seeks_in_file_coordinates(#[case] tagged: bool) {
     let audio = rhythm_mp3_deck_a_120bpm_48k().bytes();
-    let mut wave = Vec::new();
-    if tagged {
-        let len = u32::try_from(audio.len()).expect("fixture fits an ID3 tag size");
-        // ID3v2 sizes are syncsafe: seven payload bits per byte.
-        let syncsafe = (len & 0x0FE0_0000) << 3
-            | (len & 0x001F_C000) << 2
-            | (len & 0x0000_3F80) << 1
-            | (len & 0x0000_007F);
-        wave.extend_from_slice(&[b'I', b'D', b'3', 4, 0, 0]);
-        wave.extend_from_slice(&syncsafe.to_be_bytes());
-        wave.extend_from_slice(audio);
-    }
-    let metadata_prefix = wave.clone();
-    let origin = wave.len();
-    wave.extend_from_slice(b"RIFF");
-    wave.extend_from_slice(
-        &u32::try_from(audio.len() + 36)
-            .expect("RIFF length")
-            .to_le_bytes(),
-    );
-    wave.extend_from_slice(b"WAVEfmt ");
-    wave.extend_from_slice(&16u32.to_le_bytes());
-    wave.extend_from_slice(&0x55u16.to_le_bytes());
-    wave.extend_from_slice(&2u16.to_le_bytes());
-    wave.extend_from_slice(&48_000u32.to_le_bytes());
-    wave.extend_from_slice(&16_000u32.to_le_bytes());
-    wave.extend_from_slice(&1u16.to_le_bytes());
-    wave.extend_from_slice(&0u16.to_le_bytes());
-    wave.extend_from_slice(b"data");
-    wave.extend_from_slice(
-        &u32::try_from(audio.len())
-            .expect("payload length")
-            .to_le_bytes(),
-    );
-    wave.extend_from_slice(audio);
+    let (wave, origin) = if tagged {
+        (assets::decoder_mp3_wave_tagged().bytes(), 10 + audio.len())
+    } else {
+        (assets::decoder_mp3_wave_plain().bytes(), 0)
+    };
     let config = || {
         DecoderConfig::<kithara_resampler::NoResamplerBackend, TestPools>::builder()
             .backend(DecoderBackend::Apple)
@@ -85,7 +55,7 @@ fn mp3_in_wave_matches_elementary_audio_and_seeks_in_file_coordinates(#[case] ta
         DecoderFactory::create_with_probe(Cursor::new(audio.to_vec()), Some("mp3"), config())
             .expect("elementary MP3");
     let mut wrapped = DecoderFactory::create_from_media_info(
-        Cursor::new(wave),
+        Cursor::new(wave.to_vec()),
         &MediaInfo::builder().container(ContainerFormat::Wav).build(),
         config(),
     )
@@ -107,8 +77,7 @@ fn mp3_in_wave_matches_elementary_audio_and_seeks_in_file_coordinates(#[case] ta
         "the carrier and its metadata do not alter audio"
     );
     if tagged {
-        let mut elementary = metadata_prefix;
-        elementary.extend_from_slice(audio);
+        let elementary = assets::decoder_mp3_tagged_default().bytes().to_vec();
         let mut tagged_decoder =
             DecoderFactory::create_with_probe(Cursor::new(elementary), Some("mp3"), config())
                 .expect("MP3 with audio-looking metadata");

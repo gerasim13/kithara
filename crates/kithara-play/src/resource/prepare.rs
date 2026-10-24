@@ -50,9 +50,12 @@ where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
     /// Prepares `config` to play on the deck's worker into its session.
-    /// Before the session measures its output no deadline can be checked, so
-    /// buffer depths sized to the render quantum and response budget overwrite
-    /// whatever `audio:` configured only once the output shape is known.
+    /// Once the session knows its output shape, a renderer without a render
+    /// quantum renders one output block per lane packet. Before the session
+    /// measures its output no deadline can be checked, so buffer depths sized
+    /// to the render quantum and response budget overwrite whatever `audio:`
+    /// configured only under a response budget; without one they only fill
+    /// depths `audio:` left unset.
     ///
     /// # Errors
     ///
@@ -74,7 +77,6 @@ where
         });
         let mut warp = self.warp.clone();
         if warp.render_quantum_frames().is_none()
-            && self.response_budget_frames.is_some()
             && let Some(shape) = output.stream_shape
         {
             let quantum = NonZeroUsize::try_from(shape.max_block_frames)
@@ -84,15 +86,20 @@ where
             warp.apply(patch)
                 .map_err(|error| PlayError::Internal(error.to_string()))?;
         }
-        let (preload_chunks, audio_buffer_chunks) =
-            match (warp.render_quantum_frames(), output.stream_shape) {
-                (Some(quantum), Some(shape)) => {
-                    let (preload, ring) =
-                        shape.playback_buffers(quantum, self.response_budget_frames)?;
-                    (Some(preload), Some(ring))
-                }
-                _ => (config.preload_chunks, config.audio_buffer_chunks),
-            };
+        let derived = match (warp.render_quantum_frames(), output.stream_shape) {
+            (Some(quantum), Some(shape)) => {
+                Some(shape.playback_buffers(quantum, self.response_budget_frames)?)
+            }
+            _ => None,
+        };
+        let (preload_chunks, audio_buffer_chunks) = match (derived, self.response_budget_frames) {
+            (Some((preload, ring)), Some(_)) => (Some(preload), Some(ring)),
+            (Some((preload, ring)), None) => (
+                config.preload_chunks.or(Some(preload)),
+                config.audio_buffer_chunks.or(Some(ring)),
+            ),
+            (None, _) => (config.preload_chunks, config.audio_buffer_chunks),
+        };
         let resampler = match config.decoder.resampler().cloned() {
             Some(settings) => Some(settings),
             None => output
@@ -406,6 +413,30 @@ mod tests {
             prepared.audio_buffer_chunks.map(NonZeroUsize::get),
             Some(expected_ring)
         );
+    }
+
+    #[kithara::test]
+    fn a_measured_output_block_is_the_default_render_quantum() {
+        let shape = StreamShape::new(
+            NonZeroU32::new(512).expect("test block is non-zero"),
+            mock::SAMPLE_RATE,
+        );
+        let mut config = resource_config("https://example.com/song.mp3");
+        config.audio_buffer_chunks = NonZeroUsize::new(1);
+        let prepared = prep(WarpConfig::builder().build())
+            .prepare(config, &mock::output(Some(shape)).get())
+            .expect("a measured output prepares the resource");
+
+        assert_eq!(
+            prepared.warp.render_quantum_frames().map(NonZeroUsize::get),
+            Some(512)
+        );
+        assert_eq!(
+            prepared.audio_buffer_chunks.map(NonZeroUsize::get),
+            Some(1),
+            "without a response budget the track's ring depth stands"
+        );
+        assert!(prepared.preload_chunks.is_some());
     }
 
     #[kithara::test]

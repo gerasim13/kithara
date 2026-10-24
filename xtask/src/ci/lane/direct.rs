@@ -108,14 +108,13 @@ fn run_in(args: &LaneArgs, ctx: &Ctx, var: &dyn Fn(&str) -> Option<OsString>) ->
     )?;
     let text = |name: &str| var(name).and_then(|value| value.into_string().ok());
     let wrapped = var("RUSTC_WRAPPER").is_some_and(|wrapper| !wrapper.is_empty());
-    // The container names the store but not kache's configuration, and its
+    // The container names kache's host layer, its remote and store; the
     // daemon is the job's to start and to stop. Outside a job both are the
     // developer's.
     let kache = if wrapped && ci_in(var) {
         Some(KacheJob::prepare(
             scratch_root().join("kache").join(job_owner()?),
             None,
-            &text,
         )?)
     } else {
         None
@@ -1008,9 +1007,10 @@ cargo.packages = ["tools"]
         );
     }
 
-    /// A GitHub job's container carries the store's credentials but no
-    /// kache configuration: the lane writes the job's own, compiles through
-    /// it, and stops the daemon it started so what it compiled is stored.
+    /// A GitHub job's container names kache's host layer, which holds the
+    /// runner's remote: the lane writes the job's own file for the daemon it
+    /// starts, compiles through it, and stops that daemon so what it compiled
+    /// is stored.
     #[cfg(unix)]
     #[test]
     fn a_ci_lane_compiles_through_a_kache_of_its_own() {
@@ -1044,11 +1044,10 @@ cargo.packages = ["tools"]
             .split_once("wrapper=")
             .expect("the step said its wrapper");
         let config: toml::Table = toml::from_str(config).expect("kache's configuration parses");
-        assert_eq!(
-            config["cache"]["remote"]["bucket"].as_str(),
-            Some("kithara-review")
+        assert!(
+            config["cache"].get("remote").is_none(),
+            "the remote is the runner's, named in kache's host layer"
         );
-        assert!(config["cache"].get("remote_readonly").is_none());
         let (wrapper, path) = said
             .split_once("\nconfig=")
             .expect("the step said its config");

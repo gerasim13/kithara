@@ -105,6 +105,21 @@ pub(crate) fn make_ambient_stmt(args: &TestArgs) -> TokenStream2 {
     }
 }
 
+/// Native synchronous statements own credit after their ambient scope is installed.
+pub(crate) fn wrap_with_sync_participation(body: &TokenStream2, args: &TestArgs) -> TokenStream2 {
+    if args.is_loom || args.flash == Some(false) {
+        return body.clone();
+    }
+    quote! {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            ::kithara_test_utils::kithara_platform::flash::participate_sync(|| { #body })
+        }
+        #[cfg(target_arch = "wasm32")]
+        { #body }
+    }
+}
+
 /// Per-test process setup, spliced as statements into the test body's scope:
 /// the log subscriber, then the `load` feature's CPU contention held until
 /// the body ends.

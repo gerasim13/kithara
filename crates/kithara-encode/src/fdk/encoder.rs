@@ -92,6 +92,12 @@ impl Encoder {
                     sys::AACENC_PARAM_AACENC_SBR_MODE,
                     consts::SBR_ON,
                 ))?;
+                // Every SBR access unit is advertised as a sync sample.
+                check(sys::aacEncoder_SetParam(
+                    handle,
+                    sys::AACENC_PARAM_AACENC_HEADER_PERIOD,
+                    1,
+                ))?;
             }
             check(sys::aacEncEncode(
                 handle,

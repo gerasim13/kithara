@@ -13,11 +13,8 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
-# Heavy work: this asks for the whole fleet, so it queues with the other heavy
-# lanes and takes its turn among them rather than beside them. A push is not
-# behind that queue; see ci.yml.
 concurrency:
-  group: heavy-linux-${{ github.repository }}
+  group: network-${{ github.repository }}-${{ github.ref }}
   cancel-in-progress: false
   queue: max
 

@@ -4,6 +4,7 @@
 //! person drives it, through the public API.
 
 mod picked;
+mod placeholder;
 mod scenario;
 mod ui;
 mod writes;

@@ -30,7 +30,7 @@ use kithara_net::{
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Notify},
-    time::{Duration, sleep},
+    time::{Duration, WallInstant, sleep},
 };
 use kithara_test_utils::{TestHttpServer, bufpool::pools, kithara};
 use url::Url;
@@ -121,19 +121,23 @@ async fn slow_headers_endpoint() -> impl IntoResponse {
 }
 
 async fn slow_body_endpoint() -> impl IntoResponse {
-    let stream = stream::iter(vec![
+    let mut chunks = vec![
         Ok::<_, axum::BoxError>(Bytes::from("Hello")),
         Ok(Bytes::from(", ")),
         Ok(Bytes::from("World")),
         Ok(Bytes::from("!")),
-    ])
-    .then(|chunk| async move {
-        sleep(Duration::from_millis(200)).await;
-        chunk
-    });
+    ]
+    .into_iter();
+    let stream =
+        stream::iter(chunks.next()).chain(stream::unfold(chunks, |mut chunks| async move {
+            sleep(Duration::from_millis(200)).await;
+            chunks.next().map(|chunk| (chunk, chunks))
+        }));
 
     Response::builder()
         .status(StatusCode::OK)
+        // NSURLSession buffers a tiny untyped body before reporting its response head.
+        .header(header::CONTENT_TYPE, "application/octet-stream")
         .body(Body::from_stream(stream))
         .unwrap()
 }
@@ -174,15 +178,6 @@ impl KeyRequestCounter {
     fn increment(&self, path: &str) {
         let mut counts = self.counts.write().unwrap();
         *counts.entry(path.to_string()).or_insert(0) += 1;
-    }
-}
-
-async fn retry_test_endpoint(State(counter): State<RequestCounter>) -> impl IntoResponse {
-    let attempt = counter.increment();
-
-    match attempt {
-        0 | 1 => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-        _ => "Success after retries".into_response(),
     }
 }
 
@@ -281,8 +276,6 @@ async fn key_with_params_endpoint(
 
 #[kithara::fixture]
 fn test_router() -> Router {
-    let counter = RequestCounter::new();
-
     Router::new()
         .route("/test", get(test_endpoint))
         .route("/head-length", head(head_length_endpoint))
@@ -294,8 +287,6 @@ fn test_router() -> Router {
         .route("/slow-headers", get(slow_headers_endpoint))
         .route("/slow-body", get(slow_body_endpoint))
         .route("/ignore-range", get(ignore_range_endpoint))
-        .route("/retry-test", get(retry_test_endpoint))
-        .with_state(counter)
 }
 
 fn key_test_router() -> Router {
@@ -494,24 +485,6 @@ async fn test_head_success_case(#[future] test_server: TestServer, http_client: 
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-async fn test_retry_variants(#[future] test_server: TestServer, http_client: HttpClient) {
-    let test_server = test_server.await;
-    let url = test_server.url("/retry-test");
-
-    let retry_policy = RetryPolicy::builder()
-        .max_retries(2)
-        .base_delay(Duration::from_millis(10))
-        .max_delay(Duration::from_secs(5))
-        .build();
-    let client = http_client.with_retry_policy(retry_policy);
-
-    let result = client.get_bytes(url, None).await;
-
-    assert!(result.is_ok());
-    assert_eq!(result.unwrap(), Bytes::from("Success after retries"));
-}
-
-#[kithara::test(tokio, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 async fn test_range_on_non_range_supporting_server(
     #[future] test_server: TestServer,
     http_client: HttpClient,
@@ -688,38 +661,60 @@ enum TimeoutOp {
     GetRange { start: u64, end: Option<u64> },
 }
 
+#[derive(Default)]
+struct HeadArrivals(Mutex<Vec<Duration>>);
+
+impl NetObserver for HeadArrivals {
+    fn first_byte(&self, elapsed: Duration, _status: u16, _partial: bool) {
+        self.0.lock().unwrap().push(elapsed);
+    }
+}
+
 #[kithara::test(tokio, timeout(Duration::from_secs(2)), hang_timeout_secs(1))]
 #[case::slow_alive_stream_completes(
     "/slow-body",
     Duration::from_millis(400),
     TimeoutOp::Stream,
-    Ok(&b"Hello, World!"[..])
+    Ok(&b"Hello, World!"[..]),
+    1
+)]
+#[case::slow_alive_whole_body_completes(
+    "/slow-body",
+    Duration::from_millis(400),
+    TimeoutOp::GetBytes,
+    Ok(&b"Hello, World!"[..]),
+    1
 )]
 #[case::body_silence_times_out_on_get_bytes(
     "/slow-body",
     Duration::from_millis(50),
     TimeoutOp::GetBytes,
-    Err(NetError::Timeout)
+    Err(NetError::Timeout),
+    1
 )]
 #[case::header_silence_times_out_on_stream(
     "/slow-headers",
     Duration::from_millis(100),
     TimeoutOp::Stream,
-    Err(NetError::Timeout)
+    Err(NetError::Timeout),
+    0
 )]
 #[case::header_silence_times_out_on_range(
     "/slow-headers",
     Duration::from_millis(100),
     TimeoutOp::GetRange { start: 0, end: Some(10) },
-    Err(NetError::Timeout)
+    Err(NetError::Timeout),
+    0
 )]
 async fn inactivity_timeout_bounds_silence_not_total_time(
     #[case] path: &str,
     #[case] inactivity: Duration,
     #[case] op: TimeoutOp,
     #[case] expected: Result<&'static [u8], NetError>,
+    #[case] expected_heads: usize,
 ) {
     let server = TestServer::new(test_router()).await;
+    let arrivals = Arc::new(HeadArrivals::default());
     let client = HttpClient::new(
         NetOptions::builder()
             .inactivity_timeout(inactivity)
@@ -727,8 +722,10 @@ async fn inactivity_timeout_bounds_silence_not_total_time(
             .build(),
         pools(),
         CancelToken::never(),
-    );
+    )
+    .with_observer(Some(Observer(arrivals.clone())));
     let url = server.url(path);
+    let wall = WallInstant::now();
 
     let result = match op {
         TimeoutOp::GetBytes => client
@@ -741,10 +738,19 @@ async fn inactivity_timeout_bounds_silence_not_total_time(
         }
     };
 
+    assert_eq!(arrivals.0.lock().unwrap().len(), expected_heads);
     match (&result, &expected) {
         (Ok(body), Ok(expected_body)) => assert_eq!(body.as_slice(), *expected_body),
-        (Err(NetError::Timeout), Err(NetError::Timeout)) => {}
-        _ => panic!("expected {expected:?}, got {result:?}"),
+        (Err(NetError::Timeout), Err(NetError::Timeout)) => {
+            assert!(
+                wall.elapsed() >= inactivity,
+                "real I/O timed out prematurely"
+            );
+        }
+        _ => panic!(
+            "expected {expected:?}, got {result:?}; response heads: {:?}",
+            arrivals.0.lock().unwrap()
+        ),
     }
 }
 
@@ -777,9 +783,9 @@ async fn cancel_during_backoff_ends_the_call_without_the_delay() {
                 .max_delay(Duration::from_secs(10))
                 .build(),
         )
-        .build()
+        .build();
+    let client = HttpClient::new(options, pools(), cancel.clone())
         .with_observer(Some(Observer(backoff_started.clone())));
-    let client = HttpClient::new(options, pools(), cancel.clone());
     let cancel_in_backoff = async {
         backoff_started.0.notified().await;
         sleep(Duration::from_millis(50)).await;
@@ -797,56 +803,258 @@ async fn cancel_during_backoff_ends_the_call_without_the_delay() {
     }
 }
 
-#[derive(Default)]
-struct ExhaustionLog(Mutex<Vec<(u32, u64, NetError)>>);
-
-impl NetObserver for ExhaustionLog {
-    fn retry_exhausted(&self, max_retries: u32, consumed: u64, error: &NetError) {
-        self.0
-            .lock()
-            .unwrap()
-            .push((max_retries, consumed, error.clone()));
-    }
-}
-
 #[kithara::test(tokio, timeout(Duration::from_secs(2)), hang_timeout_secs(1))]
-#[case::budget_spent(2, "/error500", true)]
-#[case::no_budget(0, "/error500", false)]
-#[case::fatal_cause(2, "/error404", false)]
+#[case::budget_spent(2, None, "/error500", true)]
+#[case::no_budget(0, None, "/error500", false)]
+#[case::fatal_cause(2, None, "/error404", false)]
+#[case::policy_after_observer(0, Some(2), "/error500", true)]
 async fn establish_exhaustion_is_reported_once_with_its_cause(
     #[case] max_retries: u32,
+    #[case] then_max_retries: Option<u32>,
     #[case] path: &str,
     #[case] reported: bool,
 ) {
     let server = TestServer::new(test_router()).await;
-    let log = Arc::new(ExhaustionLog::default());
+    let reports = Arc::new(Reports::default());
     let options = NetOptions::builder()
-        .retry_policy(
-            RetryPolicy::builder()
-                .max_retries(max_retries)
-                .base_delay(Duration::from_millis(1))
-                .max_delay(Duration::from_millis(5))
-                .build(),
-        )
-        .build()
-        .with_observer(Some(Observer(log.clone())));
-    let client = HttpClient::new(options, pools(), CancelToken::never());
+        .retry_policy(fast_retry_policy(max_retries))
+        .build();
+    let observed = HttpClient::new(options, pools(), CancelToken::never())
+        .with_observer(Some(Observer(reports.clone())));
+    let client = match then_max_retries {
+        Some(max_retries) => observed.with_retry_policy(fast_retry_policy(max_retries)),
+        None => observed,
+    };
 
     let _ = client.get_bytes(server.url(path), None).await;
 
-    let reports = std::mem::take(&mut *log.0.lock().unwrap());
+    let exhausted: Vec<Report> = reports
+        .take()
+        .into_iter()
+        .filter(|report| matches!(report, Report::Exhausted { .. }))
+        .collect();
     if reported {
         assert!(
             matches!(
-                reports.as_slice(),
-                [(2, 0, NetError::Status { status, .. })] if status.get() == 500
+                exhausted.as_slice(),
+                [Report::Exhausted {
+                    max_retries: 2,
+                    consumed: 0,
+                    error: NetError::Status { status, .. },
+                }] if status.get() == 500
             ),
-            "expected one exhaustion report (2, 0, HTTP 500), got {reports:?}"
+            "expected one exhaustion report (2, 0, HTTP 500), got {exhausted:?}"
         );
     } else {
         assert!(
-            reports.is_empty(),
-            "expected no exhaustion report, got {reports:?}"
+            exhausted.is_empty(),
+            "expected no exhaustion report, got {exhausted:?}"
         );
     }
+}
+
+#[derive(Debug)]
+enum Report {
+    FirstByte {
+        status: u16,
+    },
+    Retrying {
+        attempt: u32,
+        max_retries: u32,
+    },
+    Exhausted {
+        max_retries: u32,
+        consumed: u64,
+        error: NetError,
+    },
+}
+
+/// Records every report in order.
+#[derive(Default)]
+struct Reports(Mutex<Vec<Report>>);
+
+impl Reports {
+    fn take(&self) -> Vec<Report> {
+        std::mem::take(&mut *self.0.lock().unwrap())
+    }
+}
+
+impl NetObserver for Reports {
+    fn first_byte(&self, _ttfb: Duration, status: u16, _partial: bool) {
+        self.0.lock().unwrap().push(Report::FirstByte { status });
+    }
+
+    fn retry_exhausted(&self, max_retries: u32, consumed: u64, error: &NetError) {
+        self.0.lock().unwrap().push(Report::Exhausted {
+            max_retries,
+            consumed,
+            error: error.clone(),
+        });
+    }
+
+    fn retrying(&self, attempt: u32, max_retries: u32, _error: &NetError, _backoff: Duration) {
+        self.0.lock().unwrap().push(Report::Retrying {
+            attempt,
+            max_retries,
+        });
+    }
+}
+
+fn fast_retry_policy(max_retries: u32) -> RetryPolicy {
+    RetryPolicy::builder()
+        .max_retries(max_retries)
+        .base_delay(Duration::from_millis(1))
+        .max_delay(Duration::from_millis(5))
+        .build()
+}
+
+fn fast_retry_client() -> HttpClient {
+    HttpClient::new(
+        NetOptions::builder()
+            .retry_policy(fast_retry_policy(2))
+            .build(),
+        pools(),
+        CancelToken::never(),
+    )
+}
+
+#[derive(Copy, Clone, Debug)]
+enum Op {
+    GetBytes,
+    Head,
+    Post,
+    Stream,
+    Range,
+}
+
+/// The body of a successful `op`: empty for `head`.
+async fn call(client: &HttpClient, url: Url, op: Op) -> Result<Vec<u8>, NetError> {
+    match op {
+        Op::GetBytes => client.get_bytes(url, None).await.map(|body| body.to_vec()),
+        Op::Head => client.head(url, None).await.map(|_| Vec::new()),
+        Op::Post => client
+            .post_bytes(url, Bytes::from_static(b"ping"), None)
+            .await
+            .map(|body| body.to_vec()),
+        Op::Stream => test_stream_success(client, url).await,
+        Op::Range => test_get_range_success(client, url, 0, Some(1)).await,
+    }
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(2)), hang_timeout_secs(1))]
+#[case::get_bytes(Op::GetBytes)]
+#[case::stream(Op::Stream)]
+#[case::range(Op::Range)]
+#[case::head(Op::Head)]
+async fn an_observed_handle_reports_every_attempt(#[case] op: Op) {
+    let server = TestServer::new(test_router()).await;
+    let client = fast_retry_client();
+    let reports = Arc::new(Reports::default());
+    let observed = client.with_observer(Some(Observer(reports.clone())));
+    let url = server.url("/error500");
+
+    call(&observed, url.clone(), op)
+        .await
+        .expect_err("every attempt answers 500");
+    let observed_reports = reports.take();
+    call(&client, url, op)
+        .await
+        .expect_err("every attempt answers 500");
+
+    let is_500 =
+        |error: &NetError| matches!(error, NetError::Status { status, .. } if status.get() == 500);
+    let reported = match op {
+        Op::Head => matches!(
+            observed_reports
+                .iter()
+                .filter(|report| !matches!(report, Report::FirstByte { .. }))
+                .collect::<Vec<_>>()
+                .as_slice(),
+            [
+                Report::Retrying {
+                    attempt: 1,
+                    max_retries: 2
+                },
+                Report::Retrying {
+                    attempt: 2,
+                    max_retries: 2
+                },
+                Report::Exhausted {
+                    max_retries: 2,
+                    consumed: 0,
+                    error,
+                },
+            ] if is_500(error)
+        ),
+        _ => matches!(
+            observed_reports.as_slice(),
+            [
+                Report::FirstByte { status: 500 },
+                Report::Retrying {
+                    attempt: 1,
+                    max_retries: 2
+                },
+                Report::FirstByte { status: 500 },
+                Report::Retrying {
+                    attempt: 2,
+                    max_retries: 2
+                },
+                Report::FirstByte { status: 500 },
+                Report::Exhausted {
+                    max_retries: 2,
+                    consumed: 0,
+                    error,
+                },
+            ] if is_500(error)
+        ),
+    };
+    assert!(reported, "got {observed_reports:?}");
+    assert!(
+        reports.take().is_empty(),
+        "the base client reports to no observer"
+    );
+}
+
+/// `/flaky-body` answers 503 to its first request and `ok`, or the posted
+/// body, after; the counter counts every request.
+fn flaky_body_router() -> (Router, RequestCounter) {
+    let counter = RequestCounter::new();
+    let router = Router::new()
+        .route(
+            "/flaky-body",
+            get(|State(counter): State<RequestCounter>| async move {
+                if counter.increment() == 0 {
+                    StatusCode::SERVICE_UNAVAILABLE.into_response()
+                } else {
+                    "ok".into_response()
+                }
+            })
+            .post(
+                |State(counter): State<RequestCounter>, body: Bytes| async move {
+                    if counter.increment() == 0 {
+                        StatusCode::SERVICE_UNAVAILABLE.into_response()
+                    } else {
+                        body.into_response()
+                    }
+                },
+            ),
+        )
+        .with_state(counter.clone());
+    (router, counter)
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(2)), hang_timeout_secs(1))]
+#[case::get_bytes(Op::GetBytes, b"ok")]
+#[case::head(Op::Head, b"")]
+#[case::post(Op::Post, b"ping")]
+#[case::stream(Op::Stream, b"ok")]
+#[case::range(Op::Range, b"ok")]
+async fn a_transient_status_is_retried(#[case] op: Op, #[case] expected: &[u8]) {
+    let (router, counter) = flaky_body_router();
+    let server = TestServer::new(router).await;
+
+    let body = call(&fast_retry_client(), server.url("/flaky-body"), op).await;
+
+    assert_eq!(body.expect("the retried request answers"), expected);
+    assert_eq!(counter.count.load(Ordering::SeqCst), 2);
 }

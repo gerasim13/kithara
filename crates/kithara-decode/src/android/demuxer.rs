@@ -33,9 +33,8 @@ impl AndroidMediaExtractorDemuxer {
         codec: AudioCodec,
         byte_map: Option<Arc<dyn ByteMap>>,
         byte_len: Option<Arc<AtomicU64>>,
-        init_end: Option<u64>,
     ) -> DecodeResult<(Self, OwnedFormat)> {
-        let mut extractor = AndroidMediaExtractor::open(source, byte_len, init_end)?;
+        let mut extractor = AndroidMediaExtractor::open(source, byte_len)?;
         let (
             TrackFormatInfo {
                 sample_rate,

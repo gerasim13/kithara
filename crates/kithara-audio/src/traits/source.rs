@@ -47,7 +47,7 @@ pub trait AudioSource: Send + 'static {
     fn native_pcm_basis(&self) -> Option<AudioChunkInfo> {
         None
     }
-    /// Original raw coordinate of track-media zero.
+    /// Raw decoded-source coordinate of content zero: track-media zero past the codec's leading frames, so every variant of one stream shares it.
     fn media_origin(&self) -> Option<Duration> {
         None
     }

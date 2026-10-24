@@ -5,9 +5,7 @@ use kithara_stream::{
 };
 use tracing::{debug, trace, warn};
 
-use super::core::{
-    OwnerPhase, StreamAudioSource, initial_promotion_frontier, promotion_frontier_for,
-};
+use super::core::{OwnerPhase, StreamAudioSource, promotion_frontier_for};
 use crate::{
     DecoderChangeCause, WaitingReason,
     pipeline::decode::{
@@ -42,7 +40,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             self.abandon_incoming();
             drop(
                 self.decode
-                    .begin_incoming(transition, initial_promotion_frontier(transition)),
+                    .begin_incoming(transition, OutgoingFrontier::Awaiting),
             );
         }
         if !self.decode.incoming_is_preparing(transition) {
@@ -166,17 +164,11 @@ impl<T: StreamType> StreamAudioSource<T> {
         match control.promote_variant(transition) {
             VariantPromotion::Promoted => {
                 let previous_revision = self.decode.discontinuity().revision();
-                let previous_resume = self.resume.source_end();
                 let incoming_resume = prepared.resume_head();
                 let outgoing = self.decode.commit_prepared_promotion(prepared);
-                let resume = if self.decode.discontinuity().revision() == previous_revision {
-                    previous_resume
-                } else {
-                    Some(incoming_resume)
-                };
-                self.resume.clear();
-                if let Some(resume) = resume {
-                    self.resume.rebase(resume);
+                if self.decode.discontinuity().revision() != previous_revision {
+                    self.resume.clear();
+                    self.resume.rebase(incoming_resume);
                 }
                 self.waiting_for_source = false;
                 {

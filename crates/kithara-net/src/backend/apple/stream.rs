@@ -15,7 +15,7 @@ use kithara_platform::{
 
 use super::{
     delegate::AppleSessionEvents,
-    response::{AppleDataResponse, StreamHead, consts::HTTP_PARTIAL_CONTENT, copy_data},
+    response::{StreamHead, consts::HTTP_PARTIAL_CONTENT, copy_data},
     session::{AppleTask, TaskId},
 };
 use crate::{ByteStream, backend::pooled::ByteBuffers, error::NetError, types::Headers};
@@ -266,30 +266,7 @@ impl Drop for AppleBodyStream {
 fn content_length(headers: &Headers) -> Option<u64> {
     headers
         .get("content-length")
-        .or_else(|| headers.get("Content-Length"))
         .and_then(|value| value.parse().ok())
-}
-
-pub(super) async fn wait_for_data(
-    receiver: oneshot::Receiver<Result<AppleDataResponse, NetError>>,
-    task: AppleTask,
-    cancel: CancelToken,
-) -> Result<AppleDataResponse, NetError> {
-    let mut guard = DataTaskGuard::new(task);
-    select! {
-        biased;
-        () = cancel.cancelled() => {
-            guard.cancel();
-            Err(NetError::Cancelled)
-        }
-        result = receiver => {
-            let result = result.unwrap_or_else(
-                |_| Err(NetError::Network("NSURLSession data task closed without completion".to_string())),
-            );
-            guard.disarm();
-            result
-        }
-    }
 }
 
 pub(super) async fn wait_for_stream_head(
@@ -336,36 +313,6 @@ pub(super) async fn wait_for_stream_head(
                     Err(NetError::Network("NSURLSession stream closed before response headers".to_string()))
                 }
             }
-        }
-    }
-}
-
-struct DataTaskGuard {
-    task: AppleTask,
-    active: bool,
-}
-
-impl DataTaskGuard {
-    fn new(task: AppleTask) -> Self {
-        Self { task, active: true }
-    }
-
-    fn cancel(&mut self) {
-        if self.active {
-            self.task.cancel();
-            self.active = false;
-        }
-    }
-
-    fn disarm(&mut self) {
-        self.active = false;
-    }
-}
-
-impl Drop for DataTaskGuard {
-    fn drop(&mut self) {
-        if self.active {
-            self.task.cancel();
         }
     }
 }

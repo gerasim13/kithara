@@ -9,6 +9,7 @@ use kithara_render::{Dispatched, DispatcherCommand, Loaded, ServiceClass};
 use super::*;
 use crate::{
     Transition,
+    mock::fixture_uri,
     queue::slots::{LoadState, Slots},
 };
 
@@ -27,13 +28,7 @@ fn append(
                     QueueCommand::Append {
                         position: kithara_play::Position::ZERO,
                         id,
-                        source: TrackSource::Uri(
-                            dir.path()
-                                .join("entry.wav")
-                                .to_str()
-                                .expect("fixture path")
-                                .to_owned(),
-                        ),
+                        source: TrackSource::Uri(fixture_uri(dir.path(), "entry.wav")),
                     },
                     out,
                 )
@@ -266,13 +261,7 @@ async fn initial_append_loads_at_its_cue_without_a_seek() {
             queue,
             QueueCommand::Append {
                 id,
-                source: TrackSource::Uri(
-                    dir.path()
-                        .join("entry.wav")
-                        .to_str()
-                        .expect("fixture path")
-                        .to_owned(),
-                ),
+                source: TrackSource::Uri(fixture_uri(dir.path(), "entry.wav")),
                 position,
             },
             out,
@@ -323,13 +312,7 @@ async fn preloaded_append_keeps_its_cue_without_seeking_the_current_track() {
             queue,
             QueueCommand::Append {
                 id,
-                source: TrackSource::Uri(
-                    dir.path()
-                        .join("entry.wav")
-                        .to_str()
-                        .expect("fixture path")
-                        .to_owned(),
-                ),
+                source: TrackSource::Uri(fixture_uri(dir.path(), "entry.wav")),
                 position,
             },
             out,

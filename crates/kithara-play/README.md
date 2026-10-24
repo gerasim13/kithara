@@ -125,9 +125,10 @@ resource.read(&mut buf);
   backend. A speed change goes to each held track's render lane and applies on
   a frame of its output, mid-track. Render quantum and rate smoothing remain
   optional frame-based Warp settings. Player resolves an
-  unspecified render quantum to 32 frames when `response_budget_frames` is
-  supplied. This optional application constraint retains admission checks
-  against the actual Host output shape.
+  unspecified render quantum to the Host output block, so every lane packet
+  carries one block. `response_budget_frames` is an optional application
+  constraint that also sizes buffering and retains admission checks against
+  the actual Host output shape.
 - **Events:** `tokio::sync::broadcast` via `player.subscribe()` /
   the Host subscriptions (`PlayerEvent`, `EngineEvent`,
   `SessionEvent`, `DjEvent`).

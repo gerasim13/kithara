@@ -90,20 +90,10 @@ jobs:
       only: ${{ inputs.only || '' }}
       narrow: ${{ inputs.narrow || '' }}
 
-  # The lanes that ask for the whole fleet take turns with each other. One
-  # machine serves every lane, and a queue that also stalled the pushes was
-  # measured on the Linux host: a nightly assessment held the only slot with
-  # three jobs while two pushes waited fourteen minutes with fifteen of
-  # eighteen runner slots idle. The group is held by the calling job, so the
-  # fan-out's own lanes still run concurrently inside its turn.
   deep:
     if: >-
       vars.KITHARA_RUNNER_LABELS != ''
       && (inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || github.event.schedule == '17 3 1 * *' && 'monthly' || 'nightly')) != 'monthly'
-    concurrency:
-      group: heavy-linux-${{ github.repository }}
-      cancel-in-progress: false
-      queue: max
     uses: ./.github/workflows/run.yml
     with:
       role: deep
@@ -118,10 +108,6 @@ jobs:
       vars.KITHARA_RUNNER_LABELS != ''
       && (inputs.mutants || (inputs.only || '') != '')
       && (inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || github.event.schedule == '17 3 1 * *' && 'monthly' || 'nightly')) != 'monthly'
-    concurrency:
-      group: heavy-linux-${{ github.repository }}
-      cancel-in-progress: false
-      queue: max
     uses: ./.github/workflows/run.yml
     with:
       role: mutants
@@ -133,10 +119,6 @@ jobs:
     if: >-
       vars.KITHARA_RUNNER_LABELS != ''
       && (inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || github.event.schedule == '17 3 1 * *' && 'monthly' || 'nightly')) != 'monthly'
-    concurrency:
-      group: heavy-linux-${{ github.repository }}
-      cancel-in-progress: false
-      queue: max
     uses: ./.github/workflows/run.yml
     with:
       role: quality

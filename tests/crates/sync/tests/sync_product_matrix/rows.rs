@@ -4,7 +4,6 @@ use super::{cases::*, harness::*, imports::*, providers::*};
 
 #[kithara::test(native, tokio, multi_thread, serial)]
 #[case::synthetic(synthetic_sources().await, CUE)]
-#[case::mp3_same(source_mp3_same().await, CUE)]
 #[case::mp3_distinct(source_mp3_distinct().await, CUE)]
 #[case::hls_plain(source_hls_same_plain().await, CUE)]
 #[case::hls_drm(source_hls_same_drm().await, CUE)]
@@ -13,10 +12,9 @@ use super::{cases::*, harness::*, imports::*, providers::*};
 #[case::ambient_trip_hop(source_ambient_trip_hop_provider().await, CUE)]
 #[case::downtempo_house(source_downtempo_house_provider().await, CUE)]
 #[case::techno_breakbeat(source_techno_breakbeat_provider().await, CUE)]
-#[case::cross_style(source_cross_style_provider().await, CUE)]
 #[case::tunnel(tunnel_sources().await, TUNNEL_CUE)]
 #[case::newtechno(newtechno_sources().await, NEWTECHNO_PHRASE)]
-#[case::library(prepared_sources(Provider::Library(crate::providers::LIBRARY)).await, CUE)]
+#[case::library(prepared_sources(Provider::Library(crate::providers::LIBRARY)).await, Start::bar(0))]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn provider_tempo_controls_measure_without_sync(
     #[case] prepared: PreparedSources,
@@ -27,36 +25,36 @@ async fn provider_tempo_controls_measure_without_sync(
         if prepared.2[..deck].contains(source) {
             continue;
         }
+        // Mp3Distinct already checks the identical local B source and oracle.
+        if matches!(prepared.0, Provider::HlsMp3(_)) && deck % 2 == 1 {
+            continue;
+        }
         let ArtifactSource::Value(mut grid) = prepared.0.beat_grid(deck) else {
             panic!("control has a known fixture grid");
         };
         let native_bpm = grid.as_raw().bpm;
         #[cfg(not(target_os = "android"))]
-        let mut reference = match prepared.0.control_reference(deck) {
-            Some(asset) => Some(
-                kithara_integration_tests::pcm_oracle::decode_native(asset.bytes())
-                    .await
-                    .expect("independent native control reference"),
-            ),
-            None => None,
-        };
+        let mut reference = prepared.0.control_reference(deck).map(|asset| {
+            kithara_integration_tests::pcm_oracle::prepared_native(&asset)
+                .expect("independent native control reference")
+        });
         #[cfg(target_os = "android")]
         let mut reference: Option<kithara_integration_tests::pcm_oracle::Audio> = None;
         let wrong_asset = prepared.0.wrong_control_reference(deck);
         #[cfg(not(target_os = "android"))]
-        let mut wrong_source =
-            kithara_integration_tests::pcm_oracle::decode_native(wrong_asset.bytes())
-                .await
-                .expect("independent wrong-source control reference");
+        let mut wrong_source = kithara_integration_tests::pcm_oracle::prepared_native(&wrong_asset)
+            .expect("independent wrong-source control reference");
         #[cfg(target_os = "android")]
-        let mut wrong_source = kithara_integration_tests::pcm_oracle::Audio {
-            samples: kithara_integration_tests::pcm_oracle::decode(wrong_asset.bytes())
-                .await
-                .expect("independent 48 kHz stereo wrong-source fixture"),
-            channels: CHANNELS,
-            sample_rate: 48_000,
-        };
-        for target in [native_bpm, 108.0, 120.0, 127.0, 132.0] {
+        let mut wrong_source = kithara_integration_tests::pcm_oracle::prepared(&wrong_asset)
+            .expect("independent 48 kHz stereo wrong-source fixture");
+        let targets = [native_bpm, 108.0, 120.0, 127.0, 132.0];
+        for (index, &target) in targets.iter().enumerate() {
+            if targets[..index]
+                .iter()
+                .any(|previous| previous.to_bits() == target.to_bits())
+            {
+                continue;
+            }
             hang_tick!(format!(
                 "{:?}: deck {deck}, native {native_bpm}, target {target}",
                 prepared.0
@@ -174,16 +172,10 @@ async fn run_with_decoder(
     let mut tracks = Vec::with_capacity(case.decks);
     let mut request_failures = Vec::new();
     for audible_deck in 0..case.decks {
-        let wrong_source = kithara_integration_tests::pcm_oracle::decode(
-            provider.wrong_control_reference(audible_deck).bytes(),
+        let wrong_source = kithara_integration_tests::pcm_oracle::prepared(
+            &provider.wrong_control_reference(audible_deck),
         )
-        .await
         .expect("independent wrong-source payload");
-        let wrong_source = kithara_integration_tests::pcm_oracle::Audio {
-            samples: wrong_source,
-            channels: CHANNELS,
-            sample_rate: 48_000,
-        };
         hang_tick!(format!(
             "{} {provider:?}: capturing deck {audible_deck}",
             case.id
@@ -218,9 +210,28 @@ async fn run_with_decoder(
         );
         request_failures.extend(harness.grid_binding_failures(case).await);
         request_failures.extend(harness.grid_anchor_failures(case, None).await);
-        tracks.push(pcm);
+        #[cfg(not(target_os = "android"))]
+        let direct_binding = audible_deck == 0
+            && decoder.is_none()
+            && matches!(provider, Provider::HlsMp3(_))
+            && [TEMPO_DOWN_30.id, SYNC_SEEK_PLAY.id].contains(&case.id);
+        #[cfg(not(target_os = "android"))]
+        if direct_binding {
+            request_failures.extend(harness.grid_anchor_failures(case, Some(2)).await);
+        }
         request_failures.append(&mut harness.failures);
         drop(harness);
+        #[cfg(not(target_os = "android"))]
+        if direct_binding {
+            request_failures.extend(synchronization_failures(
+                "supplementary PCM",
+                &[&pcm],
+                CHANNELS,
+                case.sample_rate,
+                case.final_bpm(),
+            ));
+        }
+        tracks.push(pcm);
         hang_reset!();
     }
     let track_slices = tracks.iter().map(Vec::as_slice).collect::<Vec<_>>();
@@ -298,6 +309,28 @@ async fn wav_product_rows_reach_the_pcm_oracle(
     run(case, provider, CUE).await;
 }
 
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    timeout(if cfg!(target_os = "android") {
+        Duration::from_secs(600)
+    } else {
+        Duration::from_secs(60)
+    })
+)]
+#[case::hls_mp3_sync_seek_play(source_hls_mp3_plain().await, SYNC_SEEK_PLAY)]
+#[case::hls_mp3_tempo_down_30hz(source_hls_mp3_plain().await, TEMPO_DOWN_30)]
+#[case::drm_mp3_sync_seek_play(source_hls_mp3_drm().await, SYNC_SEEK_PLAY)]
+#[case::drm_mp3_tempo_down_30hz(source_hls_mp3_drm().await, TEMPO_DOWN_30)]
+async fn supplied_grid_product_rows_reach_the_pcm_oracle(
+    #[case] provider: PreparedSources,
+    #[case] case: SyncCase,
+) {
+    run(case, provider, CUE).await;
+}
+
 #[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(600)))]
 #[case::hls_same_play_sync_seek(source_hls_same_plain().await, PLAY_SYNC_SEEK)]
 #[case::hls_same_play_seek_sync(source_hls_same_plain().await, PLAY_SEEK_SYNC)]
@@ -348,23 +381,19 @@ async fn wav_product_rows_reach_the_pcm_oracle(
 #[case::hls_mp3_seek_play_sync(source_hls_mp3_plain().await, SEEK_PLAY_SYNC)]
 #[case::hls_mp3_seek_sync_play(source_hls_mp3_plain().await, SEEK_SYNC_PLAY)]
 #[case::hls_mp3_sync_play_seek(source_hls_mp3_plain().await, SYNC_PLAY_SEEK)]
-#[case::hls_mp3_sync_seek_play(source_hls_mp3_plain().await, SYNC_SEEK_PLAY)]
 #[case::hls_mp3_sequential_sync(source_hls_mp3_plain().await, SEQUENTIAL_SYNC)]
 #[case::hls_mp3_paused_sync_then_play(source_hls_mp3_plain().await, PAUSED_SYNC)]
 #[case::hls_mp3_four_deck_sequential_sync(source_hls_mp3_plain().await, FOUR_DECK_SYNC)]
 #[case::hls_mp3_tempo_up_120hz(source_hls_mp3_plain().await, TEMPO_UP_120)]
-#[case::hls_mp3_tempo_down_30hz(source_hls_mp3_plain().await, TEMPO_DOWN_30)]
 #[case::drm_mp3_play_sync_seek(source_hls_mp3_drm().await, PLAY_SYNC_SEEK)]
 #[case::drm_mp3_play_seek_sync(source_hls_mp3_drm().await, PLAY_SEEK_SYNC)]
 #[case::drm_mp3_seek_play_sync(source_hls_mp3_drm().await, SEEK_PLAY_SYNC)]
 #[case::drm_mp3_seek_sync_play(source_hls_mp3_drm().await, SEEK_SYNC_PLAY)]
 #[case::drm_mp3_sync_play_seek(source_hls_mp3_drm().await, SYNC_PLAY_SEEK)]
-#[case::drm_mp3_sync_seek_play(source_hls_mp3_drm().await, SYNC_SEEK_PLAY)]
 #[case::drm_mp3_sequential_sync(source_hls_mp3_drm().await, SEQUENTIAL_SYNC)]
 #[case::drm_mp3_paused_sync_then_play(source_hls_mp3_drm().await, PAUSED_SYNC)]
 #[case::drm_mp3_four_deck_sequential_sync(source_hls_mp3_drm().await, FOUR_DECK_SYNC)]
 #[case::drm_mp3_tempo_up_120hz(source_hls_mp3_drm().await, TEMPO_UP_120)]
-#[case::drm_mp3_tempo_down_30hz(source_hls_mp3_drm().await, TEMPO_DOWN_30)]
 async fn real_media_product_rows_reach_the_pcm_oracle(
     #[case] provider: PreparedSources,
     #[case] case: SyncCase,

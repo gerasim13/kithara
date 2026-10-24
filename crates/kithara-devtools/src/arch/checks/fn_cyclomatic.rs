@@ -98,11 +98,12 @@ fn walk_impl(im: &ItemImpl, scope: &[String], out: &mut Vec<(String, usize)>) {
     }
 }
 
-/// Cyclomatic complexity as `cargo-crap` measures it, so the number agrees with the
-/// CRAP report: one path through the body plus one per `if`, loop, `match`
-/// arm, `&&`/`||` and `?`. A closure's decisions are its own, not the
-/// enclosing function's; items nested in the body and macro input are not
-/// part of it either.
+/// Cyclomatic complexity: one path through the body plus one per `if`,
+/// loop, `&&`/`||` and `?`, one per `match` and one more per guarded arm.
+/// The compiler already proves a `match` exhaustive, so its unguarded arms
+/// add no path to review, and a flat dispatch over an enum costs one. A
+/// closure's decisions are its own, not the enclosing function's; items
+/// nested in the body and macro input are not part of it either.
 fn complexity(body: &Block) -> usize {
     let mut decisions = Decisions::default();
     decisions.visit_block(body);
@@ -119,7 +120,13 @@ impl<'ast> Visit<'ast> for Decisions {
         self.count += match expr {
             Expr::Closure(_) => return,
             Expr::If(_) | Expr::While(_) | Expr::ForLoop(_) | Expr::Loop(_) | Expr::Try(_) => 1,
-            Expr::Match(m) => m.arms.len(),
+            Expr::Match(m) => {
+                1 + m
+                    .arms
+                    .iter()
+                    .filter(|arm| matches!(arm.pat, syn::Pat::Guard(_)))
+                    .count()
+            }
             Expr::Binary(b) if matches!(b.op, BinOp::And(_) | BinOp::Or(_)) => 1,
             _ => 0,
         };
@@ -155,12 +162,39 @@ fn decisions(x: Option<u8>, y: bool) -> Option<u8> {
     None
 }
 ";
-        // if, &&, for, while, ||, loop, three arms and `?`: ten decisions;
+        // if, &&, for, while, ||, loop, the match and `?`: eight decisions;
         // the closure's `if` and `nested` belong to themselves.
         assert_eq!(
             measured(source),
-            [("straight".to_string(), 1), ("decisions".to_string(), 11)]
+            [("straight".to_string(), 1), ("decisions".to_string(), 9)]
         );
+    }
+
+    #[test]
+    fn a_flat_match_counts_once() {
+        let arms: String = (0..20).map(|n| format!("{n} => {n},")).collect();
+        let source = format!("fn flat(x: u8) -> u8 {{ match x {{ {arms} _ => 0 }} }}");
+        assert_eq!(measured(&source), [("flat".to_string(), 2)]);
+    }
+
+    #[test]
+    fn each_guarded_arm_adds_one() {
+        let source = r"
+fn guarded(x: u8, y: bool) -> u8 {
+    match x { 0 if y => 1, 1 if !y => 2, 2 => 3, _ => 4 }
+}
+";
+        assert_eq!(measured(source), [("guarded".to_string(), 4)]);
+    }
+
+    #[test]
+    fn decisions_inside_arms_still_count() {
+        let source = r"
+fn arms(x: u8, v: Option<u8>) -> Option<u8> {
+    Some(match x { 0 => v?, 1 => v? + 1, _ => v? + 2 })
+}
+";
+        assert_eq!(measured(source), [("arms".to_string(), 5)]);
     }
 
     #[test]

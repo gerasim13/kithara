@@ -47,8 +47,12 @@ fn leaked_output_fails_the_lane_and_stress_report() {
         &fs::read_to_string(root().join(".config/nextest.toml")).expect("nextest configuration"),
     )
     .expect("nextest TOML");
-    let profiles =
-        toml::Table::from_iter([("stress".to_owned(), repository["profile"]["stress"].clone())]);
+    let mut stress = repository["profile"]["stress"]
+        .as_table()
+        .expect("stress profile")
+        .clone();
+    stress.remove("overrides");
+    let profiles = toml::Table::from_iter([("stress".to_owned(), toml::Value::Table(stress))]);
     let isolated = toml::Table::from_iter([("profile".to_owned(), toml::Value::Table(profiles))]);
     let config = temp.path().join("nextest.toml");
     fs::write(
@@ -69,6 +73,7 @@ fn leaked_output_fails_the_lane_and_stress_report() {
             .arg(&config)
             .args(["-E", "test(=leaks_output)"])
             .env("CARGO_TARGET_DIR", temp.path().join("build"))
+            .env("CARGO_HOME", temp.path().join("cargo-home"))
             .env("LEAK_RELEASE_PATH", &release)
             .env("LEAK_RELEASED_PATH", &released)
             .env("LEAK_STARTED_PATH", &started);

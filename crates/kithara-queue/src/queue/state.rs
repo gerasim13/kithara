@@ -222,15 +222,21 @@ where
         }
         self.events.extend(self.tracks.drain_events());
         let snapshot = self.queue_snapshot();
-        let previous = self.view.read().deck.mix;
+        let previous = self.view.read();
+        let rate = snapshot.applied_rate();
+        let rate_changed = previous.applied_rate() != rate;
+        let previous_mix = previous.deck.mix;
         let mix = snapshot.deck.mix;
         self.view.publish(snapshot);
-        if previous.volume() != mix.volume() {
+        if rate_changed {
+            self.bus.publish(PlayerEvent::RateChanged { rate });
+        }
+        if previous_mix.volume() != mix.volume() {
             self.bus.publish(PlayerEvent::VolumeChanged {
                 volume: f32::from(mix.volume()),
             });
         }
-        if previous.muted() != mix.muted() {
+        if previous_mix.muted() != mix.muted() {
             self.bus
                 .publish(PlayerEvent::MuteChanged { muted: mix.muted() });
         }
@@ -742,12 +748,6 @@ pub(crate) mod tests {
         assert_eq!(queue.control().position_seconds(), None);
     }
 
-    #[kithara::test]
-    fn select_phase_idle_after_construction() {
-        let (queue, _audio_thread) = make_queue();
-        assert!(queue.target.is_none());
-    }
-
     fn armed_queue(id: TrackId) -> (Queue<TestPools>, DeckRig<TestPools>, Seq, Seq) {
         let (mut queue, mut rig) = make_queue();
         apply(
@@ -800,36 +800,6 @@ pub(crate) mod tests {
     }
 
     #[kithara::test]
-    fn atomic_track_id_disarmed_loads_disarmed() {
-        let (queue, _rig) = make_queue();
-        assert_eq!(queue.target.map(|target| target.to), None);
-    }
-
-    #[kithara::test(tokio)]
-    async fn atomic_track_id_take_if_matches_only_disarms_matching_track() {
-        let (mut queue, _rig, seq, unrelated) = armed_queue(TrackId(7));
-        assert_eq!(queue.target.map(|target| target.to), Some(TrackId(7)));
-        queue
-            .transition_applied(
-                unrelated,
-                queue.incoming_index(TrackId(7)).expect("incoming"),
-                SessionFrame::new(128),
-            )
-            .expect("stale receipt");
-        assert_eq!(queue.target.map(|target| target.to), Some(TrackId(7)));
-        assert_eq!(queue.current, None);
-        queue
-            .transition_applied(
-                seq,
-                queue.incoming_index(TrackId(7)).expect("incoming"),
-                SessionFrame::new(128),
-            )
-            .expect("matching receipt");
-        assert_eq!(queue.current, Some(TrackId(7)));
-        assert!(queue.target.is_none());
-    }
-
-    #[kithara::test]
     fn atomic_cached_position_unknown_loads_none() {
         let (queue, _rig) = make_queue();
         assert_eq!(queue.control().position_seconds(), None);
@@ -879,6 +849,7 @@ pub(crate) mod tests {
     #[kithara::test(tokio)]
     async fn crossfade_arm_take_only_disarms_matching_track() {
         let (mut queue, _rig, seq, unrelated) = armed_queue(TrackId(9));
+        assert_eq!(queue.target.map(|target| target.to), Some(TrackId(9)));
         queue
             .transition_applied(
                 unrelated,
