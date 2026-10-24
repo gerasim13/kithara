@@ -12,6 +12,7 @@ use crate::{
     ids::{InternId, Interner},
     module::{BindingRef, ControlNode, TableColumn, TableFrame, Tone, WaveStyle},
     shader::{self, ShaderUniform},
+    skin::ColorRole,
     validate,
 };
 
@@ -124,50 +125,15 @@ pub(super) fn control_spec(
     machine: &mut Expander<'_, '_>,
 ) -> Result<Option<ControlSpec>, UiDocError> {
     let spec = match control {
-        ControlNode::Glyph {
-            icon,
-            active_icon,
-            style,
-            color,
-            active_color,
-            ..
-        } => ControlSpec::Glyph {
-            icon: context.param(icon, path)?,
-            active_icon: context.optional_param(active_icon.as_ref(), path)?,
-            style: *style,
-            color: context.optional_param(color.as_ref(), path)?,
-            active_color: context.optional_param(active_color.as_ref(), path)?,
-            active: optional_binding(context, machine, extra.active.as_ref())?,
-        },
-        ControlNode::Shader { source, .. } => shader_spec(context, machine, source, extra, path)?,
-        ControlNode::Custom { kind, .. } => ControlSpec::Custom {
-            kind: machine.interner.intern(kind, &context.origin)?,
-        },
-        lottie @ ControlNode::Lottie { .. } => lottie_spec(context, machine, lottie, extra, path)?,
-        ControlNode::Sprite { sheet, seconds, .. } => ControlSpec::Sprite {
-            sheet: intern_text(context, machine.interner, sheet, path, &context.origin)?,
-            seconds: *seconds,
-        },
-        ControlNode::TitleBar { label, .. } => title_bar_spec(context, machine, label, path)?,
-        ControlNode::Text {
-            style,
-            label,
-            align,
-            color,
-            active_color,
-            font,
-            weight,
-            ..
-        } => ControlSpec::Text {
-            style: *style,
-            label: optional_text(context, machine, label.as_deref(), path)?,
-            color: *color,
-            active_color: *active_color,
-            active: optional_binding(context, machine, extra.active.as_ref())?,
-            align: *align,
-            font: context.optional_param(font.as_ref(), path)?,
-            weight: context.optional_param(weight.as_ref(), path)?,
-        },
+        ControlNode::Glyph { .. } => glyph_spec(context, machine, control, extra, path),
+        ControlNode::Shader { source, .. } => shader_spec(context, machine, source, extra, path),
+        ControlNode::Custom { kind, .. } => custom_spec(context, machine.interner, kind),
+        ControlNode::Lottie { .. } => lottie_spec(context, machine, control, extra, path),
+        ControlNode::Sprite { sheet, seconds, .. } => {
+            sprite_spec(context, machine, sheet, *seconds, path)
+        }
+        ControlNode::TitleBar { label, .. } => title_bar_spec(context, machine, label, path),
+        ControlNode::Text { .. } => text_spec(context, machine, control, extra, path),
         ControlNode::Wave { style, badge, .. } => wave_spec(
             context,
             machine,
@@ -175,45 +141,21 @@ pub(super) fn control_spec(
             badge.as_deref(),
             extra.zoom.as_ref(),
             path,
-        )?,
-        ControlNode::Table {
-            columns,
-            footer,
-            padding_left,
-            padding_right,
-            ..
-        } => {
-            let columns = context
-                .optional_param(columns.as_ref(), path)?
-                .unwrap_or_default();
-            table_spec(
-                context,
-                machine,
-                &columns,
-                TableFrame::new(*padding_left, *padding_right, *footer),
-                extra,
-                path,
-            )?
-        }
-        ControlNode::Search { .. } => ControlSpec::Search,
-        ControlNode::Tree { .. } => ControlSpec::Tree {
-            query: optional_binding(context, machine, extra.query.as_ref())?,
-            search: extra.query.is_some() || extra.writes.query.is_some(),
-            toggle: extra.writes.toggle.is_some(),
-        },
+        ),
+        ControlNode::Table { .. } => table_spec(context, machine, control, extra, path),
+        ControlNode::Search { .. } => Ok(ControlSpec::Search),
+        ControlNode::Tree { .. } => tree_spec(context, machine, extra),
         ControlNode::ContextBar { scope_items, .. } => context_bar_spec(
             context,
             machine.interner,
             scope_items,
             extra.scope.as_ref(),
             path,
-        )?,
-        ControlNode::Segmented { items, .. } => ControlSpec::Segmented {
-            items: intern_texts(context, machine.interner, items, path, &context.origin)?,
-        },
-        ControlNode::Select { label, .. } => ControlSpec::Select {
-            label: intern_text(context, machine.interner, label, path, &context.origin)?,
-        },
+        ),
+        ControlNode::Segmented { items, .. } => {
+            segmented_spec(context, machine.interner, items, path)
+        }
+        ControlNode::Select { label, .. } => select_spec(context, machine.interner, label, path),
         ControlNode::StatusDot {
             label,
             dot_size,
@@ -231,14 +173,143 @@ pub(super) fn control_spec(
             },
             extra,
             path,
-        )?,
-        ControlNode::Swatch { role, label, .. } => ControlSpec::Swatch {
-            role: *role,
-            label: intern_text(context, machine.interner, label, path, &context.origin)?,
-        },
+        ),
+        ControlNode::Swatch { role, label, .. } => {
+            swatch_spec(context, machine.interner, *role, label, path)
+        }
         _ => return caption_spec(context, control, path, machine),
     };
-    Ok(Some(spec))
+    spec.map(Some)
+}
+
+fn glyph_spec(
+    context: &Context<'_>,
+    machine: &mut Expander<'_, '_>,
+    control: &ControlNode,
+    extra: &ExtraBindings,
+    path: &str,
+) -> Result<ControlSpec, UiDocError> {
+    let ControlNode::Glyph {
+        icon,
+        active_icon,
+        style,
+        color,
+        active_color,
+        ..
+    } = control
+    else {
+        unreachable!("glyph_spec is called only for a glyph")
+    };
+    Ok(ControlSpec::Glyph {
+        icon: context.param(icon, path)?,
+        active_icon: context.optional_param(active_icon.as_ref(), path)?,
+        style: *style,
+        color: context.optional_param(color.as_ref(), path)?,
+        active_color: context.optional_param(active_color.as_ref(), path)?,
+        active: optional_binding(context, machine, extra.active.as_ref())?,
+    })
+}
+
+fn custom_spec(
+    context: &Context<'_>,
+    interner: &mut Interner,
+    kind: &str,
+) -> Result<ControlSpec, UiDocError> {
+    Ok(ControlSpec::Custom {
+        kind: interner.intern(kind, &context.origin)?,
+    })
+}
+
+fn sprite_spec(
+    context: &Context<'_>,
+    machine: &mut Expander<'_, '_>,
+    sheet: &str,
+    seconds: f32,
+    path: &str,
+) -> Result<ControlSpec, UiDocError> {
+    Ok(ControlSpec::Sprite {
+        sheet: intern_text(context, machine.interner, sheet, path, &context.origin)?,
+        seconds,
+    })
+}
+
+fn text_spec(
+    context: &Context<'_>,
+    machine: &mut Expander<'_, '_>,
+    control: &ControlNode,
+    extra: &ExtraBindings,
+    path: &str,
+) -> Result<ControlSpec, UiDocError> {
+    let ControlNode::Text {
+        style,
+        label,
+        align,
+        color,
+        active_color,
+        font,
+        weight,
+        ..
+    } = control
+    else {
+        unreachable!("text_spec is called only for text")
+    };
+    Ok(ControlSpec::Text {
+        style: *style,
+        label: optional_text(context, machine, label.as_deref(), path)?,
+        color: *color,
+        active_color: *active_color,
+        active: optional_binding(context, machine, extra.active.as_ref())?,
+        align: *align,
+        font: context.optional_param(font.as_ref(), path)?,
+        weight: context.optional_param(weight.as_ref(), path)?,
+    })
+}
+
+fn tree_spec(
+    context: &Context<'_>,
+    machine: &mut Expander<'_, '_>,
+    extra: &ExtraBindings,
+) -> Result<ControlSpec, UiDocError> {
+    Ok(ControlSpec::Tree {
+        query: optional_binding(context, machine, extra.query.as_ref())?,
+        search: extra.query.is_some() || extra.writes.query.is_some(),
+        toggle: extra.writes.toggle.is_some(),
+    })
+}
+
+fn segmented_spec(
+    context: &Context<'_>,
+    interner: &mut Interner,
+    items: &[String],
+    path: &str,
+) -> Result<ControlSpec, UiDocError> {
+    Ok(ControlSpec::Segmented {
+        items: intern_texts(context, interner, items, path, &context.origin)?,
+    })
+}
+
+fn select_spec(
+    context: &Context<'_>,
+    interner: &mut Interner,
+    label: &str,
+    path: &str,
+) -> Result<ControlSpec, UiDocError> {
+    Ok(ControlSpec::Select {
+        label: intern_text(context, interner, label, path, &context.origin)?,
+    })
+}
+
+fn swatch_spec(
+    context: &Context<'_>,
+    interner: &mut Interner,
+    role: ColorRole,
+    label: &str,
+    path: &str,
+) -> Result<ControlSpec, UiDocError> {
+    Ok(ControlSpec::Swatch {
+        role,
+        label: intern_text(context, interner, label, path, &context.origin)?,
+    })
 }
 
 fn caption_spec(
@@ -445,11 +516,24 @@ fn wave_spec(
 fn table_spec(
     context: &Context<'_>,
     machine: &mut Expander<'_, '_>,
-    columns: &[TableColumn],
-    frame: TableFrame,
+    control: &ControlNode,
     extra: &ExtraBindings,
     path: &str,
 ) -> Result<ControlSpec, UiDocError> {
+    let ControlNode::Table {
+        columns,
+        footer,
+        padding_left,
+        padding_right,
+        ..
+    } = control
+    else {
+        unreachable!("table_spec is called only for a table")
+    };
+    let columns = context
+        .optional_param(columns.as_ref(), path)?
+        .unwrap_or_default();
+    let frame = TableFrame::new(*padding_left, *padding_right, *footer);
     let mut resolved: Vec<TableColumn> = Vec::with_capacity(columns.len());
     for (index, column) in columns.iter().enumerate() {
         let label = resolve_text_key(
