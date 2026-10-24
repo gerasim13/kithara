@@ -414,7 +414,7 @@ mod tests {
             .build();
         let config = TrackConfig::for_audio(
             AudioConfig::<Hls<_>>::for_stream(hls)
-                .cancel(cancel.child())
+                .cancel(cancel.clone())
                 .build(),
         )
         .block_on_underrun(true)
@@ -445,10 +445,11 @@ mod tests {
         assert!(futures::poll!(delayed.as_mut()).is_pending());
         if cancel_load {
             cancel.cancel();
-            assert!(matches!(
-                loading.await,
-                Err(kithara_render::LoadRefusal::Cancelled)
-            ));
+            let refusal = loading.await.err().expect("cancelled load must refuse");
+            assert!(
+                matches!(&refusal, kithara_render::LoadRefusal::Cancelled),
+                "{refusal:?}"
+            );
             gate.release();
         } else {
             gate.release();
