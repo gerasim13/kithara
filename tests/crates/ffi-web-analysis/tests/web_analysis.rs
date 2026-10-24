@@ -151,6 +151,54 @@ fn clicks_url() -> String {
 }
 
 #[wasm_bindgen_test]
+async fn analysis_observers_ignore_other_players_tracks() {
+    let (other, other_events, _) = observed_player();
+    let (analyzed, events, diagnostics) = observed_player();
+    let other_id = other.append_js(clicks_url()).expect("append other item");
+    let analyzed_id = analyzed
+        .append_js(clicks_url())
+        .expect("append analyzed item");
+    assert_ne!(other_id, analyzed_id);
+    assert!(
+        drive(&analyzed, &events, |_| {
+            other.item_count() == 1 && analyzed.item_count() == 1
+        })
+        .await
+        .is_some(),
+        "both owners must admit their items; {}",
+        progress_report(&events, &diagnostics)
+    );
+    analyzed.analyze_js(analyzed_id).expect("analyze accepted");
+    assert!(
+        drive(&analyzed, &events, |received| {
+            received
+                .last()
+                .is_some_and(|event| boolean(event, "settled") && boolean(event, "beatFinal"))
+        })
+        .await
+        .is_some(),
+        "the analyzed player must publish its result; {}",
+        progress_report(&events, &diagnostics)
+    );
+    assert_decoded_clicks(&events, analyzed_id);
+    other.remove_all_items();
+    analyzed.remove_all_items();
+    assert!(
+        drive(&analyzed, &events, |_| {
+            other.item_count() == 0 && analyzed.item_count() == 0
+        })
+        .await
+        .is_some(),
+        "both owners must remove their items"
+    );
+    let foreign_publications = other_events.borrow().len();
+    assert_eq!(
+        foreign_publications, 0,
+        "a player must not receive another player's analysis"
+    );
+}
+
+#[wasm_bindgen_test]
 async fn a_queued_track_publishes_analysis_until_the_pass_settles() {
     let (player, events, diagnostics) = observed_player();
     let track_id = player.append_js(clicks_url()).expect("append");
