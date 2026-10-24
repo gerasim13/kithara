@@ -26,13 +26,24 @@ use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
     cochlea::marked_rhythm_markers,
 };
-use kithara_test_fixtures::assets::{rhythm_mp3_deck_b_120bpm_48k, rhythm_wav_deck_b_120bpm_48k};
+use kithara_test_fixtures::{assets::rhythm_mp3_deck_b_120bpm_48k, reference};
 use kithara_test_utils::kithara;
 
 const CHANNELS: u16 = 2;
 const PERIOD: u64 = 24_000;
 const RATE: u32 = 48_000;
 const WINDOW: usize = 48_000 * 3;
+
+#[kithara::test(native)]
+fn prepared_source_markers_match_the_actual_authored_window() {
+    let authored = reference::mp3_clock_window();
+    assert_eq!((authored.sample_rate, authored.channels), (RATE, CHANNELS));
+    assert_eq!(authored.samples.len(), WINDOW * usize::from(CHANNELS));
+    assert_eq!(
+        reference::mp3_clock_markers(),
+        marked_rhythm_markers(&authored.samples, CHANNELS, RATE),
+    );
+}
 
 #[derive(Default)]
 struct Capture {
@@ -165,16 +176,7 @@ async fn original_and_sought_markers_expose_the_raw_media_basis(
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
     let encoded = rhythm_mp3_deck_b_120bpm_48k();
-    let waveform = rhythm_wav_deck_b_120bpm_48k();
-    let header = kithara_test_fixtures::signal::header(RATE, CHANNELS, Some(0));
-    let authored: Vec<_> = waveform.bytes()[header.len()..]
-        .as_chunks::<{ size_of::<i16>() }>()
-        .0
-        .iter()
-        .map(|sample| f32::from(i16::from_le_bytes([sample[0], sample[1]])) / f32::from(i16::MAX))
-        .take(WINDOW * usize::from(CHANNELS))
-        .collect();
-    let score = marked_rhythm_markers(&authored, CHANNELS, RATE);
+    let score = reference::mp3_clock_markers();
     tracing::info!(?backend, ?mode, ?score, "MP3_CLOCK_SOURCE_SCORE");
     assert!(score.0.len() >= 3);
 

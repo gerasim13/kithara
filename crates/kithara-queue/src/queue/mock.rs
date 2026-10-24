@@ -1,26 +1,80 @@
 use std::num::NonZeroUsize;
 
-use kithara_assets::{AssetStore, StorageBackend};
+use kithara_assets::{AcquisitionResult, AssetResource, AssetStore, StorageBackend, WriteSide};
 use kithara_audio::AudioObserverSlot;
 use kithara_command::{ScopedReceipt, Seq};
+use kithara_download::{Downloader, DownloaderConfig};
 use kithara_events::TrackId;
-use kithara_platform::time::{Duration, timeout};
+use kithara_net::{HttpClient, NetOptions};
+use kithara_platform::{
+    CancelToken,
+    time::{Duration, timeout},
+};
 use kithara_play::{
     DeckMixSettings, DeckMixerConfig, DeckPart, DeckPass, HostedDeck, Outbox, PlayWorker,
     PlayWorkerConfig, Player, ResourceConfig, ResourceLoad, ResourcePrep, ResourceSrc,
     TrackReceipt, mock, mock::DeckRig,
 };
-use kithara_signal::{AudioSpec, FrameCount, SessionFrame};
-pub use kithara_test_utils::bufpool::{TestPools, pools};
+use kithara_signal::{FrameCount, SessionFrame};
+pub(crate) use kithara_test_utils::bufpool::{TestPools, pools};
 use kithara_test_utils::{TestTempDir, kithara};
 
 use crate::{Queue, QueueCommand, QueueConfig, TrackSource};
+
+pub(crate) fn downloader() -> Downloader {
+    let config = DownloaderConfig::for_client(HttpClient::new(
+        NetOptions::default(),
+        pools(),
+        CancelToken::never(),
+    ));
+    #[cfg(not(target_arch = "wasm32"))]
+    let config = config.runtime(kithara_platform::tokio::runtime::Handle::current());
+    Downloader::new(config.build())
+}
+
+pub(crate) fn fixture_uri(directory: &std::path::Path, name: &str) -> String {
+    let namespace = directory.file_name().expect("fixture namespace");
+    format!(
+        "https://queue.invalid/{}/{name}",
+        namespace.to_str().expect("UTF-8 fixture namespace")
+    )
+}
+
+pub(crate) fn fixture_key(store: &AssetStore<TestPools>, uri: &str) -> kithara_assets::ResourceKey {
+    let config: ResourceConfig<TestPools> =
+        ResourceConfig::for_src(ResourceSrc::parse(uri).expect("fixture URI"))
+            .store(store.clone())
+            .build();
+    let extension = uri.rsplit_once('.').expect("fixture extension").1;
+    config
+        .asset_key(&AssetResource::Source {
+            extension: extension.to_owned(),
+        })
+        .expect("fixture source key")
+}
+
+pub(crate) fn seed_fixture(store: &AssetStore<TestPools>, uri: &str, bytes: &[u8]) {
+    let key = fixture_key(store, uri);
+    let AcquisitionResult::Pending(writer) =
+        store.acquire_resource(&key, None).expect("new fixture")
+    else {
+        panic!("fixture URI is already seeded");
+    };
+    writer
+        .write_at(0, bytes)
+        .expect("seed prepared fixture bytes");
+    writer
+        .commit(Some(
+            u64::try_from(bytes.len()).expect("fixture length fits u64"),
+        ))
+        .expect("commit prepared fixture");
+}
 
 /// Runs a queue operation with the fixture's deck scope and dispatcher.
 ///
 /// # Panics
 /// Panics if the fixture's deck scope is absent or the operation panics.
-pub fn with_outbox<Value, Run>(
+pub(crate) fn with_outbox<Value, Run>(
     queue: &mut Queue<TestPools>,
     rig: &mut DeckRig<TestPools>,
     run: Run,
@@ -48,7 +102,7 @@ where
 /// # Panics
 /// Panics if fixture creation, path conversion, or command admission fails.
 #[must_use]
-pub fn pending_selection() -> (
+pub(crate) fn pending_selection() -> (
     Queue<TestPools>,
     TrackId,
     TrackId,
@@ -56,7 +110,7 @@ pub fn pending_selection() -> (
     TestTempDir,
 ) {
     let (mut queue, mut rig, dir) = empty_queue();
-    let path = dir.path().join("entry.wav");
+    let source = fixture_uri(dir.path(), "entry.wav");
     let first = TrackId::allocate();
     let second = TrackId::allocate();
     with_outbox(&mut queue, &mut rig, |queue, out| {
@@ -66,7 +120,7 @@ pub fn pending_selection() -> (
                 QueueCommand::Append {
                     position: kithara_play::Position::ZERO,
                     id,
-                    source: TrackSource::Uri(path.to_str().expect("fixture path").to_owned()),
+                    source: TrackSource::Uri(source.clone()),
                 },
                 out,
             )
@@ -91,18 +145,24 @@ pub fn pending_selection() -> (
 /// Panics if fixture preparation or opening fails, or opening makes no progress.
 #[kithara::flash(io)]
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-pub async fn loaded_fixture(
+pub(crate) async fn loaded_fixture(
     worker: &PlayWorker<TestPools>,
     rig: &mut DeckRig<TestPools>,
     dir: &TestTempDir,
 ) -> kithara_render::Loaded<kithara_play::OpenedTrack> {
     let prep = ResourcePrep::builder().worker(worker.clone()).build();
-    let config = ResourceConfig::for_src(ResourceSrc::Path(dir.path().join("entry.wav")))
-        .store(
-            AssetStore::builder(pools())
-                .backend(StorageBackend::Memory)
-                .build(),
-        )
+    let store = AssetStore::builder(pools())
+        .backend(StorageBackend::Memory)
+        .build();
+    let source = fixture_uri(dir.path(), "entry.wav");
+    seed_fixture(
+        &store,
+        &source,
+        kithara_test_fixtures::assets::fixed_constant_wav_cd_half_1024().bytes(),
+    );
+    let config = ResourceConfig::for_src(ResourceSrc::parse(&source).expect("fixture URI"))
+        .downloader(downloader())
+        .store(store)
         .build();
     let prepared = prep
         .prepare(config, &mock::output(None).get())
@@ -160,7 +220,7 @@ pub(crate) fn opened_with_source(
 /// # Panics
 /// Panics if the fixture cannot open or the pending dispatcher command cannot settle.
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-pub async fn answer_load(
+pub(crate) async fn answer_load(
     queue: &mut Queue<TestPools>,
     rig: &mut DeckRig<TestPools>,
     _dir: &TestTempDir,
@@ -185,7 +245,7 @@ pub async fn answer_load(
 /// Panics if the requested load is missing, refused, or stalls.
 #[kithara::flash(io)]
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-pub async fn loaded_request(
+pub(crate) async fn loaded_request(
     worker: &PlayWorker<TestPools>,
     rig: &mut DeckRig<TestPools>,
     seq: Seq,
@@ -218,7 +278,7 @@ pub async fn loaded_request(
 /// # Panics
 /// Panics if a command, fixture, or receipt is missing, unsupported, or stalls.
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-pub fn answer_loaded(
+pub(crate) fn answer_loaded(
     queue: &mut Queue<TestPools>,
     rig: &mut DeckRig<TestPools>,
     loaded: kithara_render::Loaded<kithara_play::OpenedTrack>,
@@ -277,7 +337,7 @@ pub fn answer_loaded(
 ///
 /// # Panics
 /// Panics if publication, deck scope, entry batch, or receipt is missing or invalid.
-pub fn answer_deck(
+pub(crate) fn answer_deck(
     queue: &mut Queue<TestPools>,
     rig: &mut DeckRig<TestPools>,
     at: SessionFrame,
@@ -320,7 +380,7 @@ pub fn answer_deck(
 /// # Panics
 /// Panics if the PCM fixture cannot be written or the command rig cannot be created.
 #[must_use]
-pub fn empty_queue() -> (Queue<TestPools>, DeckRig<TestPools>, TestTempDir) {
+pub(crate) fn empty_queue() -> (Queue<TestPools>, DeckRig<TestPools>, TestTempDir) {
     queue_with_load_settings(NonZeroUsize::new(3).expect("default cap"), false)
 }
 
@@ -330,22 +390,25 @@ pub fn empty_queue() -> (Queue<TestPools>, DeckRig<TestPools>, TestTempDir) {
 /// # Panics
 /// Panics if the PCM fixture cannot be written or the command rig cannot be created.
 #[must_use]
-pub fn queue_with_load_settings(
+pub(crate) fn queue_with_load_settings(
     max_concurrent_loads: NonZeroUsize,
     should_autoplay: bool,
 ) -> (Queue<TestPools>, DeckRig<TestPools>, TestTempDir) {
     let dir = TestTempDir::new();
-    let path = dir.path().join("entry.wav");
-    mock::write_pcm_wav(&path, &[0.5; 2_048], AudioSpec::new(2, mock::SAMPLE_RATE))
-        .expect("float WAV fixture");
     let prep = ResourcePrep::builder()
         .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
         .build();
     let store = AssetStore::builder(pools())
         .backend(StorageBackend::Memory)
         .build();
+    seed_fixture(
+        &store,
+        &fixture_uri(dir.path(), "entry.wav"),
+        kithara_test_fixtures::assets::fixed_constant_wav_cd_half_1024().bytes(),
+    );
     let mut queue = Queue::new(
         QueueConfig::builder()
+            .downloader(downloader())
             .prep(prep)
             .store(store)
             .max_concurrent_loads(max_concurrent_loads)
@@ -363,7 +426,7 @@ pub fn queue_with_load_settings(
 /// # Panics
 /// Panics if the fixture's deck scope is absent or event settlement stalls.
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-pub fn tick_fixture(queue: &mut Queue<TestPools>, rig: &mut DeckRig<TestPools>) {
+pub(crate) fn tick_fixture(queue: &mut Queue<TestPools>, rig: &mut DeckRig<TestPools>) {
     let events = rig.events.drain();
     let output = mock::output(None).get();
     let mut deck = queue.deck.mixer.clone();
@@ -391,7 +454,7 @@ pub fn tick_fixture(queue: &mut Queue<TestPools>, rig: &mut DeckRig<TestPools>) 
 /// # Panics
 /// Panics if the deck block fails, its scope is absent, or receipt settlement stalls.
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-pub fn settle(queue: &mut Queue<TestPools>, rig: &mut DeckRig<TestPools>, at: SessionFrame) {
+pub(crate) fn settle(queue: &mut Queue<TestPools>, rig: &mut DeckRig<TestPools>, at: SessionFrame) {
     for receipt in rig.block(at, 0.0).expect("deck block") {
         hang_tick!();
         let seq = receipt.seq();
@@ -416,7 +479,7 @@ pub fn settle(queue: &mut Queue<TestPools>, rig: &mut DeckRig<TestPools>, at: Se
 /// # Panics
 /// Panics if a fixture deck block or its receipt settlement fails or stalls.
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-pub fn finish(queue: &mut Queue<TestPools>, rig: &mut DeckRig<TestPools>) {
+pub(crate) fn finish(queue: &mut Queue<TestPools>, rig: &mut DeckRig<TestPools>) {
     for at in [0, 128, 256] {
         hang_tick!();
         settle(queue, rig, SessionFrame::new(at));
@@ -429,7 +492,7 @@ pub fn finish(queue: &mut Queue<TestPools>, rig: &mut DeckRig<TestPools>) {
 /// # Panics
 /// Panics if fixture creation, load admission, or deck entry fails or stalls.
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-pub async fn selected() -> (
+pub(crate) async fn selected() -> (
     Queue<TestPools>,
     TrackId,
     TrackId,

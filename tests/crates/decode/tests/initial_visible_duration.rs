@@ -86,7 +86,7 @@ async fn initial_visible_duration_matches_the_built_ruler_before_eof(#[case] ass
 
     #[cfg(not(target_os = "android"))]
     if asset == SignalAsset::PROFILE_M4A_AAC_44100_2CH {
-        assert_complete_aac_presentation(&body, url.clone()).await;
+        assert_complete_aac_presentation(asset, &body, url.clone()).await;
     }
 
     let file = FileConfig::for_src(url.into())
@@ -236,12 +236,13 @@ async fn initial_visible_duration_matches_the_built_ruler_before_eof(#[case] ass
 
 #[cfg(not(target_os = "android"))]
 #[kithara::hang_watchdog]
-async fn assert_complete_aac_presentation(bytes: &[u8], url: url::Url) {
+async fn assert_complete_aac_presentation(asset: SignalAsset, bytes: &[u8], url: url::Url) {
     let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("AAC fixture rate"));
     let origin = spec.duration_for(1_024).expect("MP4 edit origin");
     let endpoint = Duration::from_secs(6);
-    let reference = kithara_integration_tests::pcm_oracle::decode_native(bytes)
-        .await
+    let fixture =
+        kithara_test_fixtures::assets::by_name(asset.name()).expect("registered AAC fixture");
+    let reference = kithara_integration_tests::pcm_oracle::prepared_native(&fixture)
         .expect("independent native FFmpeg AAC decode");
     assert_eq!((reference.sample_rate, reference.channels), (44_100, 2));
     assert_eq!(reference.samples.len(), 264_600 * 2);

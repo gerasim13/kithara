@@ -4,8 +4,8 @@ mod command;
 mod handle;
 mod hosted;
 mod lifecycle;
-#[cfg(all(not(target_arch = "wasm32"), any(test, feature = "mock")))]
-pub mod mock;
+#[cfg(all(not(target_arch = "wasm32"), test))]
+pub(crate) mod mock;
 mod slots;
 mod state;
 #[cfg(all(test, not(target_arch = "wasm32")))]

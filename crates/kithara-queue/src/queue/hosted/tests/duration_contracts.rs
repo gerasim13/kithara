@@ -3,7 +3,7 @@ use std::num::NonZeroU32;
 use kithara_play::CrossfadeSettings;
 
 use super::*;
-use crate::{QueueSettings, QueueSettingsChange, Transition};
+use crate::{QueueSettings, QueueSettingsChange, Transition, mock::fixture_uri};
 
 const SAMPLE_RATE: u32 = 48_000;
 const BLOCK_FRAMES: usize = 128;
@@ -45,6 +45,7 @@ impl DurationRig {
         Self {
             queue: Queue::new(
                 QueueConfig::builder()
+                    .downloader(crate::mock::downloader())
                     .prep(prep)
                     .store(store)
                     .mixer(config)
@@ -92,21 +93,20 @@ impl DurationRig {
     }
 
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-    async fn select(&mut self, level: f32, name: &str) {
+    async fn select(&mut self, wav: &[u8], name: &str) {
         use kithara_render::{Dispatched, DispatcherCommand};
 
-        let path = self.dir.path().join(name);
-        mock::write_pcm_wav(
-            &path,
-            &vec![level; 60 * 48_000 * 2],
-            AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("rate")),
-        )
-        .expect("constant WAV");
+        let source = fixture_uri(self.dir.path(), name);
+        crate::mock::seed_fixture(
+            self.queue.config.store.as_ref().expect("fixture store"),
+            &source,
+            wav,
+        );
         let id = TrackId::allocate();
         self.apply(QueueCommand::Append {
             position: kithara_play::Position::ZERO,
             id,
-            source: TrackSource::Uri(path.to_str().expect("fixture path").to_owned()),
+            source: TrackSource::Uri(source),
         });
         self.apply(QueueCommand::Select {
             id,
@@ -252,7 +252,11 @@ fn max_step_across(before: &[f32], after: &[f32]) -> f32 {
 
 async fn fading_in() -> (DurationRig, Vec<f32>) {
     let mut rig = DurationRig::new();
-    rig.select(0.5, "first.wav").await;
+    rig.select(
+        kithara_test_fixtures::assets::fixed_constant_wav_render_half_2880000().bytes(),
+        "first.wav",
+    )
+    .await;
     let (rig, fading) = rig.pump(WARMUP_BLOCKS).await;
     let level = last(&fading);
     assert!(
@@ -301,7 +305,11 @@ async fn a_changed_crossfade_duration_applies_to_the_next_fade() {
         last(&settled)
     );
     rig.configure_duration(FADE_SECONDS / 10.0);
-    rig.select(0.25, "second.wav").await;
+    rig.select(
+        kithara_test_fixtures::assets::fixed_constant_wav_render_quarter_2880000().bytes(),
+        "second.wav",
+    )
+    .await;
     let (_, handed_over) = rig.pump(SETTLE_BLOCKS * 3).await;
     assert!(
         (last(&handed_over) - 0.25).abs() < EXACT,

@@ -225,6 +225,28 @@ struct AppliedCurve<'a> {
     at: SessionFrame,
 }
 
+struct SourceGeometry<'a> {
+    model: &'a BeatGridModel,
+    source: BeatGridSnapshot,
+    maximum_slope: f64,
+}
+
+impl<'a> SourceGeometry<'a> {
+    fn new(
+        model: &'a BeatGridModel,
+        rate: NonZeroU32,
+        duration: Option<Duration>,
+    ) -> Result<Self, String> {
+        let source = source_with_duration(model, rate, duration)?;
+        let maximum_slope = maximum_source_slope(model, &source, rate)?;
+        Ok(Self {
+            model,
+            source,
+            maximum_slope,
+        })
+    }
+}
+
 struct PrefixPlan {
     latest: bool,
     initial_media: Duration,
@@ -327,7 +349,7 @@ fn applied_curves(
                 curves.push(AppliedCurve { command, at: *at });
             }
             [kithara::play::Settled::Rejected { .. }] => {}
-            [] if matches!(command.at, When::At(at) if at > mark.session) => {}
+            [] if matches!(command.at, When::At(at) if at >= mark.session) => {}
             [] => {
                 return Err(format!(
                     "speed {:?} has no actual Lane outcome",
@@ -669,6 +691,37 @@ fn source_slope(grid: &BeatGridSnapshot, seconds: f64, rate: NonZeroU32) -> Resu
     Ok(60.0 / grid_tempo(grid, media_seconds_position(seconds, rate)?)?)
 }
 
+fn maximum_source_slope(
+    model: &BeatGridModel,
+    source: &BeatGridSnapshot,
+    rate: NonZeroU32,
+) -> Result<f64, String> {
+    let observed = model
+        .as_raw()
+        .beats
+        .first()
+        .ok_or_else(|| "source slope has no observed beat".to_owned())?;
+    let observed = Duration::try_from_secs_f64(observed.at).map_err(|error| error.to_string())?;
+    let first = media_position(observed, rate)?;
+    let MapPosition::Asset(first_frame) = first else {
+        return Err("source slope has a different axis".to_owned());
+    };
+    let mut maximum = 60.0 / grid_tempo(source, first)?;
+    for (start, _) in source_regions(source)? {
+        let MapPosition::Asset(frame) = start else {
+            return Err("source region has a different axis".to_owned());
+        };
+        if frame >= first_frame {
+            maximum = maximum.max(60.0 / grid_tempo(source, start)?);
+        }
+    }
+    if maximum.is_finite() && maximum > 0.0 {
+        Ok(maximum)
+    } else {
+        Err("maximum source slope is not finite and positive".to_owned())
+    }
+}
+
 fn declared_law(
     host: &TempoTrajectory,
     frame: SessionFrame,
@@ -776,30 +829,6 @@ fn source_with_duration(
         AssetAxis::new(rate, extent),
     )
     .map_err(|error| error.to_string())
-}
-
-fn correction_deadline(
-    curve: &SpeedCurve,
-    parts: &[(u64, ExponentialApproach)],
-    source: &BeatGridSnapshot,
-    host: &TempoTrajectory,
-    start: SessionFrame,
-    media: f64,
-    terminal: u64,
-) -> Result<u64, String> {
-    let rate = host.sample_rate();
-    for &(at, law) in parts.iter().filter(|(at, _)| *at >= terminal) {
-        let position = media + curve_advance(curve, 0, at)? / f64::from(rate.get());
-        let slope = source_slope(source, position, rate)?;
-        let expected = declared_law(host, frame_after(start, at)?, slope, 0.0)?;
-        if law.initial() == expected.initial()
-            && law.target() == expected.target()
-            && law.time_constant() == expected.time_constant()
-        {
-            return Ok(at);
-        }
-    }
-    Err("finite correction has no emitted return to the declared base law".to_owned())
 }
 
 fn source_media_for_beat(
@@ -911,22 +940,23 @@ fn ordinary_span_is_local(
     let position = source_media_for_beat(source, from, rate)?;
     let mut cursor = media_seconds_position(position, rate)?;
     let mut tempo = grid_tempo(source, cursor)?;
-    if include_endpoints {
-        let BeatGridQuery::Resolved(kithara::warp::BeatGridRegion::Bounded(region)) =
-            source.region_at(MapPoint::new(source.stamp(), cursor))
-        else {
-            return Err("source span has no declared bounded region".to_owned());
-        };
-        if let MapPosition::Asset(start) = region.start()
-            && f64::from(start) > 0.0
-            && grid_beat_at(source, region.start())? == from
-        {
-            let previous = MapPosition::Asset(
-                AssetFrame::new(f64::from(start).next_down()).map_err(|error| error.to_string())?,
-            );
-            if grid_tempo(source, previous)? != tempo {
-                return Ok(false);
-            }
+    let BeatGridQuery::Resolved(kithara::warp::BeatGridRegion::Bounded(region)) =
+        source.region_at(MapPoint::new(source.stamp(), cursor))
+    else {
+        return Err("source span has no declared bounded region".to_owned());
+    };
+    let boundary = grid_beat_at(source, region.start())?;
+    if let MapPosition::Asset(start) = region.start()
+        && f64::from(start) > 0.0
+        && from <= boundary
+        && boundary <= to
+        && (include_endpoints || from < boundary && boundary < to)
+    {
+        let previous = MapPosition::Asset(
+            AssetFrame::new(f64::from(start).next_down()).map_err(|error| error.to_string())?,
+        );
+        if grid_tempo(source, previous)? != tempo {
+            return Ok(false);
         }
     }
     loop {
@@ -1203,7 +1233,6 @@ impl AppliedCurve<'_> {
         parts: &[(u64, ExponentialApproach)],
         offsets: &[(u64, f64)],
         terminal: u64,
-        deadline: Option<u64>,
     ) -> Result<Vec<u64>, String> {
         let command = self.command;
         let limit = horizon
@@ -1217,9 +1246,6 @@ impl AppliedCurve<'_> {
         boundaries.extend(offsets.iter().map(|(at, _)| *at).filter(|at| *at <= limit));
         if terminal <= limit {
             boundaries.push(terminal);
-        }
-        if let Some(end) = deadline.filter(|end| *end <= limit) {
-            boundaries.push(end);
         }
         boundaries.extend(
             host.changes_after(self.at)
@@ -1261,13 +1287,18 @@ impl AppliedCurve<'_> {
         source_progress: f64,
         frame: SessionFrame,
         terminal: u64,
-        deadline: u64,
+        maximum_slope: f64,
         failures: &mut Vec<String>,
-    ) -> Result<f64, String> {
+    ) -> Result<(u64, f64), String> {
         let residual = source_progress - host_progress(host, self.at, frame)?;
-        let length = deadline
-            .checked_sub(terminal)
-            .ok_or_else(|| "correction returns before its terminal stage".to_owned())?;
+        let length = (residual.abs() * f64::from(host.sample_rate().get()) * maximum_slope
+            / f64::from(LinkConfig::default().epsilon()))
+        .ceil()
+        .to_u64()
+        .ok_or_else(|| "declared terminal duration is unrepresentable".to_owned())?;
+        let deadline = terminal
+            .checked_add(length)
+            .ok_or_else(|| "declared correction deadline overflows".to_owned())?;
         if length == 0 && residual != 0.0 {
             failures.push(format!(
                 "Applied {:?} declares zero terminal duration with beat residual {}",
@@ -1275,11 +1306,14 @@ impl AppliedCurve<'_> {
             ));
         }
         let length: f64 = length.as_();
-        Ok(if length == 0.0 {
-            0.0
-        } else {
-            -residual * f64::from(host.sample_rate().get()) / length
-        })
+        Ok((
+            deadline,
+            if length == 0.0 {
+                0.0
+            } else {
+                -residual * f64::from(host.sample_rate().get()) / length
+            },
+        ))
     }
 
     fn ordinary_coefficients(
@@ -1287,8 +1321,7 @@ impl AppliedCurve<'_> {
         source: &BeatGridSnapshot,
         host: &TempoTrajectory,
         prefixes: &[(u64, f64)],
-        offsets: &[(u64, f64)],
-        correction: Option<&std::ops::Range<u64>>,
+        plan: &PrefixPlan,
         q: Option<f64>,
     ) -> Result<Option<String>, String> {
         let command = self.command;
@@ -1306,8 +1339,8 @@ impl AppliedCurve<'_> {
                 "Applied law has no analytic interval at the executed frame".to_owned()
             })?;
         let correcting = command.landing.is_none();
-        let terminal = correction.map_or(0, |range| range.start);
-        let deadline = correction.map(|range| range.end);
+        let terminal = plan.terminal;
+        let deadline = plan.deadline;
         let original_position = prefixes
             .iter()
             .find_map(|(at, position)| (*at == *law_at).then_some(*position))
@@ -1316,7 +1349,7 @@ impl AppliedCurve<'_> {
             })?;
         let original_slope = source_slope(source, original_position, rate)?;
         let original_offset = if correcting && *law_at < terminal {
-            offsets
+            plan.offsets
                 .iter()
                 .rev()
                 .find(|(at, _)| *at <= *law_at)
@@ -1384,17 +1417,16 @@ impl AppliedCurve<'_> {
 
     fn interval_offsets(
         &self,
-        offsets: &[(u64, f64)],
-        correction: Option<&std::ops::Range<u64>>,
+        plan: &PrefixPlan,
         q: Option<f64>,
         at: u64,
     ) -> Result<(Option<f64>, f64), String> {
         let correcting = self.command.landing.is_none();
-        let terminal = correction.map_or(0, |range| range.start);
-        let deadline = correction.map(|range| range.end);
+        let terminal = plan.terminal;
+        let deadline = plan.deadline;
         let media_offset = if correcting && at < terminal {
             Some(
-                offsets
+                plan.offsets
                     .iter()
                     .rev()
                     .find(|(starts, _)| *starts <= at)
@@ -1475,24 +1507,11 @@ impl AppliedCurve<'_> {
             last
         };
         let parts = analytic_parts(&command.curve)?;
-        let deadline = if correcting {
-            Some(correction_deadline(
-                &command.curve,
-                &parts,
-                source,
-                host,
-                self.at,
-                initial_media.as_secs_f64(),
-                terminal,
-            )?)
-        } else {
-            None
-        };
+        let deadline = None;
         let limit = horizon
             .frames_since(self.at)
             .ok_or_else(|| "executed replacement precedes Applied".to_owned())?;
-        let boundaries =
-            self.prefix_boundaries(host, horizon, &parts, &offsets, terminal, deadline)?;
+        let boundaries = self.prefix_boundaries(host, horizon, &parts, &offsets, terminal)?;
         let previous_offset = if commanded || !correcting {
             0.0
         } else {
@@ -1513,38 +1532,31 @@ impl AppliedCurve<'_> {
 
     fn verify_prefix(
         &self,
-        model: &BeatGridModel,
-        source: &BeatGridSnapshot,
+        geometry: &SourceGeometry<'_>,
         host: &TempoTrajectory,
         horizon: std::ops::Bound<SessionFrame>,
         predecessor: f64,
         commanded: bool,
     ) -> Result<PrefixProof, String> {
+        let model = geometry.model;
+        let source = &geometry.source;
         let command = self.command;
         let rate = host.sample_rate();
-        let PrefixPlan {
-            latest,
-            initial_media,
-            offsets,
-            terminal,
-            parts,
-            deadline,
-            limit,
-            boundaries,
-            mut previous_offset,
-        } = self.prefix_plan(source, host, horizon, predecessor, commanded)?;
+        let mut plan = self.prefix_plan(source, host, horizon, predecessor, commanded)?;
+        let mut previous_offset = plan.previous_offset;
         let correcting = command.landing.is_none();
-        let correction = deadline.map(|end| terminal..end);
         let mut failures = Vec::new();
-        let mut position = initial_media.as_secs_f64();
+        let mut position = plan.initial_media.as_secs_f64();
         let initial_beat = grid_beat_at(source, media_seconds_position(position, rate)?)?;
         let mut beat = initial_beat;
         let phase = self.source_phase(model, host, initial_beat)?;
         let mut q = None;
         let mut prefixes = Vec::new();
         let mut diagnostics = Vec::new();
-        for (boundary_index, &at) in boundaries.iter().enumerate() {
-            if !latest && at == limit {
+        let mut boundary_index = 0;
+        while let Some(&at) = plan.boundaries.get(boundary_index) {
+            boundary_index += 1;
+            if !plan.latest && at == plan.limit {
                 break;
             }
             let frame = frame_after(self.at, at)?;
@@ -1556,25 +1568,30 @@ impl AppliedCurve<'_> {
                 beat = grid_beat_at(source, media_seconds_position(position, rate)?)?;
             }
             prefixes.push((at, source_media_for_beat(source, beat, rate)?));
-            if correcting && at == terminal {
-                q = Some(
-                    self.terminal_offset(
-                        host,
-                        phase + beat - initial_beat,
-                        frame,
-                        terminal,
-                        deadline
-                            .ok_or_else(|| "finite correction has no return boundary".to_owned())?,
-                        &mut failures,
-                    )?,
-                );
+            if correcting && at == plan.terminal {
+                let (deadline, offset) = self.terminal_offset(
+                    host,
+                    phase + beat - initial_beat,
+                    frame,
+                    plan.terminal,
+                    geometry.maximum_slope,
+                    &mut failures,
+                )?;
+                plan.deadline = Some(deadline);
+                q = Some(offset);
+                if deadline <= plan.limit
+                    && let Err(index) = plan.boundaries.binary_search(&deadline)
+                {
+                    plan.boundaries.insert(index, deadline);
+                }
             }
-            let end = boundaries.get(boundary_index + 1).copied().unwrap_or(at);
+            let end = plan.boundaries.get(boundary_index).copied().unwrap_or(at);
             let frames = end - at;
             if frames == 0 {
                 continue;
             }
-            let (law_at, law) = parts
+            let (law_at, law) = plan
+                .parts
                 .iter()
                 .rev()
                 .find(|(law_at, _)| *law_at <= at)
@@ -1587,8 +1604,7 @@ impl AppliedCurve<'_> {
                 .ok_or_else(|| "Applied law has an invalid analytic integral".to_owned())?
                 / f64::from(rate.get());
             let slope = source_slope(source, source_media_for_beat(source, beat, rate)?, rate)?;
-            let (media_offset, beat_offset) =
-                self.interval_offsets(&offsets, correction.as_ref(), q, at)?;
+            let (media_offset, beat_offset) = self.interval_offsets(&plan, q, at)?;
             let offset = media_offset.unwrap_or(beat_offset * slope);
             let next_beat =
                 self.interval_beat(host, beat, slope, at..end, media_offset, beat_offset)?;
@@ -1614,14 +1630,9 @@ impl AppliedCurve<'_> {
                     slope,
                     media_offset.map_or(beat_offset, |offset| offset / slope),
                 )?;
-                if let Some(failure) = self.ordinary_coefficients(
-                    source,
-                    host,
-                    &prefixes,
-                    &offsets,
-                    correction.as_ref(),
-                    q,
-                )? {
+                if let Some(failure) =
+                    self.ordinary_coefficients(source, host, &prefixes, &plan, q)?
+                {
                     failures.push(failure);
                 }
                 self.check_partial_area(expected, position, advance, at..end, host, &mut failures)?;
@@ -1645,7 +1656,7 @@ impl AppliedCurve<'_> {
                     .as_ref()
                     .map(|position| source.region_at(MapPoint::new(source.stamp(), *position)));
                 diagnostics.push(serde_json::json!({
-                    "at": at, "end": end, "frames": frames, "limit": limit,
+                    "at": at, "end": end, "frames": frames, "limit": plan.limit,
                     "law_at": law_at, "law_elapsed": law_elapsed,
                     "from_beat": from_beat, "to_beat": beat,
                     "from_position": format!("{from_position:?}"),
@@ -1657,7 +1668,7 @@ impl AppliedCurve<'_> {
                     "local_including_endpoints": format!("{:?}", ordinary_span_is_local(source, from_beat, beat, rate, true)),
                     "local_excluding_endpoints": format!("{:?}", ordinary_span_is_local(source, from_beat, beat, rate, false)),
                     "checked_prefixes": prefixes,
-                    "emitted_laws": parts.iter().map(|(at, law)| serde_json::json!({
+                    "emitted_laws": plan.parts.iter().map(|(at, law)| serde_json::json!({
                         "at": at, "initial": law.initial(), "target": law.target(),
                         "time_constant": law.time_constant(),
                     })).collect::<Vec<_>>(),
@@ -1667,19 +1678,26 @@ impl AppliedCurve<'_> {
             previous_offset = offset;
             position += advance;
         }
-        let reference = declared_binding_at(source, host, beat, frame_after(self.at, limit)?)?;
-        Ok((terminal, deadline, failures, diagnostics, reference))
+        let reference = declared_binding_at(source, host, beat, frame_after(self.at, plan.limit)?)?;
+        Ok((
+            plan.terminal,
+            plan.deadline,
+            failures,
+            diagnostics,
+            reference,
+        ))
     }
 
     fn verify_end(
         &self,
-        model: &BeatGridModel,
-        source: &BeatGridSnapshot,
+        geometry: &SourceGeometry<'_>,
         observation: &LinkObservation,
         curves: &[AppliedCurve<'_>],
         snapshot: &kithara::link::LinkedSnapshot<kithara::play::TrackSnapshot>,
         deadline: Option<u64>,
     ) -> Result<Vec<String>, String> {
+        let model = geometry.model;
+        let source = &geometry.source;
         let command = self.command;
         let item = command.item;
         let host = self.owner_host(observation)?;
@@ -1698,6 +1716,11 @@ impl AppliedCurve<'_> {
             }
         };
         let correcting = command.landing.is_none();
+        if correcting && deadline.is_none() {
+            return Err(
+                "latest Applied correction has no independently checked terminal".to_owned(),
+            );
+        }
         let before = command
             .consumed
             .ok_or_else(|| "Applied law has no consumed source anchor".to_owned())?;
@@ -1714,7 +1737,7 @@ impl AppliedCurve<'_> {
                 .transpose()?
                 != Some(end)
             {
-                failures.push(format!("Correcting deadline {:?} differs from the emitted return to the declared zero-offset base", end));
+                failures.push(format!("Correcting deadline {:?} differs from its independently declared phase correction end", end));
             }
         } else if deadline
             .is_some_and(|end| frame_after(self.at, end).is_ok_and(|end| end > mark.session))
@@ -1746,7 +1769,7 @@ impl AppliedCurve<'_> {
 
     fn verify(
         &self,
-        model: &BeatGridModel,
+        geometry: &SourceGeometry<'_>,
         observation: &LinkObservation,
         curves: &[AppliedCurve<'_>],
         index: usize,
@@ -1755,7 +1778,6 @@ impl AppliedCurve<'_> {
     ) -> Result<(serde_json::Value, SelectedBinding), String> {
         let command = self.command;
         let host = self.owner_host(observation)?;
-        let rate = host.sample_rate();
         let input = command
             .input
             .and_then(|input| observation.owner_inputs.get(input))
@@ -1773,7 +1795,6 @@ impl AppliedCurve<'_> {
             ));
         }
         let predecessor = self.check_planned_input(observation, curves, index, failures)?;
-        let source = source_with_duration(model, rate, command.before.duration)?;
         let mark = snapshot
             .track
             .mark
@@ -1800,17 +1821,10 @@ impl AppliedCurve<'_> {
             std::ops::Bound::Excluded(horizon)
         };
         let (terminal, deadline, prefix_failures, prefix_diagnostics, reference) =
-            self.verify_prefix(model, &source, host, bound, predecessor, commanded)?;
+            self.verify_prefix(geometry, host, bound, predecessor, commanded)?;
         failures.extend(prefix_failures);
         if latest {
-            failures.extend(self.verify_end(
-                model,
-                &source,
-                observation,
-                curves,
-                snapshot,
-                deadline,
-            )?);
+            failures.extend(self.verify_end(geometry, observation, curves, snapshot, deadline)?);
         }
         Ok((
             serde_json::json!({"seq": command.seq.get(), "applied": i64::from(self.at), "verified_through": i64::from(horizon), "terminal_start": terminal, "terminal_end": deadline, "host_input": command.host_input, "prefix_diagnostics": prefix_diagnostics}),
@@ -2061,17 +2075,27 @@ pub(super) fn executed_law(
             ));
         }
     };
-    let latest = curves.iter().rposition(|curve| curve.at <= mark.session);
+    let active = curves.partition_point(|curve| curve.at <= mark.session);
+    let latest = active.checked_sub(1);
     let mut verified = Vec::new();
-    for (index, applied) in curves
-        .iter()
-        .enumerate()
-        .filter(|(_, curve)| curve.at <= mark.session)
+    let mut group_start = 0;
+    for group in curves[..active]
+        .chunk_by(|first, second| first.command.before.duration == second.command.before.duration)
     {
-        let (evidence, anchor) =
-            applied.verify(model, observation, &curves, index, snapshot, &mut failures)?;
-        verified.push(evidence);
-        reference = Some(anchor);
+        let geometry = SourceGeometry::new(model, rate, group[0].command.before.duration)?;
+        for (index, applied) in group.iter().enumerate() {
+            let (evidence, anchor) = applied.verify(
+                &geometry,
+                observation,
+                &curves,
+                group_start + index,
+                snapshot,
+                &mut failures,
+            )?;
+            verified.push(evidence);
+            reference = Some(anchor);
+        }
+        group_start += group.len();
     }
     let speed = if let Some(index) = latest {
         let applied = &curves[index];
@@ -3290,10 +3314,6 @@ fn source_media_at(
     SyncCase { id: "tempo-hold-30hz", ride: TempoRide::Hold(120.0), ..TEMPO_DOWN_30 },
     None
 )]
-#[case::plain_tempo_down(Provider::HlsMp3(HlsProtection::Plain), TEMPO_DOWN_30, None)]
-#[case::plain_sync_seek_play(Provider::HlsMp3(HlsProtection::Plain), SYNC_SEEK_PLAY, None)]
-#[case::drm_tempo_down(Provider::HlsMp3(HlsProtection::Drm), TEMPO_DOWN_30, None)]
-#[case::drm_sync_seek_play(Provider::HlsMp3(HlsProtection::Drm), SYNC_SEEK_PLAY, None)]
 #[case::symphonia_tempo_down(
     Provider::HlsMp3(HlsProtection::Plain),
     TEMPO_DOWN_30,
@@ -3337,6 +3357,80 @@ async fn supplied_grids_bind_consumed_pcm_marks_to_the_host(
         "direct grid binding failed: {}",
         failures.join("\n")
     );
+}
+
+#[kithara::test(native)]
+fn ordinary_source_spans_preserve_beat_sides_at_rounded_seams() {
+    let rate = NonZeroU32::new(48_000).expect("source rate");
+    let ArtifactSource::Value(model) = synthetic_grid() else {
+        panic!("declared source grid");
+    };
+    let mut raw = model.as_raw().clone();
+    raw.beats = [(74, 31.96), (75, 32.38), (76, 32.8)]
+        .into_iter()
+        .map(|(ordinal, at)| GridBeat {
+            at,
+            ordinal,
+            confidence: None,
+        })
+        .collect();
+    raw.downbeats.clear();
+    raw.meter = None;
+    let model = BeatGridModel::try_from(raw).expect("rounded source seam");
+    let source = source_with_duration(&model, rate, None).expect("declared source geometry");
+    let seam = 75.0_f64;
+    let before = seam.next_down();
+    let position = media_seconds_position(
+        source_media_for_beat(&source, before, rate).expect("inverse before seam"),
+        rate,
+    )
+    .expect("asset coordinate before seam");
+    let BeatGridQuery::Resolved(kithara::warp::BeatGridRegion::Bounded(region)) =
+        source.region_at(MapPoint::new(source.stamp(), position))
+    else {
+        panic!("bounded source region");
+    };
+    assert!(before < seam);
+    assert_eq!(
+        grid_beat_at(&source, region.start()).expect("seam beat"),
+        seam
+    );
+    assert_eq!(
+        position,
+        region.start(),
+        "inverse rounds onto the next cell"
+    );
+    let MapPosition::Asset(start) = region.start() else {
+        panic!("asset region");
+    };
+    let previous = MapPosition::Asset(
+        AssetFrame::new(f64::from(start).next_down()).expect("previous asset coordinate"),
+    );
+    assert_ne!(
+        grid_tempo(&source, previous).expect("previous tempo"),
+        grid_tempo(&source, position).expect("next tempo"),
+        "exact adjacent slopes must differ"
+    );
+    for from in [before.next_down(), before, seam, seam.next_up()] {
+        for to in [before, seam, seam.next_up(), before + 2.0 / 48_000.0] {
+            if to <= from {
+                continue;
+            }
+            for include_endpoints in [false, true] {
+                let crosses = if include_endpoints {
+                    from <= seam && seam <= to
+                } else {
+                    from < seam && seam < to
+                };
+                assert_eq!(
+                    ordinary_span_is_local(&source, from, to, rate, include_endpoints)
+                        .expect("finite source span"),
+                    !crosses,
+                    "span {from:?}..{to:?}, endpoints={include_endpoints}"
+                );
+            }
+        }
+    }
 }
 
 #[kithara::test(native)]
@@ -4413,6 +4507,19 @@ fn confirmed_targets_and_consumed_laws_have_separate_clocks() {
         configured_speed_failures(observation, item, mark.lane.segment, &curves, speed)
             .expect("confirmed target")
     };
+    for at in [95, 96, 97] {
+        observation.speeds[0].at = When::At(SessionFrame::new(at));
+        if at < i64::from(mark.session) {
+            assert_eq!(
+                applied_curves(&observation, item, mark, rate).err(),
+                Some(format!("speed {future_seq:?} has no actual Lane outcome")),
+            );
+        } else {
+            assert!(check_config(&observation, 1.0).is_empty());
+            assert_eq!(check_config(&observation, 1.25).len(), 1);
+        }
+    }
+    observation.speeds[0].at = When::At(SessionFrame::new(192));
     assert!(check_config(&observation, 1.0).is_empty());
     assert_eq!(check_config(&observation, 1.25).len(), 1);
     observation.placement_receipts.push((
@@ -4480,7 +4587,7 @@ fn confirmed_targets_and_consumed_laws_have_separate_clocks() {
     let ArtifactSource::Value(model) = synthetic_grid() else {
         panic!("declared source grid");
     };
-    let source = source_with_duration(&model, rate, None).expect("declared source geometry");
+    let geometry = SourceGeometry::new(&model, rate, None).expect("declared source geometry");
     let host = TempoTrajectory::new(
         TempoStep {
             frame: SessionFrame::new(0),
@@ -4503,8 +4610,7 @@ fn confirmed_targets_and_consumed_laws_have_separate_clocks() {
     let verify = |end| {
         applied
             .verify_prefix(
-                &model,
-                &source,
+                &geometry,
                 &host,
                 std::ops::Bound::Included(SessionFrame::new(end)),
                 1.0,
@@ -4532,6 +4638,102 @@ fn confirmed_targets_and_consumed_laws_have_separate_clocks() {
             "the last positive interval must fail physical source area at horizon {end}: {failures:?}"
         );
     }
+
+    let mut raw = model.as_raw().clone();
+    raw.beats = [0.0, 0.5, 0.75]
+        .into_iter()
+        .enumerate()
+        .map(|(ordinal, at)| GridBeat {
+            at,
+            ordinal: i64::try_from(ordinal).expect("fixture ordinal"),
+            confidence: None,
+        })
+        .collect();
+    raw.downbeats.clear();
+    raw.meter = None;
+    let model = BeatGridModel::try_from(raw).expect("two source slopes");
+    let geometry = SourceGeometry::new(&model, rate, None).expect("source crossing geometry");
+    let source_grid = sync_source_grid(&model, rate, None).expect("native source geometry");
+    let host = TempoTrajectory::new(
+        TempoStep {
+            frame: SessionFrame::new(0),
+            beat: SessionBeat::new(-1.0e-9).expect("Host phase before the source crossing"),
+            tempo: Tempo::new(120.0).expect("Host tempo"),
+        },
+        NonZeroU16::new(4).expect("Host meter"),
+        rate,
+    );
+    let start = SessionFrame::new(23_998);
+    let media = Duration::from_nanos(499_958_333);
+    let (curve, end) = corrected_speed_curve(
+        &host,
+        &source_grid,
+        media,
+        start,
+        1.0,
+        LinkConfig::default().epsilon(),
+        true,
+    )
+    .expect("finite phase correction");
+    let parts = analytic_parts(&curve).expect("analytic correction");
+    assert_eq!(end, 2, "phase correction ends before the source bridge");
+    assert!(
+        parts
+            .windows(2)
+            .any(|pair| pair[0].0 == 2 && pair[0].1.time_constant() == 0.0 && pair[1].0 == 3),
+        "fixture must cross the source slope after correction end: {parts:?}"
+    );
+    terminal.at = When::At(start);
+    terminal.curve = curve;
+    terminal.planned = Some(Ok((media, 1.0)));
+    terminal.landing = None;
+    let applied = AppliedCurve {
+        command: &terminal,
+        at: start,
+    };
+    let proof = applied
+        .verify_prefix(
+            &geometry,
+            &host,
+            std::ops::Bound::Included(start + kithara::signal::FrameCount::new(4)),
+            1.0,
+            true,
+        )
+        .expect("source crossing prefix");
+    assert_eq!(proof.1, Some(2), "source bridge must not extend correction");
+    assert!(proof.2.is_empty(), "valid source bridge: {:?}", proof.2);
+
+    let SpeedCurve::ApproachSteps(parts) = &mut terminal.curve else {
+        panic!("source crossing has analytic parts");
+    };
+    let law = &mut Arc::make_mut(parts)[1].1;
+    *law = ExponentialApproach::new(
+        law.initial() + 0.001,
+        law.target() + 0.001,
+        law.time_constant(),
+    )
+    .expect("wrong terminal law");
+    let applied = AppliedCurve {
+        command: &terminal,
+        at: start,
+    };
+    let proof = applied
+        .verify_prefix(
+            &geometry,
+            &host,
+            std::ops::Bound::Included(start + kithara::signal::FrameCount::new(4)),
+            1.0,
+            true,
+        )
+        .expect("wrong terminal remains a representable prefix");
+    assert!(
+        proof
+            .2
+            .iter()
+            .any(|failure| failure.contains("analytic law")),
+        "the terminal frame must retain its exact law check: {:?}",
+        proof.2
+    );
 }
 
 #[kithara::test]

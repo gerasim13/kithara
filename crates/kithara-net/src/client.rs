@@ -1,25 +1,26 @@
-use std::num::NonZeroU16;
-
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
-use futures::{StreamExt, TryStreamExt};
+use futures::StreamExt;
+use http::{Method, Request, Response, StatusCode};
 use kithara_bufpool::{HasPool, PoolRegion};
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(all(test, reqwest_backend, not(target_arch = "wasm32")))]
 use kithara_platform::sync::Mutex;
 use kithara_platform::{
     CancelToken,
     sync::Arc,
     time::{Duration, Instant, timeout},
 };
-use url::Url;
+use url::{Position, Url};
 
 mod kithara {
-    pub(crate) use kithara_test_macros::{flash, measure};
+    pub(crate) use kithara_test_macros::measure;
 }
 
 use crate::{
+    HttpBody,
     backend::{
-        Client, RequestBuilder, Response, StatusCode, build_client, head_request, post_request,
+        SelectedTransport,
+        common::{normalize_head_headers, status_error},
     },
     error::{NetError, truncate_error_body},
     metrics::ConnectionMetrics,
@@ -27,57 +28,33 @@ use crate::{
     range_response::{accepts_response_status, validate_range_response},
     resumable::{Refetch, Resumed, resumable_body},
     retry::{RawNet, RetryClient, RetryNet},
+    transport::HttpTransport,
     types::{AcceptEncodingPolicy, Headers, NetOptions, RangeSpec, RetryPolicy},
 };
 
-/// Read an error response's body for [`NetError::Status`] context — a real
-/// socket read, so the fn is one `flash(io)` bracket. Bounded by the same
-/// inactivity budget as [`body_bytes`]: the body is diagnostics only, so a
-/// stall degrades to an empty string instead of parking the error path.
-#[kithara::flash(io)]
-async fn error_body(resp: Response, inactivity: Duration) -> String {
-    let body = timeout(inactivity, resp.text())
+async fn error_body(resp: Response<HttpBody>, inactivity: Duration) -> String {
+    let body = timeout(inactivity, body_bytes(resp, inactivity))
         .await
-        .map_or_else(|_| String::new(), Result::unwrap_or_default);
-    truncate_error_body(body, "\u{2026}")
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or_default();
+    truncate_error_body(String::from_utf8_lossy(&body).into_owned(), "\u{2026}")
 }
 
-/// Collect a full response body under the per-chunk inactivity bound: no
-/// chunk within `inactivity` ⇒ transient [`NetError::Timeout`] the retry
-/// decorator owns. `get_bytes`/`post_bytes` bodies (playlists, DRM keys)
-/// do not ride the resilient stream, so without this bound a server that
-/// sends headers and then stalls the body parks the caller forever.
-///
-/// A real socket read, so the fn is one `flash(io)` bracket. The `Net`
-/// trait methods cannot carry the attribute themselves: `#[async_trait]`
-/// rewrites them into sync constructors of boxed futures, which would drop
-/// the bracket before the I/O starts.
-#[kithara::flash(io)]
-async fn body_bytes(resp: Response, inactivity: Duration) -> Result<Bytes, NetError> {
-    let mut stream = resp.bytes_stream();
+async fn body_bytes(resp: Response<HttpBody>, inactivity: Duration) -> Result<Bytes, NetError> {
+    let mut stream = resp.into_body();
     let mut buf = BytesMut::new();
     while let Some(chunk) = timeout(inactivity, stream.next())
         .await
         .map_err(|_| NetError::Timeout)?
     {
-        buf.extend_from_slice(&chunk.map_err(NetError::from)?);
+        buf.extend_from_slice(&chunk?);
     }
     Ok(buf.freeze())
 }
 
-fn status_error(url: Url, status: u16, body: String) -> NetError {
-    match NonZeroU16::new(status) {
-        Some(status) => NetError::Status {
-            status,
-            url: Some(url),
-            body: Some(body),
-        },
-        None => NetError::Network(format!("unexpected zero HTTP status for {url}")),
-    }
-}
-
 #[cfg(not(target_arch = "wasm32"))]
-fn reject_undecoded_content_encoding(resp: &Response, url: &Url) -> Result<(), NetError> {
+fn reject_undecoded_content_encoding(resp: &Response<HttpBody>, url: &Url) -> Result<(), NetError> {
     for value in resp.headers().get_all("content-encoding") {
         let value = value.to_str().map_err(|error| {
             NetError::Decode(format!(
@@ -98,7 +75,7 @@ fn reject_undecoded_content_encoding(resp: &Response, url: &Url) -> Result<(), N
 }
 
 /// Extract response headers into our [`Headers`] type.
-fn extract_headers(resp: &Response) -> Headers {
+fn extract_headers(resp: &Response<HttpBody>) -> Headers {
     let mut headers = Headers::default();
     let str_pairs = resp
         .headers()
@@ -110,60 +87,42 @@ fn extract_headers(resp: &Response) -> Headers {
     headers
 }
 
-/// Raw HTTP client (one `Client`, one attempt per request). [`HttpClient`]
-/// runs each request through [`RetryNet`]'s retry loop over it, reaching it
-/// only through the [`RawNet`] trait.
+/// Raw HTTP policy owner over one transport resource. Lives
+/// behind [`HttpClient`]'s [`RetryNet`] decorator through [`RawNet`].
 #[derive(Clone)]
 pub struct RawHttp {
     /// Master-derived cancel, captured by the self-healing body so a re-fetch
     /// loop exits promptly on teardown. Same token the `RetryNet` retry loop uses.
     cancel: CancelToken,
-    inner: Client,
+    inner: Arc<dyn HttpTransport>,
     options: NetOptions,
 }
 
 impl RawHttp {
-    #[cfg(not(target_arch = "wasm32"))]
-    fn apply_headers(
-        &self,
-        mut req: RequestBuilder,
+    fn request(
+        method: Method,
+        url: &Url,
+        body: Bytes,
         headers: Option<Headers>,
-        policy: AcceptEncodingPolicy,
-    ) -> RequestBuilder {
+        encoding: AcceptEncodingPolicy,
+    ) -> Result<Request<Bytes>, NetError> {
+        let mut request = Request::builder()
+            .method(method)
+            .uri(&url[..Position::AfterQuery]);
         if let Some(headers) = headers {
-            for (k, v) in headers
+            for (name, value) in headers
                 .iter()
-                .filter(|(k, _)| !k.eq_ignore_ascii_case("accept-encoding"))
+                .filter(|(name, _)| !name.eq_ignore_ascii_case("accept-encoding"))
             {
-                req = req.header(k, v);
+                request = request.header(name, value);
             }
         }
-        let accept_encoding = match policy {
-            AcceptEncodingPolicy::Configured => {
-                crate::types::accept_encoding_value(self.options.compression)
-            }
-            AcceptEncodingPolicy::Identity => "identity".to_string(),
-        };
-        req.header("Accept-Encoding", accept_encoding)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn apply_headers(
-        &self,
-        mut req: RequestBuilder,
-        headers: Option<Headers>,
-        _policy: AcceptEncodingPolicy,
-    ) -> RequestBuilder {
-        if let Some(headers) = headers {
-            for (key, value) in headers.iter() {
-                req = req.header(key, value);
-            }
+        if encoding == AcceptEncodingPolicy::Identity {
+            request = request.header("Accept-Encoding", "identity");
         }
-        req
-    }
-
-    fn head_request(&self, url: &Url) -> RequestBuilder {
-        head_request(&self.inner, url)
+        request
+            .body(body)
+            .map_err(|error| NetError::Network(error.to_string()))
     }
 
     /// Establish ONE body stream (no self-healing) for `range` (`None` = full
@@ -177,52 +136,49 @@ impl RawHttp {
         accept_partial: bool,
         observer: Option<&Observer>,
     ) -> Result<crate::ByteStream, NetError> {
-        let mut req = self.inner.get(url.as_str());
+        let mut req = Self::request(
+            Method::GET,
+            &url,
+            Bytes::new(),
+            headers,
+            AcceptEncodingPolicy::Identity,
+        )?;
         if let Some(range) = &range {
-            req = req.header("Range", range.to_string());
+            req.headers_mut().insert(
+                "range",
+                range
+                    .to_string()
+                    .parse()
+                    .map_err(|error: http::header::InvalidHeaderValue| {
+                        NetError::Network(error.to_string())
+                    })?,
+            );
         }
         let resp = self
-            .send_checked(
-                req,
-                headers,
-                url.clone(),
-                accept_partial,
-                AcceptEncodingPolicy::Identity,
-                observer,
-            )
+            .send_checked(req, url.clone(), accept_partial, observer)
             .await?;
         Self::response_to_stream(resp, range.as_ref(), &url)
     }
 
-    /// Body-chunk awaits on this stream happen inside [`resumable_body`]'s
-    /// `flash(io)` bracket (`next_chunk`) — every streaming fetch is wrapped
-    /// by [`Self::wrap_resumable`] before it reaches a consumer.
     fn response_to_stream(
-        resp: Response,
+        resp: Response<HttpBody>,
         range: Option<&RangeSpec>,
         url: &Url,
     ) -> Result<crate::ByteStream, NetError> {
         let headers = extract_headers(&resp);
         let partial = resp.status() == StatusCode::PARTIAL_CONTENT;
         validate_range_response(resp.status().as_u16(), range, &headers, url)?;
-        let stream = resp.bytes_stream().map_err(NetError::from);
-        Ok(crate::ByteStream::with_partial(
-            headers,
-            Box::pin(stream),
-            partial,
-        ))
+        let stream = resp.into_body();
+        Ok(crate::ByteStream::with_partial(headers, stream, partial))
     }
 
     async fn send_checked(
         &self,
-        req: RequestBuilder,
-        headers: Option<Headers>,
+        req: Request<Bytes>,
         url: Url,
         accept_partial: bool,
-        encoding: AcceptEncodingPolicy,
         observer: Option<&Observer>,
-    ) -> Result<Response, NetError> {
-        let req = self.apply_headers(req, headers, encoding);
+    ) -> Result<Response<HttpBody>, NetError> {
         let started = Instant::now();
         let resp = self.send_idle_bounded(req).await?;
         let status = resp.status();
@@ -246,23 +202,10 @@ impl RawHttp {
         Ok(resp)
     }
 
-    /// Await a request's response under the idle/stall timeout: no response
-    /// headers within `inactivity_timeout` ⇒ a transient [`NetError::Timeout`]
-    /// so the retry decorator re-issues it. This is the establish-side half of
-    /// the single idle timer (the body half lives in [`resumable_body`]).
-    ///
-    /// This bound measures a REAL socket operation (connect + header wait), so
-    /// the fn is a `flash(io)` bracket: under `flash` the virtual clock
-    /// is paced to real time while the op is in flight, so the (virtual) idle
-    /// timer cannot be fired by the quiescence engine racing ahead of an
-    /// in-flight loopback establish — it measures at least the equivalent real
-    /// time, and never fires for a fast healthy fetch.
-    #[kithara::flash(io)]
-    async fn send_idle_bounded(&self, req: RequestBuilder) -> Result<Response, NetError> {
-        timeout(self.options.inactivity_timeout, req.send())
+    async fn send_idle_bounded(&self, req: Request<Bytes>) -> Result<Response<HttpBody>, NetError> {
+        timeout(self.options.inactivity_timeout, self.inner.open(req))
             .await
             .map_err(|_| NetError::Timeout)?
-            .map_err(NetError::from)
     }
 
     /// Wrap a freshly-established body in the self-healing stream: on a stall
@@ -350,23 +293,36 @@ impl RetryClient<RawHttp> {
     ///
     /// Panics if the HTTP `Client` builder fails to build.
     #[must_use]
-    pub fn new<S>(options: NetOptions, _pools: PoolRegion<S>, cancel: CancelToken) -> Self
+    pub fn new<S>(options: NetOptions, pools: PoolRegion<S>, cancel: CancelToken) -> Self
     where
         S: HasPool<u8> + Send + Sync + 'static,
     {
         let connection_metrics = ConnectionMetrics::default();
-        let inner = build_client(&options, &connection_metrics)
-            .expect("BUG: HTTP client builder with our defaults cannot fail");
+        let transport =
+            SelectedTransport::new(&options, pools, cancel.clone(), &connection_metrics);
+        let mut client = Self::new_with_transport(options, transport, cancel);
+        client.connection_metrics = connection_metrics;
+        client
+    }
+
+    /// Build a client over an owned transport, sharing it with derived handles.
+    /// The client applies the same inactivity, validation, retry and cancellation policies
+    /// as it does to built-in transports.
+    #[must_use]
+    pub fn new_with_transport<T: HttpTransport + 'static>(
+        options: NetOptions,
+        transport: T,
+        cancel: CancelToken,
+    ) -> Self {
+        let retry_policy = options.retry_policy;
         let raw = RawHttp {
-            inner,
+            inner: Arc::new(transport),
             options,
             cancel: cancel.clone(),
         };
-        let retry_policy = raw.options.retry_policy;
-        let net = Arc::new(RetryNet::new(raw, retry_policy, cancel));
         Self {
-            net,
-            connection_metrics,
+            net: Arc::new(RetryNet::new(raw, retry_policy, cancel)),
+            connection_metrics: ConnectionMetrics::default(),
             observer: None,
         }
     }
@@ -415,17 +371,14 @@ impl RawNet for RawHttp {
         headers: Option<Headers>,
         observer: Option<&Observer>,
     ) -> Result<Bytes, NetError> {
-        let req = self.inner.get(url.as_str());
-        let resp = self
-            .send_checked(
-                req,
-                headers,
-                url,
-                false,
-                AcceptEncodingPolicy::Configured,
-                observer,
-            )
-            .await?;
+        let req = Self::request(
+            Method::GET,
+            &url,
+            Bytes::new(),
+            headers,
+            AcceptEncodingPolicy::Configured,
+        )?;
+        let resp = self.send_checked(req, url, false, observer).await?;
         body_bytes(resp, self.options.inactivity_timeout).await
     }
 
@@ -454,35 +407,18 @@ impl RawNet for RawHttp {
         &self,
         url: Url,
         headers: Option<Headers>,
-        _observer: Option<&Observer>,
+        observer: Option<&Observer>,
     ) -> Result<Headers, NetError> {
-        let req = self.head_request(&url);
-        let req = self.apply_headers(req, headers, AcceptEncodingPolicy::Identity);
-        let resp = self.send_idle_bounded(req).await?;
-
-        let status = resp.status();
-
-        if !status.is_success() && status != StatusCode::PARTIAL_CONTENT {
-            let body = error_body(resp, self.options.inactivity_timeout).await;
-            return Err(status_error(url, status.as_u16(), body));
-        }
-
-        #[cfg(not(target_arch = "wasm32"))]
-        reject_undecoded_content_encoding(&resp, &url)?;
-
-        let mut out = extract_headers(&resp);
-
-        if out.get("content-length").is_none() {
-            let total_from_range = out
-                .get("content-range")
-                .and_then(|h| h.split('/').nth(1))
-                .filter(|s| *s != "*")
-                .map(str::to_owned);
-            if let Some(total) = total_from_range {
-                out.insert("content-length", total);
-            }
-        }
-
+        let req = Self::request(
+            Method::HEAD,
+            &url,
+            Bytes::new(),
+            headers,
+            AcceptEncodingPolicy::Identity,
+        )?;
+        let resp = self.send_checked(req, url, true, observer).await?;
+        let out = normalize_head_headers(extract_headers(&resp));
+        body_bytes(resp, self.options.inactivity_timeout).await?;
         Ok(out)
     }
 
@@ -494,17 +430,14 @@ impl RawNet for RawHttp {
         headers: Option<Headers>,
         observer: Option<&Observer>,
     ) -> Result<Bytes, NetError> {
-        let req = post_request(&self.inner, &url, body);
-        let resp = self
-            .send_checked(
-                req,
-                headers,
-                url,
-                false,
-                AcceptEncodingPolicy::Configured,
-                observer,
-            )
-            .await?;
+        let req = Self::request(
+            Method::POST,
+            &url,
+            body,
+            headers,
+            AcceptEncodingPolicy::Configured,
+        )?;
+        let resp = self.send_checked(req, url, false, observer).await?;
         body_bytes(resp, self.options.inactivity_timeout).await
     }
 
@@ -523,8 +456,7 @@ impl RawNet for RawHttp {
     }
 }
 
-#[cfg(test)]
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(test, reqwest_backend, not(target_arch = "wasm32")))]
 mod tests {
     mod kithara {
         pub(crate) use kithara_test_macros::test;

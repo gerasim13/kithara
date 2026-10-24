@@ -180,6 +180,10 @@ where
         budget: usize,
         latch: Duration,
     ) -> Vec<FetchCmd> {
+        self.dispatch_capped(ctx, budget, self.owed_segment_end(latch))
+    }
+
+    fn owed_segment_end(&self, latch: Duration) -> Option<u32> {
         let read_end = self
             .find_at_offset(self.projected_position().byte)
             .map(|(seg_idx, _, _)| seg_idx.saturating_add(1));
@@ -192,8 +196,12 @@ where
             .read_wait_end()
             .and_then(|end| self.find_at_offset(end.saturating_sub(1)))
             .map(|(seg_idx, _, _)| seg_idx);
-        let owed_end = [read_end, latch_end, wait_end].into_iter().flatten().max();
-        self.dispatch_capped(ctx, budget, owed_end)
+        [read_end, latch_end, wait_end].into_iter().flatten().max()
+    }
+
+    pub(crate) fn take_retired_lookahead(&self, latch: Duration) -> Vec<CancelToken> {
+        self.cancel
+            .take_retired_lookahead(self.owed_segment_end(latch))
     }
 
     pub(crate) fn incoming(
@@ -362,12 +370,6 @@ where
     delegate::delegate! {
         to self.cancel {
             pub(crate) fn abort(&self);
-            /// Retire this session's look-ahead fetches — queued and in
-            /// flight — while keeping the owed window live. Called when an
-            /// incoming variant slot is installed: the capacity those fetches
-            /// hold is what the construction needs, and their bytes lie past
-            /// the cut the transition latches.
-            pub(crate) fn retire_lookahead(&self);
         }
         to self.signal {
             pub(crate) fn arm_peer(&self);

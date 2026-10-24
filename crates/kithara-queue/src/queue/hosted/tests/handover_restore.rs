@@ -3,7 +3,10 @@ use kithara_play::{DeckEvent, DeckMixSettingsChange, Position, TrackCommand};
 use kithara_render::bridge::{DeckProtocol, PlaybackFault, Slot, SlotState};
 
 use super::*;
-use crate::{AdvanceReason, QueueSettingsChange, Transition};
+use crate::{
+    AdvanceReason, QueueSettingsChange, Transition,
+    mock::{fixture_uri, seed_fixture},
+};
 
 struct HandoverRig {
     queue: Queue<TestPools>,
@@ -106,20 +109,21 @@ impl HandoverRig {
             ],
             last_lane: None,
         };
-        for name in names {
+        for name in std::collections::BTreeSet::from(names) {
             hang_tick!();
-            let path = rig.dir.path().join(name);
-            mock::write_pcm_wav(&path, &[0.5; 2_048], AudioSpec::new(2, mock::SAMPLE_RATE))
-                .expect("offline item fixture");
+            seed_fixture(
+                rig.queue.config.store.as_ref().expect("fixture store"),
+                &fixture_uri(rig.dir.path(), name),
+                kithara_test_fixtures::assets::fixed_constant_wav_cd_half_1024().bytes(),
+            );
             hang_reset!();
         }
         for (id, name) in rig.ids.into_iter().zip(names).take(1) {
             hang_tick!();
-            let path = rig.dir.path().join(name);
             rig.apply(QueueCommand::Append {
                 position: Position::ZERO,
                 id,
-                source: TrackSource::Uri(path.to_str().expect("fixture path").to_owned()),
+                source: TrackSource::Uri(fixture_uri(rig.dir.path(), name)),
             })
             .expect("append item");
             hang_reset!();
@@ -147,14 +151,7 @@ impl HandoverRig {
         });
         rig.queue.insert_entry(
             rig.ids[1],
-            TrackSource::Uri(
-                rig.dir
-                    .path()
-                    .join(names[1])
-                    .to_str()
-                    .expect("fixture path")
-                    .to_owned(),
-            ),
+            TrackSource::Uri(fixture_uri(rig.dir.path(), names[1])),
             Position::ZERO,
             crate::queue::types::Placement::Append,
         );
@@ -171,14 +168,7 @@ impl HandoverRig {
         if self.queue.track(self.ids[index]).is_none() {
             self.queue.insert_entry(
                 self.ids[index],
-                TrackSource::Uri(
-                    self.dir
-                        .path()
-                        .join("item-3.wav")
-                        .to_str()
-                        .expect("fixture path")
-                        .to_owned(),
-                ),
+                TrackSource::Uri(fixture_uri(self.dir.path(), "item-3.wav")),
                 Position::ZERO,
                 crate::queue::types::Placement::Append,
             );
@@ -628,11 +618,11 @@ async fn removing_a_successor_over_a_held_native_chain_enters_the_next_item(
     let outgoing_source = rig.source(0).to_owned();
     let incoming = rig.arm(1).await;
     let incoming_source = rig.source(1).to_owned();
-    let source = rig.dir.path().join("item-3.wav");
+    let source = fixture_uri(rig.dir.path(), "item-3.wav");
     rig.apply(QueueCommand::Append {
         position: Position::ZERO,
         id: rig.ids[2],
-        source: TrackSource::Uri(source.to_str().expect("fixture source").to_owned()),
+        source: TrackSource::Uri(source.clone()),
     })
     .expect("append the held successor after B");
     let following = rig.arm(2).await;
@@ -824,11 +814,11 @@ async fn removing_an_unstarted_chain_target_keeps_the_confirmed_current(
     let incoming = rig.arm(1).await;
     let incoming_source = rig.source(1).to_owned();
     let following_item = rig.ids[2];
-    let source = rig.dir.path().join("item-3.wav");
+    let source = fixture_uri(rig.dir.path(), "item-3.wav");
     rig.apply(QueueCommand::Append {
         position: Position::ZERO,
         id: following_item,
-        source: TrackSource::Uri(source.to_str().expect("fixture source").to_owned()),
+        source: TrackSource::Uri(source.clone()),
     })
     .expect("append following C");
     let following = rig.arm(2).await;
@@ -1075,10 +1065,10 @@ async fn removing_an_unstarted_staged_replacement_does_not_select_its_neighbor(
     assert_eq!(rig.queue.current, Some(rig.ids[1]));
     rig.queue.deck.mixer.slots[usize::from(old_slot.get())].state = SlotState::Playing;
     let following_item = rig.ids[2];
-    let source = rig.dir.path().join("item-3.wav");
+    let source = fixture_uri(rig.dir.path(), "item-3.wav");
     rig.apply(QueueCommand::Insert {
         id: following_item,
-        source: TrackSource::Uri(source.to_str().expect("fixture source").to_owned()),
+        source: TrackSource::Uri(source.clone()),
         after: Some(rig.ids[0]),
     })
     .expect("C follows the outgoing A in queue order");
@@ -1189,11 +1179,11 @@ async fn a_rejected_removal_detach_finishes_its_custody_gate(
     let incoming = rig.arm(1).await;
     let incoming_source = rig.source(1).to_owned();
     let following_item = rig.ids[2];
-    let source = rig.dir.path().join("item-3.wav");
+    let source = fixture_uri(rig.dir.path(), "item-3.wav");
     rig.apply(QueueCommand::Append {
         position: Position::ZERO,
         id: following_item,
-        source: TrackSource::Uri(source.to_str().expect("fixture source").to_owned()),
+        source: TrackSource::Uri(source.clone()),
     })
     .expect("append C");
     let following = rig.arm(2).await;
@@ -2007,10 +1997,10 @@ async fn a_replacement_settles_returned_pcm_before_the_queue_replaces_its_owner(
         HandoverRig::playing_with_config(["item-1.wav", "item-2.wav", "item-3.wav"], config).await;
     let old_lane = rig.last_lane.expect("original opened lane");
     let old_slot = rig.slot(0);
-    let source = rig.dir.path().join("item-1.wav");
+    let source = fixture_uri(rig.dir.path(), "item-1.wav");
     assert_eq!(
         rig.deck.mixer.held(old_slot),
-        source.to_str(),
+        Some(source.as_str()),
         "the existing executor owns the original consumer"
     );
     rig.queue.deck.mixer.slots[usize::from(old_slot.get())].state = SlotState::Playing;
@@ -2037,7 +2027,7 @@ async fn a_replacement_settles_returned_pcm_before_the_queue_replaces_its_owner(
             .iter()
             .filter(|part| matches!(part,
                 DeckPart::Returned(Returned::Pcm { slot, pcm })
-                if *slot == old_slot && &**pcm.src() == source.to_str().expect("source path")
+                if *slot == old_slot && &**pcm.src() == source.as_str()
             ))
             .count(),
         1,
@@ -2132,14 +2122,7 @@ async fn cancelling_a_parked_chain_answers_it_before_the_predecessors_eof() {
     rig.arm(1).await;
     rig.queue.insert_entry(
         rig.ids[2],
-        TrackSource::Uri(
-            rig.dir
-                .path()
-                .join("item-3.wav")
-                .to_str()
-                .expect("third path")
-                .to_owned(),
-        ),
+        TrackSource::Uri(fixture_uri(rig.dir.path(), "item-3.wav")),
         Position::ZERO,
         crate::queue::types::Placement::Append,
     );
@@ -2291,10 +2274,7 @@ async fn arm_next_loads_item_and_returns_src() {
     let mut rig = HandoverRig::playing().await;
     let slot = rig.arm(1).await;
     assert_eq!(rig.armed(), Some(rig.ids[1]));
-    assert_eq!(
-        rig.source(1),
-        rig.dir.path().join("item-2.wav").to_str().expect("source")
-    );
+    assert_eq!(rig.source(1), fixture_uri(rig.dir.path(), "item-2.wav"));
     assert_eq!(rig.queue.active.get(1).expect("armed track").slot, slot);
     assert_eq!(
         rig.queue.track(rig.ids[1]).expect("record").status,
@@ -2363,8 +2343,8 @@ async fn arm_next_idempotent_for_same_index() {
     );
 }
 
-#[kithara::test]
-fn arm_next_returns_none_for_empty_slot() {
+#[kithara::test(tokio)]
+async fn arm_next_returns_none_for_empty_slot() {
     let (mut queue, mut deck, _dir) = empty_queue();
     let result = with_outbox(&mut queue, &mut deck, |queue, out| {
         queue.next_target(
@@ -2430,8 +2410,8 @@ async fn commit_next_index_mismatch_returns_typed_error() {
     assert_eq!(rig.queue.current, Some(rig.ids[0]));
 }
 
-#[kithara::test]
-fn commit_next_without_arm_returns_not_ready() {
+#[kithara::test(tokio)]
+async fn commit_next_without_arm_returns_not_ready() {
     let (mut queue, mut deck, _dir) = empty_queue();
     let error = with_outbox(&mut queue, &mut deck, |queue, out| {
         queue.send_transition(0, SessionFrame::new(128), out)
@@ -2552,10 +2532,7 @@ async fn unarm_next_clears_when_not_activated_and_unloads() {
     with_outbox(&mut rig.queue, &mut rig.deck, Queue::cancel_auto).expect("unarm preload");
     let parts = rig.pending_parts();
     assert_eq!(rig.armed(), None);
-    assert_eq!(
-        source,
-        rig.dir.path().join("item-2.wav").to_str().expect("source")
-    );
+    assert_eq!(source, fixture_uri(rig.dir.path(), "item-2.wav"));
     assert!(
         parts
             .iter()
@@ -2576,10 +2553,7 @@ async fn select_item_clears_pending_next_and_unloads_preloaded_track() {
     crate::mock::finish(&mut rig.queue, &mut rig.deck);
     assert_eq!(rig.armed(), None);
     assert_eq!(rig.queue.control().current_index(), Some(2));
-    assert_eq!(
-        source,
-        rig.dir.path().join("item-2.wav").to_str().expect("source")
-    );
+    assert_eq!(source, fixture_uri(rig.dir.path(), "item-2.wav"));
 }
 
 #[kithara::test(tokio)]
@@ -2905,10 +2879,7 @@ async fn end_of_the_held_slot_is_the_leading_track() {
         (current.as_ref().item, current.as_ref().slot),
         (rig.ids[0], Some(held))
     );
-    assert_eq!(
-        rig.source(0),
-        rig.dir.path().join("item-1.wav").to_str().expect("source")
-    );
+    assert_eq!(rig.source(0), fixture_uri(rig.dir.path(), "item-1.wav"));
     assert_eq!(
         rig.queue.active.get(0).expect("held track").role,
         Role::Current
@@ -2938,10 +2909,7 @@ async fn end_of_a_slot_the_phase_does_not_hold_is_a_background_track() {
         (rig.ids[1], background, Role::Preloaded)
     );
     assert_ne!(background, rig.slot(0));
-    assert_eq!(
-        rig.source(1),
-        rig.dir.path().join("item-2.wav").to_str().expect("source")
-    );
+    assert_eq!(rig.source(1), fixture_uri(rig.dir.path(), "item-2.wav"));
     let mut receiver = rig.queue.control().subscribe();
     rig.event(DeckEvent::Ended {
         slot: background,
@@ -3055,10 +3023,7 @@ async fn start_of_a_slot_the_phase_does_not_hold_is_a_background_item() {
         active.track.snapshot().as_ref().status,
         PlayingStatus::Playing { .. }
     ));
-    assert_eq!(
-        rig.source(1),
-        rig.dir.path().join("item-2.wav").to_str().expect("source")
-    );
+    assert_eq!(rig.source(1), fixture_uri(rig.dir.path(), "item-2.wav"));
     assert_eq!(rig.queue.current, Some(rig.ids[0]));
     assert!(events(&mut receiver).is_empty());
 }
@@ -3068,14 +3033,7 @@ impl HandoverRig {
         if self.queue.track(self.ids[2]).is_none() {
             self.queue.insert_entry(
                 self.ids[2],
-                TrackSource::Uri(
-                    self.dir
-                        .path()
-                        .join("item-3.wav")
-                        .to_str()
-                        .expect("third path")
-                        .to_owned(),
-                ),
+                TrackSource::Uri(fixture_uri(self.dir.path(), "item-3.wav")),
                 Position::ZERO,
                 crate::queue::types::Placement::Append,
             );
@@ -3242,7 +3200,7 @@ async fn a_late_applied_previous_commits_its_original_history_before_the_new_tar
     let slot = rig.queue.active.get(incoming).expect("incoming C").slot;
     assert_eq!(
         rig.deck.mixer.held(slot),
-        rig.dir.path().join("item-1.wav").to_str(),
+        Some(fixture_uri(rig.dir.path(), "item-1.wav").as_str()),
         "the replacement victim still owns its actual PCM"
     );
     rig.queue.deck.mixer.slots[usize::from(slot.get())].state = SlotState::Playing;

@@ -1,6 +1,7 @@
 use std::f32::consts::TAU;
 
 use fearless_simd::{Level, dispatch};
+use kithara_test_fixtures::portable::polar_points;
 use kithara_test_utils::{bufpool::pools, kithara};
 use num_traits::ToPrimitive;
 
@@ -17,8 +18,6 @@ const MAGNITUDE_PARITY: f32 = 2.0 * f32::EPSILON;
 /// Largest `arg` error against `atan2`, in radians on the circle.
 const PHASE_PARITY: f32 = 1e-6;
 const LENGTHS: [usize; 7] = [16, 48, 80, 240, 1024, 3072, 4096];
-const RADII: [f32; 3] = [1.0e-3, 1.0, 4096.0];
-const STEPS: u16 = 64;
 const UNWRITTEN: f32 = -1.0;
 const TAPS: [usize; 5] = [1, 3, 7, 64, 257];
 /// Lags beyond the longest kernel.
@@ -91,22 +90,8 @@ fn phases() -> [Kernel; 2] {
 /// Points around the circle at three radii, then the four signed zeros and
 /// the axes; the count is no multiple of a vector, so the tail runs too.
 fn points() -> (Vec<f32>, Vec<f32>) {
-    let circle = (0..STEPS).flat_map(|step| {
-        let angle = f32::from(step) * (TAU / f32::from(STEPS));
-        RADII.map(|radius| (radius * angle.cos(), radius * angle.sin()))
-    });
-    let edges = [
-        (0.0, 0.0),
-        (-0.0, 0.0),
-        (0.0, -0.0),
-        (-0.0, -0.0),
-        (1.0, 0.0),
-        (-1.0, 0.0),
-        (-1.0, -0.0),
-        (0.0, 1.0),
-        (0.0, -1.0),
-    ];
-    circle.chain(edges).unzip()
+    let (re, im) = polar_points();
+    (re.to_vec(), im.to_vec())
 }
 
 /// Distance between two angles on the circle, in radians.

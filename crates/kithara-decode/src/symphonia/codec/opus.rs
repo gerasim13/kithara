@@ -135,21 +135,8 @@ mod tests {
 
     #[kithara::test]
     fn opus_registry_decodes_pcm_and_resets_without_container_trim() {
-        let input: Vec<f32> = (0_u16..960)
-            .flat_map(|frame| {
-                let sample =
-                    (f32::from(frame) * std::f32::consts::TAU * 440.0 / 48_000.0).sin() * 0.5;
-                [sample, sample]
-            })
-            .collect();
-        let mut encoder =
-            opus::Encoder::new(48_000, opus::Channels::Stereo, opus::Application::Audio)
-                .expect("Opus encoder");
-        let mut encoded = [0; 4_000];
-        let len = encoder
-            .encode_float(&input, &mut encoded)
-            .expect("encode packet");
-        let packet = PacketRef::new(0, Timestamp::new(0), Duration::new(960), &encoded[..len]);
+        let encoded = kithara_test_fixtures::unit_fixtures::decoder_opus_packet();
+        let packet = PacketRef::new(0, Timestamp::new(0), Duration::new(960), encoded);
         let mut params = AudioCodecParameters::new();
         params
             .for_codec(CODEC_ID_OPUS)

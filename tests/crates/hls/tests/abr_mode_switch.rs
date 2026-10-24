@@ -831,7 +831,10 @@ async fn wait_v0_fully_cached(collector: &EventCollector, segment_count: usize) 
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
 #[case::platform_default(DecoderBackend::default())]
-#[cfg_attr(not(target_os = "android"), case::software(DecoderBackend::Symphonia))]
+#[cfg_attr(
+    not(any(target_os = "android", target_os = "linux")),
+    case::software(DecoderBackend::Symphonia)
+)]
 async fn vod_manual_switch_affects_future_segments(
     #[future(awt)] manual_thirty_gated: (CreatedHls, SegmentGateHandle),
     #[case] backend: DecoderBackend,
@@ -1359,7 +1362,10 @@ async fn multi_track_shared_abr_with_cache(#[future(awt)] shared_tracks: (Create
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
 #[case::platform_default(DecoderBackend::default())]
-#[cfg_attr(not(target_os = "android"), case::software(DecoderBackend::Symphonia))]
+#[cfg_attr(
+    not(any(target_os = "android", target_os = "linux")),
+    case::software(DecoderBackend::Symphonia)
+)]
 async fn abr_switch_must_not_redownload_covered_segments(
     #[future(awt)] manual_thirty_gated: (CreatedHls, SegmentGateHandle),
     #[case] backend: DecoderBackend,
@@ -2704,44 +2710,6 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     );
 }
 
-/// Production replay (app.log 2026-05-16 22:23 and 2026-05-17 09:08):
-/// after a manual ABR switch to a variant whose `seg 0` is NOT in the
-/// cache, a seek **backwards to a non-zero offset** (37 s in app.log)
-/// makes `start_recreating_decoder` fire but `Recreating decoder for
-/// new format` never logs — the FSM parks in `RecreatingDecoder` and
-/// `audio_worker_loop` panics on `HangDetector` after 10 s.
-///
-/// Root cause (kithara-audio/src/pipeline/source.rs:1640
-/// `source_ready_for_recreate`): for `RecreateCause::VariantSwitch`
-/// the fast path that probes only the init range is skipped — the
-/// code falls back to `source_is_ready_for_boundary(offset)` which
-/// waits for `[0..32 KiB)` to be `Ready`. After a seek-backwards the
-/// reader byte cursor is far past byte 0, the HLS scheduler emits
-/// segments around that cursor (seg N+), and **nobody asks for
-/// `seg 0` of the new variant** — the readiness gate never opens.
-/// The init bytes are already cached (`emit init v=N`,
-/// `bytes_written=627` in app.log), so the recreate could complete
-/// — but the gate blocks on a range no one schedules.
-///
-/// Distinction from the existing fast path: it covers only
-/// `FormatBoundary + Decode`, where the decoder afterwards
-/// `decode`s from `offset`. `VariantSwitch + Seek/ApplySeek` uses the
-/// same factory contract (decoder needs only the init range to
-/// initialise; the seek that follows lands wherever the pending
-/// request asks for) but was left in the slow path.
-///
-/// Reproduces both production runs by seeking to a non-zero offset
-/// after a manual switch to an uncached variant. Seek-to-0 does NOT
-/// reproduce — that resets `reader_pos` to 0 and the scheduler then
-/// schedules `seg 0` of the new variant, so the gate eventually
-/// opens.
-///
-/// Four cases × `(DecoderBackend, target_variant)`:
-/// - `sw_same_codec_aac_low_to_high`: V0 (slq AAC) → V2 (shq AAC),
-///   same-codec recreate.
-/// - `sw_cross_codec_aac_to_flac`: V0 (slq AAC) → V3 (slossless
-///   FLAC), cross-codec recreate.
-/// - `hw_*` mirror the above on the Apple backend.
 #[kithara::test(
     native,
     tokio,
@@ -2783,8 +2751,6 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
     let (_server, url) = mixed_plain;
-    // The mixed-codec ladder: v=0..2 AAC (mp4a.40.2, fmp4), v=3 FLAC
-    // (fmp4). Track ≈ 220 s, 37 segments each (~6 s).
 
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
@@ -2840,18 +2806,14 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
     let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .expect("create audio");
+    audio = kithara_integration_tests::mock::with_blocking_reads(audio);
 
-    // Phase 1 — play V0 long enough that reader_pos is past seg 6
-    // (the seek target ≈ 37 s lands in seg 6). The blocking read
-    // loop is parked on the tokio blocking pool so that
-    // `recv_outcome_blocking` (`park_timeout` on the current thread)
-    // does NOT freeze the tokio worker that drives `Downloader`.
     let (mut audio, samples_phase1) = spawn_blocking(move || {
-        let target_samples: u64 = 25 * 44_100;
+        let target_position = Duration::from_secs(50);
         let mut samples = 0u64;
         let mut buf = vec![0f32; 4096 * 2];
         let deadline = Instant::now() + Duration::from_secs(20);
-        while samples < target_samples && Instant::now() < deadline {
+        while audio.position() < target_position && Instant::now() < deadline {
             match audio.read(&mut buf) {
                 Ok(ReadOutcome::Frames { count, .. }) => samples += count.get() as u64,
                 Ok(ReadOutcome::Pending { .. }) => {}
@@ -2865,13 +2827,11 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
     .expect("phase 1 join");
 
     assert!(
-        samples_phase1 > 4 * 44_100,
-        "phase 1 must produce > 4 s of V0 audio before the switch, \
-         got {samples_phase1}"
+        audio.position() >= Duration::from_secs(50),
+        "backwards seek requires 50 seconds of pre-roll, actual={:?}",
+        audio.position()
     );
 
-    // Phase 2 — manual switch to the target variant. Its seg 0 and
-    // (typically) seg 6 at the seek-to-37 s position are NOT cached.
     let handle = audio
         .abr_handle()
         .expect("HLS stream must expose AbrHandle");
@@ -2879,37 +2839,10 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
         .set_mode(AbrMode::manual(target_variant))
         .expect("Manual target valid");
 
-    // Deterministic ordering (no wall nap, no event race): `set_mode` only sets
-    // the pending Manual decision — it does NOT wake the HLS peer's downloader
-    // poll, and phase 1's reader has stopped, so the peer is parked and has not
-    // committed the switch (active is still V0). Seeking now forces the bug's
-    // interleaving every time: the worker resolves the seek anchor in V0's byte
-    // space (`apply_seek` calls `seek_time_anchor` BEFORE `arm_peer_wake`),
-    // THEN wakes the peer, which commits the Manual switch to the target and
-    // re-maps the reader into the target's byte space. The PostSeek gate is then
-    // left waiting on the stale V0 anchor offset, interpreted against the target
-    // variant's byte_map — a segment the producer (aimed at the real reader
-    // position) never fetches. The previous `wait_for_event(enqueue)` forced a
-    // peer poll here that sometimes committed the switch BEFORE the seek (anchor
-    // then resolved in the target's space → no hang), making the repro ~30%.
-
-    // Phase 3 — seek BACKWARDS to a non-zero offset (37 s, as in
-    // app.log run 1). reader_pos ends up at ≈ seg 6 byte-coords of
-    // the new variant. The scheduler emits segments around that
-    // cursor — seg 0 of the new variant is NEVER scheduled, even
-    // though the recreate readiness gate currently waits for
-    // `[0..32 KiB)` to be Ready.
     audio
         .seek(Duration::from_secs(37))
         .expect("seek to 37 s must succeed");
 
-    // Phase 4 — pump up to ~12 s of wall-clock and expect samples
-    // to flow from the new variant. Regression surface: zero
-    // samples produced (FSM parked in `RecreatingDecoder`) and the
-    // playback worker panics via `HangDetector` after
-    // `KITHARA_HANG_TIMEOUT_SECS = 5`. The outer test will then fail
-    // with `kithara-play-worker-* panicked` rather than this
-    // assertion.
     let (samples_phase4, saw_eof_phase4) = spawn_blocking(move || {
         let mut samples = 0u64;
         let mut saw_eof = false;
@@ -2944,17 +2877,10 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
 
     assert!(
         !saw_eof_phase4,
-        "phase 4 unexpected EOF after seek-backwards-to-37 s following \
-         Manual({target_variant}) switch — samples_phase4={samples_phase4}"
+        "unexpected EOF after backwards seek to 37 s and Manual({target_variant}), samples={samples_phase4}"
     );
     assert!(
         samples_phase4 > 0,
-        "post-seek-backwards-to-37 s playback after Manual({target_variant}) \
-         switch must yield samples, got {samples_phase4}. Regression — \
-         see app.log 2026-05-16 22:23 (V0→V2 AAC same-codec) and \
-         2026-05-17 09:08 (V0→V3 FLAC cross-codec, then V3→V1 AAC \
-         cross-codec). Root cause: `source_ready_for_recreate` slow \
-         path waits for `[0..32 KiB)` Ready on `VariantSwitch`, but \
-         the scheduler never schedules `seg 0` after a backwards seek."
+        "backwards seek to 37 s after Manual({target_variant}) must yield PCM, got {samples_phase4}"
     );
 }

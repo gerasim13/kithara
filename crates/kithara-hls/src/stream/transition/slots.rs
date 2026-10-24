@@ -235,10 +235,24 @@ where
             .as_ref()
             .map(|slot| slot.landing_time);
         let session = self.active_session();
-        latch.map_or_else(
+        let commands = latch.map_or_else(
             || session.dispatch(ctx, budget),
             |latch| session.dispatch_owed(ctx, budget, latch),
-        )
+        );
+        self.retire_outgoing_lookahead(&session);
+        commands
+    }
+
+    pub(in crate::stream) fn retire_outgoing_lookahead(&self, session: &HlsSession<S>) {
+        let retired = {
+            let state = self.sessions.transition.lock();
+            state.incoming.as_ref().map_or_else(Vec::new, |slot| {
+                session.take_retired_lookahead(slot.landing_time)
+            })
+        };
+        for token in retired {
+            token.cancel();
+        }
     }
 
     /// Emit high-priority construction fetches within the peer budget so audible work cannot starve them.

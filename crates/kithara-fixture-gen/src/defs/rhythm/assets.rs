@@ -50,6 +50,38 @@ fn rhythm_wav(style: Style, control: Control) -> Vec<u8> {
     score::wav(style, control)
 }
 
+#[kithara::asset(
+    ext = "pcm-reference", content_type = "application/x-kithara-pcm-reference",
+    format = crate::reference::format, depends_on = ["rhythm_wav_{case}"]
+)]
+#[case::ambient_dub_62_aligned()]
+#[case::ambient_dub_62_one_frame_late()]
+#[case::ambient_dub_62_one_beat_bar_late()]
+#[case::ambient_dub_62_missing_beat()]
+#[case::trip_hop_74_aligned()]
+#[case::trip_hop_74_one_frame_late()]
+#[case::trip_hop_74_one_beat_bar_late()]
+#[case::trip_hop_74_missing_beat()]
+#[case::downtempo_96_aligned()]
+#[case::downtempo_96_one_frame_late()]
+#[case::downtempo_96_one_beat_bar_late()]
+#[case::downtempo_96_missing_beat()]
+#[case::house_124_aligned()]
+#[case::house_124_one_frame_late()]
+#[case::house_124_one_beat_bar_late()]
+#[case::house_124_missing_beat()]
+#[case::techno_132_aligned()]
+#[case::techno_132_one_frame_late()]
+#[case::techno_132_one_beat_bar_late()]
+#[case::techno_132_missing_beat()]
+#[case::breakbeat_140_aligned()]
+#[case::breakbeat_140_one_frame_late()]
+#[case::breakbeat_140_one_beat_bar_late()]
+#[case::breakbeat_140_missing_beat()]
+fn authored_rhythm_wav(inputs: &[&[u8]]) -> Vec<u8> {
+    crate::reference::authored(inputs, None)
+}
+
 #[kithara::asset(ext = "wav", content_type = "audio/wav")]
 #[case::ambient_dub_62_aligned(Style::AmbientDub)]
 #[case::trip_hop_74_aligned(Style::TripHop)]
@@ -405,6 +437,7 @@ pub(in crate::defs) fn analysed_format() -> Vec<u8> {
             .expect("the fixture build runs the beat pass")
             .as_bytes(),
     );
+    format.extend_from_slice(&super::analyze::source_format());
     format
 }
 

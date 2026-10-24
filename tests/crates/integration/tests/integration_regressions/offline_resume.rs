@@ -21,11 +21,11 @@ use kithara_integration_tests::{
     event::TestEvent,
     kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
-    test_server::NetworkMode,
+    test_server::{BehaviorHandle, NetworkMode},
     waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
 };
 use kithara_test_fixtures::hls::long_plain;
-use kithara_test_utils::{TestTempDir, temp_dir};
+use kithara_test_utils::{TestTempDir, temp_dir, wait_until};
 
 fn hls_look_ahead(bytes: u64) -> HlsConfigPatch {
     let mut patch = HlsConfigPatch::default();
@@ -54,10 +54,7 @@ const LOOK_AHEAD_BYTES: u64 = 64 * 1024;
 /// Wide enough that an outage catches several fetches mid-body, which is
 /// what a device does and what the narrow window above deliberately avoids.
 const PACED_LOOK_AHEAD_BYTES: u64 = 1024 * 1024;
-/// ~12 KiB/s: the slq variant carries ~50 KiB per 5 s of audio, so the
-/// downloader gains on playback slowly instead of racing to the end.
-const SEGMENT_CHUNK_BYTES: usize = 3 * 1024;
-const SEGMENT_CHUNK_DELAY_MS: u64 = 250;
+const SEGMENT_PREFIX_BYTES: usize = 3 * 1024;
 const PLAY_BEFORE_OUTAGE_SECS: f64 = 1.0;
 const MIN_RESUME_PROGRESS_SECS: f64 = 1.0;
 /// Far enough past the buffered window that the landing segment has to be
@@ -87,6 +84,7 @@ async fn playback_resumes_after_network_returns(
         LOOK_AHEAD_BYTES,
         NetworkMode::Unavailable,
         None,
+        &[],
     )
     .await;
 }
@@ -113,6 +111,7 @@ async fn playback_resumes_after_transport_failure(
         LOOK_AHEAD_BYTES,
         NetworkMode::TransportFailure,
         None,
+        &[],
     )
     .await;
 }
@@ -130,9 +129,9 @@ async fn playback_resumes_after_transport_failure(
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
 async fn playback_resumes_after_network_returns_with_paced_segments(
     temp_dir: TestTempDir,
-    #[future(awt)] paced_source: (PrivateTestServer, String),
+    #[future(awt)] paced_source: (PrivateTestServer, String, Vec<BehaviorHandle>),
 ) {
-    let (server, url) = paced_source;
+    let (server, url, gates) = paced_source;
     resumes_after_outage(
         temp_dir,
         &server,
@@ -140,6 +139,7 @@ async fn playback_resumes_after_network_returns_with_paced_segments(
         PACED_LOOK_AHEAD_BYTES,
         NetworkMode::Unavailable,
         None,
+        &gates,
     )
     .await;
 }
@@ -156,9 +156,9 @@ async fn playback_resumes_after_network_returns_with_paced_segments(
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
 async fn playback_resumes_after_seek_during_outage(
     temp_dir: TestTempDir,
-    #[future(awt)] paced_source: (PrivateTestServer, String),
+    #[future(awt)] paced_source: (PrivateTestServer, String, Vec<BehaviorHandle>),
 ) {
-    let (server, url) = paced_source;
+    let (server, url, gates) = paced_source;
     resumes_after_outage(
         temp_dir,
         &server,
@@ -166,14 +166,14 @@ async fn playback_resumes_after_seek_during_outage(
         PACED_LOOK_AHEAD_BYTES,
         NetworkMode::TransportFailure,
         Some(SEEK_AHEAD_SECS),
+        &gates,
     )
     .await;
 }
 
-/// Re-serve the packaged variant with every media segment throttled to roughly
-/// the rate it is consumed (~50 KiB of audio per 5 s). The playlists stay
-/// immediate: pacing those would only delay the start.
-fn paced_master(server: &PrivateTestServer) -> String {
+/// Hold later media bodies after their first bytes, leaving initial decoder
+/// preparation immediate and the outage ordering controlled by the test.
+fn paced_master(server: &PrivateTestServer) -> (String, Vec<BehaviorHandle>) {
     const VARIANT: &str = "index-slq-a1.m3u8";
     const INITIALIZATION: &str = "init-slq-a1.mp4";
     const PLAYLIST_TYPE: Option<&'static str> = Some("application/vnd.apple.mpegurl");
@@ -186,6 +186,8 @@ fn paced_master(server: &PrivateTestServer) -> String {
         .expect("read the generated packaged variant");
 
     let mut rewritten = Vec::new();
+    let mut gates = Vec::new();
+    let mut segment = 0;
     for line in playlist.split('\n') {
         if line.starts_with("#EXT-X-MAP:") {
             let init = server.helper().asset(&format!("hls/{INITIALIZATION}"));
@@ -200,12 +202,19 @@ fn paced_master(server: &PrivateTestServer) -> String {
                     bytes: Arc::new(bytes),
                     content_type: None,
                 },
-                delivery: Delivery::Throttle {
-                    chunk: SEGMENT_CHUNK_BYTES,
-                    delay_ms: SEGMENT_CHUNK_DELAY_MS,
+                delivery: if segment < 2 {
+                    Delivery::Range
+                } else {
+                    Delivery::Gated {
+                        after_bytes: SEGMENT_PREFIX_BYTES,
+                    }
                 },
             });
             rewritten.push(handle.child_url(line).to_string());
+            if segment >= 2 {
+                gates.push(handle);
+            }
+            segment += 1;
         } else {
             rewritten.push(line.to_string());
         }
@@ -229,7 +238,7 @@ fn paced_master(server: &PrivateTestServer) -> String {
         },
         delivery: Delivery::Normal,
     });
-    handle.child_url("master.m3u8").to_string()
+    (handle.child_url("master.m3u8").to_string(), gates)
 }
 
 /// Wait until playback has genuinely run dry, reported as the position it
@@ -280,6 +289,7 @@ async fn resumes_after_outage(
     look_ahead_bytes: u64,
     outage: NetworkMode,
     seek_ahead: Option<f64>,
+    gates: &[BehaviorHandle],
 ) {
     let pools = pools();
     let net = NetOptions::builder()
@@ -350,8 +360,20 @@ async fn resumes_after_outage(
     .await
     .unwrap_or_else(|error| panic!("precondition: {error}"));
 
+    if !gates.is_empty() {
+        wait_until(
+            Duration::from_secs(1),
+            "multiple partial segment bodies",
+            || gates.iter().filter(|gate| gate.body_pending() > 0).count() >= 2,
+        )
+        .await
+        .expect("the outage catches multiple segment bodies after their prefixes");
+    }
     server.set_network_mode(outage);
     let _network_restore = NetworkRestore(&server);
+    for gate in gates {
+        gate.release_body();
+    }
     wait_for_event(
         &mut rx,
         "a segment fetch observing the offline server",
@@ -432,8 +454,8 @@ async fn offline_source() -> (PrivateTestServer, String) {
 }
 
 #[kithara::fixture]
-async fn paced_source() -> (PrivateTestServer, String) {
+async fn paced_source() -> (PrivateTestServer, String, Vec<BehaviorHandle>) {
     let server = PrivateTestServer::start().await;
-    let url = paced_master(&server);
-    (server, url)
+    let (url, gates) = paced_master(&server);
+    (server, url, gates)
 }

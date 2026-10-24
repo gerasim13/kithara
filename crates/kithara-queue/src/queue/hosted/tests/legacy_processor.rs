@@ -2,7 +2,10 @@ use kithara_render::bridge::SlotState;
 use num_traits::ToPrimitive;
 
 use super::*;
-use crate::{AdvanceReason, Transition};
+use crate::{
+    AdvanceReason, Transition,
+    mock::{fixture_uri, loaded_request, seed_fixture},
+};
 
 const THRESHOLD_ITEM: TrackId = TrackId(1);
 const THRESHOLD_NEXT: TrackId = TrackId(2);
@@ -36,18 +39,20 @@ impl ThresholdRig {
         use kithara_signal::AudioChunk;
 
         let dir = TestTempDir::new();
-        let path = dir.path().join("test.mp3");
+        let uri = fixture_uri(dir.path(), "test.mp3");
         let declared_frames = (duration * f64::from(mock::SAMPLE_RATE.get()))
             .to_usize()
             .expect("fixture declared frame count fits usize");
         let frames = frames.unwrap_or(declared_frames);
-        mock::write_pcm_wav(
-            &path,
-            &vec![0.5; frames * 2],
-            AudioSpec::new(2, mock::SAMPLE_RATE),
-        )
-        .expect("finite constant source");
-        let source = TrackSource::Uri(path.to_str().expect("fixture source").to_owned());
+        let fixture = match frames {
+            441_000 => kithara_test_fixtures::assets::fixed_constant_wav_cd_half_441000(),
+            22_050 => kithara_test_fixtures::assets::fixed_constant_wav_cd_half_22050(),
+            441 => kithara_test_fixtures::assets::fixed_constant_wav_cd_half_441(),
+            220_500 => kithara_test_fixtures::assets::fixed_constant_wav_cd_half_220500(),
+            900 => kithara_test_fixtures::assets::fixed_constant_wav_cd_half_900(),
+            _ => panic!("threshold case has no prepared {frames}-frame source"),
+        };
+        let source = TrackSource::Uri(uri.clone());
         let config = DeckMixerConfig::builder()
             .sample_rate(mock::SAMPLE_RATE)
             .build();
@@ -74,6 +79,7 @@ impl ThresholdRig {
         let mut rig = Self {
             queue: Queue::new(
                 QueueConfig::builder()
+                    .downloader(crate::mock::downloader())
                     .prep(prep)
                     .store(
                         AssetStore::builder(pools())
@@ -104,6 +110,11 @@ impl ThresholdRig {
             target_bound: None,
             monitoring: false,
         };
+        seed_fixture(
+            rig.queue.config.store.as_ref().expect("fixture store"),
+            &uri,
+            fixture.bytes(),
+        );
         rig.apply(QueueCommand::Append {
             position: kithara_play::Position::ZERO,
             id: THRESHOLD_ITEM,
@@ -858,6 +869,7 @@ async fn cancel_preload_unloads_a_successor_only_while_it_preloads(
         .build();
     let mut queue = Queue::new(
         QueueConfig::builder()
+            .downloader(crate::mock::downloader())
             .prep(prep)
             .store(
                 AssetStore::builder(pools())
@@ -881,20 +893,22 @@ async fn cancel_preload_unloads_a_successor_only_while_it_preloads(
         .floor()
         .to_usize()
         .expect("leading frame count fits usize");
-    let samples = vec![0.5; frames * 2];
-    mock::write_pcm_wav(
-        &dir.path().join("entry.wav"),
-        &samples,
-        AudioSpec::new(2, mock::SAMPLE_RATE),
-    )
-    .expect("leading WAV");
+    let fixture = match frames {
+        441 => kithara_test_fixtures::assets::fixed_constant_wav_cd_half_441(),
+        2_646_000 => kithara_test_fixtures::assets::fixed_constant_wav_cd_half_2646000(),
+        _ => panic!("leading case has no prepared {frames}-frame source"),
+    };
+    seed_fixture(
+        queue.config.store.as_ref().expect("fixture store"),
+        &fixture_uri(dir.path(), "entry.wav"),
+        fixture.bytes(),
+    );
     let successor_dir = TestTempDir::new();
-    mock::write_pcm_wav(
-        &successor_dir.path().join("entry.wav"),
-        &vec![0.5; 8192],
-        AudioSpec::new(2, mock::SAMPLE_RATE),
-    )
-    .expect("successor WAV");
+    seed_fixture(
+        queue.config.store.as_ref().expect("fixture store"),
+        &fixture_uri(successor_dir.path(), "entry.wav"),
+        kithara_test_fixtures::assets::fixed_constant_wav_cd_half_4096().bytes(),
+    );
     real_outbox(
         &mut queue,
         &mut mixer,
@@ -908,14 +922,7 @@ async fn cancel_preload_unloads_a_successor_only_while_it_preloads(
                     QueueCommand::Append {
                         position: kithara_play::Position::ZERO,
                         id,
-                        source: TrackSource::Uri(
-                            source_dir
-                                .path()
-                                .join("entry.wav")
-                                .to_str()
-                                .expect("fixture path")
-                                .to_owned(),
-                        ),
+                        source: TrackSource::Uri(fixture_uri(source_dir.path(), "entry.wav")),
                     },
                     out,
                 )
@@ -934,8 +941,28 @@ async fn cancel_preload_unloads_a_successor_only_while_it_preloads(
                 .expect("prepare paused leading");
         },
     );
-    let leading = loaded_fixture(queue.worker().expect("fixture worker"), &mut rig, &dir).await;
-    let receipt = rig.open(Ok(leading)).expect("leading load");
+    let leading_load = queue
+        .active
+        .iter()
+        .find(|active| active.item == first)
+        .and_then(|active| active.load)
+        .expect("leading load")
+        .seq();
+    let leading = loaded_request(
+        queue.worker().expect("fixture worker"),
+        &mut rig,
+        leading_load,
+    )
+    .await;
+    rig.opens
+        .resume(leading_load, (), ())
+        .expect("leading dispatcher command")
+        .apply(kithara_render::Dispatched::Loaded(leading));
+    let receipt = rig
+        .dispatcher
+        .receipts()
+        .next()
+        .expect("leading load receipt");
     real_outbox(
         &mut queue,
         &mut mixer,
@@ -977,13 +1004,28 @@ async fn cancel_preload_unloads_a_successor_only_while_it_preloads(
         },
     )
     .expect("gapless successor");
-    let successor = loaded_fixture(
+    let successor_load = queue
+        .active
+        .iter()
+        .find(|active| active.item == second)
+        .and_then(|active| active.load)
+        .expect("successor load")
+        .seq();
+    let successor = loaded_request(
         queue.worker().expect("fixture worker"),
         &mut rig,
-        &successor_dir,
+        successor_load,
     )
     .await;
-    let receipt = rig.open(Ok(successor)).expect("successor load");
+    rig.opens
+        .resume(successor_load, (), ())
+        .expect("successor dispatcher command")
+        .apply(kithara_render::Dispatched::Loaded(successor));
+    let receipt = rig
+        .dispatcher
+        .receipts()
+        .next()
+        .expect("successor load receipt");
     real_outbox(
         &mut queue,
         &mut mixer,
