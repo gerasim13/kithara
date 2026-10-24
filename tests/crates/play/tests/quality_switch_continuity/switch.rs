@@ -584,6 +584,7 @@ pub(super) async fn render_switch(
     let mut applied_frame = None;
     let mut decoder_events = Vec::new();
     let mut position_jumps = Vec::new();
+    let initial_underruns = prepared.player.metrics().underruns();
     while samples.len() / usize::from(CHANNELS) < observation_frames {
         hang_tick!();
         let before = prepared.player.position();
@@ -607,6 +608,14 @@ pub(super) async fn render_switch(
                 "QUALITY_SWITCH_UNDERRUN transition={} backend={backend:?} window_frame={rendered_frames} requested_frames={render_frames} advanced_frames={advanced} underruns_before={underruns_before} underruns_after={underruns_after}",
                 transition.label,
             );
+            if underruns_before == initial_underruns {
+                println!(
+                    "QUALITY_SWITCH_UNDERRUN_FLIGHT transition={} events={:?} probes={:?}",
+                    transition.label,
+                    kithara_test_utils::flight::tail(),
+                    kithara_test_utils::flight::probes_tail(),
+                );
+            }
         }
         let render_limit = i64::try_from(render_frames).expect("render block fits i64");
         if !(0..=render_limit).contains(&advanced) {
