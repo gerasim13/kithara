@@ -29,8 +29,6 @@ pub(crate) fn check_layout_instances(
     )
 }
 
-/// Two pages never stand at once, so each claims its instances against what stood before the tabs
-/// rather than against its sibling pages.
 pub(super) fn walk_layout(
     node: &LayoutNode,
     path: &NodePath,
@@ -39,67 +37,14 @@ pub(super) fn walk_layout(
     sibling: Sibling,
 ) -> Result<(), UiDocError> {
     match node {
-        LayoutNode::Split {
-            measure,
-            size,
-            children,
-            ..
-        } => {
-            let among = match measure {
-                Some(axis) => {
-                    check_measured_box(*axis, *size, &path.push("Split"), origin)?;
-                    Sibling::Measured
-                }
-                None => Sibling::Among,
-            };
-            for (index, child) in children.iter().enumerate() {
-                let child_path = path.push(format!("Split[{index}]"));
-                let weight = child.weight;
-                if !weight.is_finite() || weight <= 0.0 {
-                    return Err(UiDocError::InvalidWeight {
-                        origin: origin.clone(),
-                        path: child_path.render(),
-                        value: format!("{weight}"),
-                    });
-                }
-                if child.from != 0.0 || child.until.is_some() {
-                    check_reveal(child.from, child.until, &child_path, origin, among)?;
-                }
-                walk_layout(&child.node, &child_path, origin, seen, among)?;
-            }
-            Ok(())
-        }
+        LayoutNode::Split { .. } => walk_split(node, path, origin, seen),
         LayoutNode::Optional { id, node, .. } => {
             let here = path.push(format!("Optional({id})"));
             check_block_position(id, &here, origin, sibling)?;
             record_block(id, &here, origin, seen)?;
             walk_layout(node, &here, origin, seen, Sibling::Only)
         }
-        LayoutNode::Adaptive {
-            id, base, steps, ..
-        } => {
-            let here = path.push(format!("Adaptive({id})"));
-            check_id(&id.0, origin)?;
-            check_layout_steps(id, steps, &here, origin)?;
-            let taken = seen.clone();
-            for (index, branch) in std::iter::once((0, base.as_ref())).chain(
-                steps
-                    .iter()
-                    .enumerate()
-                    .map(|(index, step)| (index + 1, &step.node)),
-            ) {
-                let mut claimed = taken.clone();
-                walk_layout(
-                    branch,
-                    &here.push(format!("[{index}]")),
-                    origin,
-                    &mut claimed,
-                    Sibling::Only,
-                )?;
-                seen.extend(claimed);
-            }
-            Ok(())
-        }
+        LayoutNode::Adaptive { .. } => walk_adaptive(node, path, origin, seen),
         LayoutNode::Module { instance, .. } => {
             check_id(&instance.0, origin)?;
             claim(
@@ -109,36 +54,124 @@ pub(super) fn walk_layout(
                 seen,
             )
         }
-        LayoutNode::Tabs {
-            state,
-            initial,
-            pages,
-        } => {
-            check_state_id(&state.0, origin)?;
-            let here = path.push(format!("Tabs({state})"));
-            if !pages.contains_key(initial) {
-                return Err(UiDocError::UnknownPage {
-                    origin: origin.clone(),
-                    id: state.0.clone(),
-                    page: initial.clone(),
-                    path: here.render(),
-                });
-            }
-            let taken = seen.clone();
-            for (page, node) in pages {
-                let mut claimed = taken.clone();
-                walk_layout(
-                    node,
-                    &here.push(format!("[{page}]")),
-                    origin,
-                    &mut claimed,
-                    Sibling::Only,
-                )?;
-                seen.extend(claimed);
-            }
-            Ok(())
-        }
+        LayoutNode::Tabs { .. } => walk_tabs(node, path, origin, seen),
     }
+}
+
+fn walk_split(
+    node: &LayoutNode,
+    path: &NodePath,
+    origin: &SourceUri,
+    seen: &mut BTreeSet<String>,
+) -> Result<(), UiDocError> {
+    let LayoutNode::Split {
+        measure,
+        size,
+        children,
+        ..
+    } = node
+    else {
+        unreachable!("walk_split only receives splits")
+    };
+    let among = match measure {
+        Some(axis) => {
+            check_measured_box(*axis, *size, &path.push("Split"), origin)?;
+            Sibling::Measured
+        }
+        None => Sibling::Among,
+    };
+    for (index, child) in children.iter().enumerate() {
+        let child_path = path.push(format!("Split[{index}]"));
+        let weight = child.weight;
+        if !weight.is_finite() || weight <= 0.0 {
+            return Err(UiDocError::InvalidWeight {
+                origin: origin.clone(),
+                path: child_path.render(),
+                value: format!("{weight}"),
+            });
+        }
+        if child.from != 0.0 || child.until.is_some() {
+            check_reveal(child.from, child.until, &child_path, origin, among)?;
+        }
+        walk_layout(&child.node, &child_path, origin, seen, among)?;
+    }
+    Ok(())
+}
+
+fn walk_adaptive(
+    node: &LayoutNode,
+    path: &NodePath,
+    origin: &SourceUri,
+    seen: &mut BTreeSet<String>,
+) -> Result<(), UiDocError> {
+    let LayoutNode::Adaptive {
+        id, base, steps, ..
+    } = node
+    else {
+        unreachable!("walk_adaptive only receives adaptive nodes")
+    };
+    let here = path.push(format!("Adaptive({id})"));
+    check_id(&id.0, origin)?;
+    check_layout_steps(id, steps, &here, origin)?;
+    let taken = seen.clone();
+    for (index, branch) in std::iter::once((0, base.as_ref())).chain(
+        steps
+            .iter()
+            .enumerate()
+            .map(|(index, step)| (index + 1, &step.node)),
+    ) {
+        let mut claimed = taken.clone();
+        walk_layout(
+            branch,
+            &here.push(format!("[{index}]")),
+            origin,
+            &mut claimed,
+            Sibling::Only,
+        )?;
+        seen.extend(claimed);
+    }
+    Ok(())
+}
+
+/// Two pages never stand at once, so each claims its instances against what stood before the tabs
+/// rather than against its sibling pages.
+fn walk_tabs(
+    node: &LayoutNode,
+    path: &NodePath,
+    origin: &SourceUri,
+    seen: &mut BTreeSet<String>,
+) -> Result<(), UiDocError> {
+    let LayoutNode::Tabs {
+        state,
+        initial,
+        pages,
+    } = node
+    else {
+        unreachable!("walk_tabs only receives tabs")
+    };
+    check_state_id(&state.0, origin)?;
+    let here = path.push(format!("Tabs({state})"));
+    if !pages.contains_key(initial) {
+        return Err(UiDocError::UnknownPage {
+            origin: origin.clone(),
+            id: state.0.clone(),
+            page: initial.clone(),
+            path: here.render(),
+        });
+    }
+    let taken = seen.clone();
+    for (page, node) in pages {
+        let mut claimed = taken.clone();
+        walk_layout(
+            node,
+            &here.push(format!("[{page}]")),
+            origin,
+            &mut claimed,
+            Sibling::Only,
+        )?;
+        seen.extend(claimed);
+    }
+    Ok(())
 }
 
 pub(crate) fn check_layout_measure(
