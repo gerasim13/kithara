@@ -89,19 +89,21 @@ is holding.
 
 ## The verdict
 
-Gating on green would hold every change behind red it did not cause. The judged
-lanes carry `allow_failure: true` and one job decides: a run is held for failing
-something the default branch is not.
+Judged lanes set `allow_failure: true`; the verdict holds only failures absent
+from the default branch.
 
-Each lane leaves what it produced in `.ci-artifacts/junit/`, collected by the
-lane dispatcher, not the lane: the build directory survives between jobs, so the
-report a lane is expected to write is removed before it runs. A lane that can
-name no test leaves a marker naming itself, because GitLab hands a job no status
-for the jobs it needed.
+The lane dispatcher clears expected reports before execution because build
+directories persist, then collects outputs in `.ci-artifacts/junit/`. A lane
+that cannot name a test leaves its own failure marker: GitLab exposes no
+needed-job status.
 
-Every executor resolves the journal at
-`<shared cache root>/verdict/journal.json` from its runner environment, so Linux
-containers and macOS shell jobs share one baseline. `main` and the nightly chain
-record; branch, merge-request and quarantine runs check against a window
-unioning the last five recorded runs, so an intermittent failure is not read as
-a regression.
+Branch's only test producer, `apple-test`, writes its canonical plan's selected
+lane names to `.ci-artifacts/junit/apple-test.selection.json` before running it.
+Only valid `[]` proves no suite applies. Nonempty lists need its own report
+with test cases. Failure markers and invalid or failing XML retain their behavior;
+other pipeline kinds require reports or failure markers.
+
+Executors use their runner environment's `<shared cache root>/verdict/journal.json`
+as one Linux/macOS baseline. `main` and nightly runs record; branch, merge-request
+and quarantine runs check the last five recorded runs' union to absorb intermittent
+failures.

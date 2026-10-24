@@ -336,7 +336,6 @@ mod tests {
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
-        let publisher = state.publisher();
         let peer = abr_peer(&state);
         let handle = controller.register(&peer);
 
@@ -355,7 +354,7 @@ mod tests {
         );
 
         assert!(
-            publisher.commit_pending(
+            state.commit_pending(
                 state
                     .claim_pending_decision(state.current_variant_index())
                     .expect("pending claim"),
@@ -372,7 +371,6 @@ mod tests {
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
-        let publisher = state.publisher();
         let peer = abr_peer(&state);
         let handle = controller.register(&peer);
 
@@ -381,7 +379,7 @@ mod tests {
             .claim_pending_decision()
             .expect("pending request must be claimable");
 
-        assert!(publisher.commit_pending(claim, Instant::now()));
+        assert!(state.commit_pending(claim, Instant::now()));
         assert_eq!(state.current_variant_index(), VariantIndex::new(2));
         assert!(handle.claim_pending_decision().is_none());
     }
@@ -429,7 +427,7 @@ mod tests {
         let claim = state
             .claim_pending_decision(state.current_variant_index())
             .expect("the up-switch request must be claimable");
-        assert!(state.publisher().commit_pending(claim, Instant::now()));
+        assert!(state.commit_pending(claim, Instant::now()));
         let after = handle
             .current_variant()
             .expect("current variant after switch");

@@ -15,5 +15,4 @@ pub use core::AbrState;
 pub use decision::AbrDecision;
 pub use error::AbrError;
 pub use pending::{AbrTicket, PendingAbrClaim, PendingAbrDecision};
-pub use publisher::AbrPublisher;
 pub use view::AbrView;

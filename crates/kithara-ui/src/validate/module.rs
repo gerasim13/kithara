@@ -134,141 +134,281 @@ pub(super) fn walk_module(
     sibling: Sibling,
 ) -> Result<(), UiDocError> {
     match node {
-        ControlNode::Row {
-            id,
-            size,
-            measure,
-            write,
-            children,
-            ..
+        ControlNode::Row { .. } | ControlNode::Column { .. } => {
+            walk_group(node, path, origin, seen)
         }
-        | ControlNode::Column {
-            id,
-            size,
-            measure,
-            write,
-            children,
-            ..
-        } => {
-            if id.is_none() && write.is_some() {
-                return Err(UiDocError::UnaddressedSurface {
-                    origin: origin.clone(),
-                    path: path.render(),
-                });
-            }
-            let here = match id {
-                Some(id) => {
-                    let here = path.push(format!("Group({id})"));
-                    record(&id.0, &here, origin, seen)?;
-                    here
-                }
-                None => path.clone(),
-            };
-            let among = match measure {
-                Some(axis) => {
-                    check_measured_box(*axis, *size, &here, origin)?;
-                    Sibling::Measured
-                }
-                None => Sibling::Among,
-            };
-            for (index, child) in children.iter().enumerate() {
-                walk_module(child, &here.push(format!("[{index}]")), origin, seen, among)?;
-            }
-            Ok(())
-        }
-        ControlNode::Reveal { from, until, child } => {
-            let here = path.push("Reveal");
-            check_reveal(*from, *until, &here, origin, sibling)?;
-            walk_module(child, &here, origin, seen, Sibling::Only)
-        }
+        ControlNode::Reveal { .. } => walk_reveal(node, path, origin, seen, sibling),
         ControlNode::Include { id, .. } => {
             record(&id.0, &path.push(format!("Include({id})")), origin, seen)
         }
-        ControlNode::Adaptive {
-            id,
-            measure,
-            size,
-            base,
-            steps,
-        } => {
-            let here = path.push(format!("Adaptive({id})"));
-            record(&id.0, &here, origin, seen)?;
-            check_adaptive_measure(id, measure, *size, &here, origin)?;
-            check_adaptive_steps(id, steps, &here, origin)?;
-            walk_branches(base, steps, &here, origin, seen)
-        }
-        ControlNode::Optional { id, child, .. } => {
-            let here = path.push(format!("Optional({id})"));
-            check_block_position(id, &here, origin, sibling)?;
-            record_block(id, &here, origin, seen)?;
-            walk_module(child, &here, origin, seen, Sibling::Only)
-        }
-        ControlNode::Popover {
-            id,
-            anchor,
-            content,
-            ..
-        } => {
-            let here = path.push(format!("Popover({id})"));
-            record(&id.0, &here, origin, seen)?;
-            walk_module(anchor, &here, origin, seen, Sibling::Only)?;
-            walk_module(content, &here, origin, seen, Sibling::Only)
-        }
-        ControlNode::Modal { id, content, .. } => {
-            let here = path.push(format!("Modal({id})"));
-            record(&id.0, &here, origin, seen)?;
-            walk_module(content, &here, origin, seen, Sibling::Only)
-        }
-        ControlNode::Pressable { id, child, .. } => {
-            let here = path.push(format!("Pressable({id})"));
-            record(&id.0, &here, origin, seen)?;
-            walk_module(child, &here, origin, seen, Sibling::Only)
-        }
-        ControlNode::Scroll { id, child, .. } => {
-            let here = path.push(format!("Scroll({id})"));
-            record(&id.0, &here, origin, seen)?;
-            walk_module(child, &here, origin, seen, Sibling::Only)
-        }
-        ControlNode::Object {
-            id,
-            transform,
-            to,
-            phase,
-            motion,
-            child,
-        } => {
-            let here = path.push(format!("Object({id})"));
-            record(&id.0, &here, origin, seen)?;
-            one_driver(phase.is_some(), motion.is_some(), &here, origin)?;
-            single_box(transform, to.as_ref(), child, &here, origin)?;
-            walk_module(child, &here, origin, seen, Sibling::Only)
-        }
+        ControlNode::Adaptive { .. } => walk_adaptive(node, path, origin, seen),
+        ControlNode::Optional { .. } => walk_optional(node, path, origin, seen, sibling),
+        ControlNode::Popover { .. } => walk_popover(node, path, origin, seen),
+        ControlNode::Modal { id, content, .. } => walk_modal(id, content, path, origin, seen),
+        ControlNode::Pressable { id, child, .. } => walk_pressable(id, child, path, origin, seen),
+        ControlNode::Scroll { id, child, .. } => walk_scroll(id, child, path, origin, seen),
+        ControlNode::Object { .. } => walk_object(node, path, origin, seen),
         ControlNode::Stage { id, children, .. } => walk_stage(id, children, path, origin, seen),
         ControlNode::Placed { id, .. } => Err(UiDocError::PlacedOutsideStage {
             origin: origin.clone(),
             path: path.push(format!("Placed({id})")).render(),
         }),
-        ControlNode::Slot { id, default, .. } => {
-            let here = path.push(format!("Slot({id})"));
-            record(&id.0, &here, origin, seen)?;
-            for (index, child) in default.iter().enumerate() {
-                walk_module(
-                    child,
-                    &here.push(format!("[{index}]")),
-                    origin,
-                    seen,
-                    Sibling::Among,
-                )?;
-            }
-            Ok(())
-        }
-        control => {
-            if let Some(id) = control_id(control) {
-                record(&id.0, &path.push(format!("Control({id})")), origin, seen)?;
-            }
-            Ok(())
+        ControlNode::Slot { id, default, .. } => walk_slot(id, default, path, origin, seen),
+        ControlNode::DeckSummary { id, .. }
+        | ControlNode::Brand { id, .. }
+        | ControlNode::Spacer { id, .. }
+        | ControlNode::Divider { id, .. }
+        | ControlNode::PresetSelector { id, .. }
+        | ControlNode::SettingsButton { id, .. }
+        | ControlNode::WindowDrag { id, .. }
+        | ControlNode::TitleBar { id, .. }
+        | ControlNode::WindowControls { id, .. }
+        | ControlNode::Text { id, .. }
+        | ControlNode::Glyph { id, .. }
+        | ControlNode::NavItem { id, .. }
+        | ControlNode::TabLarge { id, .. }
+        | ControlNode::Button { id, .. }
+        | ControlNode::Bpm { id, .. }
+        | ControlNode::Time { id, .. }
+        | ControlNode::Scalar { id, .. }
+        | ControlNode::Crossfader { id, .. }
+        | ControlNode::Fader { id, .. }
+        | ControlNode::Wave { id, .. }
+        | ControlNode::Vis { id, .. }
+        | ControlNode::Sprite { id, .. }
+        | ControlNode::Custom { id, .. }
+        | ControlNode::Lottie { id, .. }
+        | ControlNode::Shader { id, .. }
+        | ControlNode::PortalMap { id, .. }
+        | ControlNode::Range { id, .. }
+        | ControlNode::Table { id, .. }
+        | ControlNode::Search { id, .. }
+        | ControlNode::Tree { id, .. }
+        | ControlNode::ContextBar { id, .. }
+        | ControlNode::Toggle { id, .. }
+        | ControlNode::Checkbox { id, .. }
+        | ControlNode::Segmented { id, .. }
+        | ControlNode::Select { id, .. }
+        | ControlNode::StatusDot { id, .. }
+        | ControlNode::Swatch { id, .. }
+        | ControlNode::Cell { id, .. }
+        | ControlNode::Readout { id, .. }
+        | ControlNode::Chip { id, .. }
+        | ControlNode::Knob { id, .. }
+        | ControlNode::VuStereo { id, .. }
+        | ControlNode::VuVertical { id, .. }
+        | ControlNode::Meter { id, .. } => {
+            record(&id.0, &path.push(format!("Control({id})")), origin, seen)
         }
     }
+}
+
+fn walk_group(
+    node: &ControlNode,
+    path: &NodePath,
+    origin: &SourceUri,
+    seen: &mut BTreeSet<String>,
+) -> Result<(), UiDocError> {
+    let (ControlNode::Row {
+        id,
+        size,
+        measure,
+        write,
+        children,
+        ..
+    }
+    | ControlNode::Column {
+        id,
+        size,
+        measure,
+        write,
+        children,
+        ..
+    }) = node
+    else {
+        unreachable!("walk_group only receives rows or columns")
+    };
+    if id.is_none() && write.is_some() {
+        return Err(UiDocError::UnaddressedSurface {
+            origin: origin.clone(),
+            path: path.render(),
+        });
+    }
+    let here = match id {
+        Some(id) => {
+            let here = path.push(format!("Group({id})"));
+            record(&id.0, &here, origin, seen)?;
+            here
+        }
+        None => path.clone(),
+    };
+    let among = match measure {
+        Some(axis) => {
+            check_measured_box(*axis, *size, &here, origin)?;
+            Sibling::Measured
+        }
+        None => Sibling::Among,
+    };
+    for (index, child) in children.iter().enumerate() {
+        walk_module(child, &here.push(format!("[{index}]")), origin, seen, among)?;
+    }
+    Ok(())
+}
+
+fn walk_reveal(
+    node: &ControlNode,
+    path: &NodePath,
+    origin: &SourceUri,
+    seen: &mut BTreeSet<String>,
+    sibling: Sibling,
+) -> Result<(), UiDocError> {
+    let ControlNode::Reveal { from, until, child } = node else {
+        unreachable!("walk_reveal only receives reveals")
+    };
+    let here = path.push("Reveal");
+    check_reveal(*from, *until, &here, origin, sibling)?;
+    walk_module(child, &here, origin, seen, Sibling::Only)
+}
+
+fn walk_adaptive(
+    node: &ControlNode,
+    path: &NodePath,
+    origin: &SourceUri,
+    seen: &mut BTreeSet<String>,
+) -> Result<(), UiDocError> {
+    let ControlNode::Adaptive {
+        id,
+        measure,
+        size,
+        base,
+        steps,
+    } = node
+    else {
+        unreachable!("walk_adaptive only receives adaptive nodes")
+    };
+    let here = path.push(format!("Adaptive({id})"));
+    record(&id.0, &here, origin, seen)?;
+    check_adaptive_measure(id, measure, *size, &here, origin)?;
+    check_adaptive_steps(id, steps, &here, origin)?;
+    walk_branches(base, steps, &here, origin, seen)
+}
+
+fn walk_optional(
+    node: &ControlNode,
+    path: &NodePath,
+    origin: &SourceUri,
+    seen: &mut BTreeSet<String>,
+    sibling: Sibling,
+) -> Result<(), UiDocError> {
+    let ControlNode::Optional { id, child, .. } = node else {
+        unreachable!("walk_optional only receives optional nodes")
+    };
+    let here = path.push(format!("Optional({id})"));
+    check_block_position(id, &here, origin, sibling)?;
+    record_block(id, &here, origin, seen)?;
+    walk_module(child, &here, origin, seen, Sibling::Only)
+}
+
+fn walk_popover(
+    node: &ControlNode,
+    path: &NodePath,
+    origin: &SourceUri,
+    seen: &mut BTreeSet<String>,
+) -> Result<(), UiDocError> {
+    let ControlNode::Popover {
+        id,
+        anchor,
+        content,
+        ..
+    } = node
+    else {
+        unreachable!("walk_popover only receives popovers")
+    };
+    let here = path.push(format!("Popover({id})"));
+    record(&id.0, &here, origin, seen)?;
+    walk_module(anchor, &here, origin, seen, Sibling::Only)?;
+    walk_module(content, &here, origin, seen, Sibling::Only)
+}
+
+fn walk_modal(
+    id: &NodeId,
+    content: &ControlNode,
+    path: &NodePath,
+    origin: &SourceUri,
+    seen: &mut BTreeSet<String>,
+) -> Result<(), UiDocError> {
+    let here = path.push(format!("Modal({id})"));
+    record(&id.0, &here, origin, seen)?;
+    walk_module(content, &here, origin, seen, Sibling::Only)
+}
+
+fn walk_pressable(
+    id: &NodeId,
+    child: &ControlNode,
+    path: &NodePath,
+    origin: &SourceUri,
+    seen: &mut BTreeSet<String>,
+) -> Result<(), UiDocError> {
+    let here = path.push(format!("Pressable({id})"));
+    record(&id.0, &here, origin, seen)?;
+    walk_module(child, &here, origin, seen, Sibling::Only)
+}
+
+fn walk_scroll(
+    id: &NodeId,
+    child: &ControlNode,
+    path: &NodePath,
+    origin: &SourceUri,
+    seen: &mut BTreeSet<String>,
+) -> Result<(), UiDocError> {
+    let here = path.push(format!("Scroll({id})"));
+    record(&id.0, &here, origin, seen)?;
+    walk_module(child, &here, origin, seen, Sibling::Only)
+}
+
+fn walk_object(
+    node: &ControlNode,
+    path: &NodePath,
+    origin: &SourceUri,
+    seen: &mut BTreeSet<String>,
+) -> Result<(), UiDocError> {
+    let ControlNode::Object {
+        id,
+        transform,
+        to,
+        phase,
+        motion,
+        child,
+    } = node
+    else {
+        unreachable!("walk_object only receives objects")
+    };
+    let here = path.push(format!("Object({id})"));
+    record(&id.0, &here, origin, seen)?;
+    one_driver(phase.is_some(), motion.is_some(), &here, origin)?;
+    single_box(transform, to.as_ref(), child, &here, origin)?;
+    walk_module(child, &here, origin, seen, Sibling::Only)
+}
+
+fn walk_slot(
+    id: &NodeId,
+    default: &[ControlNode],
+    path: &NodePath,
+    origin: &SourceUri,
+    seen: &mut BTreeSet<String>,
+) -> Result<(), UiDocError> {
+    let here = path.push(format!("Slot({id})"));
+    record(&id.0, &here, origin, seen)?;
+    for (index, child) in default.iter().enumerate() {
+        walk_module(
+            child,
+            &here.push(format!("[{index}]")),
+            origin,
+            seen,
+            Sibling::Among,
+        )?;
+    }
+    Ok(())
 }
 
 /// One pose, one thing driving it.
@@ -346,69 +486,6 @@ pub(super) const fn native_pass(child: &ControlNode) -> Option<&'static str> {
         ControlNode::Search { .. } => Some("Search"),
         ControlNode::Tree { .. } => Some("Tree"),
         _ => None,
-    }
-}
-
-pub(super) const fn control_id(node: &ControlNode) -> Option<&NodeId> {
-    match node {
-        ControlNode::Row { .. }
-        | ControlNode::Adaptive { .. }
-        | ControlNode::Column { .. }
-        | ControlNode::Include { .. }
-        | ControlNode::Object { .. }
-        | ControlNode::Optional { .. }
-        | ControlNode::Reveal { .. }
-        | ControlNode::Popover { .. }
-        | ControlNode::Modal { .. }
-        | ControlNode::Placed { .. }
-        | ControlNode::Pressable { .. }
-        | ControlNode::Scroll { .. }
-        | ControlNode::Stage { .. }
-        | ControlNode::Slot { .. } => None,
-        ControlNode::DeckSummary { id, .. }
-        | ControlNode::Brand { id, .. }
-        | ControlNode::Spacer { id, .. }
-        | ControlNode::Divider { id, .. }
-        | ControlNode::PresetSelector { id, .. }
-        | ControlNode::SettingsButton { id, .. }
-        | ControlNode::WindowDrag { id, .. }
-        | ControlNode::TitleBar { id, .. }
-        | ControlNode::WindowControls { id, .. }
-        | ControlNode::Text { id, .. }
-        | ControlNode::Glyph { id, .. }
-        | ControlNode::NavItem { id, .. }
-        | ControlNode::TabLarge { id, .. }
-        | ControlNode::Button { id, .. }
-        | ControlNode::Bpm { id, .. }
-        | ControlNode::Time { id, .. }
-        | ControlNode::Scalar { id, .. }
-        | ControlNode::Crossfader { id, .. }
-        | ControlNode::Fader { id, .. }
-        | ControlNode::Wave { id, .. }
-        | ControlNode::Vis { id, .. }
-        | ControlNode::Sprite { id, .. }
-        | ControlNode::Custom { id, .. }
-        | ControlNode::Lottie { id, .. }
-        | ControlNode::Shader { id, .. }
-        | ControlNode::PortalMap { id, .. }
-        | ControlNode::Range { id, .. }
-        | ControlNode::Table { id, .. }
-        | ControlNode::Search { id, .. }
-        | ControlNode::Tree { id, .. }
-        | ControlNode::ContextBar { id, .. }
-        | ControlNode::Toggle { id, .. }
-        | ControlNode::Checkbox { id, .. }
-        | ControlNode::Segmented { id, .. }
-        | ControlNode::Select { id, .. }
-        | ControlNode::StatusDot { id, .. }
-        | ControlNode::Swatch { id, .. }
-        | ControlNode::Cell { id, .. }
-        | ControlNode::Readout { id, .. }
-        | ControlNode::Chip { id, .. }
-        | ControlNode::Knob { id, .. }
-        | ControlNode::VuStereo { id, .. }
-        | ControlNode::VuVertical { id, .. }
-        | ControlNode::Meter { id, .. } => Some(id),
     }
 }
 
