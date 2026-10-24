@@ -96,7 +96,7 @@ async fn render_committed_queue(
     block_budget: usize,
     expected: (TrackId, usize),
 ) -> Vec<f32> {
-    let mut events: EventReceiver<QueueEvent> = queue.subscribe();
+    let mut events: EventReceiver<TestEvent> = queue.subscribe();
     let mut pcm = Vec::new();
     let mut committed = false;
     let mut ended = 0;
@@ -104,13 +104,24 @@ async fn render_committed_queue(
         pcm.extend(render_loop(queue, harness, 1).await);
         while let Ok(envelope) = events.try_recv() {
             match envelope.event {
-                QueueEvent::CurrentTrackAdvance { id: Some(id), .. } if id == expected.0 => {
+                TestEvent::Queue(QueueEvent::TrackStatusChanged {
+                    id,
+                    status: TrackStatus::Pending,
+                }) if id == expected.0 => {
+                    // Offline rendering must not outrun the successor's real I/O.
+                    wait_for_loader_done_event(&mut events, queue, id, LOCAL_LOAD_DEADLINE)
+                        .await
+                        .expect("the expected successor reloads");
+                }
+                TestEvent::Queue(QueueEvent::CurrentTrackAdvance { id: Some(id), .. })
+                    if id == expected.0 =>
+                {
                     assert!(!committed, "the expected track becomes current once");
                     assert_eq!(queue.current().map(|entry| entry.id), Some(id));
                     assert_eq!(queue.current_index(), Some(expected.1));
                     committed = true;
                 }
-                QueueEvent::QueueEnded => {
+                TestEvent::Queue(QueueEvent::QueueEnded) => {
                     assert!(
                         committed,
                         "the expected track must become current before EOF"
