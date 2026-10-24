@@ -32,6 +32,6 @@ pub(super) fn publish(state: &Arc<AbrState>, decision: AbrDecision, now: Instant
         state.request_target(decision.target(), decision.reason());
     }
     if let Some(claim) = state.claim_pending_decision(state.current_variant_index()) {
-        assert!(state.publisher().commit_pending(claim, now));
+        assert!(state.commit_pending(claim, now));
     }
 }

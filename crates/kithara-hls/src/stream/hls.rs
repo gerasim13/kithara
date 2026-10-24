@@ -163,7 +163,7 @@ where
             playhead,
             activity_writer,
             stream_peer.peer_handle().abr().clone(),
-            hls_peer.abr_publisher(),
+            hls_peer.abr_state(),
             Arc::clone(&variants),
         ));
 

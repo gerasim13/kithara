@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
-    binding::{BindingSide, binding_parts, check_binding, read_kind},
-    slots::{column_writes, primary, write_slots},
+    binding::{BindingSide, binding_parts, check_binding},
+    slots::{column_writes, primary, read_slots, write_slots},
 };
 use crate::{
     error::UiDocError,
@@ -29,61 +29,11 @@ pub(crate) fn check_controls(
             endpoints,
         )?;
     }
-    if let Some(status) = site.status {
-        check_binding(
-            status,
-            BindingSide::Read,
-            Some(ValueKind::Text),
-            site.path,
-            origin,
-            endpoints,
-        )?;
-    }
-    if let Some(query) = site.query {
-        check_binding(
-            query,
-            BindingSide::Read,
-            Some(ValueKind::Text),
-            site.path,
-            origin,
-            endpoints,
-        )?;
-    }
-    if let Some(scope) = site.scope {
-        check_binding(
-            scope,
-            BindingSide::Read,
-            Some(ValueKind::Scalar),
-            site.path,
-            origin,
-            endpoints,
-        )?;
-    }
-    if let Some(zoom) = site.zoom {
-        check_binding(
-            zoom,
-            BindingSide::Read,
-            Some(ValueKind::Scalar),
-            site.path,
-            origin,
-            endpoints,
-        )?;
-    }
-    if let Some(active) = site.active {
-        check_binding(
-            active,
-            BindingSide::Read,
-            Some(ValueKind::Bool),
-            site.path,
-            origin,
-            endpoints,
-        )?;
-    }
-    if let Some(binding) = site.read {
+    for (binding, kind) in read_slots(site) {
         check_binding(
             binding,
             BindingSide::Read,
-            read_kind(site.control),
+            kind,
             site.path,
             origin,
             endpoints,

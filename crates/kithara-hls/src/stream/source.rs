@@ -285,12 +285,13 @@ mod tests {
             }
             .into_variant(0, ctx);
             let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
-            let publisher = state.publisher();
             let peer: Arc<dyn Abr> = Arc::new(Unimock::new((
                 AbrMock::cancel
                     .each_call(matching!())
                     .returns(cancel.clone()),
-                AbrMock::state.each_call(matching!()).returns(Some(state)),
+                AbrMock::state
+                    .each_call(matching!())
+                    .returns(Some(Arc::clone(&state))),
             )));
             let settings = AbrSettings::builder().cancel(cancel.clone()).build();
             let controller = AbrController::new(settings);
@@ -307,7 +308,7 @@ mod tests {
                 Arc::new(PlayheadState::new()),
                 ActivityWriter::new(),
                 handle,
-                publisher,
+                state,
                 Arc::from(vec![variant]),
             ))
         }
