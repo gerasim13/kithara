@@ -53,34 +53,12 @@ fn deck_write(
     value: WriteValue,
 ) -> Option<Message> {
     let index = deck_index(scope.get("deck")?)?;
+    match id {
+        "deck.view.zoom_in" | "deck.view.zoom_out" | "deck.view.zoom" | "deck.queue.load"
+        | "deck.eq.mode" => return deck_view_write(state, id, index, scope, value),
+        _ => {}
+    }
     let msg = match (id, value) {
-        ("deck.view.zoom_in", WriteValue::Trigger) => {
-            return step_zoom(&mut state.ui.cache, index, zoom_in);
-        }
-        ("deck.view.zoom_out", WriteValue::Trigger) => {
-            return step_zoom(&mut state.ui.cache, index, zoom_out);
-        }
-        ("deck.view.zoom", WriteValue::Scalar(zoom)) => {
-            let zoom: f32 = zoom.as_();
-            state.ui.cache.deck_mut(index)?.view.zoom =
-                Some(f64::from(f32::from(Zoom::from(zoom))));
-            return None;
-        }
-        ("deck.queue.load", WriteValue::Record(record)) => {
-            let track = Playable::try_from(record).ok()?;
-            let deck = deck_id(state, index)?;
-            state.ui.cache.focus(index);
-            state.send(Command::LoadOntoDeck { deck, track });
-            return None;
-        }
-        ("deck.eq.mode", WriteValue::Trigger) => {
-            let mode = match scope.get("bands")? {
-                "3" => EqMode::ThreeBand,
-                "4" => EqMode::FourBand,
-                _ => return None,
-            };
-            return Some(Message::SetEqMode(mode));
-        }
         ("deck.stream.select_variant", WriteValue::Trigger) => {
             quality_msg(state, index, scope.get("variant")?)?
         }
@@ -95,14 +73,49 @@ fn deck_write(
             DeckMsg::SetTempo(TempoPercent::from(steps.mul_add(TEMPO_STEP, tempo)))
         }
         ("deck.tempo.reset", WriteValue::Trigger) => DeckMsg::SetTempo(TempoPercent::DEFAULT),
-        ("deck.eq.low", WriteValue::Scalar(knob)) => eq_band(state, "low", knob)?,
-        ("deck.eq.low_mid", WriteValue::Scalar(knob)) => eq_band(state, "low_mid", knob)?,
-        ("deck.eq.mid", WriteValue::Scalar(knob)) => eq_band(state, "mid", knob)?,
-        ("deck.eq.high_mid", WriteValue::Scalar(knob)) => eq_band(state, "high_mid", knob)?,
-        ("deck.eq.high", WriteValue::Scalar(knob)) => eq_band(state, "high", knob)?,
+        (id, WriteValue::Scalar(knob)) => eq_band(state, id.strip_prefix("deck.eq.")?, knob)?,
         _ => return None,
     };
     Some(Message::Deck(deck_id(state, index)?, msg))
+}
+
+fn deck_view_write(
+    state: &mut Kithara,
+    id: &str,
+    index: usize,
+    scope: Scope<'_>,
+    value: WriteValue,
+) -> Option<Message> {
+    match (id, value) {
+        ("deck.view.zoom_in", WriteValue::Trigger) => {
+            step_zoom(&mut state.ui.cache, index, zoom_in)
+        }
+        ("deck.view.zoom_out", WriteValue::Trigger) => {
+            step_zoom(&mut state.ui.cache, index, zoom_out)
+        }
+        ("deck.view.zoom", WriteValue::Scalar(zoom)) => {
+            let zoom: f32 = zoom.as_();
+            state.ui.cache.deck_mut(index)?.view.zoom =
+                Some(f64::from(f32::from(Zoom::from(zoom))));
+            None
+        }
+        ("deck.queue.load", WriteValue::Record(record)) => {
+            let track = Playable::try_from(record).ok()?;
+            let deck = deck_id(state, index)?;
+            state.ui.cache.focus(index);
+            state.send(Command::LoadOntoDeck { deck, track });
+            None
+        }
+        ("deck.eq.mode", WriteValue::Trigger) => {
+            let mode = match scope.get("bands")? {
+                "3" => EqMode::ThreeBand,
+                "4" => EqMode::FourBand,
+                _ => return None,
+            };
+            Some(Message::SetEqMode(mode))
+        }
+        _ => None,
+    }
 }
 
 fn eq_band(state: &Kithara, name: &str, knob: f64) -> Option<DeckMsg> {
