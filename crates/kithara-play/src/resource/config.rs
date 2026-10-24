@@ -179,6 +179,17 @@ mod tests {
         test_pools::{TestPools, pools},
     };
 
+    fn downloader() -> Downloader {
+        let config = kithara_download::DownloaderConfig::for_client(kithara_net::HttpClient::new(
+            kithara_net::NetOptions::default(),
+            pools(),
+            CancelToken::never(),
+        ));
+        #[cfg(not(target_arch = "wasm32"))]
+        let config = config.runtime(kithara_platform::tokio::runtime::Handle::current());
+        Downloader::new(config.build())
+    }
+
     fn store() -> AssetStore<TestPools> {
         AssetStore::builder(pools()).build()
     }
@@ -274,19 +285,7 @@ mod tests {
         let worker = worker();
         let config: ResourceConfig<TestPools> =
             ResourceConfig::for_src(valid_src("https://example.com/live.m3u8"))
-                .downloader(Downloader::new({
-                    let config = kithara_download::DownloaderConfig::for_client(
-                        kithara_net::HttpClient::new(
-                            kithara_net::NetOptions::default(),
-                            pools(),
-                            CancelToken::never(),
-                        ),
-                    );
-                    #[cfg(not(target_arch = "wasm32"))]
-                    let config =
-                        config.runtime(kithara_platform::tokio::runtime::Handle::current());
-                    config.build()
-                }))
+                .downloader(downloader())
                 .store(store())
                 .events(EventBus::new(32))
                 .build();
@@ -351,19 +350,7 @@ mod tests {
         let mut hls_events = hls_bus.subscribe::<DecoderEvent>();
         let hls: ResourceConfig<TestPools> =
             ResourceConfig::for_src(ResourceSrc::Url(server.url("/direct.m3u8")))
-                .downloader(Downloader::new({
-                    let config = kithara_download::DownloaderConfig::for_client(
-                        kithara_net::HttpClient::new(
-                            kithara_net::NetOptions::default(),
-                            pools(),
-                            CancelToken::never(),
-                        ),
-                    );
-                    #[cfg(not(target_arch = "wasm32"))]
-                    let config =
-                        config.runtime(kithara_platform::tokio::runtime::Handle::current());
-                    config.build()
-                }))
+                .downloader(downloader())
                 .store(store())
                 .events(hls_bus)
                 .hint("wav")
@@ -425,19 +412,7 @@ mod tests {
             .build();
         let config: ResourceConfig<TestPools> =
             ResourceConfig::for_src(valid_src("https://example.com/live.m3u8"))
-                .downloader(Downloader::new({
-                    let config = kithara_download::DownloaderConfig::for_client(
-                        kithara_net::HttpClient::new(
-                            kithara_net::NetOptions::default(),
-                            pools(),
-                            CancelToken::never(),
-                        ),
-                    );
-                    #[cfg(not(target_arch = "wasm32"))]
-                    let config =
-                        config.runtime(kithara_platform::tokio::runtime::Handle::current());
-                    config.build()
-                }))
+                .downloader(downloader())
                 .store(store())
                 .decoder(decoder)
                 .build();

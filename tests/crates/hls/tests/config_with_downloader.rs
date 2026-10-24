@@ -12,6 +12,7 @@ use kithara::{
 use kithara_integration_tests::{
     TestServerHelper,
     bufpool_ext::{TestPools, pools},
+    fixture_protocol::DelayRule,
     hls_server::abr_binary_ladder,
 };
 use kithara_test_utils::{TestTempDir, temp_dir};
@@ -24,14 +25,20 @@ use kithara_test_utils::{TestTempDir, temp_dir};
     hang_timeout_secs(1)
 )]
 async fn hls_config_with_downloader_shares_downloader_across_two_streams(temp_dir: TestTempDir) {
+    let ladder = abr_binary_ladder(false, Duration::ZERO).delay_rules(vec![DelayRule {
+        variant: Some(0),
+        segment_eq: Some(0),
+        delay_ms: 10,
+        ..DelayRule::default()
+    }]);
     let hls_a = TestServerHelper::new()
         .await
-        .create_hls(abr_binary_ladder(false, Duration::from_millis(10)))
+        .create_hls(ladder.clone())
         .await
         .expect("create ABR ladder");
     let hls_b = TestServerHelper::new()
         .await
-        .create_hls(abr_binary_ladder(false, Duration::from_millis(10)))
+        .create_hls(ladder)
         .await
         .expect("create ABR ladder");
 
@@ -62,13 +69,12 @@ async fn hls_config_with_downloader_shares_downloader_across_two_streams(temp_di
     let bus_b = EventBus::new(1024);
     let mut events_a = bus_a.subscribe::<DownloaderEvent>();
     let mut events_b = bus_b.subscribe::<DownloaderEvent>();
-    // The ladder delays variant 2, so its request outlasts the soft timer.
     let config_a = HlsConfig::for_url(hls_a.master_url())
         .cancel(cancel.clone())
         .events(bus_a)
         .store(store_a)
         .pools(pools.clone())
-        .initial_abr_mode(AbrMode::manual(2))
+        .initial_abr_mode(AbrMode::manual(0))
         .downloader(downloader.clone())
         .build();
     let config_b = HlsConfig::for_url(hls_b.master_url())
@@ -76,7 +82,7 @@ async fn hls_config_with_downloader_shares_downloader_across_two_streams(temp_di
         .events(bus_b)
         .store(store_b)
         .pools(pools.clone())
-        .initial_abr_mode(AbrMode::manual(2))
+        .initial_abr_mode(AbrMode::manual(0))
         .downloader(downloader.clone())
         .build();
 
