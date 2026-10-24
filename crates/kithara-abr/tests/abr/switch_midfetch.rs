@@ -27,7 +27,7 @@ fn manual_switch_wins_over_in_flight_auto_decisions() {
 
     state.set_mode(AbrMode::Manual(VariantIndex::new(0)));
 
-    assert!(!state.publisher().commit_pending(claim, now));
+    assert!(!state.commit_pending(claim, now));
 
     assert_eq!(
         state.current_variant_index().get(),

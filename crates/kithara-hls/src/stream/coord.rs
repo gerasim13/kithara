@@ -3,7 +3,7 @@
 use std::ops::Range;
 
 use delegate::delegate;
-use kithara_abr::{AbrHandle, AbrPublisher};
+use kithara_abr::{AbrHandle, AbrState};
 use kithara_assets::{AssetScope, ResourceKey};
 use kithara_bufpool::HasPool;
 use kithara_events::DeferredBus;
@@ -61,7 +61,7 @@ where
     pub(crate) cancel: CancelToken,
     pub(crate) config: Arc<HlsConfig<S>>,
     pub(crate) look_ahead_segments: Option<usize>,
-    pub(super) abr_publisher: AbrPublisher,
+    pub(super) abr_state: Arc<AbrState>,
     /// One authoritative active session and at most one exact incoming session.
     pub(super) sessions: SessionSlots<S>,
     /// Backing playhead state — the coord owns the `Arc` directly and
@@ -81,7 +81,7 @@ where
         playhead: Arc<PlayheadState>,
         writer: ActivityWriter,
         abr: AbrHandle,
-        abr_publisher: AbrPublisher,
+        abr_state: Arc<AbrState>,
         variants: Arc<[Arc<HlsVariant<S>>]>,
     ) -> Self {
         assert!(
@@ -113,7 +113,7 @@ where
             activity,
             activity_writer: Mutex::new(Some(writer)),
             abr,
-            abr_publisher,
+            abr_state,
             variants,
             cancel: env.cancel,
             scope: env.scope,
@@ -320,7 +320,6 @@ where
             pub(crate) fn reset_for_seek(&self);
         }
         to self.active().as_ref() {
-            pub(crate) fn download_head(&self) -> u32;
             pub(crate) fn format_change_segment_range(&self) -> StreamResult<Range<u64>>;
         }
     }
@@ -499,7 +498,7 @@ pub(super) mod tests {
     use kithara_platform::{
         CancelScope,
         sync::{Arc, Mutex, Notify, mpsc},
-        time::{Instant, timeout},
+        time::timeout,
         tokio::{runtime::Handle, task::spawn_blocking_on},
     };
     use kithara_stream::{
@@ -618,7 +617,6 @@ pub(super) mod tests {
             .into_variant(1, &ctx),
         ]);
         let abr_state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
-        let abr_publisher = abr_state.publisher();
         let peer: Arc<dyn Abr> = Arc::new(Unimock::new((
             AbrMock::cancel
                 .each_call(matching!())
@@ -643,7 +641,7 @@ pub(super) mod tests {
             Arc::new(PlayheadState::new()),
             ActivityWriter::new(),
             handle,
-            abr_publisher,
+            Arc::clone(&abr_state),
             variants,
         ));
         (coord, bus, ctx, abr_state, v0_slots)
@@ -1046,44 +1044,6 @@ pub(super) mod tests {
             coord.as_ref(),
             transition
         ));
-    }
-
-    #[kithara::test]
-    fn exact_session_resolution_follows_the_committed_abr_selector_before_collapse() {
-        let (coord, _bus, _ctx, _abr_state) = switch_coord();
-        prepare_incoming(&coord, incremental_profile(32))
-            .expect("prepare incoming")
-            .expect("pending switch");
-        let claim = coord
-            .abr
-            .claim_pending_decision()
-            .expect("prepared transition keeps its exact claim");
-
-        assert!(coord.abr_publisher.commit_pending(claim, Instant::now()));
-
-        assert_eq!(
-            coord.active_session().variant_index(),
-            1,
-            "the committed ABR selector must resolve through the resident pair before collapse"
-        );
-    }
-
-    #[kithara::test]
-    fn exact_session_resolution_retries_a_stale_selector_snapshot() {
-        let (coord, _bus, _ctx, _abr_state) = switch_coord();
-        prepare_incoming(&coord, incremental_profile(32))
-            .expect("prepare incoming")
-            .expect("pending switch");
-        let mut selector_observations = [0, 1, 1, 1].into_iter();
-
-        let resolved = coord.sessions.active(|| {
-            selector_observations
-                .next()
-                .expect("resolver performs two selector reads per attempt")
-        });
-
-        assert_eq!(resolved.variant_index(), 1);
-        assert_eq!(selector_observations.next(), None);
     }
 
     #[kithara::test(tokio)]
