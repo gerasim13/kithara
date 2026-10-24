@@ -29,6 +29,15 @@ fn default_pcm() -> Vec<u8> {
         .collect()
 }
 
+#[kithara::asset(ext = "wav", content_type = "audio/wav")]
+#[case::default()]
+fn constant_half_wav() -> Vec<u8> {
+    const SAMPLES: usize = 44_100 * 2;
+    let mut wav = super::unit::wav_header(3, 32, 44_100, 2, SAMPLES * size_of::<f32>());
+    wav.extend(std::iter::repeat_n(0.5_f32, SAMPLES).flat_map(f32::to_le_bytes));
+    wav
+}
+
 #[kithara::asset(ext = "wav", content_type = "audio/wav", embed)]
 #[case::frames_8000(8000)]
 #[case::frames_132300(132300)]
@@ -379,6 +388,54 @@ fn cochlea_signal(frequency: f32, amplitude: f32, frames: usize) -> Vec<u8> {
                     / 48_000.0;
             [phase.sin() * amplitude; 2]
         })
+        .flat_map(f32::to_le_bytes)
+        .collect()
+}
+
+#[kithara::asset(ext = "f32le", content_type = "application/octet-stream", embed)]
+#[case::rate_44100_bpm_120(44_100, 120.0)]
+#[case::rate_48000_bpm_120(48_000, 120.0)]
+#[case::rate_44100_bpm_127(44_100, 127.0)]
+#[case::rate_48000_bpm_127(48_000, 127.0)]
+#[case::rate_44100_bpm_126(44_100, 126.0)]
+#[case::rate_48000_bpm_126(48_000, 126.0)]
+#[case::rate_44100_bpm_128(44_100, 128.0)]
+#[case::rate_48000_bpm_128(48_000, 128.0)]
+#[case::rate_44100_bpm_126_49(44_100, 126.49)]
+#[case::rate_48000_bpm_126_49(48_000, 126.49)]
+#[case::rate_44100_bpm_127_51(44_100, 127.51)]
+#[case::rate_48000_bpm_127_51(48_000, 127.51)]
+#[case::rate_48000_bpm_63_5(48_000, 63.5)]
+fn cochlea_pulses(sample_rate: u32, bpm: f64) -> Vec<u8> {
+    let beat_frames = f64::from(sample_rate) * 60.0 / bpm;
+    let rate_frames = usize::try_from(sample_rate).expect("fixture rate fits usize");
+    let leading_frames = rate_frames / 4;
+    let pulse_frames = rate_frames / 50;
+    let frame_count = leading_frames + (beat_frames * 6.0).ceil().to_usize().expect("pulse extent");
+    let rate = sample_rate.to_f32().expect("fixture rate fits f32");
+    let width = pulse_frames.to_f32().expect("fixture pulse fits f32");
+    let mut samples = vec![0.0_f32; frame_count];
+    for beat in 0..6_u32 {
+        let start = leading_frames
+            + (f64::from(beat) * beat_frames)
+                .round()
+                .to_usize()
+                .expect("pulse start");
+        let amplitude = if beat % 4 == 0 { 0.9 } else { 0.7 };
+        for offset in 0..pulse_frames {
+            let position = offset.to_f32().expect("fixture pulse position fits f32");
+            let phase = std::f32::consts::TAU * 1_000.0 * position / rate;
+            samples[start + offset] = amplitude * phase.cos() * (1.0 - position / width);
+        }
+    }
+    samples.into_iter().flat_map(f32::to_le_bytes).collect()
+}
+
+#[kithara::asset(ext = "f32le", content_type = "application/octet-stream", embed)]
+#[case::default()]
+fn cochlea_silence() -> Vec<u8> {
+    vec![0.0_f32; 48_000 * 3]
+        .into_iter()
         .flat_map(f32::to_le_bytes)
         .collect()
 }

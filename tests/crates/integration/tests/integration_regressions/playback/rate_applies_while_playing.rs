@@ -1,15 +1,15 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::{future::Future, num::NonZeroU32};
+use std::future::Future;
 
 use kithara::{
     events::TrackId,
     platform::time::{self, Duration, WallInstant},
     play::PlayerEvent,
-    signal::{AudioChunkInfo, AudioSpec},
+    signal::AudioChunkInfo,
 };
 use kithara_integration_tests::offline::{OfflinePlayer, OfflinePlayerOptions};
-use kithara_test_fixtures::integration_fixtures::constant_half;
+use kithara_test_fixtures::assets;
 
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
@@ -21,21 +21,10 @@ const CLOCK_BLOCKS: usize = 32;
 const MEASURE_BLOCKS: usize = 200;
 const FAST_RATE: f32 = 2.0;
 
-fn make_reader(
-    constant_half: &'static [u8],
-    duration_secs: f64,
-) -> Box<dyn kithara::audio::AudioReader> {
-    Box::new(kithara::audio::mock::TestPcmReader::with_pcm(
-        AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate")),
-        duration_secs,
-        constant_half,
-    ))
-}
-
 #[kithara::test(tokio)]
 #[kithara_test_utils::kithara::hang_watchdog]
-async fn fixed_rate_reader_keeps_source_and_player_clock_at_unity(constant_half: &'static [u8]) {
-    let oracle = loaded_harness(constant_half, 1.0).await;
+async fn fixed_rate_reader_keeps_source_and_player_clock_at_unity() {
+    let oracle = loaded_harness(1.0).await;
     assert_eq!(oracle.player().rate(), 1.0);
     completed(oracle.with_queue(kithara::queue::QueueControl::pause)).await;
     assert_eq!(
@@ -65,10 +54,10 @@ async fn fixed_rate_reader_keeps_source_and_player_clock_at_unity(constant_half:
     assert_eq!(resumed_rates, [FAST_RATE]);
     assert_eq!(oracle.player().rate(), FAST_RATE);
 
-    let baseline = blocks_until_silence(constant_half, 1.0).await;
-    let requested_fast = blocks_until_silence(constant_half, FAST_RATE).await;
-    let baseline_advance = media_advance(constant_half, 1.0).await;
-    let requested_fast_advance = media_advance(constant_half, FAST_RATE).await;
+    let baseline = blocks_until_silence(1.0).await;
+    let requested_fast = blocks_until_silence(FAST_RATE).await;
+    let baseline_advance = media_advance(1.0).await;
+    let requested_fast_advance = media_advance(FAST_RATE).await;
 
     assert!(
         baseline < MEASURE_BLOCKS,
@@ -135,13 +124,20 @@ fn rate_events(events: Vec<PlayerEvent>) -> Vec<f32> {
 }
 
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-async fn loaded_harness(constant_half: &'static [u8], rate: f32) -> OfflinePlayer {
+async fn loaded_harness(rate: f32) -> OfflinePlayer {
     let harness = completed(OfflinePlayer::with_sample_rate(
-        OfflinePlayerOptions::builder().build(),
+        OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
+            .build(),
         SAMPLE_RATE,
     ))
     .await;
-    let deck_source = harness.pcm_deck(make_reader(constant_half, 1.0));
+    let deck_source = assets::constant_half_wav_default()
+        .path()
+        .expect("prepared float WAV has a store path")
+        .to_str()
+        .expect("UTF-8 fixture path")
+        .to_owned();
     let deck_id = completed(harness.with_queue(move |player| {
         player.set_default_rate(rate).expect("initial lane speed");
         let deck_id = TrackId::allocate();
@@ -173,8 +169,8 @@ async fn loaded_harness(constant_half: &'static [u8], rate: f32) -> OfflinePlaye
 }
 
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-async fn blocks_until_silence(constant_half: &'static [u8], rate: f32) -> usize {
-    let harness = loaded_harness(constant_half, rate).await;
+async fn blocks_until_silence(rate: f32) -> usize {
+    let harness = loaded_harness(rate).await;
 
     let mut blocks = 0usize;
     for _ in 0..MEASURE_BLOCKS {
@@ -192,8 +188,8 @@ async fn blocks_until_silence(constant_half: &'static [u8], rate: f32) -> usize 
 }
 
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-async fn media_advance(constant_half: &'static [u8], rate: f32) -> f64 {
-    let harness = loaded_harness(constant_half, rate).await;
+async fn media_advance(rate: f32) -> f64 {
+    let harness = loaded_harness(rate).await;
     let (start, source) = source_frame(&harness);
     for _ in 0..CLOCK_BLOCKS {
         hang_tick!();

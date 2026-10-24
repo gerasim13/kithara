@@ -105,20 +105,18 @@ pub(crate) fn make_ambient_stmt(args: &TestArgs) -> TokenStream2 {
     }
 }
 
-/// The native sync body: body-held flash mode, then the statements counted as
-/// a flash participant, as `participate` counts the async body's future. The
-/// body's own work holds the virtual clock until it parks in an engine wait.
-pub(crate) fn make_sync_body(
-    test_setup: &TokenStream2,
-    preamble: &TokenStream2,
-    ambient: &TokenStream2,
-    body_stmts: &[syn::Stmt],
-) -> TokenStream2 {
+/// Native synchronous statements own credit after their ambient scope is installed.
+pub(crate) fn wrap_with_sync_participation(body: &TokenStream2, args: &TestArgs) -> TokenStream2 {
+    if args.is_loom || args.flash == Some(false) {
+        return body.clone();
+    }
     quote! {
-        #test_setup
-        #preamble
-        #ambient
-        ::kithara_test_utils::kithara_platform::flash::participate_sync(|| { #(#body_stmts)* })
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            ::kithara_test_utils::kithara_platform::flash::participate_sync(|| { #body })
+        }
+        #[cfg(target_arch = "wasm32")]
+        { #body }
     }
 }
 

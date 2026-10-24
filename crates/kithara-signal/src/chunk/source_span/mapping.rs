@@ -79,12 +79,8 @@ impl Rational {
             self.step_change.unsigned_abs(),
             self.denominator,
         )?)?;
-        let denominator = origin.common(step)?;
-        let denominator = Ratio {
-            numerator: 0,
-            denominator,
-        }
-        .common(change)?;
+        let denominator = Ratio::common(origin.denominator, step.denominator)?;
+        let denominator = Ratio::common(denominator, change.denominator)?;
         let magnitude = change.at(denominator)?;
         let step_change = self.transformed_step_change(magnitude)?;
         Some(Self {

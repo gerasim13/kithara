@@ -425,6 +425,17 @@ fn fully_trimmed_seek_packet_is_dropped_before_target_chunk(
 ) {
     const SAMPLE_RATE: u32 = 44_100;
     const PACKET_FRAMES: u32 = 1024;
+    const PCM: [f32; 1_152] = {
+        let mut samples = [0.0; 1_152];
+        let mut index = 0;
+        let mut value = 0.0;
+        while index < samples.len() {
+            samples[index] = value;
+            value += 1.0 / 2_048.0;
+            index += 1;
+        }
+        samples
+    };
 
     let target = test_duration(SAMPLE_RATE, u64::from(PACKET_FRAMES));
     let rounded_past_target = target.saturating_add(Duration::from_nanos(1));
@@ -562,9 +573,7 @@ fn fully_trimmed_seek_packet_is_dropped_before_target_chunk(
             let duration = test_duration(rate, u64::from(frames));
             let next_pts =
                 pts + test_duration(rate, origin + u64::from(frames)) - test_duration(rate, origin);
-            let pcm = (0..frames)
-                .map(|frame| f32::from(u16::try_from(frame).expect("fixture frame")) / 2_048.0)
-                .collect();
+            let pcm = PCM[..usize::try_from(frames).expect("fixture frame count")].to_vec();
             let codec = CountingCodec::new(pcm, spec, frames);
             let calls = Arc::clone(&codec.decode_calls);
             let demuxer = BoundaryFrameDemuxer {
@@ -795,6 +804,18 @@ fn seek_trim_uses_codec_output_rate_for_resampled_chunks(
     trim_silence: Vec<f32>,
     zero_packet: &'static [u8],
 ) {
+    const PCM: [f32; 64] = {
+        let mut samples = [0.0; 64];
+        let mut index = 0;
+        let mut value = 0.0;
+        while index < samples.len() {
+            samples[index] = value;
+            value += 1.0 / 128.0;
+            index += 1;
+        }
+        samples
+    };
+
     let source_packet_start = test_duration(consts::SAMPLE_RATE, u64::from(consts::PACKET_FRAMES));
     let target = test_duration(consts::SAMPLE_RATE, u64::from(consts::PACKET_FRAMES) + 512);
     let output_packet_frames = u32::try_from(frames_to_trim(
@@ -840,9 +861,7 @@ fn seek_trim_uses_codec_output_rate_for_resampled_chunks(
         for prefix in [false, true] {
             let spec = test_spec(rate);
             let origin = Duration::from_nanos(42_250_000);
-            let pcm = (0..64_u16)
-                .map(|frame| f32::from(frame) / 128.0)
-                .collect::<Vec<_>>();
+            let pcm = PCM.to_vec();
             let codec = CountingCodec::new(pcm.clone(), spec, 64);
             let demuxer = BoundaryFrameDemuxer {
                 track: track_with_rate(rate),

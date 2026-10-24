@@ -17,7 +17,7 @@ use firewheel::{
     },
 };
 use kithara_assets::AssetStore;
-use kithara_audio::{AudioObserverSlot, AudioRead, ReadOutcome, mock::TestPcmReader};
+use kithara_audio::AudioObserverSlot;
 use kithara_command::{
     Batch, ChannelConfig, LevelInbox, Port, ScopeId, ScopedConfig, ScopedInbox, ScopedSender, When,
     scoped_channel,
@@ -25,15 +25,15 @@ use kithara_command::{
 use kithara_platform::time::Duration;
 use kithara_play::{
     CrossfadeSettings, PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceLoad, ResourceSrc,
-    TrackSettings, mock,
+    TrackSettings,
 };
 use kithara_render::{
     Open,
     bridge::{DeckPart, DeckProtocol, Fade, FadeDir, SessionInbox, Slot, scope_channels},
     rt::{DeckMixer, DeckMixerConfig, StreamShape, install_render_context, publish_render_context},
 };
-use kithara_signal::{AudioSpec, OutputContext, SegmentId, SessionEpoch, SessionFrame};
-use kithara_test_fixtures::integration_fixtures::constant_half;
+use kithara_signal::{OutputContext, SegmentId, SessionEpoch, SessionFrame};
+use kithara_test_fixtures::assets;
 use kithara_test_utils::{
     TestTempDir,
     bufpool::{TestPools, pools},
@@ -71,9 +71,7 @@ impl SessionInbox for TestSessionInbox {
 
 #[kithara::test(tokio)]
 #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
-async fn a_deck_applies_fades_for_tracks_it_does_not_hold_without_allocating(
-    constant_half: &'static [u8],
-) {
+async fn a_deck_applies_fades_for_tracks_it_does_not_hold_without_allocating() {
     let (mut ring, inbox) = scoped_channel(
         ScopedConfig::builder()
             .scope(ChannelConfig::builder().targets(ABSENT_FADES + 2).build())
@@ -91,21 +89,13 @@ async fn a_deck_applies_fades_for_tracks_it_does_not_hold_without_allocating(
     let mut deck =
         DeckMixer::<TestSessionInbox>::new(inputs, shape, &pools()).expect("mixer pools");
     let settings = CrossfadeSettings::default();
-    let spec = AudioSpec::new(2, SAMPLE_RATE);
-    let mut reader = TestPcmReader::with_pcm(spec, 60.0, constant_half);
-    let mut samples = vec![0.0; 60 * usize::try_from(SAMPLE_RATE.get()).expect("rate") * 2];
-    let mut written = 0;
-    while written < samples.len() {
-        let ReadOutcome::Frames { count, .. } =
-            reader.read(&mut samples[written..]).expect("generated PCM")
-        else {
-            panic!("generated PCM ended early")
-        };
-        written += count.get();
-    }
     let dir = TestTempDir::new();
     let path = dir.path().join("held.wav");
-    mock::write_pcm_wav(&path, &samples, spec).expect("generated float WAV");
+    std::fs::write(
+        &path,
+        assets::fixed_constant_wav_render_half_2880000().bytes(),
+    )
+    .expect("prepared float WAV");
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
     let load: ResourceLoad<TestPools> = ResourceLoad::new(
         ResourceConfig::for_src(ResourceSrc::Path(path))

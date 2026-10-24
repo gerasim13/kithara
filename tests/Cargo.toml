@@ -216,6 +216,8 @@ kithara-encode = { workspace = true, default-features = false, optional = true }
 kithara-record = { workspace = true, features = ["assets"], optional = true }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["encoded", "hls", "hls-inputs", "signal"] }
 
+async-trait = { workspace = true }
+
 # HTTP server. The axum stack is not available on WASM, which is the whole
 # reason these are declared per target rather than plainly.
 axum = { workspace = true }
@@ -237,6 +239,7 @@ rand = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls", "stream"] }
 tokio = { workspace = true, features = ["process"] }
 tower-http = { workspace = true }
+tower-service = { workspace = true }
 
 # Mocking
 unimock = { workspace = true }

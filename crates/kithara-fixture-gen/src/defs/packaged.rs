@@ -114,7 +114,8 @@ fn rhythm_fmp4_media(index: usize, carrier_hz: f64) -> Vec<u8> {
 #[case::deck_a_120bpm_48k()]
 #[case::deck_b_120bpm_48k()]
 fn analysis_rhythm_fmp4(inputs: &[&[u8]]) -> Vec<u8> {
-    super::rhythm::analysed(&[&inputs.concat()], "mp4")
+    let prepared = super::rhythm::source_pcm(&[&inputs.concat()], "mp4");
+    super::rhythm::analysed(&[&prepared])
 }
 
 fn aac_bytes(codec: AudioCodec, bit_rate: u64) -> Vec<u8> {
@@ -173,4 +174,29 @@ fn aac() -> Vec<u8> {
 #[case::v2(AudioCodec::AacHeV2, consts::AAC_HE_V2_BIT_RATE)]
 fn he_aac(codec: AudioCodec, bit_rate: u64) -> Vec<u8> {
     aac_bytes(codec, bit_rate)
+}
+
+#[cfg(all(test, feature = "rhythm"))]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    #[kithara::test]
+    fn packaged_analysis_keeps_both_halves_and_the_native_decoder_profile() {
+        for deck in ["a", "b"] {
+            let name = format!("analysis_rhythm_fmp4_deck_{deck}_120bpm_48k");
+            let definition = inventory::iter::<crate::registry::AssetDef>
+                .into_iter()
+                .find(|definition| definition.accessor_name() == name)
+                .expect("packaged whole-track analysis");
+            assert_eq!(
+                definition.dependencies,
+                [
+                    format!("rhythm_fmp4_init_deck_{deck}_120bpm_48k"),
+                    format!("rhythm_fmp4_media_deck_{deck}_120bpm_48k"),
+                ]
+            );
+            let format = definition.format.expect("profile-keyed packaged analysis")();
+            assert!(format.ends_with(&super::super::rhythm::source_format()));
+        }
+    }
 }

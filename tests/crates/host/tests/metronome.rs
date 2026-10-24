@@ -3,14 +3,13 @@
 use std::num::NonZeroU32;
 
 use kithara::{
-    audio::mock::TestPcmReader,
     effects::LimiterConfig,
     host::{
         HostConfig, HostSettings, HostSettingsChange, HostSettingsControl, MetronomeConfig,
         MetronomeConfigChange, MetronomeConfigControl, Tap,
     },
     play::{PlayError, Tempo},
-    signal::{AudioSpec, SessionFrame},
+    signal::SessionFrame,
     warp::{Beat, BeatGridQuery, BeatGridSnapshot, BeatOrdinal, MapPoint, MapPosition},
 };
 use kithara_command::When;
@@ -18,16 +17,14 @@ use kithara_config::Configure;
 use kithara_integration_tests::{
     audio_artifact::{AudioArtifactTap, artifact_label},
     bufpool_ext::{TestPools, pools},
-    offline::{
-        OfflineHostHarness, OfflinePlayer, OfflinePlayerOptions, TapProbe, resource_from_reader,
-    },
+    offline::{OfflineHostHarness, OfflinePlayer, OfflinePlayerOptions, TapProbe, asset_source},
 };
 use kithara_test_fixtures::{
-    analysis_beat_fixtures::sine_440_long, integration_fixtures::constant_half,
+    analysis_beat_fixtures::sine_440_long, asset::Asset, assets, unit_fixtures::metronome_sine_wav,
 };
 use num_traits::AsPrimitive;
 
-use super::mix_tap::{ROOMY_CAPACITY, play_resource, playing_harness, render_blocks};
+use super::mix_tap::{ROOMY_CAPACITY, play_source, playing_harness, render_blocks};
 
 mod consts {
     pub(super) const SAMPLE_RATE: u32 = 44_100;
@@ -95,10 +92,6 @@ mod consts {
     pub(super) const GRID_WAIT_BLOCKS: usize = 4;
     /// Blocks rendered after a ride's last beat so its click ends in the take.
     pub(super) const CLICK_TAIL_BLOCKS: usize = 2;
-    /// The louder of two decks that differ in nothing else.
-    pub(super) const DECK_LOUD: f32 = 0.5;
-    /// The softer of two decks that differ in nothing else.
-    pub(super) const DECK_SOFT: f32 = 0.25;
     /// The default metronome level: a downbeat click at the limiter ceiling.
     pub(super) const FULL_LEVEL: f32 = 1.0;
     pub(super) const HALF_LEVEL: f32 = 0.5;
@@ -544,10 +537,8 @@ async fn a_metronome_switched_back_on_clicks_from_the_next_beat() {
 }
 
 #[kithara::test(tokio)]
-async fn the_metronome_is_off_by_default_and_passes_the_mix_bit_exactly(
-    constant_half: &'static [u8],
-) {
-    let harness = playing_harness(constant_half).await;
+async fn the_metronome_is_off_by_default_and_passes_the_mix_bit_exactly() {
+    let harness = playing_harness().await;
     let mut master = harness
         .host()
         .attach_tap(Tap::Master, ROOMY_CAPACITY)
@@ -599,10 +590,8 @@ async fn the_master_tap_carries_no_click() {
 }
 
 #[kithara::test(tokio)]
-async fn the_metronome_clicks_on_host_beats_while_every_deck_is_paused(
-    constant_half: &'static [u8],
-) {
-    let harness = playing_harness(constant_half).await;
+async fn the_metronome_clicks_on_host_beats_while_every_deck_is_paused() {
+    let harness = playing_harness().await;
     harness
         .with_queue(kithara::queue::QueueControl::pause)
         .await;
@@ -670,12 +659,10 @@ struct Ride {
 }
 
 /// Rides the Host tempo from [`consts::RIDE_FROM_BPM`] to
-/// [`consts::RIDE_TO_BPM`] with the metronome on over a deck playing `tone`.
+/// [`consts::RIDE_TO_BPM`] with the metronome on over a prepared source.
 #[kithara_test_utils::kithara::hang_watchdog]
-async fn ride_over(tone: Vec<f32>) -> Ride {
-    let frames = u64::try_from(tone.len()).expect("tone length");
-    let rate = NonZeroU32::new(consts::SAMPLE_RATE).expect("test sample rate");
-    let harness = play_resource(
+async fn ride_over(source: Asset, frames: u64) -> Ride {
+    let harness = play_source(
         OfflinePlayer::with_sample_rate(
             OfflinePlayerOptions::builder()
                 .block_on_underrun(true)
@@ -683,12 +670,7 @@ async fn ride_over(tone: Vec<f32>) -> Ride {
             consts::SAMPLE_RATE,
         )
         .await,
-        move || {
-            resource_from_reader(TestPcmReader::with_samples(
-                AudioSpec::new(consts::CHANNELS, rate),
-                tone,
-            ))
-        },
+        asset_source(&source).into(),
     )
     .await;
     let host = harness.host();
@@ -774,9 +756,9 @@ async fn the_metronome_clicks_on_every_host_beat_over_a_deck_through_a_tempo_rid
         .step_by(usize::from(consts::CHANNELS))
         .collect();
     let tone_peak = peak(&tone);
-    let half_tone = tone.iter().map(|sample| sample / 2.0).collect();
-    let full = ride_over(tone).await;
-    let half = ride_over(half_tone).await;
+    let frames = u64::try_from(tone.len()).expect("tone length");
+    let full = ride_over(metronome_sine_wav(false), frames).await;
+    let half = ride_over(metronome_sine_wav(true), frames).await;
 
     if let Some(mut artifact) =
         AudioArtifactTap::from_env(&artifact_label(), consts::SAMPLE_RATE, consts::CHANNELS)
@@ -857,19 +839,13 @@ async fn the_duck_under_a_click_keeps_a_loud_mix_at_or_under_the_limiter_ceiling
     // the last rendered frame.
     let frames = u64::from(consts::BLOCK_FRAMES)
         * u64::try_from(consts::LOUD_BLOCKS + 2).expect("block count");
-    let deck = vec![consts::DECK_LOUD; capacity(frames)];
     let options = OfflinePlayerOptions::builder()
         .crossfade_duration(0.0)
         .block_on_underrun(true)
         .build();
-    let harness = play_resource(
+    let harness = play_source(
         OfflinePlayer::with_options(options, session).await,
-        move || {
-            resource_from_reader(TestPcmReader::with_samples(
-                AudioSpec::new(consts::CHANNELS, rate),
-                deck,
-            ))
-        },
+        asset_source(&assets::fixed_constant_wav_cd_half_55296()).into(),
     )
     .await;
     let host = harness.host();
@@ -922,16 +898,14 @@ async fn the_duck_under_a_click_keeps_a_loud_mix_at_or_under_the_limiter_ceiling
 }
 
 /// The output and master taps of a player at the default Host config whose
-/// deck holds `level` while the metronome clicks at [`consts::BPM`] for
+/// deck plays the prepared source while the metronome clicks at [`consts::BPM`] for
 /// [`consts::PAUSED_BLOCKS`] blocks.
-async fn deck_under_clicks(level: f32) -> (Vec<f32>, Vec<f32>) {
-    let rate = NonZeroU32::new(consts::SAMPLE_RATE).expect("test sample rate");
+async fn deck_under_clicks(source: Asset) -> (Vec<f32>, Vec<f32>) {
     // WHY: One block plays before the taps attach and one more keeps the
     // deck sounding past the last rendered frame.
     let deck_blocks = u64::try_from(consts::PAUSED_BLOCKS + 2).expect("block count");
     let frames = u64::from(consts::BLOCK_FRAMES) * deck_blocks;
-    let deck = vec![level; usize::try_from(frames).expect("deck length")];
-    let harness = play_resource(
+    let harness = play_source(
         OfflinePlayer::with_sample_rate(
             OfflinePlayerOptions::builder()
                 .block_on_underrun(true)
@@ -939,12 +913,7 @@ async fn deck_under_clicks(level: f32) -> (Vec<f32>, Vec<f32>) {
             consts::SAMPLE_RATE,
         )
         .await,
-        move || {
-            resource_from_reader(TestPcmReader::with_samples(
-                AudioSpec::new(consts::CHANNELS, rate),
-                deck,
-            ))
-        },
+        asset_source(&source).into(),
     )
     .await;
     let host = harness.host();
@@ -982,8 +951,9 @@ fn span(pcm: &[f32], frames: std::ops::Range<u64>) -> &[f32] {
 
 #[kithara::test(tokio)]
 async fn a_full_duck_mutes_the_deck_through_the_hold_and_returns_it_over_the_release() {
-    let (loud, loud_master) = deck_under_clicks(consts::DECK_LOUD).await;
-    let (soft, soft_master) = deck_under_clicks(consts::DECK_SOFT).await;
+    let (loud, loud_master) = deck_under_clicks(assets::fixed_constant_wav_cd_half_52224()).await;
+    let (soft, soft_master) =
+        deck_under_clicks(assets::fixed_constant_wav_cd_quarter_52224()).await;
 
     assert_eq!(
         (loud.len(), soft.len(), soft_master.len()),

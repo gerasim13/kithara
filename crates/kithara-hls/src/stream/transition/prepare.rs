@@ -148,7 +148,7 @@ where
             reader: Some(reader),
         });
         drop(state);
-        outgoing.retire_lookahead();
+        self.retire_outgoing_lookahead(&outgoing);
         self.signal().wake_peer();
         Ok(Some(transition))
     }

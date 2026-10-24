@@ -1,7 +1,10 @@
 use std::{num::NonZeroUsize, ops::Range};
 
 use fearless_simd::{Level, dispatch};
-use kithara_test_fixtures::signal::Wave;
+use kithara_test_fixtures::{
+    portable::{harmonics, sawtooth, sine_440},
+    signal::Wave,
+};
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
@@ -32,10 +35,6 @@ const SPECIALS: [f32; 9] = [
     f32::NAN,
     f32::from_bits(SIGNALING_NAN),
 ];
-const SINE: Wave = Wave::Sine {
-    hz: 440.0,
-    peak: i16::MAX,
-};
 
 type DeinterleavePair = fn(&[f32], &mut [f32], &mut [f32]) -> usize;
 type DownmixPair = fn(&[f32], &mut [f32]) -> usize;
@@ -73,12 +72,19 @@ fn pairs() -> Vec<Pairs> {
     ])
 }
 
-fn signal(len: usize, wave: Wave) -> Vec<f32> {
-    SPECIALS
-        .into_iter()
-        .chain((0..).map(|frame| f32::from(wave.sample(frame, RATE)) / 32_768.0))
-        .take(len)
-        .collect()
+fn signal(len: usize, prepared: &[f32]) -> Vec<f32> {
+    let mut samples = Vec::with_capacity(len);
+    samples.extend_from_slice(
+        SPECIALS
+            .get(..len.min(SPECIALS.len()))
+            .expect("special input extent"),
+    );
+    samples.extend_from_slice(
+        prepared
+            .get(..len.saturating_sub(SPECIALS.len()))
+            .expect("prepared input extent"),
+    );
+    samples
 }
 
 fn bits(values: &[f32]) -> Vec<u32> {
@@ -95,8 +101,8 @@ fn interleave_pair_matches_the_oracle() {
         let name = layout.name;
         for size in SIZES {
             for offset in OFFSETS {
-                let left = signal(size.saturating_add(offset), SINE);
-                let right = signal(size.saturating_add(offset), Wave::Sawtooth);
+                let left = signal(size.saturating_add(offset), sine_440());
+                let right = signal(size.saturating_add(offset), sawtooth());
                 let mut expected = vec![UNWRITTEN; size.saturating_mul(2).saturating_add(offset)];
                 let mut actual = expected.clone();
                 let ((_, left), (_, right)) = (left.split_at(offset), right.split_at(offset));
@@ -119,7 +125,7 @@ fn deinterleave_pair_matches_the_oracle() {
         let name = layout.name;
         for size in SIZES {
             for offset in OFFSETS {
-                let input = signal(size.saturating_mul(2).saturating_add(offset), SINE);
+                let input = signal(size.saturating_mul(2).saturating_add(offset), sine_440());
                 let input = input.split_at(offset).1;
                 let plane = vec![UNWRITTEN; size.saturating_add(offset)];
                 let (mut want, mut got) = ((plane.clone(), plane.clone()), (plane.clone(), plane));
@@ -164,7 +170,7 @@ fn downmix_pair_matches_the_scalar_mean() {
                     size.saturating_mul(2)
                         .saturating_add(offset)
                         .saturating_add(1),
-                    SINE,
+                    sine_440(),
                 );
                 let input = input.split_at(offset).1;
                 let mut mono = vec![UNWRITTEN; size.saturating_add(2)];
@@ -197,7 +203,7 @@ fn scatter_and_gather_match_the_oracle() {
     for size in SIZES {
         for step in STRIDES {
             for channel in 0..step {
-                let plane = signal(size, Wave::Sawtooth);
+                let plane = signal(size, sawtooth());
                 let mut want = vec![UNWRITTEN; size.saturating_mul(step)];
                 let mut got = want.clone();
                 let start = channel.min(want.len());
@@ -243,7 +249,7 @@ fn sanitize_matches_the_oracle_at_every_level() {
     ] {
         for size in SIZES {
             for offset in OFFSETS {
-                let mut want = signal(size.saturating_add(offset), SINE);
+                let mut want = signal(size.saturating_add(offset), sine_440());
                 let mut got = want.clone();
                 oracle::sanitize(want.split_at_mut(offset).1);
                 sanitize(got.split_at_mut(offset).1);
@@ -434,16 +440,11 @@ fn halves(sections: usize) -> [Vec<[f32; 5]>; 2] {
 }
 
 fn tones(channels: usize) -> Vec<Vec<f32>> {
-    (1..=channels)
-        .map(|harmonic| {
-            let wave = Wave::Sine {
-                hz: 440.0 * f64::from(u32::try_from(harmonic).expect("few channels")),
-                peak: i16::MAX,
-            };
-            (0..4_096)
-                .map(|frame| f32::from(wave.sample(frame, RATE)) / 32_768.0)
-                .collect()
-        })
+    harmonics()
+        .get(..channels)
+        .expect("prepared channel extent")
+        .iter()
+        .map(|plane| plane.to_vec())
         .collect()
 }
 
@@ -594,10 +595,14 @@ fn a_silent_channel_beside_a_playing_one_never_reaches_subnormals() {
     for (name, call) in runs {
         let mut cascade = cascade::Cascade::new(stride(2), stride(1)).expect("cascade");
         cascade.set_section(0, section).expect("section");
-        let mut wave = (0..).map(|frame| f32::from(SINE.sample(frame, RATE)) / 32_768.0);
-        let subnormal: usize = (0..CALLS)
-            .map(|block| {
-                let tone = wave.by_ref().take(CALL).collect();
+        assert_eq!(sine_440().len(), CALL.saturating_mul(CALLS));
+        let subnormal: usize = sine_440()
+            .as_chunks::<CALL>()
+            .0
+            .iter()
+            .enumerate()
+            .map(|(block, tone)| {
+                let tone = tone.to_vec();
                 let mut ring = vec![0.0; CALL];
                 if let Some(first) = ring.first_mut().filter(|_| block == 0) {
                     *first = 1.0;
@@ -629,7 +634,7 @@ fn peak_matches_the_scalar_maximum_on_every_backend() {
         ("accelerate", accelerate::peak),
     ]);
     for len in SIZES {
-        let sine: Vec<f32> = signal(len.saturating_add(SPECIALS.len()), SINE)
+        let sine: Vec<f32> = signal(len.saturating_add(SPECIALS.len()), sine_440())
             .into_iter()
             .skip(SPECIALS.len())
             .collect();
@@ -747,8 +752,8 @@ fn multiply_matches_the_scalar_product_on_every_backend() {
     for row in vectors() {
         let name = row.name;
         for size in SIZES {
-            let a = signal(size, SINE);
-            let b = signal(size.saturating_add(1), Wave::Sawtooth);
+            let a = signal(size, sine_440());
+            let b = signal(size.saturating_add(1), sawtooth());
             let mut output = vec![UNWRITTEN; size.saturating_add(2)];
             assert_eq!(
                 (row.multiply)(&a, &b, &mut output),
@@ -776,7 +781,7 @@ fn sum_squares_tracks_the_f64_sum_on_every_backend() {
     for row in vectors() {
         let name = row.name;
         for size in SIZES {
-            let samples: Vec<f32> = signal(size.saturating_add(SPECIALS.len()), SINE)
+            let samples: Vec<f32> = signal(size.saturating_add(SPECIALS.len()), sine_440())
                 .into_iter()
                 .skip(SPECIALS.len())
                 .collect();
@@ -861,7 +866,7 @@ fn every_interpolation_backend_tracks_the_f64_oracle() {
     ]);
     let window: Vec<f32> = signal(
         usize::from(INTERP_WINDOW).saturating_add(SPECIALS.len()),
-        SINE,
+        sine_440(),
     )
     .into_iter()
     .skip(SPECIALS.len())
@@ -957,10 +962,10 @@ fn shifted(mut values: Vec<f32>) -> Vec<f32> {
     values
 }
 
-/// `size` slots of `wave` followed by two `UNWRITTEN` slots, so a kernel
+/// `size` signal slots followed by two `UNWRITTEN` slots, so a kernel
 /// that writes past its prefix shows.
-fn padded_signal(size: usize, wave: Wave) -> Vec<f32> {
-    let mut values = signal(size, wave);
+fn padded_signal(size: usize, prepared: &[f32]) -> Vec<f32> {
+    let mut values = signal(size, prepared);
     values.extend([UNWRITTEN; 2]);
     values
 }
@@ -1027,7 +1032,7 @@ fn div_matches_ieee_division_at_every_level() {
         for divisor in [3.0, -0.7].into_iter().chain(SPECIALS) {
             for size in SIZES {
                 for offset in OFFSETS {
-                    let input = padded_signal(size.saturating_add(offset), SINE);
+                    let input = padded_signal(size.saturating_add(offset), sine_440());
                     let mut output = input.clone();
                     let region = output.split_at_mut(offset).1;
                     let count = div(region.split_at_mut(size).0, divisor);
@@ -1052,7 +1057,7 @@ fn affine_rounds_within_one_ulp_on_every_backend() {
         for (scale, offset_value) in [(0.75, -0.25), (-3.0, 0.5)] {
             for size in SIZES {
                 for offset in OFFSETS {
-                    let input = padded_signal(size.saturating_add(offset), SINE);
+                    let input = padded_signal(size.saturating_add(offset), sine_440());
                     let mut output = input.clone();
                     let region = output.split_at_mut(offset).1;
                     let count = (row.affine)(region.split_at_mut(size).0, scale, offset_value);
@@ -1082,8 +1087,8 @@ fn sub_rounds_within_one_ulp_on_every_backend() {
         let name = row.name;
         for size in SIZES {
             for offset in OFFSETS {
-                let x = padded_signal(size.saturating_add(offset), SINE);
-                let y = shifted(signal(size.saturating_add(offset), Wave::Sawtooth));
+                let x = padded_signal(size.saturating_add(offset), sine_440());
+                let y = shifted(signal(size.saturating_add(offset), sawtooth()));
                 let mut output = x.clone();
                 let region = output.split_at_mut(offset).1;
                 let count = (row.sub)(region, y.split_at(offset).1);
@@ -1112,8 +1117,8 @@ fn scale_add_rounds_within_one_ulp_on_every_backend() {
         for gain in [0.7, -1.5] {
             for size in SIZES {
                 for offset in OFFSETS {
-                    let x = shifted(signal(size.saturating_add(offset), SINE));
-                    let acc = padded_signal(size.saturating_add(offset), Wave::Sawtooth);
+                    let x = shifted(signal(size.saturating_add(offset), sine_440()));
+                    let acc = padded_signal(size.saturating_add(offset), sawtooth());
                     let mut output = acc.clone();
                     let region = output.split_at_mut(offset).1;
                     let count = (row.scale_add)(x.split_at(offset).1, gain, region);
@@ -1142,15 +1147,18 @@ fn scale_add_rounds_within_one_ulp_on_every_backend() {
 
 #[kithara::test]
 fn mul_add_rounds_within_one_ulp_at_every_level() {
+    let descending: Vec<_> = (0..sawtooth().len())
+        .map(|frame| f32::from(Wave::SawtoothDescending.sample(frame, RATE)) / 32_768.0)
+        .collect();
     for (name, mul_add) in mul_adds() {
         for size in SIZES {
             for offset in OFFSETS {
-                let x = signal(size.saturating_add(offset), SINE);
+                let x = signal(size.saturating_add(offset), sine_440());
                 let y = shifted(signal(
                     size.saturating_add(offset).saturating_add(1),
-                    Wave::SawtoothDescending,
+                    &descending,
                 ));
-                let acc = padded_signal(size.saturating_add(offset), Wave::Sawtooth);
+                let acc = padded_signal(size.saturating_add(offset), sawtooth());
                 let mut output = acc.clone();
                 let region = output.split_at_mut(offset).1;
                 let count = mul_add(x.split_at(offset).1, y.split_at(offset).1, region);
@@ -1220,8 +1228,8 @@ fn add_rounds_within_one_ulp_on_every_backend() {
         let name = row.name;
         for size in SIZES {
             for offset in OFFSETS {
-                let x = shifted(signal(size.saturating_add(offset), SINE));
-                let acc = padded_signal(size.saturating_add(offset), Wave::Sawtooth);
+                let x = shifted(signal(size.saturating_add(offset), sine_440()));
+                let acc = padded_signal(size.saturating_add(offset), sawtooth());
                 let mut output = acc.clone();
                 let region = output.split_at_mut(offset).1;
                 let count = (row.add)(x.split_at(offset).1, region);
@@ -1246,7 +1254,7 @@ fn add_rounds_within_one_ulp_on_every_backend() {
 /// A target shorter than its inputs bounds the prefix on every backend.
 #[kithara::test]
 fn a_short_target_bounds_every_elementwise_kernel() {
-    let input = signal(9, SINE);
+    let input = signal(9, sine_440());
     for row in vectors() {
         let name = row.name;
         let mut target = [0.0_f32; 5];

@@ -390,7 +390,6 @@ async fn local_track_plays_end_to_end(
 }
 
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
-#[kithara_test_utils::kithara::flash(io)]
 async fn wait_for_queue_event<F>(
     rx: &mut EventReceiver<TestEvent>,
     queue: &QueueControl<TestPools>,
@@ -738,6 +737,48 @@ async fn local_queue_playlist_behavior(
 
     tick_handle.stop().await;
     queue.close().await;
+}
+
+#[cfg(feature = "flash")]
+#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+async fn queue_event_watchdog_keeps_a_virtual_deadline() {
+    let (harness, control) =
+        kithara_integration_tests::offline::offline_queue_fixture(44_100).await;
+    let wall_start = time::WallInstant::now();
+    let stalled = kithara::platform::tokio::task::spawn(async move {
+        let mut events = control.subscribe();
+        wait_for_queue_event(
+            &mut events,
+            &control,
+            &[],
+            "an absent transition",
+            |_| true,
+            Duration::from_secs(5),
+        )
+        .await
+    })
+    .await;
+    let wall_elapsed = wall_start.elapsed();
+    harness.close().await;
+
+    let failure = stalled.expect_err("a stalled queue wait must trip its watchdog");
+    assert!(
+        failure.is_panic(),
+        "the wait must panic rather than be cancelled"
+    );
+    let payload = failure.into_panic();
+    let message = payload
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| payload.downcast_ref::<&str>().copied())
+        .expect("the watchdog panic carries a message");
+    assert!(message.contains("wait_for_queue_event"));
+    assert!(message.contains("no progress for 1s"));
+    assert!(message.contains("waiting for an absent transition"));
+    assert!(
+        message.contains("real clock leapt the budget"),
+        "the watchdog must expire before one real second; full failure handling took {wall_elapsed:?}: {message}",
+    );
 }
 
 #[kithara::fixture]

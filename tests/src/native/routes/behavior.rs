@@ -9,7 +9,7 @@ use axum::{
     routing::get,
 };
 use bytes::Bytes;
-use futures::{StreamExt, stream};
+use futures::{StreamExt, TryStreamExt, stream};
 use kithara::platform::{
     sync::Arc,
     time::{Duration, sleep},
@@ -17,7 +17,7 @@ use kithara::platform::{
 
 use crate::{
     routes::range::build_range_response,
-    test_server_state::{Content, Delivery, FixtureBehavior, TestServerState},
+    test_server_state::{Content, Delivery, FixtureBehavior, NetworkMode, TestServerState},
 };
 
 pub(crate) fn router() -> Router<Arc<TestServerState>> {
@@ -45,11 +45,45 @@ async fn dispatch_nested(
     serve(&state, &token, &headers)
 }
 
-fn serve(state: &TestServerState, token: &str, headers: &HeaderMap) -> Response {
+fn serve(state: &Arc<TestServerState>, token: &str, headers: &HeaderMap) -> Response {
     let Some(behavior) = state.get_behavior(token) else {
         return (StatusCode::NOT_FOUND, "no such behavior").into_response();
     };
     state.bump_behavior(token);
+    if let Delivery::Gated { after_bytes } = &behavior.delivery {
+        let after_bytes = *after_bytes;
+        let gate = state
+            .behavior_body_gate(token)
+            .expect("gated behavior owns a body gate");
+        let response = serve_content(&behavior, headers);
+        let (parts, body) = response.into_parts();
+        let state = Arc::clone(state);
+        let body = body
+            .into_data_stream()
+            .map_err(io::Error::other)
+            .map_ok(move |mut bytes| {
+                let prefix = bytes.split_to(after_bytes.min(bytes.len()));
+                let gate = Arc::clone(&gate);
+                let state = Arc::clone(&state);
+                stream::once(async move { Ok(prefix) }).chain(stream::once(async move {
+                    if bytes.is_empty() {
+                        return Ok(bytes);
+                    }
+                    gate.mark_requested();
+                    gate.wait_until_released().await;
+                    if state.network_mode() == NetworkMode::Online {
+                        Ok(bytes)
+                    } else {
+                        Err(io::Error::new(
+                            io::ErrorKind::ConnectionReset,
+                            "network outage",
+                        ))
+                    }
+                }))
+            })
+            .try_flatten();
+        return Response::from_parts(parts, Body::from_stream(body));
+    }
     serve_content(&behavior, headers)
 }
 
@@ -74,7 +108,7 @@ fn delivery_response(
 ) -> Response {
     let total = bytes.len();
     let (body, accept_ranges, context) = match delivery {
-        Delivery::Range => {
+        Delivery::Range | Delivery::Gated { .. } => {
             return build_range_response(bytes, headers, true, true, content_type);
         }
         Delivery::Normal => {
@@ -158,6 +192,62 @@ mod tests {
 
     use super::*;
     use crate::{kithara, test_server_state::*};
+
+    #[kithara::test(tokio)]
+    #[case::online(NetworkMode::Online)]
+    #[case::outage(NetworkMode::TransportFailure)]
+    async fn gated_body_waits_after_its_prefix_and_preserves_range(#[case] network: NetworkMode) {
+        let state = TestServerState::new();
+        let token = state.insert_behavior(FixtureBehavior {
+            content: Content::StaticBytes {
+                bytes: Arc::new(b"0123456789".to_vec()),
+                content_type: None,
+            },
+            delivery: Delivery::Gated { after_bytes: 2 },
+        });
+        let gate = state.behavior_body_gate(&token).expect("body gate");
+        let mut headers = HeaderMap::new();
+        headers.insert(header::RANGE, HeaderValue::from_static("bytes=3-3"));
+        let probe = serve(&state, &token, &headers);
+        assert_eq!(
+            axum::body::to_bytes(probe.into_body(), usize::MAX)
+                .await
+                .expect("a complete prefix needs no release"),
+            "3"
+        );
+        assert_eq!(gate.requested(), 0);
+        headers.insert(header::RANGE, HeaderValue::from_static("bytes=3-7"));
+        let mut cancelled = serve(&state, &token, &headers)
+            .into_body()
+            .into_data_stream();
+        assert_eq!(
+            cancelled.next().await.expect("prefix").expect("bytes"),
+            "34"
+        );
+        assert!(futures::poll!(cancelled.next()).is_pending());
+        assert_eq!(gate.pending(), 1);
+        drop(cancelled);
+        assert_eq!(gate.pending(), 0, "cancelling a body releases its waiter");
+        assert_eq!(gate.requested(), 1, "request history stays cumulative");
+        let response = serve(&state, &token, &headers);
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(response.headers()[header::CONTENT_LENGTH], "5");
+        let mut body = response.into_body().into_data_stream();
+        assert_eq!(body.next().await.expect("prefix").expect("bytes"), "34");
+        assert!(futures::poll!(body.next()).is_pending());
+        assert_eq!(gate.requested(), 2);
+        assert_eq!(gate.pending(), 1);
+        state.set_network_mode(network);
+        gate.release();
+        let suffix = body.next().await.expect("body resumes");
+        assert_eq!(gate.pending(), 0);
+        if network == NetworkMode::Online {
+            assert_eq!(suffix.expect("complete body"), "567");
+        } else {
+            assert!(suffix.is_err(), "an in-flight body observes the outage");
+        }
+        assert!(body.next().await.is_none());
+    }
 
     #[kithara::test(tokio)]
     async fn static_bytes_range_serves_partial_and_counts() {

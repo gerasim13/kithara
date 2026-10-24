@@ -15,11 +15,7 @@ use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex, Weak},
     time::Duration,
-    tokio::{
-        self,
-        sync::mpsc,
-        task::{spawn, yield_runnable},
-    },
+    tokio::sync::mpsc,
 };
 use kithara_stream::{Activity, DeferredWake, WorkerWake};
 use kithara_test_utils::kithara;
@@ -73,11 +69,7 @@ where
     reader_segment: Arc<AtomicUsize>,
     state: Mutex<Option<HlsTrackState<S>>>,
     cancel: CancelToken,
-    /// Wake-up trigger for the waker-forwarding micro-task: not a
-    /// cancellation of work — fires from `teardown()` / `Drop`. A free
-    /// `CancelToken` used purely as a one-shot latch (cloned to the
-    /// forwarding task; `cancel()` is the fire, idempotent on repeat).
-    wake_signal: CancelToken,
+    /// Resume a downloader poll made before track activation.
     pending_waker: Mutex<Option<Waker>>,
     /// Single source of truth for variant metadata visible to ABR
     /// controller via [`Abr::variants()`] and to UI/FFI via
@@ -102,7 +94,6 @@ where
             cancel,
             state: Mutex::new(None),
             pending_waker: Mutex::default(),
-            wake_signal: CancelToken::never(),
             variants: Mutex::default(),
             reader_segment: Arc::new(AtomicUsize::new(0)),
             reader_advanced: Arc::new(DeferredWake::default()),
@@ -115,19 +106,14 @@ where
     }
 
     /// Activate track planning and forward reader notifications to the downloader.
-    /// Each delivery yields one scheduler turn while retaining runnable credit;
-    /// waiting for the next notification releases it when no permit remains.
     pub(crate) fn activate(
         self: &Arc<Self>,
         coord: Arc<HlsCoord<S>>,
         eviction_rx: mpsc::UnboundedReceiver<ResourceKey>,
     ) {
-        let reader_advanced = Arc::clone(&self.reader_advanced);
-        coord.set_peer_wake(
-            Arc::clone(&self.reader_advanced),
-            Arc::new(PeerPollWake(Arc::downgrade(self))),
-        );
-        let cancel = coord.cancel.clone();
+        let target: Arc<dyn WorkerWake> = Arc::new(PeerPollWake(Arc::downgrade(self)));
+        self.reader_advanced.set_target(Arc::clone(&target));
+        coord.set_peer_wake(Arc::clone(&self.reader_advanced), target);
 
         let initial_seg = coord
             .find_at_offset(coord.position())
@@ -157,35 +143,9 @@ where
         if let Some(waker) = pending_waker {
             waker.wake();
         }
-
-        let peer_weak = Arc::downgrade(self);
-        let wake_signal = self.wake_signal.clone();
-        spawn(async move {
-            loop {
-                tokio::select! {
-                    biased;
-                    () = cancel.cancelled() => return,
-                    () = wake_signal.cancelled() => return,
-                    () = reader_advanced.notified() => {
-                        let Some(peer) = peer_weak.upgrade() else { return; };
-                        {
-                            let guard = peer.state.lock();
-                            if let Some(ref state) = *guard
-                                && let Some(waker) = state.waker.as_ref()
-                            {
-                                waker.wake_by_ref();
-                            }
-                        }
-                        yield_runnable().await;
-                    }
-                }
-            }
-        });
     }
 
-    /// Shared wake handle the `Source` clones to resume `poll_next` after a
-    /// reader progress event. The reader drivers arm/notify it; this micro-task
-    /// awaits [`DeferredWake::notified`].
+    /// Reader progress resumes `poll_next` through the peer's current off-core task waker.
     pub(crate) fn reader_wake(&self) -> Arc<DeferredWake> {
         Arc::clone(&self.reader_advanced)
     }
@@ -194,10 +154,8 @@ where
         *self.variants.lock() = variants;
     }
 
-    /// Release the stashed [`HlsTrackState`] and cancel the waker task so
-    /// the peer drops its `Arc<HlsCoord>` (and the eviction receiver).
+    /// Release the coordinator and eviction receiver retained by the peer.
     pub(crate) fn teardown(&self) {
-        self.wake_signal.cancel();
         let mut guard = self.state.lock();
         *guard = None;
     }
@@ -215,15 +173,6 @@ where
         if let Some(waker) = waker {
             waker.wake();
         }
-    }
-}
-
-impl<S> Drop for HlsPeer<S>
-where
-    S: HasPool<u8> + Send + Sync + 'static,
-{
-    fn drop(&mut self) {
-        self.wake_signal.cancel();
     }
 }
 

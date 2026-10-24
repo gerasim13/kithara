@@ -1,6 +1,6 @@
 #![cfg(target_os = "macos")]
 
-use cochlea_features::{Audio as ProbeAudio, SegmentOpts, segment_timeline};
+use cochlea_features::{Audio as ProbeAudio, SegmentOpts, count_silent_segments};
 use kithara::{
     StretchKind,
     abr::AbrHandle,
@@ -395,14 +395,10 @@ fn desktop_silent_buckets(samples: &[f32]) -> usize {
         channels: CHANNELS,
         sample_rate: HOST_SAMPLE_RATE,
     };
-    segment_timeline(
+    count_silent_segments(
         &audio,
         &SegmentOpts::default().with_window_ms(COCHLEA_WINDOW_MS),
     )
-    .segments
-    .iter()
-    .filter(|segment| segment.silent)
-    .count()
 }
 
 fn assert_no_desktop_click(switched: &[f32], control: &[f32]) {

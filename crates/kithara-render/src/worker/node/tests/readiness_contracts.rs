@@ -465,9 +465,7 @@ async fn fractional_segment_entry() {
         ),
     ] {
         for source_rate in [48_000, 44_100] {
-            let samples = (0_u16..4_096)
-                .flat_map(|frame| [f32::from(frame), -f32::from(frame)])
-                .collect::<Vec<_>>();
+            let samples = kithara_test_fixtures::unit_fixtures::render_readiness_pcm();
             let mut packet = chunk(spec, SegmentId::FIRST, 0, first_frame, &samples);
             packet.meta.visible_origin = visible_origin;
             let source_rate = NonZeroU32::new(source_rate).expect("decoded source rate");

@@ -1,7 +1,10 @@
 use std::env;
 
 use axum::{Router, middleware, routing::get};
-use kithara::platform::sync::Arc;
+use kithara::{
+    net::{HttpClient, NetOptions},
+    platform::{CancelToken, sync::Arc},
+};
 use kithara_test_fixtures::{Mp3Shape, SignalAsset, assets::by_name};
 use kithara_test_utils::TestHttpServer;
 use tower_http::cors::CorsLayer;
@@ -34,6 +37,16 @@ impl TestServerHelper {
 
     pub(crate) const fn for_server(state: Arc<TestServerState>, base_url: Url) -> Self {
         Self { state, base_url }
+    }
+
+    /// Serve this fixture's routes in memory through the normal HTTP client policies.
+    #[must_use]
+    pub fn modeled_client(&self, options: NetOptions, cancel: CancelToken) -> HttpClient {
+        HttpClient::new_with_transport(
+            options,
+            super::modeled::Transport::new(router(Arc::clone(&self.state)), self.base_url.origin()),
+            cancel,
+        )
     }
 
     /// Build a URL for a static test asset.
@@ -313,6 +326,20 @@ pub struct BehaviorHandle {
 }
 
 impl BehaviorHandle {
+    delegate::delegate! {
+        to self.state
+            .behavior_body_gate(&self.token)
+            .expect("the behavior uses gated delivery") {
+            /// Number of response bodies currently withheld after their prefixes.
+            #[must_use]
+            #[call(pending)]
+            pub fn body_pending(&self) -> usize;
+            /// Finish gated bodies; an offline server truncates responses already in flight.
+            #[call(release)]
+            pub fn release_body(&self);
+        }
+    }
+
     /// URL that dispatches to this behavior.
     #[must_use]
     pub fn url(&self) -> Url {

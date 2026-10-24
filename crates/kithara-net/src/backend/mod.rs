@@ -1,25 +1,20 @@
 mod guards;
 
-#[cfg(not(reqwest_backend))]
-mod common;
+pub(crate) mod common;
 #[cfg(not(reqwest_backend))]
 mod pooled;
 
 #[cfg(feature = "client-host")]
 pub(crate) mod host;
 #[cfg(feature = "client-host")]
-pub use self::host::HttpClient;
+pub(crate) use self::host::Transport as SelectedTransport;
 
 #[cfg(apple_backend)]
 mod apple;
-#[cfg(apple_backend)]
-pub use self::apple::HttpClient;
+#[cfg(all(apple_backend, not(feature = "client-host")))]
+pub(crate) use self::apple::Transport as SelectedTransport;
 
 #[cfg(reqwest_backend)]
 mod reqwest;
 #[cfg(reqwest_backend)]
-pub use self::reqwest::HttpClient;
-#[cfg(reqwest_backend)]
-pub(crate) use self::reqwest::{
-    Client, RequestBuilder, Response, StatusCode, build_client, head_request, post_request,
-};
+pub(crate) use self::reqwest::Transport as SelectedTransport;

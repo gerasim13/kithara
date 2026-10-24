@@ -6,7 +6,6 @@ mod harness;
 mod imports;
 mod providers;
 mod queue;
-mod recording;
 mod rows;
 
 pub(super) use cases::*;
