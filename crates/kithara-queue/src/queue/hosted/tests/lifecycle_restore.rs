@@ -6,7 +6,9 @@ use kithara_play::TrackSettingsChange;
 use kithara_test_utils::cancel_token;
 
 use super::*;
-use crate::{NavigationState, QueueSettingsChange, Transition, queue::types::Placement};
+use crate::{
+    NavigationState, QueueSettingsChange, Transition, mock::fixture_uri, queue::types::Placement,
+};
 
 fn apply(
     queue: &mut Queue<TestPools>,
@@ -93,13 +95,7 @@ async fn announce_carries_the_item_identity(#[case] loaded: bool) {
         QueueCommand::Append {
             position: kithara_play::Position::ZERO,
             id,
-            source: TrackSource::Uri(
-                dir.path()
-                    .join("entry.wav")
-                    .to_str()
-                    .expect("path")
-                    .to_owned(),
-            ),
+            source: TrackSource::Uri(fixture_uri(dir.path(), "entry.wav")),
         },
     )
     .expect("insert identity");
@@ -179,13 +175,7 @@ async fn clear_resets_cursor_and_announce() {
         QueueCommand::Append {
             position: kithara_play::Position::ZERO,
             id: first,
-            source: TrackSource::Uri(
-                dir.path()
-                    .join("entry.wav")
-                    .to_str()
-                    .expect("path")
-                    .to_owned(),
-            ),
+            source: TrackSource::Uri(fixture_uri(dir.path(), "entry.wav")),
         },
     )
     .expect("reinsert first");
@@ -257,13 +247,7 @@ async fn player_advance_through_queue() {
         QueueCommand::Append {
             position: kithara_play::Position::ZERO,
             id: third,
-            source: TrackSource::Uri(
-                dir.path()
-                    .join("entry.wav")
-                    .to_str()
-                    .expect("path")
-                    .to_owned(),
-            ),
+            source: TrackSource::Uri(fixture_uri(dir.path(), "entry.wav")),
         },
     )
     .expect("third");
@@ -293,13 +277,7 @@ fn player_insert_scenarios(#[case] insert_at_position: bool, #[case] expected_co
             QueueCommand::Append {
                 position: kithara_play::Position::ZERO,
                 id: TrackId::allocate(),
-                source: TrackSource::Uri(
-                    dir.path()
-                        .join("entry.wav")
-                        .to_str()
-                        .expect("path")
-                        .to_owned(),
-                ),
+                source: TrackSource::Uri(fixture_uri(dir.path(), "entry.wav")),
             },
         )
         .expect("append");
@@ -310,13 +288,7 @@ fn player_insert_scenarios(#[case] insert_at_position: bool, #[case] expected_co
             &mut rig,
             QueueCommand::Insert {
                 id: TrackId::allocate(),
-                source: TrackSource::Uri(
-                    dir.path()
-                        .join("entry.wav")
-                        .to_str()
-                        .expect("path")
-                        .to_owned(),
-                ),
+                source: TrackSource::Uri(fixture_uri(dir.path(), "entry.wav")),
                 after: None,
             },
         )
@@ -347,13 +319,7 @@ async fn player_remove_at_scenarios(#[case] scenario: u8) {
             QueueCommand::Append {
                 position: kithara_play::Position::ZERO,
                 id: third,
-                source: TrackSource::Uri(
-                    dir.path()
-                        .join("entry.wav")
-                        .to_str()
-                        .expect("path")
-                        .to_owned(),
-                ),
+                source: TrackSource::Uri(fixture_uri(dir.path(), "entry.wav")),
             },
         )
         .expect("third");
@@ -384,7 +350,7 @@ async fn cold_navigation_and_removal_preserve_item_identity() {
             TrackId::allocate(),
             TrackId::allocate(),
         ];
-        let path = dir.path().join("entry.wav");
+        let source = fixture_uri(dir.path(), "entry.wav");
         for &id in &ids[..count] {
             apply(
                 &mut queue,
@@ -392,7 +358,7 @@ async fn cold_navigation_and_removal_preserve_item_identity() {
                 QueueCommand::Append {
                     position: kithara_play::Position::ZERO,
                     id,
-                    source: TrackSource::Uri(path.to_str().expect("path").to_owned()),
+                    source: TrackSource::Uri(source.clone()),
                 },
             )
             .expect("append cold item");
@@ -474,13 +440,7 @@ async fn remove_at_shifts_current_and_reopens_announce() {
         QueueCommand::Append {
             position: kithara_play::Position::ZERO,
             id: third,
-            source: TrackSource::Uri(
-                dir.path()
-                    .join("entry.wav")
-                    .to_str()
-                    .expect("path")
-                    .to_owned(),
-            ),
+            source: TrackSource::Uri(fixture_uri(dir.path(), "entry.wav")),
         },
     )
     .expect("third");
@@ -527,13 +487,7 @@ async fn replacing_current_item_re_announces_on_next_play() {
         &mut rig,
         QueueCommand::Insert {
             id: replacement,
-            source: TrackSource::Uri(
-                dir.path()
-                    .join("entry.wav")
-                    .to_str()
-                    .expect("path")
-                    .to_owned(),
-            ),
+            source: TrackSource::Uri(fixture_uri(dir.path(), "entry.wav")),
             after: None,
         },
     )
@@ -703,13 +657,7 @@ async fn remove_all_items_releases_output_state_and_allows_fresh_playback() {
         QueueCommand::Append {
             position: kithara_play::Position::ZERO,
             id: first,
-            source: TrackSource::Uri(
-                dir.path()
-                    .join("entry.wav")
-                    .to_str()
-                    .expect("path")
-                    .to_owned(),
-            ),
+            source: TrackSource::Uri(fixture_uri(dir.path(), "entry.wav")),
         },
     )
     .expect("fresh item");
@@ -726,9 +674,12 @@ async fn an_inserted_resource_adopts_the_session_wake_mode() {
     use kithara_render::DispatcherCommand;
 
     let (mut queue, mut rig, dir) = empty_queue();
-    let path = dir.path().join("inserted.wav");
-    mock::write_pcm_wav(&path, &[0.5; 8_192], AudioSpec::new(2, mock::SAMPLE_RATE))
-        .expect("inserted offline resource");
+    let source = fixture_uri(dir.path(), "inserted.wav");
+    crate::mock::seed_fixture(
+        queue.config.store.as_ref().expect("fixture store"),
+        &source,
+        kithara_test_fixtures::assets::fixed_constant_wav_cd_half_4096().bytes(),
+    );
     let id = TrackId::allocate();
     apply(
         &mut queue,
@@ -736,7 +687,7 @@ async fn an_inserted_resource_adopts_the_session_wake_mode() {
         QueueCommand::Append {
             position: kithara_play::Position::ZERO,
             id,
-            source: TrackSource::Uri(path.to_str().expect("inserted source").to_owned()),
+            source: TrackSource::Uri(source),
         },
     )
     .expect("insert resource through its owner");

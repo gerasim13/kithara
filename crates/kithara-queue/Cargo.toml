@@ -16,7 +16,6 @@ ignored = ["serde"]
 
 [features]
 default = ["symphonia", "stretch-signalsmith", "client-reqwest", "tls-rustls"]
-mock = ["dep:kithara-render", "kithara-play/mock", "kithara-test-utils/temp-dir"]
 # HTTP backend forwarding to every kithara-net-reaching dep.
 client-reqwest = ["kithara-play/client-reqwest", "kithara-download/client-reqwest", "kithara-abr/client-reqwest"]
 client-wreq = ["kithara-play/client-wreq", "kithara-download/client-wreq", "kithara-abr/client-wreq"]
@@ -49,7 +48,6 @@ kithara-events = { workspace = true }
 kithara-net = { workspace = true, default-features = false }
 kithara-platform = { workspace = true }
 kithara-play = { workspace = true, default-features = false }
-kithara-render = { workspace = true, optional = true, default-features = false }
 kithara-signal = { workspace = true }
 kithara-test-utils = { workspace = true }
 
@@ -85,6 +83,7 @@ kithara-warp = { workspace = true }
 kithara-worker = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
 serde_yaml_ng = { workspace = true }
 
 [lints]

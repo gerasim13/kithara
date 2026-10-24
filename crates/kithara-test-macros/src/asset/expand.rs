@@ -57,18 +57,51 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
             quote! { crate::registry::AssetBuild::Ready(#call) }
         };
         let accessor = format!("{fn_name_literal}_{case_literal}");
-        // The analysis joins the registry only where the beat pass is built.
+        let source_pcm = format!("source_pcm_{accessor}");
         let analysis = analysed.then(|| {
             quote! {
+                ::inventory::submit! {
+                    crate::registry::AssetDef {
+                        build: |_, __inputs| crate::registry::AssetBuild::Ready(
+                            crate::reference::prepare(__inputs, #ext),
+                        ),
+                        case: #accessor,
+                        content_type: "application/x-kithara-pcm-reference",
+                        dependencies: &[#accessor],
+                        embed: false,
+                        env: &[#(#env),*],
+                        ext: "pcm-reference",
+                        format: Some(crate::reference::format),
+                        func: "reference",
+                        optional: #optional,
+                    }
+                }
                 #[cfg(feature = "rhythm")]
                 ::inventory::submit! {
                     crate::registry::AssetDef {
                         build: |_, __inputs| crate::registry::AssetBuild::Ready(
-                            crate::defs::rhythm::analysed(__inputs, #ext),
+                            crate::defs::rhythm::source_pcm(__inputs, #ext),
+                        ),
+                        case: #accessor,
+                        content_type: "application/x-kithara-pcm-reference",
+                        dependencies: &[#accessor],
+                        embed: false,
+                        env: &[#(#env),*],
+                        ext: "pcm-reference",
+                        format: Some(crate::defs::rhythm::source_format),
+                        func: "source_pcm",
+                        optional: #optional,
+                    }
+                }
+                #[cfg(feature = "rhythm")]
+                ::inventory::submit! {
+                    crate::registry::AssetDef {
+                        build: |_, __inputs| crate::registry::AssetBuild::Ready(
+                            crate::defs::rhythm::analysed(__inputs),
                         ),
                         case: #accessor,
                         content_type: "application/x-kithara-analysis",
-                        dependencies: &[#accessor],
+                        dependencies: &[#source_pcm],
                         embed: false,
                         env: &[#(#env),*],
                         ext: "analysis",

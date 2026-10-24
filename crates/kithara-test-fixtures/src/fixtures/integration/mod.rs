@@ -15,9 +15,10 @@ pub use native::{
     constant_three, constant_two, constant_unity, deadline_tracks,
 };
 pub use oracles::{
-    cochlea_control, cochlea_loudness, listening_reference, oracle_stem_a, oracle_stem_b,
-    phase_noise, phase_sine_anchor, phase_sine_dropped, phase_sine_jitter, phase_sine_measured,
-    quality_control_a, quality_control_b, quality_control_joined, shifted_pitch,
+    cochlea_control, cochlea_loudness, cochlea_pulses, cochlea_silence, listening_reference,
+    oracle_stem_a, oracle_stem_b, phase_noise, phase_sine_anchor, phase_sine_dropped,
+    phase_sine_jitter, phase_sine_measured, quality_control_a, quality_control_b,
+    quality_control_joined, shifted_pitch,
 };
 pub use pcm::{
     allocation_planar, allocation_ramp, allocation_sequence, broadcast_tone, default_pcm,

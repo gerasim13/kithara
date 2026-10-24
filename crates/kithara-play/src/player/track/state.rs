@@ -229,7 +229,7 @@ pub(super) enum Configuring {
 /// wherever the track last observed its source.
 #[derive(Clone, PartialEq)]
 pub(super) struct EndPlan {
-    pub(super) source: (u64, u64, Option<NonZeroU64>),
+    pub(super) source: (Option<u64>, u64, Option<NonZeroU64>),
     pub(super) basis: AudioChunkInfo,
     pub(super) endpoint: (u128, NonZeroU128),
     pub(super) speed: u32,

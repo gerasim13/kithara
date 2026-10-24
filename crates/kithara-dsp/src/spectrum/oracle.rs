@@ -1,26 +1,18 @@
 use std::f64::consts::TAU;
 
-use kithara_test_fixtures::signal::Wave;
+use kithara_test_fixtures::portable;
 use num_traits::ToPrimitive;
 
 /// Least ratio of spectrum energy to error energy against the direct DFT,
 /// in decibels.
 pub(crate) const DFT_SNR_DB: f64 = 110.0;
-const RATE: u32 = 48_000;
-const SINE: Wave = Wave::Sine {
-    hz: 440.0,
-    peak: i16::MAX,
-};
 
 /// A sine under a sawtooth: energy in every bin.
 pub(crate) fn mix(len: usize) -> Vec<f32> {
-    (0..len)
-        .map(|frame| {
-            let sine = f32::from(SINE.sample(frame, RATE));
-            let saw = f32::from(Wave::Sawtooth.sample(frame, RATE));
-            sine.mul_add(0.5, saw) / 65_536.0
-        })
-        .collect()
+    portable::spectrum_mix()
+        .get(..len)
+        .expect("prepared spectrum extent")
+        .to_vec()
 }
 
 /// Bins `0..=N/2` of `signal` by the defining sum, in `f64`. The twiddles

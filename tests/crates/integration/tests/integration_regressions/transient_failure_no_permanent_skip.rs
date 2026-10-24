@@ -18,11 +18,11 @@ use kithara_integration_tests::{
     event::TestEvent,
     kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
-    test_server::NetworkMode,
+    test_server::{NetworkMode, SegmentGateHandle},
     waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
 };
 use kithara_test_fixtures::fixtures::tone_mp3;
-use kithara_test_utils::{TestTempDir, temp_dir};
+use kithara_test_utils::{TestTempDir, temp_dir, wait_until};
 use url::Url;
 
 fn hls_look_ahead(bytes: u64) -> HlsConfigPatch {
@@ -59,9 +59,9 @@ impl Drop for NetworkRestore<'_> {
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 async fn transient_failure_does_not_kill_the_track(
     temp_dir: TestTempDir,
-    #[future(awt)] transient_sources: (PrivateTestServer, Url, Url),
+    #[future(awt)] transient_sources: (PrivateTestServer, Url, Url, SegmentGateHandle),
 ) {
-    let (server, target_url, fallback_url) = transient_sources;
+    let (server, target_url, fallback_url, fetch) = transient_sources;
 
     let pools = pools();
     let net = NetOptions::builder()
@@ -156,8 +156,14 @@ async fn transient_failure_does_not_kill_the_track(
 
     // A blip, not an outage: the server goes away only long enough for one
     // in-flight segment fetch to fail, then comes straight back.
+    wait_until(Duration::from_secs(1), "the held segment request", || {
+        fetch.requested() > 0
+    })
+    .await
+    .expect("the outage has a segment request to fail");
     server.set_network_mode(NetworkMode::Unavailable);
     let restore = NetworkRestore(&server);
+    fetch.release();
     wait_for_event(
         &mut rx,
         "a segment fetch failing against the offline server",
@@ -232,7 +238,9 @@ async fn transient_failure_does_not_kill_the_track(
 }
 
 #[kithara::fixture]
-async fn transient_sources(tone_mp3: &'static [u8]) -> (PrivateTestServer, Url, Url) {
+async fn transient_sources(
+    tone_mp3: &'static [u8],
+) -> (PrivateTestServer, Url, Url, SegmentGateHandle) {
     // A private server: the blip below takes every data route down, so sharing
     // one with parallel siblings would fail them instead.
     let server = PrivateTestServer::start().await;
@@ -248,6 +256,7 @@ async fn transient_sources(tone_mp3: &'static [u8]) -> (PrivateTestServer, Url, 
         .await
         .expect("create the ladder the blip lands on");
     let target_url = target.master_url();
+    let fetch = helper.register_segment_gate(target.token(), 0, 1);
     let fallback_fixture = helper.register_behavior(FixtureBehavior {
         content: Content::StaticBytes {
             bytes: Arc::new(tone_mp3.to_vec()),
@@ -257,5 +266,5 @@ async fn transient_sources(tone_mp3: &'static [u8]) -> (PrivateTestServer, Url, 
     });
     let fallback_url = fallback_fixture.child_url("fallback.mp3");
 
-    (server, target_url, fallback_url)
+    (server, target_url, fallback_url, fetch)
 }

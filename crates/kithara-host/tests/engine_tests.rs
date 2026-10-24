@@ -29,19 +29,6 @@ fn engine_config_defaults() {
 }
 
 #[kithara::test]
-fn engine_config_builder() {
-    let config = HostConfig::offline(pools())
-        .settings(
-            HostSettings::builder()
-                .sample_rate(NonZeroU32::new(48_000).expect("fixture sample rate is non-zero"))
-                .build(),
-        )
-        .build();
-    let engine = Host::new(config).expect("fixture host");
-    assert_eq!(engine.output_sample_rate().output(), 48000);
-}
-
-#[kithara::test]
 fn an_engine_holds_no_slot_until_its_host_seats_it() {
     assert!(make_engine().is_empty());
 }

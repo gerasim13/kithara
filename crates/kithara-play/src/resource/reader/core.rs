@@ -389,7 +389,7 @@ mod tests {
     };
     use kithara_signal::{AudioSpec, SegmentId, SessionFrame};
     use kithara_sync::SpeedCurve;
-    use kithara_test_fixtures::play_fixtures::half;
+    use kithara_test_fixtures::assets;
     use kithara_test_utils::{TestTempDir, kithara};
     use kithara_warp::{StretchKind, WarpConfig};
     use num_traits::ToPrimitive;
@@ -405,8 +405,8 @@ mod tests {
     async fn a_direct_resource_decodes_to_the_end_without_the_play_dispatcher() {
         let dir = TestTempDir::new();
         let path = dir.path().join("direct.wav");
-        let spec = AudioSpec::new(2, crate::mock::SAMPLE_RATE);
-        crate::mock::write_pcm_wav(&path, &vec![0.5; 4096 * 2], spec).expect("float WAV");
+        std::fs::write(&path, assets::fixed_constant_wav_cd_half_4096().bytes())
+            .expect("float WAV");
         let cancel = CancelToken::root();
         cancel.cancel();
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).cancel(cancel).build());
@@ -767,13 +767,10 @@ mod tests {
     async fn warped_player_resource(
         speed: f32,
         src: &str,
-        samples: &[f32],
+        dir: TestTempDir,
     ) -> (OpenedTrack, ResourceLane, Sender<LaneProtocol>, TestTempDir) {
-        let dir = TestTempDir::new();
         let path = dir.path().join(format!("{src}.wav"));
         let sample_rate = NonZeroU32::new(consts::SAMPLE_RATE).expect("static rate");
-        crate::mock::write_pcm_wav(&path, samples, AudioSpec::new(2, sample_rate))
-            .expect("float WAV fixture");
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
         let warp = WarpConfig::builder().speed(speed).build();
         let load: ResourceLoad<TestPools> = ResourceLoad::new(
@@ -926,8 +923,18 @@ mod tests {
         );
         let mut mixer = crate::mock::MixerRig::new(DeckMixerConfig::default(), shape, &pools)
             .expect("offline mixer");
+        let directory = TestTempDir::new();
+        crate::mock::write_pcm_wav(
+            &directory.path().join("rate.wav"),
+            &samples,
+            AudioSpec::new(
+                2,
+                NonZeroU32::new(consts::SAMPLE_RATE).expect("static rate"),
+            ),
+        )
+        .expect("engine-sized float WAV");
         let (opened, mut lane, mut control, _dir) =
-            warped_player_resource(1.25, "rate", &samples).await;
+            warped_player_resource(1.25, "rate", directory).await;
         assert_eq!(
             block_frames % 4,
             0,
@@ -1009,7 +1016,7 @@ mod tests {
     }
 
     #[kithara::test(native, tokio, flash(false))]
-    async fn a_loaded_track_takes_the_processor_rate(half: Vec<f32>) {
+    async fn a_loaded_track_takes_the_processor_rate() {
         let pools = pools();
         let effective_rate = if supports_playback_rate() { 1.5 } else { 1.0 };
         let shape = StreamShape {
@@ -1023,8 +1030,14 @@ mod tests {
             .expect("offline mixer");
         let first_slot = Slot::new(0);
         let next_slot = Slot::new(1);
+        let first_directory = TestTempDir::new();
+        std::fs::write(
+            first_directory.path().join("first.wav"),
+            assets::fixed_constant_wav_cd_half_44100().bytes(),
+        )
+        .expect("first fixed source");
         let (first, mut first_lane, mut first_control, _first_dir) =
-            warped_player_resource(1.0, "first", &half).await;
+            warped_player_resource(1.0, "first", first_directory).await;
         mixer
             .send(
                 When::Next,
@@ -1088,8 +1101,14 @@ mod tests {
             assert!(notifications.is_empty());
         }
 
+        let next_directory = TestTempDir::new();
+        std::fs::write(
+            next_directory.path().join("next.wav"),
+            assets::fixed_constant_wav_cd_half_44100().bytes(),
+        )
+        .expect("next fixed source");
         let (next, mut next_lane, _next_control, _next_dir) =
-            warped_player_resource(effective_rate, "next", &half).await;
+            warped_player_resource(effective_rate, "next", next_directory).await;
         mixer
             .send(
                 When::Next,
@@ -1332,7 +1351,7 @@ mod tests {
     }
 
     #[kithara::test(native, tokio, flash(false))]
-    async fn seek_withdraws_the_resident_warp_context(half: Vec<f32>) {
+    async fn seek_withdraws_the_resident_warp_context() {
         let shape = StreamShape::new(
             NonZeroU32::MIN,
             NonZeroU32::new(consts::SAMPLE_RATE).expect("static sample rate"),
@@ -1340,8 +1359,14 @@ mod tests {
         let mut mixer = crate::mock::MixerRig::new(DeckMixerConfig::default(), shape, &pools())
             .expect("offline mixer");
         let slot = Slot::new(0);
+        let directory = TestTempDir::new();
+        std::fs::write(
+            directory.path().join("seek.wav"),
+            assets::fixed_constant_wav_cd_half_1().bytes(),
+        )
+        .expect("one-frame fixed source");
         let (opened, mut lane, _control, _dir) =
-            warped_player_resource(1.0, "seek", &half[..2]).await;
+            warped_player_resource(1.0, "seek", directory).await;
         crate::mock::preload_lane(&mut lane)
             .await
             .expect("preloaded lane");

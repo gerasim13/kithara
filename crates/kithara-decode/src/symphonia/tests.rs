@@ -1065,24 +1065,10 @@ mod wav {
         const FRAMES: usize = 1_152 * 3 + 17;
         const STRIDE: u16 = CHANNELS * 8;
         const HEADER_BYTES: usize = 44;
-        let data_bytes = u32::try_from(FRAMES * usize::from(STRIDE)).expect("WAV byte extent");
-        let mut wav = b"RIFF".to_vec();
-        wav.extend_from_slice(&(36 + data_bytes).to_le_bytes());
-        wav.extend_from_slice(b"WAVEfmt ");
-        wav.extend_from_slice(&16_u32.to_le_bytes());
-        wav.extend_from_slice(&3_u16.to_le_bytes());
-        wav.extend_from_slice(&CHANNELS.to_le_bytes());
-        wav.extend_from_slice(&RATE.to_le_bytes());
-        wav.extend_from_slice(&(RATE * u32::from(STRIDE)).to_le_bytes());
-        wav.extend_from_slice(&STRIDE.to_le_bytes());
-        wav.extend_from_slice(&64_u16.to_le_bytes());
-        wav.extend_from_slice(b"data");
-        wav.extend_from_slice(&data_bytes.to_le_bytes());
-        assert_eq!(wav.len(), HEADER_BYTES);
-        for index in 0..FRAMES * usize::from(CHANNELS) {
-            let sample = f64::from(u16::try_from(index % 31).expect("bounded sample")) / 31.0;
-            wav.extend_from_slice(&sample.to_le_bytes());
-        }
+        let wav = kithara_test_fixtures::assets::decoder_float64_wav_default()
+            .bytes()
+            .to_vec();
+        assert_eq!(wav.len(), HEADER_BYTES + FRAMES * usize::from(STRIDE));
         assert!(1_152 * usize::from(STRIDE) > 2 * 64 * 1_024);
         for pending in [false, true] {
             let (mut actual, gate) = reader(&wav);

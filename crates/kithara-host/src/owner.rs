@@ -346,7 +346,7 @@ where
     fn publish_root(&self) {
         self.session
             .root_view
-            .publish_decks(self.decks.0.iter().map(|(id, _)| *id).collect());
+            .publish_decks(self.decks.0.iter().map(|(id, _)| *id));
         self.session.publish_root();
     }
 }
@@ -968,7 +968,7 @@ impl<S: 'static, D: ?Sized + HostedDeck<S>> Drop for HostCore<S, D> {
                             )
                             .await;
                         }
-                        root_view.publish_decks(Box::default());
+                        root_view.publish_decks(std::iter::empty());
                         drop(dispatcher_task);
                         drop(context);
                         drop(channel);

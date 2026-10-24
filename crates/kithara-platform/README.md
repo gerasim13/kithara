@@ -48,6 +48,7 @@ time::sleep(time::Duration::from_millis(10)).await;
 - `loom` - opt-in native concurrency backend used only by `#[kithara::test(loom)]`; composes independently with `flash`.
 - `signal` — forwards `tokio::signal`.
 - `tokio-net` — enables native `tokio::net` and async I/O extension traits.
+- `tokio-process` - enables native `tokio::process::Command` for build-time media preparation.
 - `tokio-rt-multi-thread` — forwards Tokio's multi-thread runtime feature.
 
 ## Integration

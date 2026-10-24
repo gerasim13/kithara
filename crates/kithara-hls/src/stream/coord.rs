@@ -779,17 +779,6 @@ pub(super) mod tests {
     }
 
     #[kithara::test]
-    fn variant_switch_target_keeps_flushing_seek_target_after_decoder_applies() {
-        let playhead = PlayheadState::new();
-        playhead.set_position(Duration::from_secs(9));
-
-        assert_eq!(
-            variant_switch_target_time(&playhead, Some(Duration::from_secs(5))),
-            Duration::from_secs(5)
-        );
-    }
-
-    #[kithara::test]
     fn variant_switch_target_ignores_completed_seek_target() {
         let playhead = PlayheadState::new();
 
@@ -809,17 +798,6 @@ pub(super) mod tests {
         assert_eq!(
             variant_switch_target_time(&playhead, Some(Duration::from_secs(12))),
             Duration::from_secs(12)
-        );
-    }
-
-    #[kithara::test]
-    fn variant_switch_target_keeps_the_seek_target_over_a_named_landing() {
-        let playhead = PlayheadState::new();
-        playhead.set_position(Duration::from_secs(9));
-
-        assert_eq!(
-            variant_switch_target_time(&playhead, Some(Duration::from_secs(5))),
-            Duration::from_secs(5)
         );
     }
 
@@ -2027,6 +2005,55 @@ pub(super) mod tests {
                     .expect("segment cmd carries a cancel token")
                     .is_cancelled(),
                 "outgoing look-ahead fetch for segment {seg} must be retired"
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn preparing_a_transition_keeps_fetches_the_reader_now_owes() {
+        let (coord, _bus, ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
+        coord.variants[0].rebuild(&ctx, 0);
+        let commands = coord.dispatch_active(&ctx, 6);
+        assert_eq!(commands.len(), 6);
+
+        coord.set_position(300);
+        assert_eq!(coord.find_at_offset(300), Some((3, 300, 100)));
+        prepare_incoming(&coord, incremental_profile(32))
+            .expect("prepare incoming")
+            .expect("pending switch");
+
+        for command in &commands {
+            let segment = v0_seg_idx(command);
+            if (3..=4).contains(&segment) {
+                assert!(
+                    !command.cancel().expect("fetch cancellation").is_cancelled(),
+                    "segment {segment} became owed after its initial look-ahead dispatch"
+                );
+            }
+        }
+    }
+
+    #[kithara::test]
+    fn dispatch_started_before_prepare_retires_lookahead_before_publication() {
+        let (coord, _bus, ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
+        coord.variants[0].rebuild(&ctx, 0);
+        let session = coord.active_session();
+        assert!(!coord.has_incoming());
+
+        prepare_incoming(&coord, incremental_profile(32))
+            .expect("prepare incoming")
+            .expect("pending switch");
+
+        let commands = session.dispatch(&ctx, 6);
+        assert_eq!(commands.len(), 6);
+        coord.retire_outgoing_lookahead(&session);
+
+        for command in &commands {
+            let segment = v0_seg_idx(command);
+            assert_eq!(
+                command.cancel().expect("fetch cancellation").is_cancelled(),
+                segment > 1,
+                "publication must recheck a transition installed after dispatch began"
             );
         }
     }

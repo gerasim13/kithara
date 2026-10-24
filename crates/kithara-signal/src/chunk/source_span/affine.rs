@@ -16,7 +16,7 @@ pub(super) enum Offset {
 
 impl Offset {
     fn difference(first: Ratio, second: Ratio) -> Option<Self> {
-        let denominator = first.common(second)?;
+        let denominator = Ratio::common(first.denominator, second.denominator)?;
         let first = first.at(denominator)?;
         let second = second.at(denominator)?;
         if first >= second {

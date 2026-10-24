@@ -46,7 +46,12 @@ impl<N> RetryNet<N> {
         let max = self.retry_policy.max_retries;
         let mut attempt = 0;
         loop {
-            let error = match op().await {
+            let result = tokio::select! {
+                biased;
+                () = self.cancel.cancelled() => return Err(NetError::Cancelled),
+                result = op() => result,
+            };
+            let error = match result {
                 Ok(value) => return Ok(value),
                 Err(error) => error,
             };

@@ -80,10 +80,8 @@ pub(super) fn curve_speed(curve: &SpeedCurve, origin: f64, frame: u64) -> Result
         .to_f32()
         .map(f64::from)
         .ok_or(PlayError::Untimed),
-        SpeedCurve::Steps(steps) => steps
-            .iter()
-            .rev()
-            .find(|(at, _)| *at <= frame)
+        SpeedCurve::Steps(steps) => steps[..steps.partition_point(|(at, _)| *at <= frame)]
+            .last()
             .map(|(_, speed)| f64::from(*speed))
             .or_else(|| origin.to_f32().map(f64::from))
             .ok_or(PlayError::Untimed),
@@ -91,10 +89,8 @@ pub(super) fn curve_speed(curve: &SpeedCurve, origin: f64, frame: u64) -> Result
             .rate_at(frame.to_f64().ok_or(PlayError::Untimed)?)
             .ok_or(PlayError::Untimed),
         SpeedCurve::ApproachSteps(steps) => {
-            let &(start, approach) = steps
-                .iter()
-                .rev()
-                .find(|(at, _)| *at <= frame)
+            let &(start, approach) = steps[..steps.partition_point(|(at, _)| *at <= frame)]
+                .last()
                 .ok_or(PlayError::Untimed)?;
             approach
                 .rate_at((frame - start).to_f64().ok_or(PlayError::Untimed)?)
@@ -195,7 +191,7 @@ mod tests {
     use kithara_test_utils::kithara;
     use num_traits::ToPrimitive;
 
-    use super::{curve_area, curve_speed};
+    use super::{check_curve, curve_area, curve_speed};
     use crate::PlayError;
 
     fn curve_end(
@@ -467,6 +463,61 @@ mod tests {
             curve_end(&curve, 0.125, start, 1.75, Some(start + 1)).expect("one-frame EOF"),
             Some(start + 1)
         );
+    }
+
+    #[kithara::test]
+    #[case::steps(false)]
+    #[case::approaches(true)]
+    fn ordered_curves_keep_their_speed_on_both_sides_of_every_boundary(#[case] analytic: bool) {
+        let origin = 0.7_f64;
+        let mut curve = if analytic {
+            SpeedCurve::ApproachSteps(
+                (0..2_048_u64)
+                    .map(|index| {
+                        let initial = if index % 2 == 0 { 0.75 } else { 1.25 };
+                        (
+                            index * 4,
+                            ExponentialApproach::new(initial, 1.0, 220.5).expect("valid law"),
+                        )
+                    })
+                    .collect(),
+            )
+        } else {
+            SpeedCurve::Steps(
+                (0..2_048_u64)
+                    .map(|index| (index * 4 + 3, if index % 2 == 0 { 0.75 } else { 1.25 }))
+                    .collect(),
+            )
+        };
+        check_curve(&mut curve).expect("accepted ordered curve");
+        for frame in (0..8_196).chain([u64::MAX]) {
+            let expected = match &curve {
+                SpeedCurve::Steps(steps) => {
+                    steps.iter().rev().find(|(at, _)| *at <= frame).map_or_else(
+                        || f64::from(origin.to_f32().expect("finite origin")),
+                        |(_, speed)| f64::from(*speed),
+                    )
+                }
+                SpeedCurve::ApproachSteps(steps) => {
+                    let &(at, approach) = steps
+                        .iter()
+                        .rev()
+                        .find(|(at, _)| *at <= frame)
+                        .expect("curve begins at zero");
+                    approach
+                        .rate_at((frame - at).to_f64().expect("elapsed frame"))
+                        .expect("finite rate")
+                }
+                _ => unreachable!("constructed ordered curve"),
+            };
+            assert_eq!(
+                curve_speed(&curve, origin, frame)
+                    .expect("ordered projection")
+                    .to_bits(),
+                expected.to_bits(),
+                "frame {frame}"
+            );
+        }
     }
 
     #[kithara::test]

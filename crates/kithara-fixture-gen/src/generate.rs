@@ -53,14 +53,16 @@ fn resolve(defs: &[&'static AssetDef]) -> Vec<(String, String, &'static AssetDef
 /// refreshing a source without its dependents would leave the two disagreeing.
 /// Unknown selections are nonfatal because enabled families register different
 /// subsets. The small acyclic graph makes repeated dependency closure finite.
-fn refreshed(resolved: &[(String, String, &'static AssetDef)]) -> HashSet<String> {
-    let selection = store::Refresh::requested();
+fn refreshed(
+    resolved: &[(String, String, &'static AssetDef)],
+    selection: &store::Refresh,
+) -> HashSet<String> {
     let mut names: HashSet<String> = resolved
         .iter()
         .filter(|(name, _, def)| selection.selects(def.func, name))
         .map(|(name, _, _)| name.clone())
         .collect();
-    if let store::Refresh::Named(requested) = &selection {
+    if let store::Refresh::Named(requested) = selection {
         for requested in requested {
             if !resolved
                 .iter()
@@ -330,7 +332,11 @@ pub fn generate() {
     let root =
         store::root_from_env().unwrap_or_else(|error| panic!("kithara-test-fixtures: {error}"));
     let namespace = store::namespace(&root, fingerprint);
-    let unavailable = materialize(&namespace, &resolved, &refreshed(&resolved));
+    let unavailable = materialize(
+        &namespace,
+        &resolved,
+        &refreshed(&resolved, &store::Refresh::requested()),
+    );
     for (_, id, def) in resolved
         .iter()
         .filter(|(name, _, _)| !unavailable.contains_key(name))
@@ -354,4 +360,47 @@ pub fn generate() {
         codegen(&namespace, &resolved, &unavailable, target_arch == "wasm32"),
     )
     .unwrap_or_else(|error| panic!("kithara-test-fixtures: write assets.rs: {error}"));
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use kithara_test_utils::kithara;
+
+    use super::{AssetDef, refreshed, resolve, store};
+
+    #[kithara::test]
+    fn refreshing_a_whole_track_refreshes_its_independent_reference() {
+        let definitions = inventory::iter::<AssetDef>
+            .into_iter()
+            .filter(|definition| {
+                matches!(
+                    definition.accessor_name().as_str(),
+                    "drain_tone_default"
+                        | "reference_drain_tone_default"
+                        | "source_pcm_drain_tone_default"
+                        | "analysis_drain_tone_default"
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(definitions.len(), 4);
+        let resolved = resolve(&definitions);
+        let selected = store::Refresh::Named(vec!["drain_tone_default".to_owned()]);
+        let rebuilt = refreshed(&resolved, &selected);
+        assert_eq!(rebuilt.len(), 4);
+        assert!(rebuilt.contains("drain_tone_default"));
+        assert!(rebuilt.contains("reference_drain_tone_default"));
+        assert!(rebuilt.contains("source_pcm_drain_tone_default"));
+        assert!(rebuilt.contains("analysis_drain_tone_default"));
+        let native = store::Refresh::Named(vec!["source_pcm_drain_tone_default".to_owned()]);
+        assert_eq!(
+            refreshed(&resolved, &native),
+            HashSet::from([
+                "source_pcm_drain_tone_default".to_owned(),
+                "analysis_drain_tone_default".to_owned(),
+            ])
+        );
+        assert!(refreshed(&resolved, &store::Refresh::Nothing).is_empty());
+    }
 }

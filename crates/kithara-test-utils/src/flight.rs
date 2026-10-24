@@ -184,7 +184,10 @@ where
         };
         let at_ns = self.started.elapsed().as_nanos();
         let thread = std::thread::current();
-        let mut text = EventText::default();
+        let mut text = EventText {
+            line: String::with_capacity(consts::MAX_EVENT_BYTES + '\u{2026}'.len_utf8()),
+            ..EventText::default()
+        };
         let _ = write!(
             text,
             "{level} {target}: thread={id:?} thread_name={name:?}",
@@ -248,7 +251,7 @@ impl EventText {
 
     fn finish(mut self) -> (String, u64) {
         if self.truncated {
-            self.line.push('…');
+            self.line.push('\u{2026}');
         }
         (self.line, self.key.finish())
     }
@@ -310,7 +313,7 @@ fn clamp(mut text: String) -> String {
         end -= 1;
     }
     text.truncate(end);
-    text.push('…');
+    text.push('\u{2026}');
     text.into_boxed_str().into_string()
 }
 
@@ -578,7 +581,7 @@ mod tests {
 
         assert_eq!(entries.len(), 2, "{entries:?}");
         assert!(entries.iter().all(|line| {
-            line.len() <= MAX_EVENT_BYTES + '…'.len_utf8() && line.ends_with('…')
+            line.len() <= MAX_EVENT_BYTES + '\u{2026}'.len_utf8() && line.ends_with('\u{2026}')
         }));
         assert_eq!(
             without_timestamps(&entries[0]),
@@ -863,9 +866,6 @@ mod tests {
         );
     }
 
-    /// Every DEBUG event is recorded, so the recorder sits on hot control
-    /// paths: a field's `Debug` runs once, not once for the line and again
-    /// for the fold key.
     #[kithara::test]
     fn an_event_field_is_formatted_once() {
         struct Counted<'a>(&'a Cell<usize>);
@@ -896,6 +896,27 @@ mod tests {
     }
 
     #[kithara::test]
+    fn fields_differing_after_the_retained_line_do_not_fold() {
+        let prefix = "x".repeat(MAX_EVENT_BYTES * 2);
+        let _guard = with_recorder(|| {
+            for ending in ["left", "right"] {
+                let payload = format!("{prefix}{ending}");
+                debug!(target: "kithara_flight_test", payload = payload.as_str(), "full field identity");
+            }
+        });
+
+        let events: Vec<_> = tail()
+            .into_iter()
+            .filter(|line| line.contains("full field identity"))
+            .collect();
+        assert_eq!(events.len(), 2, "{events:?}");
+        assert!(
+            events.iter().all(|line| !line.contains("(x2)")),
+            "{events:?}"
+        );
+    }
+
+    #[kithara::test]
     fn oversized_event_is_truncated_at_a_char_boundary() {
         let payload = "\u{1f980}".repeat(MAX_EVENT_BYTES);
         let _guard = with_recorder(|| {
@@ -907,7 +928,7 @@ mod tests {
             .rev()
             .find(|line| line.contains("boundary probe"))
             .expect("truncated event must still be recorded");
-        assert!(line.len() <= MAX_EVENT_BYTES + '…'.len_utf8());
-        assert!(line.ends_with('…'), "{line}");
+        assert!(line.len() <= MAX_EVENT_BYTES + '\u{2026}'.len_utf8());
+        assert!(line.ends_with('\u{2026}'), "{line}");
     }
 }

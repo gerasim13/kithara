@@ -404,3 +404,87 @@ fn an_approach_crosses_a_region_boundary_with_its_actual_source_origin() {
             .expect("mapped quantum consumed");
     }
 }
+
+#[kithara::test]
+fn varispeed_pcm_matches_scalar_geometry_across_spans() {
+    let (mut renderer, mut meta) = renderer();
+    meta.spec = AudioSpec::new(2, NonZeroU32::new(8_000).expect("fixture sample rate"));
+    renderer.prepare(meta.spec);
+    let tone = kithara_test_fixtures::unit_fixtures::warp_native_tone();
+    let mut resident = residency::SourceResidency::prepare(&renderer.pools, None, 32, 1024, 0, 2)
+        .expect("reference source window");
+    resident
+        .append(
+            AudioChunkInfo {
+                frames: 1024,
+                ..meta
+            },
+            &tone[..2048],
+        )
+        .expect("fixture PCM residency");
+    renderer.residency = Some(resident);
+    renderer.scratch = Some(
+        renderer
+            .pools
+            .get_with_len::<f32>(254)
+            .expect("127 stereo output frames"),
+    );
+    let denominator = NonZeroU128::new(2).expect("fractional phase");
+    let spans = [
+        kithara_signal::SourceSpan::try_from((129, 1, denominator, meta.spec.sample_rate, 127))
+            .expect("half speed with fractional origin"),
+        kithara_signal::SourceSpan::try_from((257, 3, denominator, meta.spec.sample_rate, 127))
+            .expect("downsampled fractional origin"),
+        kithara_signal::SourceSpan::try_from((
+            8192,
+            64,
+            1,
+            NonZeroU128::new(128).expect("ramp clock"),
+            meta.spec.sample_rate,
+            127,
+        ))
+        .expect("ramp crossing unity speed"),
+        kithara_signal::SourceSpan::approaching(
+            257,
+            NonZeroU128::new(4).expect("approach origin"),
+            ExponentialApproach::new(0.5, 1.5, 24.0).expect("approach crossing unity"),
+            0,
+            meta.spec.sample_rate,
+            127,
+        )
+        .expect("exact approach mapping"),
+    ];
+    for frames in [0, 1, 7, 127] {
+        for original in spans {
+            let span = original
+                .for_output_range(0..frames)
+                .expect("retained output extent");
+            let mut expected = vec![0.0; usize::try_from(frames).expect("frame extent") * 2];
+            let resident = renderer.residency.as_ref().expect("resident fixture");
+            for (frame, output) in expected.as_chunks_mut::<2>().0.iter_mut().enumerate() {
+                let frame = u64::try_from(frame).expect("scalar frame");
+                super::super::super::source_sample::source_frame(
+                    resident,
+                    span.source_ratio_at(frame)
+                        .expect("scalar source coordinate"),
+                    mapping::span_speed(span, frame).expect("scalar source speed"),
+                    None,
+                    output,
+                )
+                .expect("scalar PCM sample");
+            }
+            renderer
+                .render_varispeed(span)
+                .expect("mapped varispeed PCM");
+            let actual = renderer.scratch.as_deref().expect("rendered PCM");
+            assert_eq!(actual.len(), expected.len());
+            for (sample, (&actual, expected)) in actual.iter().zip(expected).enumerate() {
+                assert_eq!(
+                    actual.to_bits(),
+                    expected.to_bits(),
+                    "sample {sample}, frames {frames}, span {span:?}"
+                );
+            }
+        }
+    }
+}

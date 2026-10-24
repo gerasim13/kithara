@@ -310,6 +310,8 @@ mod tests {
     #[case::open_ended(50, None, "bytes=50-")]
     #[case::single_byte(10, Some(10), "bytes=10-10")]
     #[case::zero_length(0, Some(0), "bytes=0-0")]
+    #[case::start_greater_than_end(20, Some(10), "bytes=20-10")]
+    #[case::max_values(u64::MAX, Some(u64::MAX), &format!("bytes={}-{}", u64::MAX, u64::MAX))]
     async fn test_range_spec_to_header_value(
         #[case] start: u64,
         #[case] end: Option<u64>,
@@ -429,19 +431,6 @@ mod tests {
         assert!(debug_output.contains("max_retries: 3"));
         assert!(debug_output.contains("base_delay"));
         assert!(debug_output.contains("max_delay"));
-    }
-
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
-    #[case::start_equals_end(10, Some(10), "bytes=10-10")]
-    #[case::start_greater_than_end(20, Some(10), "bytes=20-10")]
-    #[case::max_values(u64::MAX, Some(u64::MAX), &format!("bytes={}-{}", u64::MAX, u64::MAX))]
-    async fn test_range_spec_edge_cases(
-        #[case] start: u64,
-        #[case] end: Option<u64>,
-        #[case] expected_header: &str,
-    ) {
-        let range = RangeSpec::new(start, end);
-        assert_eq!(range.to_string(), expected_header);
     }
 
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
