@@ -1,34 +1,8 @@
 use std::sync::atomic::Ordering;
 
-use kithara_platform::{sync::Arc, time::Instant};
+use kithara_platform::time::Instant;
 
 use super::{AbrState, AbrTicket, PendingAbrDecision, pending::pending_decision};
-
-/// Publication authority retained by the owner of an [`AbrState`].
-///
-/// Consumers receive [`crate::AbrHandle`] for observation and control. Only
-/// the source owner carries this capability into its exact transition commit.
-#[derive(Clone)]
-pub struct AbrPublisher {
-    state: Arc<AbrState>,
-}
-
-impl AbrPublisher {
-    pub(super) const fn new(state: Arc<AbrState>) -> Self {
-        Self { state }
-    }
-
-    delegate::delegate! {
-        to self.state {
-            /// Drop the pending request only when `ticket` still identifies it.
-            #[must_use]
-            pub fn abort_pending(&self, ticket: AbrTicket) -> bool;
-            /// Publish only the exact pending request represented by `claim`.
-            #[must_use]
-            pub fn commit_pending(&self, claim: PendingAbrDecision, now: Instant) -> bool;
-        }
-    }
-}
 
 impl AbrState {
     /// Drop the pending request only when `ticket` still identifies it.
@@ -76,11 +50,5 @@ impl AbrState {
         self.record_switch(now);
         drop(state);
         true
-    }
-
-    /// Mint the publication capability retained by this state's source owner.
-    #[must_use]
-    pub fn publisher(self: &Arc<Self>) -> AbrPublisher {
-        AbrPublisher::new(Arc::clone(self))
     }
 }

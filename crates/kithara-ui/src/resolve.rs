@@ -200,47 +200,10 @@ impl Loader<'_> {
             ControlNode::Row { children, .. }
             | ControlNode::Column { children, .. }
             | ControlNode::Stage { children, .. } => {
-                for child in children {
-                    self.walk(origin, module, child, depth)?;
-                }
-                Ok(())
+                self.walk_children(origin, module, children, depth)
             }
-            ControlNode::Slot {
-                id,
-                default,
-                from,
-                each,
-                select,
-                ..
-            } => {
-                if id.0 == CONTENT {
-                    self.set.holders.insert(origin.clone());
-                }
-                match (from, each, select) {
-                    (Some(from), each, select) if each.is_some() != select.is_some() => {
-                        let address = collection_address(module, from);
-                        self.collection(origin, address, each.as_ref(), depth)?;
-                    }
-                    (None, None, None) => {}
-                    _ => {
-                        return Err(UiDocError::CollectionShape {
-                            origin: origin.clone(),
-                            slot: id.0.clone(),
-                        });
-                    }
-                }
-                for child in default {
-                    self.walk(origin, module, child, depth)?;
-                }
-                Ok(())
-            }
-            ControlNode::Adaptive { base, steps, .. } => {
-                self.walk(origin, module, base, depth)?;
-                for step in steps {
-                    self.walk(origin, module, &step.node, depth)?;
-                }
-                Ok(())
-            }
+            ControlNode::Slot { .. } => self.walk_slot(origin, module, node, depth),
+            ControlNode::Adaptive { .. } => self.walk_adaptive(origin, module, node, depth),
             ControlNode::Object { child, .. }
             | ControlNode::Optional { child, .. }
             | ControlNode::Placed { child, .. }
@@ -248,27 +211,9 @@ impl Loader<'_> {
             | ControlNode::Reveal { child, .. }
             | ControlNode::Scroll { child, .. }
             | ControlNode::Modal { content: child, .. } => self.walk(origin, module, child, depth),
-            ControlNode::Popover {
-                anchor, content, ..
-            } => {
-                self.walk(origin, module, anchor, depth)?;
-                self.walk(origin, module, content, depth)
-            }
-            ControlNode::Include { source, .. } => {
-                let uri = self.load(Some(origin), source, depth + 1)?;
-                self.mount(&uri)
-            }
-            ControlNode::Shader { source, .. } => {
-                if self.set.shader(origin, source).is_none() {
-                    let loaded = load_source(self.resolver, Some(origin), source, self.limits)?;
-                    self.set
-                        .shaders
-                        .entry(origin.clone())
-                        .or_default()
-                        .insert(source.clone(), loaded);
-                }
-                Ok(())
-            }
+            ControlNode::Popover { .. } => self.walk_popover(origin, module, node, depth),
+            ControlNode::Include { source, .. } => self.walk_include(origin, source, depth),
+            ControlNode::Shader { source, .. } => self.walk_shader(origin, source),
             ControlNode::DeckSummary { .. }
             | ControlNode::Brand { .. }
             | ControlNode::Spacer { .. }
@@ -313,6 +258,112 @@ impl Loader<'_> {
             | ControlNode::VuVertical { .. }
             | ControlNode::Meter { .. } => Ok(()),
         }
+    }
+
+    fn walk_children(
+        &mut self,
+        origin: &SourceUri,
+        module: &str,
+        children: &[ControlNode],
+        depth: usize,
+    ) -> Result<(), UiDocError> {
+        for child in children {
+            self.walk(origin, module, child, depth)?;
+        }
+        Ok(())
+    }
+
+    fn walk_slot(
+        &mut self,
+        origin: &SourceUri,
+        module: &str,
+        node: &ControlNode,
+        depth: usize,
+    ) -> Result<(), UiDocError> {
+        let ControlNode::Slot {
+            id,
+            default,
+            from,
+            each,
+            select,
+            ..
+        } = node
+        else {
+            unreachable!("walk_slot is called only for a slot")
+        };
+        if id.0 == CONTENT {
+            self.set.holders.insert(origin.clone());
+        }
+        match (from, each, select) {
+            (Some(from), each, select) if each.is_some() != select.is_some() => {
+                let address = collection_address(module, from);
+                self.collection(origin, address, each.as_ref(), depth)?;
+            }
+            (None, None, None) => {}
+            _ => {
+                return Err(UiDocError::CollectionShape {
+                    origin: origin.clone(),
+                    slot: id.0.clone(),
+                });
+            }
+        }
+        self.walk_children(origin, module, default, depth)
+    }
+
+    fn walk_adaptive(
+        &mut self,
+        origin: &SourceUri,
+        module: &str,
+        node: &ControlNode,
+        depth: usize,
+    ) -> Result<(), UiDocError> {
+        let ControlNode::Adaptive { base, steps, .. } = node else {
+            unreachable!("walk_adaptive is called only for an adaptive node")
+        };
+        self.walk(origin, module, base, depth)?;
+        for step in steps {
+            self.walk(origin, module, &step.node, depth)?;
+        }
+        Ok(())
+    }
+
+    fn walk_popover(
+        &mut self,
+        origin: &SourceUri,
+        module: &str,
+        node: &ControlNode,
+        depth: usize,
+    ) -> Result<(), UiDocError> {
+        let ControlNode::Popover {
+            anchor, content, ..
+        } = node
+        else {
+            unreachable!("walk_popover is called only for a popover")
+        };
+        self.walk(origin, module, anchor, depth)?;
+        self.walk(origin, module, content, depth)
+    }
+
+    fn walk_include(
+        &mut self,
+        origin: &SourceUri,
+        source: &str,
+        depth: usize,
+    ) -> Result<(), UiDocError> {
+        let uri = self.load(Some(origin), source, depth + 1)?;
+        self.mount(&uri)
+    }
+
+    fn walk_shader(&mut self, origin: &SourceUri, source: &str) -> Result<(), UiDocError> {
+        if self.set.shader(origin, source).is_none() {
+            let loaded = load_source(self.resolver, Some(origin), source, self.limits)?;
+            self.set
+                .shaders
+                .entry(origin.clone())
+                .or_default()
+                .insert(source.to_owned(), loaded);
+        }
+        Ok(())
     }
 }
 
@@ -471,7 +522,19 @@ mod tests {
     }
 
     #[kithara::test]
-    fn loads_nested_includes_two_levels_deep() {
+    #[case::row(r#"Row(children: [Include(id: "c", source: "c.kmodule.ron")])"#)]
+    #[case::slot(r#"Slot(id: "body", default: [Include(id: "c", source: "c.kmodule.ron")])"#)]
+    #[case::adaptive(
+        r#"Adaptive(id: "body", measure: Width, size: (w: Fill, h: Fill),
+        base: Text(id: "empty"),
+        steps: [(from: 400.0, node: Include(id: "c", source: "c.kmodule.ron"))])"#
+    )]
+    #[case::popover(
+        r#"Popover(id: "body", open: Model(id: "menu.open"),
+        anchor: Text(id: "anchor"),
+        content: Include(id: "c", source: "c.kmodule.ron"))"#
+    )]
+    fn loads_nested_includes_two_levels_deep(#[case] body: &str) {
         let mut resolver = MemResolver::default();
         resolver.insert(
             "a.kmodule.ron",
@@ -480,19 +543,17 @@ mod tests {
                 r#"Row(children: [Include(id: "b", source: "sub/b.kmodule.ron")])"#,
             ),
         );
-        resolver.insert(
-            "sub/b.kmodule.ron",
-            &module(
-                "b",
-                r#"Row(children: [Include(id: "c", source: "c.kmodule.ron")])"#,
-            ),
-        );
+        resolver.insert("sub/b.kmodule.ron", &module("b", body));
         resolver.insert("sub/c.kmodule.ron", &module("c", r#"Text(id: "x")"#));
 
         let (uri, set) =
             load_module_graph(&resolver, None, "a.kmodule.ron", &Limits::default()).unwrap();
         assert_eq!(uri.0, "a.kmodule.ron");
         assert_eq!(set.defs.len(), 3);
+        assert!(
+            set.defs
+                .contains_key(&SourceUri("sub/c.kmodule.ron".to_owned()))
+        );
     }
 
     #[kithara::test]

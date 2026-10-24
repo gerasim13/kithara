@@ -5,13 +5,14 @@ use kithara_ui::{
     error::UiDocError,
     expand::{Binding, BindingKind, ControlSpec, ExpandedNode, MeasureSpec},
     layout::FrameCorners,
-    module::{ChromeStyle, IconName, PopoverAt},
+    module::{ChromeStyle, GlyphStyle, IconName, PopoverAt, TextAlign, TextStyle},
     registry::{EndpointCategory, EndpointDesc, ValueKind},
     render::{
         ControlAction, Published, ReadValue, Reads,
         document::{Clock, Ctx},
     },
     size::{Dim, SizeSpec},
+    skin::{ColorRole, FontFamily, FontWeight},
     source::{Limits, MemResolver, UiConfig},
     view::{self, ViewState},
 };
@@ -1320,7 +1321,8 @@ fn an_adaptive_measure_must_read_a_scalar() {
             Optional(id: "eq", hidden: Model(id: "ui.block.hidden"),
                 child: Knob(id: "high")),
         ]))"#,
-    "eq"
+    "eq",
+    "root/[1]/Optional(eq)"
 )]
 #[case::block_and_control(
     r#"(schema: "kithara.module", version: 1, id: "mixer",
@@ -1329,7 +1331,8 @@ fn an_adaptive_measure_must_read_a_scalar() {
                 child: Knob(id: "high")),
             Knob(id: "low"),
         ]))"#,
-    "low"
+    "low",
+    "root/[1]/Control(low)"
 )]
 #[case::controls_under_a_block(
     r#"(schema: "kithara.module", version: 1, id: "mixer",
@@ -1340,15 +1343,123 @@ fn an_adaptive_measure_must_read_a_scalar() {
                     Knob(id: "low"),
                 ])),
         ]))"#,
-    "low"
+    "low",
+    "root/[0]/Optional(eq)/[1]/Control(low)"
 )]
-fn a_duplicate_id_in_a_module_is_rejected(#[case] module: &str, #[case] rejected: &str) {
-    let resolver = block_resolver(module);
+#[case::row(
+    r#"(schema: "kithara.module", version: 1, id: "mixer",
+        root: Row(id: "bar", children: [Knob(id: "low"), Knob(id: "low")]))"#,
+    "low",
+    "root/Group(bar)/[1]/Control(low)"
+)]
+#[case::column(
+    r#"(schema: "kithara.module", version: 1, id: "mixer",
+        root: Column(id: "bar", children: [Knob(id: "low"), Knob(id: "low")]))"#,
+    "low",
+    "root/Group(bar)/[1]/Control(low)"
+)]
+#[case::reveal(
+    r#"(schema: "kithara.module", version: 1, id: "mixer",
+        root: Row(id: "bar", measure: Width, size: (w: Fill, h: Fixed(40.0)), children: [
+            Knob(id: "low"), Reveal(from: 100.0, child: Knob(id: "low")),
+        ]))"#,
+    "low",
+    "root/Group(bar)/[1]/Reveal/Control(low)"
+)]
+#[case::popover_anchor(
+    r#"(schema: "kithara.module", version: 1, id: "mixer",
+        root: Popover(id: "low", open: Model(id: "ui.menu.open"),
+            anchor: Knob(id: "low"), content: Knob(id: "high")))"#,
+    "low",
+    "root/Popover(low)/Control(low)"
+)]
+#[case::popover_content(
+    r#"(schema: "kithara.module", version: 1, id: "mixer",
+        root: Popover(id: "low", open: Model(id: "ui.menu.open"),
+            anchor: Knob(id: "high"), content: Knob(id: "low")))"#,
+    "low",
+    "root/Popover(low)/Control(low)"
+)]
+#[case::modal(
+    r#"(schema: "kithara.module", version: 1, id: "mixer",
+        root: Modal(id: "low", open: Model(id: "ui.menu.open"),
+            close: Command(id: "ui.menu.toggle"), content: Knob(id: "low")))"#,
+    "low",
+    "root/Modal(low)/Control(low)"
+)]
+#[case::pressable(
+    r#"(schema: "kithara.module", version: 1, id: "mixer",
+        root: Pressable(id: "low", press: Command(id: "ui.menu.toggle"),
+            child: Knob(id: "low")))"#,
+    "low",
+    "root/Pressable(low)/Control(low)"
+)]
+#[case::scroll(
+    r#"(schema: "kithara.module", version: 1, id: "mixer",
+        root: Scroll(id: "low", child: Knob(id: "low")))"#,
+    "low",
+    "root/Scroll(low)/Control(low)"
+)]
+#[case::object(
+    r#"(schema: "kithara.module", version: 1, id: "mixer",
+        root: Object(id: "low", child: Knob(id: "low")))"#,
+    "low",
+    "root/Object(low)/Control(low)"
+)]
+#[case::slot_default(
+    r#"(schema: "kithara.module", version: 1, id: "mixer",
+        root: Slot(id: "bank", default: [Knob(id: "low"), Knob(id: "low")]))"#,
+    "low",
+    "root/Slot(bank)/[1]/Control(low)"
+)]
+#[case::stage(
+    r#"(schema: "kithara.module", version: 1, id: "mixer",
+        root: Stage(id: "scene", children: [Knob(id: "low"), Knob(id: "low")]))"#,
+    "low",
+    "root/Stage(scene)/[1]/Control(low)"
+)]
+#[case::adaptive_step(
+    r#"(schema: "kithara.module", version: 1, id: "mixer",
+        root: Adaptive(id: "bank", measure: Read(Model(id: "ui.measure")),
+            base: Knob(id: "base"), steps: [(from: 1.0, node: Row(children: [
+                Knob(id: "low"), Knob(id: "low"),
+            ]))]))"#,
+    "low",
+    "root/Adaptive(bank)/steps[0]/[1]/Control(low)"
+)]
+#[case::sibling_after_adaptive(
+    r#"(schema: "kithara.module", version: 1, id: "mixer",
+        root: Row(children: [
+            Adaptive(id: "bank", measure: Read(Model(id: "ui.measure")),
+                base: Knob(id: "low"), steps: [(from: 1.0, node: Knob(id: "high"))]),
+            Knob(id: "high"),
+        ]))"#,
+    "high",
+    "root/[1]/Control(high)"
+)]
+#[case::include_id_taken_by_control(
+    r#"(schema: "kithara.module", version: 1, id: "mixer",
+        root: Row(children: [
+            Knob(id: "low"), Include(id: "low", source: "included.kmodule.ron"),
+        ]))"#,
+    "low",
+    "root/[1]/Include(low)"
+)]
+fn a_duplicate_id_in_a_module_is_rejected(
+    #[case] module: &str,
+    #[case] rejected: &str,
+    #[case] at: &str,
+) {
+    let mut resolver = block_resolver(module);
+    resolver.insert(
+        "included.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "included", root: Knob(id: "body"))"#,
+    );
 
     let error = compile_blocks(&resolver, "blocks.klayout.ron").unwrap_err();
 
     assert!(
-        matches!(&error, UiDocError::DuplicateId { id, .. } if id == rejected),
+        matches!(&error, UiDocError::DuplicateId { id, path, .. } if id == rejected && path == at),
         "{error:?}"
     );
 }
@@ -1973,6 +2084,164 @@ fn one_template_carries_a_different_glyph_per_include() {
     .unwrap();
 
     assert_eq!(glyph_icons(&ui), [IconName::Monitor, IconName::Disc]);
+}
+
+#[kithara::test]
+#[case::glyph(
+    r#"Glyph(id: "control", icon: "$icon", active_icon: "$active_icon", style: MenuSmall,
+        color: "$color", active_color: "$active_color", active: Model(id: "$active"))"#,
+    r#""icon", "active_icon", "color", "active_color", "active""#,
+    r#""icon": "Monitor", "active_icon": "Disc", "color": "Muted",
+        "active_color": "Accent", "active": "ui.prefs.mono""#,
+    |ui: &CompiledUi, spec: &ControlSpec| {
+        let ControlSpec::Glyph { icon, active_icon, style, color, active_color, active } = spec else {
+            panic!("expected a glyph, got {spec:?}");
+        };
+        assert_eq!(
+            (*icon, *active_icon, *style, *color, *active_color),
+            (IconName::Monitor, Some(IconName::Disc), GlyphStyle::MenuSmall,
+                Some(ColorRole::Muted), Some(ColorRole::Accent))
+        );
+        let active = active.as_ref().expect("the glyph has its active binding");
+        assert_eq!(active.kind, BindingKind::Model);
+        assert_eq!(ui.resolve(active.key), "ui.prefs.mono");
+    }
+)]
+#[case::text(
+    r#"Text(id: "control", label: "$label", style: Caption, align: End,
+        color: Muted, active_color: Success, font: "$font", weight: "$weight",
+        active: Model(id: "$active"))"#,
+    r#""label", "font", "weight", "active""#,
+    r#""label": "INCLUDED TEXT", "font": "Mono", "weight": "Bold",
+        "active": "ui.prefs.mono""#,
+    |ui: &CompiledUi, spec: &ControlSpec| {
+        let ControlSpec::Text { style, label, color, active_color, active, align, font, weight } = spec else {
+            panic!("expected text, got {spec:?}");
+        };
+        assert_eq!(label.map(|label| ui.resolve(label)), Some("INCLUDED TEXT"));
+        assert_eq!(
+            (*style, *align, *color, *active_color, *font, *weight),
+            (TextStyle::Caption, TextAlign::End, Some(ColorRole::Muted),
+                Some(ColorRole::Success), Some(FontFamily::Mono), Some(FontWeight::Bold))
+        );
+        let active = active.as_ref().expect("the text has its active binding");
+        assert_eq!(active.kind, BindingKind::Model);
+        assert_eq!(ui.resolve(active.key), "ui.prefs.mono");
+    }
+)]
+#[case::tree(
+    r#"Tree(id: "control", query: Model(id: "$query"),
+        write_query: Model(id: "$query"), toggle: Command(id: "$toggle"))"#,
+    r#""query", "toggle""#,
+    r#""query": "library.query", "toggle": "library.toggle""#,
+    |ui: &CompiledUi, spec: &ControlSpec| {
+        let ControlSpec::Tree { query, search, toggle } = spec else {
+            panic!("expected a tree, got {spec:?}");
+        };
+        let query = query.as_ref().expect("the tree has its query binding");
+        assert_eq!(query.kind, BindingKind::Model);
+        assert_eq!(ui.resolve(query.key), "library.query");
+        assert!(*search);
+        assert!(*toggle);
+    }
+)]
+#[case::segmented(
+    r#"Segmented(id: "control", items: ["$first", "$second"])"#,
+    r#""first", "second""#,
+    r#""first": "FIRST", "second": "SECOND""#,
+    |ui: &CompiledUi, spec: &ControlSpec| {
+        let ControlSpec::Segmented { items } = spec else {
+            panic!("expected a segmented control, got {spec:?}");
+        };
+        assert_eq!(
+            items.iter().map(|item| ui.resolve(*item)).collect::<Vec<_>>(),
+            ["FIRST", "SECOND"]
+        );
+    }
+)]
+#[case::select(
+    r#"Select(id: "control", label: "$label")"#,
+    r#""label""#,
+    r#""label": "CHOOSE AN ITEM""#,
+    |ui: &CompiledUi, spec: &ControlSpec| {
+        let ControlSpec::Select { label } = spec else {
+            panic!("expected a select control, got {spec:?}");
+        };
+        assert_eq!(ui.resolve(*label), "CHOOSE AN ITEM");
+    }
+)]
+#[case::sprite(
+    r#"Sprite(id: "control", sheet: "$sheet", seconds: 2.5)"#,
+    r#""sheet""#,
+    r#""sheet": "included-sheet""#,
+    |ui: &CompiledUi, spec: &ControlSpec| {
+        let ControlSpec::Sprite { sheet, seconds } = spec else {
+            panic!("expected a sprite, got {spec:?}");
+        };
+        assert_eq!(ui.resolve(*sheet), "included-sheet");
+        assert_eq!(*seconds, 2.5);
+    }
+)]
+#[case::custom(
+    r#"Custom(id: "control", kind: "included-widget")"#,
+    "",
+    "",
+    |ui: &CompiledUi, spec: &ControlSpec| {
+        let ControlSpec::Custom { kind } = spec else {
+            panic!("expected a custom control, got {spec:?}");
+        };
+        assert_eq!(ui.resolve(*kind), "included-widget");
+    }
+)]
+fn a_control_compiles_the_fields_it_names(
+    #[case] node: &str,
+    #[case] parameters: &str,
+    #[case] arguments: &str,
+    #[case] check: fn(&CompiledUi, &ControlSpec),
+) {
+    let mut resolver = glyph_resolver(&format!(
+        r#"(schema: "kithara.module", version: 1, id: "row", parameters: [{parameters}],
+            root: {node})"#
+    ));
+    resolver.insert(
+        "menu.kmodule.ron",
+        &format!(
+            r#"(schema: "kithara.module", version: 1, id: "menu",
+                root: Include(id: "included", source: "row.kmodule.ron", with: {{{arguments}}}))"#
+        ),
+    );
+    let mut registry = kithara_ui::mock::player_registry();
+    registry.insert(
+        EndpointCategory::Model,
+        "library.query",
+        EndpointDesc::new(ValueKind::Text),
+    );
+    registry.insert(
+        EndpointCategory::Command,
+        "library.toggle",
+        EndpointDesc::new(ValueKind::Index),
+    );
+    let mut config = UiConfig::default();
+    config.custom_kinds.insert("included-widget".to_owned());
+
+    let ui = compile(
+        "menu.klayout.ron",
+        &resolver,
+        &registry,
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &config,
+        &view::EMPTY,
+    )
+    .unwrap();
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected a module root");
+    };
+    let ExpandedNode::Control { path, spec, .. } = &**root else {
+        panic!("expected an included control");
+    };
+    assert_eq!(ui.resolve(*path), "menu/included/control");
+    check(&ui, spec);
 }
 
 #[kithara::test]
@@ -2789,8 +3058,8 @@ fn a_tabs_refuses_an_initial_page_it_does_not_offer() {
     );
 
     assert!(
-        matches!(&error, UiDocError::UnknownPage { id, page, .. }
-            if id == "shown" && page == "three"),
+        matches!(&error, UiDocError::UnknownPage { id, page, path, .. }
+            if id == "shown" && page == "three" && path == "root/Split[1]/Tabs(shown)"),
         "{error}"
     );
 }
