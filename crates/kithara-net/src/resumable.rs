@@ -1,7 +1,5 @@
-use std::pin::Pin;
-
 use bytes::Bytes;
-use futures::{Stream, StreamExt, stream};
+use futures::{StreamExt, stream};
 use kithara_platform::{
     CancelToken,
     time::{Duration, sleep, timeout},
@@ -10,24 +8,13 @@ use kithara_platform::{
 use num_traits::{AsPrimitive, ToPrimitive};
 use url::Url;
 
-mod kithara {
-    pub(crate) use kithara_test_macros::flash;
-}
-
 use crate::{
-    ByteStream,
+    ByteStream, HttpBody,
     error::{NetError, Retryability},
     observe::Observer,
     range_response::representation_total,
     types::RetryPolicy,
 };
-
-/// A boxed body stream. Mirrors [`RawByteStream`](crate::traits) `Send` cfg:
-/// `Send` on native, unconstrained on wasm (browser futures are `!Send`).
-#[cfg(not(target_arch = "wasm32"))]
-type RawBody = Pin<Box<dyn Stream<Item = Result<Bytes, NetError>> + Send>>;
-#[cfg(target_arch = "wasm32")]
-type RawBody = Pin<Box<dyn Stream<Item = Result<Bytes, NetError>>>>;
 
 /// Outcome of a resume re-fetch: a fresh body plus how many leading bytes to
 /// DROP before yielding. `skip = 0` when the server honoured the range (`206`,
@@ -53,7 +40,7 @@ pub(crate) type Refetch =
 
 /// Per-stream state threaded through the `unfold`.
 struct State {
-    inner: ByteStream,
+    inner: Option<ByteStream>,
     cancel: CancelToken,
     stall: Duration,
     expected_len: Option<u64>,
@@ -93,6 +80,7 @@ impl State {
     /// (`Cancelled`, fatal status, decode), [`NetError::RetryExhausted`] when
     /// the budget is spent, or the re-establish failure.
     async fn resume(&mut self, cause: NetError) -> Result<(), NetError> {
+        drop(self.inner.take());
         if cause.retryability() == Retryability::Fatal {
             return Err(cause);
         }
@@ -160,7 +148,7 @@ impl State {
                 .body_resumed(self.resumes, self.consumed, resumed.skip == 0);
         }
         self.partial = resumed_partial;
-        self.inner = resumed.stream;
+        self.inner = Some(resumed.stream);
         self.to_skip = resumed.skip;
         Ok(())
     }
@@ -188,20 +176,16 @@ impl State {
     }
 }
 
-/// Await the next body chunk — a real socket read, so the fn is one
-/// `flash(io)` bracket: the virtual clock is paced to real time while the
-/// chunk is in flight, and the pace drops the moment the await resolves, so
-/// pauses between consumer pulls stay fully virtual. A stall maps to
-/// `Timeout` (transient) and cancellation to `Cancelled` (fatal), so every
-/// failure funnels through [`State::resume`]'s single classification.
-#[kithara::flash(io)]
+/// Bound each chunk's inactivity and route transient failure through the resume owner.
 async fn next_chunk(st: &mut State) -> Option<Result<Bytes, NetError>> {
     if st.body_complete() {
         return None;
     }
     tokio::select! {
         biased;
-        res = timeout(st.stall, st.inner.next()) => {
+        res = timeout(st.stall, st.inner.as_mut()
+            .expect("the poll loop installs each response before reading it")
+            .next()) => {
             match res {
                 Ok(None) if st.body_incomplete_at_eof() => {
                     Some(Err(NetError::Network(
@@ -238,7 +222,7 @@ pub(crate) fn resumable_body(
     policy: RetryPolicy,
     cancel: CancelToken,
     observer: Option<Observer>,
-) -> RawBody {
+) -> HttpBody {
     let expected_len = content_length(&first);
     let partial = first.is_partial();
     let response_total = representation_total(partial, &first.headers);
@@ -251,7 +235,7 @@ pub(crate) fn resumable_body(
         observer,
         partial,
         resource,
-        inner: first,
+        inner: Some(first),
         representation_total: response_total,
         consumed: 0,
         to_skip: 0,
@@ -295,8 +279,12 @@ fn content_length(stream: &ByteStream) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::{
+        future::pending,
+        sync::atomic::{AtomicU64, Ordering},
+    };
 
+    use futures::Stream;
     use kithara_platform::{
         sync::{Arc, Mutex},
         time::Instant,
@@ -304,7 +292,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{observe::NetObserver, types::Headers};
+    use crate::{observe::NetObserver, transport::external_body, types::Headers};
 
     mod consts {
         use super::*;
@@ -397,7 +385,7 @@ mod tests {
         ByteStream::new(Headers::default(), Box::pin(stream::pending()))
     }
 
-    async fn collect(body: RawBody) -> Result<Vec<u8>, NetError> {
+    async fn collect(body: HttpBody) -> Result<Vec<u8>, NetError> {
         let mut out = Vec::new();
         let mut body = body;
         while let Some(item) = body.next().await {
@@ -408,6 +396,39 @@ mod tests {
 
     fn resumed(stream: ByteStream, skip: u64) -> Resumed {
         Resumed { stream, skip }
+    }
+
+    #[kithara::test(tokio)]
+    async fn failed_body_is_dropped_before_refetch() {
+        let resource = Arc::new(());
+        let outstanding = Arc::downgrade(&resource);
+        let pending_body = stream::unfold(resource, |resource| async move {
+            pending::<()>().await;
+            Some((Ok(Bytes::new()), resource))
+        });
+        let first = ByteStream::new(Headers::default(), external_body(Box::pin(pending_body)));
+        let refetch: Refetch = Box::new(move |_| {
+            assert!(
+                outstanding.upgrade().is_none(),
+                "failed response is still alive at refetch"
+            );
+            Box::pin(async {
+                Ok(resumed(
+                    byte_stream(vec![Ok(Bytes::from_static(b"done"))]),
+                    0,
+                ))
+            })
+        });
+        let body = resumable_body(
+            first,
+            refetch,
+            test_url(),
+            consts::STALL,
+            policy(1),
+            CancelToken::never(),
+            None,
+        );
+        assert_eq!(collect(body).await.unwrap(), b"done");
     }
 
     #[kithara::test(tokio, timeout(Duration::from_secs(10)))]

@@ -19,8 +19,12 @@ use super::{ScopedConfig, scoped_channel};
 use crate::channel::sender::Sent;
 use crate::{Batch, Outcome, Protocol, Rejection, Seq, When};
 
-#[kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
-fn await_plain_answers(sender: &mut crate::Sender<Test>, expected: &[Seq]) {
+#[kithara::hang_watchdog(timeout = watchdog_budget, ctx = String)]
+fn await_plain_answers(
+    sender: &mut crate::Sender<Test>,
+    expected: &[Seq],
+    watchdog_budget: Duration,
+) {
     let mut answered = Vec::new();
     while answered.len() < expected.len() {
         hang_tick!(format!(
@@ -115,10 +119,10 @@ async fn sends_racing_inbox_drop_are_answered_exactly_once() {
         .expect("sender leaves the closed channel within the watchdog budget")
         .expect("sender must not panic");
     assert!(!admitted.is_empty());
-    await_plain_answers(&mut sender, &admitted);
+    await_plain_answers(&mut sender, &admitted, Duration::from_secs(1));
 }
 
-#[cfg(panic = "unwind")]
+#[cfg(all(panic = "unwind", not(miri)))]
 #[kithara::test]
 fn lost_answer_negative_control_trips_the_watchdog() {
     let _real_io = kithara_platform::flash::real_io();
@@ -135,7 +139,7 @@ fn lost_answer_negative_control_trips_the_watchdog() {
     drop(inbox);
     assert_eq!(sender.receipts().count(), 1);
     let failure = catch_unwind(AssertUnwindSafe(|| {
-        await_plain_answers(&mut sender, &[seq]);
+        await_plain_answers(&mut sender, &[seq], Duration::from_millis(50));
     }));
     let panic = failure.expect_err("lost answer must fail instead of timing out the test runner");
     let reason = panic.downcast_ref::<String>().expect("watchdog reason");

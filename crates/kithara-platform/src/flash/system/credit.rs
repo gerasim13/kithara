@@ -438,6 +438,7 @@ impl FlashInner {
     /// without decrementing `active`; their first wake adds the credit and marks
     /// them running. A counted `Running` thread decrements `active` before parking.
     /// Already `Parked` is unreachable: a thread waits on only one thing at a time.
+    /// Call before publishing the waiter: no-block rejection can unwind this call.
     pub(super) fn enter_wait_locked(&self, s: &mut Core) -> WaitGuard<'_> {
         if in_async_poll() {
             crate::no_block::forbid_bridged(ctx::cur_async().map(|(_, loc)| loc));

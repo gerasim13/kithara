@@ -1,10 +1,10 @@
 use kithara_events::EventReceiver;
-use kithara_play::{PlayerStatus, mock};
+use kithara_play::{PlayerEvent, PlayerStatus, TrackSettingsChange, mock};
 
 use super::*;
 use crate::{
     QueueError, Transition,
-    mock::{finish, selected},
+    mock::{finish, fixture_uri, selected},
 };
 
 fn apply(
@@ -37,6 +37,67 @@ async fn pending_successor() -> (
 
 fn drain(rx: &mut EventReceiver<QueueEvent>) -> Vec<QueueEvent> {
     std::iter::from_fn(|| rx.try_recv().ok().map(|envelope| envelope.event)).collect()
+}
+
+#[kithara::test(tokio)]
+async fn rate_events_follow_applied_playback_without_duplicates() {
+    let (mut queue, _, _, mut rig, dir) = pending_selection();
+    let control = queue.control();
+    let mut events = queue.subscribe::<PlayerEvent>();
+    let rates = |events: &mut EventReceiver<PlayerEvent>| {
+        std::iter::from_fn(|| events.try_recv().ok().map(|event| event.event))
+            .filter_map(|event| match event {
+                PlayerEvent::RateChanged { rate } => Some(rate),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(control.rate(), 0.0);
+    answer_load(&mut queue, &mut rig, &dir).await;
+    assert!(rates(&mut events).is_empty());
+    finish(&mut queue, &mut rig);
+    assert_eq!(control.rate(), 1.0);
+    assert_eq!(rates(&mut events), [1.0]);
+
+    apply(&mut queue, &mut rig, QueueCommand::Pause { at: When::Next }).expect("pause accepted");
+    assert_eq!(control.rate(), 1.0);
+    assert!(rates(&mut events).is_empty());
+    crate::mock::settle(&mut queue, &mut rig, SessionFrame::new(384));
+    assert_eq!(control.rate(), 0.0);
+    assert_eq!(rates(&mut events), [0.0]);
+    tick_fixture(&mut queue, &mut rig);
+    assert!(rates(&mut events).is_empty());
+
+    apply(
+        &mut queue,
+        &mut rig,
+        QueueCommand::ConfigureTrack(TrackSettingsChange::Speed(2.0), When::Next),
+    )
+    .expect("paused speed accepted");
+    assert_eq!(control.rate(), 0.0);
+    assert!(rates(&mut events).is_empty());
+    crate::mock::settle(&mut queue, &mut rig, SessionFrame::new(512));
+    assert_eq!(control.rate(), 0.0);
+    assert!(rates(&mut events).is_empty());
+
+    apply(&mut queue, &mut rig, QueueCommand::Play { at: When::Next }).expect("resume accepted");
+    assert_eq!(control.rate(), 0.0);
+    assert!(rates(&mut events).is_empty());
+    let mut frame = 640;
+    kithara_test_utils::wait_until(Duration::from_secs(1), "resumed rate receipt", || {
+        tick_fixture(&mut queue, &mut rig);
+        crate::mock::settle(&mut queue, &mut rig, SessionFrame::new(frame));
+        frame += 128;
+        tick_fixture(&mut queue, &mut rig);
+        control.rate() == 2.0
+    })
+    .await
+    .expect("the resumed segment becomes ready and its Start receipt applies");
+    assert_eq!(control.rate(), 2.0);
+    assert_eq!(rates(&mut events), [2.0]);
+    tick_fixture(&mut queue, &mut rig);
+    assert!(rates(&mut events).is_empty());
 }
 
 #[kithara::test(tokio)]
@@ -87,6 +148,8 @@ async fn replay_same_item_does_not_re_emit_current_item_changed() {
 
 #[kithara::test(tokio)]
 async fn a_selected_resource_adopts_the_session_wake_mode() {
+    use kithara_render::{LoadRequest, ServiceClass};
+
     let pools = pools();
     let dir = TestTempDir::new();
     let prep = ResourcePrep::builder()
@@ -94,11 +157,38 @@ async fn a_selected_resource_adopts_the_session_wake_mode() {
             PlayWorkerConfig::builder(pools.clone()).build(),
         ))
         .build();
-    mock::assert_prepared_render_off_bus(
-        &prep,
-        &mock::output(None).get(),
+    let output = mock::output(None).get();
+    assert_eq!(output.sample_rate.output(), 44_100);
+    let source = fixture_uri(dir.path(), "selected.wav");
+    let store = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Memory)
+        .build();
+    crate::mock::seed_fixture(
+        &store,
+        &source,
+        kithara_test_fixtures::assets::fixed_constant_wav_cd_half_4096().bytes(),
+    );
+    let config = ResourceConfig::for_src(ResourceSrc::parse(&source).expect("fixture URI"))
+        .store(store)
+        .build();
+    let prepared = prep.prepare(config, &output).expect("prepared source");
+    let bus = prepared.bus().expect("prepared event bus").clone();
+    let item = kithara_play::ResourceLoad::new(
+        prepared,
+        Box::new(kithara_audio::AudioObserverSlot::default().relay()),
+    );
+    let (_control, inbox) = prep.worker.lane_channel();
+    mock::assert_requested_render_off_bus(
+        LoadRequest {
+            item,
+            class: ServiceClass::Warm,
+            inbox,
+            position: Duration::ZERO,
+            start: kithara_play::TrackSettings::default().lane_start(),
+        },
+        &bus,
+        &output,
         &pools,
-        &dir.path().join("selected.wav"),
     )
     .await
     .expect("selected lane renders off the bus");
@@ -195,13 +285,7 @@ async fn arm_next_replaces_a_previously_armed_item() {
         QueueCommand::Append {
             position: kithara_play::Position::ZERO,
             id: third,
-            source: TrackSource::Uri(
-                dir.path()
-                    .join("entry.wav")
-                    .to_str()
-                    .expect("path")
-                    .to_owned(),
-            ),
+            source: TrackSource::Uri(fixture_uri(dir.path(), "entry.wav")),
         },
     )
     .expect("append third");
@@ -308,13 +392,7 @@ async fn selecting_another_item_unarms_the_successor() {
         QueueCommand::Append {
             position: kithara_play::Position::ZERO,
             id: third,
-            source: TrackSource::Uri(
-                dir.path()
-                    .join("entry.wav")
-                    .to_str()
-                    .expect("path")
-                    .to_owned(),
-            ),
+            source: TrackSource::Uri(fixture_uri(dir.path(), "entry.wav")),
         },
     )
     .expect("append third");

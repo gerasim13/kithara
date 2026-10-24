@@ -6,7 +6,7 @@ use kithara_apple::foundation::{
         NSURLSessionDataTask, NSURLSessionTask,
     },
     objc::rc::Retained,
-    urlsession::{self, DataCompletion, UrlSessionDelegate},
+    urlsession::{self, UrlSessionDelegate},
 };
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::{
@@ -14,42 +14,20 @@ use kithara_platform::{
     sync::{Arc, Mutex, OnceLock},
     tokio::sync::oneshot,
 };
-use url::Url;
 
 use super::{
     delegate::{AppleSessionEvents, StreamState, make_delegate},
     request::AppleRequest,
-    response::{AppleDataResponse, completion_result, send_once},
-    stream::{
-        AppleBodyQueue, AppleStreamResponse, StartedStream, wait_for_data, wait_for_stream_head,
-    },
+    stream::{AppleBodyQueue, AppleStreamResponse, StartedStream, wait_for_stream_head},
 };
 use crate::{
     backend::pooled::ByteBuffers,
-    error::{NetError, NetResult},
+    error::NetResult,
     metrics::ConnectionMetrics,
-    types::{AcceptEncodingPolicy, NetOptions, accept_encoding_value},
+    types::{NetOptions, accept_encoding_value},
 };
 
 pub(super) type TaskId = NSUInteger;
-type DataResult = Result<AppleDataResponse, NetError>;
-type DataSender = Arc<Mutex<Option<oneshot::Sender<DataResult>>>>;
-type DataStart = (oneshot::Receiver<DataResult>, AppleTask);
-
-struct DataCompletionSink {
-    accept_encoding: AcceptEncodingPolicy,
-    buffers: ByteBuffers,
-    sender: DataSender,
-    url: Url,
-}
-
-impl urlsession::DataTaskCompletion for DataCompletionSink {
-    fn complete(&self, completion: DataCompletion<'_>) {
-        let result = completion_result(&completion, &self.buffers, self.accept_encoding, &self.url);
-        send_once(&self.sender, result);
-    }
-}
-
 #[derive(Clone, Debug, Eq, PartialEq, kithara_derive::Mirror)]
 #[mirror(from_ref = NetOptions)]
 struct SharedSessionKey {
@@ -98,45 +76,9 @@ impl AppleSession {
         }
     }
 
-    pub(crate) fn data(
-        &self,
-        request: AppleRequest,
-        cancel: CancelToken,
-    ) -> impl Future<Output = NetResult<AppleDataResponse>> + Send {
-        let started = self.start_data(request);
-        async move {
-            let (receiver, task) = started?;
-            wait_for_data(receiver, task, cancel).await
-        }
-    }
-
-    fn start_data(&self, request: AppleRequest) -> NetResult<DataStart> {
-        let (sender, receiver) = oneshot::channel();
-        let sender = Arc::new(Mutex::new(Some(sender)));
-        let accept_encoding = request.accept_encoding();
-        let url = request.url().clone();
-        let completion: Arc<dyn urlsession::DataTaskCompletion> = Arc::new(DataCompletionSink {
-            accept_encoding,
-            url,
-            buffers: self.buffers.clone(),
-            sender: Arc::clone(&sender),
-        });
-
-        let request = request.into_ns_request(&self.accept_encoding)?;
-        let data_task =
-            urlsession::data_task_with_completion(&self.shared.session, &request, completion);
-        let task: AppleTask = data_task.into();
-        self.shared
-            .events
-            .register_metrics(task.id(), self.connection_metrics.clone());
-        task.resume();
-        Ok((receiver, task))
-    }
-
     fn start_stream(&self, request: AppleRequest) -> NetResult<StartedStream> {
         let (head_sender, head_receiver) = oneshot::channel();
         let accept_encoding = request.accept_encoding();
-        let url = request.url().clone();
         let request = request.into_ns_request(&self.accept_encoding)?;
         let data_task = self.shared.session.dataTaskWithRequest(&request);
         let task: AppleTask = data_task.into();
@@ -154,7 +96,6 @@ impl AppleSession {
             task_id,
             StreamState {
                 accept_encoding,
-                url,
                 body_queue: Some(Arc::clone(&body_queue)),
                 head_sender: Some(head_sender),
             },
@@ -257,6 +198,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{super::response::copy_data, *};
+    use crate::NetError;
 
     #[kithara::test(native, flash(false))]
     fn configured_byte_pool_reaches_response_copy_path() {

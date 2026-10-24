@@ -3,9 +3,9 @@ use super::*;
 #[kithara::test]
 #[case::eof(false)]
 #[case::failed(true)]
-fn a_delayed_faded_event_preserves_the_tracks_terminal_status(#[case] failed: bool) {
+async fn a_delayed_faded_event_preserves_the_tracks_terminal_status(#[case] failed: bool) {
     let mut rig = rig();
-    let (mut track, _lane) = loaded(&mut rig, A, "terminal fade");
+    let (mut track, _lane) = loaded(&mut rig, A, "terminal fade").await;
     command_at_zero(
         &mut track,
         &mut rig,

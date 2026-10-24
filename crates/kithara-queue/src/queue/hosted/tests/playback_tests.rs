@@ -2,7 +2,7 @@ use kithara_platform::time::Duration;
 use kithara_play::{DeckEvent, Slot};
 
 use super::*;
-use crate::{Transition, queue::state::tests::wait_for_queue_event};
+use crate::{Transition, mock::fixture_uri, queue::state::tests::wait_for_queue_event};
 
 #[kithara::test(tokio)]
 async fn spurious_item_did_play_to_end_is_filtered() {
@@ -14,13 +14,7 @@ async fn spurious_item_did_play_to_end_is_filtered() {
                 QueueCommand::Append {
                     position: kithara_play::Position::ZERO,
                     id: TrackId::allocate(),
-                    source: TrackSource::Uri(
-                        dir.path()
-                            .join("entry.wav")
-                            .to_str()
-                            .expect("fixture path")
-                            .to_owned(),
-                    ),
+                    source: TrackSource::Uri(fixture_uri(dir.path(), "entry.wav")),
                 },
                 out,
             )
@@ -204,8 +198,9 @@ async fn play_retries_the_current_track_after_its_prefetch_failed() {
 
     let (mut queue, mut rig, dir) = empty_queue();
     let id = TrackId::allocate();
-    let path = dir.path().join("retry.wav");
-    let source = path.to_str().expect("fixture path").to_owned();
+    let source = fixture_uri(dir.path(), "retry.wav");
+    let store = queue.config.store.as_ref().expect("fixture store").clone();
+    crate::mock::seed_fixture(&store, &source, b"not a WAV source");
     with_outbox(&mut queue, &mut rig, |queue, out| {
         Player::apply(
             queue,
@@ -292,7 +287,14 @@ async fn play_retries_the_current_track_after_its_prefetch_failed() {
         });
         hang_reset!();
     }
-    std::fs::copy(dir.path().join("entry.wav"), &path).expect("restore the requested source");
+    store
+        .remove_resource(&crate::mock::fixture_key(&store, &source))
+        .expect("remove malformed fixture");
+    crate::mock::seed_fixture(
+        &store,
+        &source,
+        kithara_test_fixtures::assets::fixed_constant_wav_cd_half_1024().bytes(),
+    );
     with_outbox(&mut queue, &mut rig, |queue, out| {
         Player::apply(queue, QueueCommand::Play { at: When::Next }, out)
     })
@@ -340,13 +342,7 @@ async fn play_promotes_the_initial_pending_prefetch() {
     for insert in [false, true] {
         let (mut queue, mut rig, dir) = empty_queue();
         let id = TrackId::allocate();
-        let source = TrackSource::Uri(
-            dir.path()
-                .join("entry.wav")
-                .to_str()
-                .expect("fixture path")
-                .to_owned(),
-        );
+        let source = TrackSource::Uri(fixture_uri(dir.path(), "entry.wav"));
         with_outbox(&mut queue, &mut rig, |queue, out| {
             let command = if insert {
                 QueueCommand::Insert {

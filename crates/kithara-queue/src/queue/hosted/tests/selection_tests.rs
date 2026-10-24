@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    AdvanceReason, CrossfadeSettings, QueueSettingsChange, Transition,
+    AdvanceReason, CrossfadeSettings, QueueSettingsChange, Transition, mock::fixture_uri,
     queue::state::tests::wait_for_queue_event,
 };
 
@@ -159,13 +159,7 @@ async fn pending_override_latches_profile_without_mutating_default() {
             QueueCommand::Append {
                 position: kithara_play::Position::ZERO,
                 id,
-                source: TrackSource::Uri(
-                    dir.path()
-                        .join("entry.wav")
-                        .to_str()
-                        .expect("fixture path")
-                        .to_owned(),
-                ),
+                source: TrackSource::Uri(fixture_uri(dir.path(), "entry.wav")),
             },
             out,
         )

@@ -1,4 +1,4 @@
-pub(crate) use ::wreq::{Client, ClientBuilder, RequestBuilder, Response, StatusCode};
+pub(crate) use ::wreq::{Client, ClientBuilder};
 
 use super::metrics::CountConnectionsLayer;
 use crate::{

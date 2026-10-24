@@ -1,11 +1,9 @@
-//! Mirror of the tokio surface the workspace is allowed to touch, flash side.
-//! Enumerated on purpose: a glob re-export is how flash-blind primitives
-//! leak in unnoticed (see design doc §2). `time`/`fs`/`process` and the root
-//! `spawn`/`spawn_blocking` are intentionally ABSENT. `runtime`, feature-gated
-//! `net`/minimal `io`, `ensure_thread_pool` and `task_local!` add no flash
-//! semantics and are re-imported from `native`; the channels and `task` are
-//! flash-aware.
+//! Flash-aware Tokio channels and tasks with explicit native runtime plumbing.
+//! Time, files and root task spawns stay outside this surface.
+//! Native sockets, child processes and shutdown signals are opt-in.
 
+#[cfg(all(feature = "tokio-process", not(target_arch = "wasm32")))]
+pub use crate::backend::tokio::process;
 #[cfg(feature = "signal")]
 pub use crate::backend::tokio::signal;
 #[cfg(feature = "tokio-net")]

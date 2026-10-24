@@ -40,6 +40,8 @@ let stream = client.stream(url, None).await?;
 
 Retry and the inactivity timeout come from `NetOptions`. `with_retry_policy` returns a handle with a different retry policy that shares the connection pool.
 
+The inactivity timeout bounds response headers and each body-chunk wait separately on every backend. `HttpClient::new_with_transport` accepts an instance implementing `HttpTransport`; supplied transports use the same client policies and remain shared by derived handles.
+
 ## Key Types
 
 <table>

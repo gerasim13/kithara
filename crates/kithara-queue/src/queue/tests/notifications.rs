@@ -7,16 +7,19 @@ use kithara_test_utils::kithara;
 
 use crate::{
     QueueCommand, QueueEvent, TrackSource, Transition,
-    mock::{answer_load, empty_queue, finish, with_outbox},
+    mock::{answer_load, empty_queue, finish, fixture_uri, seed_fixture, with_outbox},
 };
 
 #[kithara::test(tokio)]
 #[kithara::hang_watchdog]
 async fn notification_changed_carries_src() {
     let (mut queue, mut rig, dir) = empty_queue();
-    let path = dir.path().join("next.mp3");
-    std::fs::copy(dir.path().join("entry.wav"), &path).expect("named offline fixture");
-    let expected_source = path.to_str().expect("fixture path").to_owned();
+    let expected_source = fixture_uri(dir.path(), "next.mp3");
+    seed_fixture(
+        queue.config.store.as_ref().expect("fixture store"),
+        &expected_source,
+        kithara_test_fixtures::assets::fixed_constant_wav_cd_half_1024().bytes(),
+    );
     let control = queue.control();
     let mut events = control.subscribe();
     let item = TrackId::allocate();
@@ -66,9 +69,12 @@ async fn notification_changed_carries_src() {
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn notification_clone() {
     let (mut queue, mut rig, dir) = empty_queue();
-    let path = dir.path().join("ended.mp3");
-    std::fs::copy(dir.path().join("entry.wav"), &path).expect("named offline fixture");
-    let expected_source = path.to_str().expect("fixture path").to_owned();
+    let expected_source = fixture_uri(dir.path(), "ended.mp3");
+    seed_fixture(
+        queue.config.store.as_ref().expect("fixture store"),
+        &expected_source,
+        kithara_test_fixtures::assets::fixed_constant_wav_cd_half_1024().bytes(),
+    );
     let item = TrackId::allocate();
     with_outbox(&mut queue, &mut rig, |queue, out| {
         Player::apply(

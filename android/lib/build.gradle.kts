@@ -48,8 +48,9 @@ val exportTestFixtures by tasks.registering(Exec::class) {
     group = "build"
     description = "Export generated audio fixtures the instrumented tests read."
     workingDir = repoRoot
-    inputs.dir(repoRoot.resolve("crates/kithara-test-fixtures/src"))
-    inputs.file(repoRoot.resolve("crates/kithara-test-fixtures/build.rs"))
+    inputs.dir(repoRoot.resolve("crates"))
+    inputs.file(repoRoot.resolve("Cargo.toml"))
+    inputs.file(repoRoot.resolve("Cargo.lock"))
     outputs.dir(generatedTestAssetsDir)
     commandLine(
         cargoExecutable(),
