@@ -4,6 +4,7 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome},
     hls::{Hls, HlsConfig},
+    net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
         sync::Arc,
@@ -26,7 +27,7 @@ use kithara_test_fixtures::hls_fixtures::{
     hls_header_fifty, hls_pcm_fifty, hls_pcm_fifty_descending,
 };
 use kithara_test_fixtures::signal::{self, SignalDirection as Direction, detect_direction};
-use kithara_test_utils::{TestTempDir, Xorshift64};
+use kithara_test_utils::{TestTempDir, Xorshift64, cancel_token};
 use num_traits::AsPrimitive;
 use tracing::info;
 
@@ -90,7 +91,6 @@ fn intra_chunk_breaks(chunk: &AudioChunk) -> usize {
     breaks
 }
 
-#[kithara::flash(io)]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 fn next_chunk_with_timeout<R: AudioRead>(
     audio: &mut R,
@@ -224,7 +224,24 @@ async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case]
     .await;
 }
 
-#[kithara::flash(io)]
+#[kithara::test(tokio, native, timeout(Duration::from_secs(5)))]
+async fn native_delayed_segment_preserves_real_header_wait(
+    #[future(awt)] audio_server: CreatedHls,
+) {
+    let client = HttpClient::new(NetOptions::default(), pools(), cancel_token());
+    let wall = WallInstant::now();
+    let bytes = client
+        .get_bytes(audio_server.segment_url(0, 3), None)
+        .await
+        .expect("the delayed native segment completes");
+    assert!(wall.elapsed() >= Duration::from_millis(500));
+    assert_eq!(bytes.len(), consts::D.segment_size);
+    let offset = audio_server.init_len() + 3 * consts::D.segment_size as u64;
+    audio_server.for_each_expected_byte_mismatch(0, offset, &bytes, |index, expected, actual| {
+        assert_eq!(actual, expected, "native delayed segment byte {index}");
+    });
+}
+
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 fn check_chunk_integrity(
     audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>,
