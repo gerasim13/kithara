@@ -27,7 +27,7 @@ use kithara_integration_tests::{
     fixture_protocol::DelayRule,
     kithara, mixed_codec_ladder_encrypted,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE, app_disk_asset_store, app_track_source},
-    waits::{wait_for_position_at_least, wait_for_position_near},
+    waits::{wait_for_position_at_least, wait_for_position_event, wait_for_position_near_event},
 };
 use kithara_test_utils::{TestTempDir, Xorshift64, temp_dir};
 use url::Url;
@@ -203,18 +203,19 @@ async fn run_seek_scenario(
         // Through the host owner, as the app seeks and as every other
         // control call here does. Called directly, the seek waits for the
         // queue's owner inside the test's own poll.
+        let mut seek_rx = queue.subscribe();
         queue.run(move |q| q.seek(target)).await.expect("seek");
         hang_reset!();
-        wait_for_position_near(&queue, target, 1.0, Duration::from_secs(5))
-            .await
-            .unwrap_or_else(|e| panic!("seek #{i} to {target:.1}s fail: {e}"));
+        let before =
+            wait_for_position_near_event(&mut seek_rx, &queue, target, 1.0, Duration::from_secs(5))
+                .await
+                .unwrap_or_else(|e| panic!("seek #{i} to {target:.1}s fail: {e}"));
         hang_reset!();
-        let before = queue.position_seconds().unwrap_or(0.0);
-        wait_for_position_at_least(&queue, before + 0.5, Duration::from_secs(5))
-            .await
-            .unwrap_or_else(|e| panic!("seek #{i} hang: {e}"));
+        let after =
+            wait_for_position_event(&mut seek_rx, &queue, before + 0.5, Duration::from_secs(5))
+                .await
+                .unwrap_or_else(|e| panic!("seek #{i} hang: {e}"));
         hang_reset!();
-        let after = queue.position_seconds().unwrap_or(0.0);
         assert!(
             after - before >= 0.5,
             "seek #{i} hang: {before:.2}→{after:.2}"
