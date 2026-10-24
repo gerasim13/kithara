@@ -1,6 +1,7 @@
 //! The one state-wait primitive, in an async and a blocking form.
 //!
-//! Its virtual poll-tick sleep is the only timer sleep in the test surface. Under the flash virtual clock that tick advances time between
+//! Its virtual poll-tick sleep is the only timer sleep in the test surface.
+//! Under the flash virtual clock that tick advances time between
 //! predicate checks, so a wait resolves the instant the program reaches the
 //! asserted state — never on a wall-clock guess. The `deadline` argument bounds
 //! only a non-progress watchdog that returns `Err` (callers `.expect()` it); it
@@ -73,4 +74,72 @@ fn settled(
             "wait_until({label}) exceeded {deadline:?} without reaching the target state"
         ))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(feature = "flash")]
+    #[kithara::test(native, timeout(Duration::from_secs(2)))]
+    fn a_macro_sync_driver_keeps_deadlines_behind_its_work() {
+        use std::{
+            future::Future,
+            task::{Context, Waker},
+        };
+
+        let started = Instant::now();
+        let wall_started = kithara_platform::time::WallInstant::now();
+        let mut timer = Box::pin(sleep(Duration::from_secs(17)));
+        let mut context = Context::from_waker(Waker::noop());
+        assert!(timer.as_mut().poll(&mut context).is_pending());
+        assert!(
+            timer.as_mut().poll(&mut context).is_pending(),
+            "runnable synchronous work must keep a registered timer pending"
+        );
+        assert_eq!(Instant::now(), started);
+        drop(timer);
+
+        let child = thread::spawn(|| {
+            thread::sleep(Duration::from_secs(17));
+            7_u8
+        });
+        assert_eq!(child.join().expect("child completes after driver parks"), 7);
+        assert_eq!(started.elapsed(), Duration::from_secs(17));
+        assert!(wall_started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[kithara::test(native, tokio)]
+    async fn both_wait_forms_check_the_predicate_before_a_zero_deadline() {
+        assert_eq!(wait_until(Duration::ZERO, "ready", || true).await, Ok(()));
+        assert_eq!(
+            wait_until_blocking(Duration::ZERO, "ready", || true),
+            Ok(())
+        );
+        let expected =
+            Err("wait_until(stalled) exceeded 0ns without reaching the target state".to_owned());
+        assert_eq!(
+            wait_until(Duration::ZERO, "stalled", || false).await,
+            expected
+        );
+        assert_eq!(
+            wait_until_blocking(Duration::ZERO, "stalled", || false),
+            expected
+        );
+    }
+
+    #[kithara::test(native)]
+    fn a_blocking_wait_releases_the_clock_for_its_child() {
+        kithara_platform::flash::participate_sync(|| {
+            let ready = kithara_platform::sync::Arc::new(kithara_platform::sync::Mutex::new(false));
+            let child_ready = ready.clone();
+            let child = thread::spawn(move || {
+                thread::sleep(Duration::from_millis(50));
+                *child_ready.lock() = true;
+            });
+            wait_until_blocking(Duration::from_secs(1), "child state", || *ready.lock())
+                .expect("the child publishes its state");
+            child.join().expect("the child exits normally");
+        });
+    }
 }

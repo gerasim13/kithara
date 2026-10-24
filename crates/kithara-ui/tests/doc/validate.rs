@@ -128,16 +128,40 @@ fn accepted(result: Result<CompiledUi, UiDocError>) {
 }
 
 #[kithara::test]
-fn duplicate_instance_reports_path() {
-    let error = refused(layout_root(
-        r#"Split(axis: Horizontal, children: [
-            (node: Module(instance: "deck-a", source: "m.ron")),
-            (node: Module(instance: "deck-a", source: "m.ron")),
-        ])"#,
-    ));
-    let message = error.to_string();
-    assert!(message.contains("deck-a"), "{message}");
-    assert!(message.contains("Split[1]"), "{message}");
+#[case::split(
+    r#"Split(axis: Horizontal, children: [
+        (node: Module(instance: "deck-a", source: "m.ron")),
+        (node: Module(instance: "deck-a", source: "m.ron")),
+    ])"#,
+    "root/Split[1]/Module(deck-a)"
+)]
+#[case::after_adaptive(
+    r#"Split(axis: Horizontal, children: [
+        (node: Adaptive(id: "bank", measure: Width, size: (w: Fill, h: Fill),
+            base: Module(instance: "deck-base", source: "m.ron"),
+            steps: [(from: 120.0, node: Module(instance: "deck-a", source: "m.ron"))])),
+        (node: Module(instance: "deck-a", source: "m.ron")),
+    ])"#,
+    "root/Split[1]/Module(deck-a)"
+)]
+#[case::after_tabs(
+    r#"Split(axis: Horizontal, children: [
+        (node: Tabs(state: "shown", initial: "one", pages: {
+            "one": Module(instance: "deck-base", source: "m.ron"),
+            "two": Module(instance: "deck-a", source: "m.ron"),
+        })),
+        (node: Module(instance: "deck-a", source: "m.ron")),
+    ])"#,
+    "root/Split[1]/Module(deck-a)"
+)]
+fn a_duplicate_instance_in_a_layout_is_found(#[case] layout: &str, #[case] at: &str) {
+    let error = refused(layout_root(layout));
+
+    assert!(
+        matches!(&error, UiDocError::DuplicateId { id, path, .. }
+            if id == "deck-a" && path == at),
+        "{error:?}"
+    );
 }
 
 #[kithara::test]
@@ -217,23 +241,6 @@ fn a_measuring_split_reveals_its_own_cells() {
 }
 
 #[kithara::test]
-fn a_measuring_split_must_declare_the_axis_it_measures() {
-    for head in [
-        "measure: Width,",
-        "measure: Height,",
-        "measure: Width, size: (w: Shrink, h: Fill),",
-        "measure: Height, size: (w: Fill, h: Shrink),",
-    ] {
-        let error = refused(split_cell(head, ""));
-        assert!(
-            matches!(&error, UiDocError::UnmeasuredAxis { path, .. }
-                if path == "root/Split"),
-            "{head}: {error:?}",
-        );
-    }
-}
-
-#[kithara::test]
 fn a_split_band_is_finite_and_closes_above_the_room_it_opens_in() {
     for band in [", from: -1.0", ", from: inf", ", from: NaN"] {
         let error = refused(measuring_split_cell(band));
@@ -270,17 +277,6 @@ fn empty_and_parameter_like_control_ids_are_rejected() {
 }
 
 #[kithara::test]
-fn duplicate_control_id_reports_path() {
-    let error = refused(module_root(
-        r#"Row(children: [
-            Button(id: "play", label: "PLAY"),
-            Button(id: "play", label: "PLAY"),
-        ])"#,
-    ));
-    assert!(error.to_string().contains("Control(play)"), "{error}");
-}
-
-#[kithara::test]
 fn control_id_with_path_separator_is_rejected() {
     let error = refused(module_root(
         r#"Button(id: "transport/play", label: "PLAY")"#,
@@ -293,32 +289,44 @@ fn control_id_with_path_separator_is_rejected() {
 }
 
 #[kithara::test]
-fn an_object_may_move_a_whole_row() {
-    accepted(module_root(
-        r#"Object(id: "shift", transform: (position: (8.0, 0.0)),
-            child: Row(children: [Button(id: "play", label: "PLAY")]))"#,
-    ));
+#[case::row(r#"Row(children: [Button(id: "play", label: "PLAY")])"#)]
+#[case::stage(r#"Stage(id: "scene", children: [Button(id: "play", label: "PLAY")])"#)]
+fn an_object_may_move_a_whole_group(#[case] child: &str) {
+    accepted(module_root(&format!(
+        r#"Object(id: "shift", transform: (position: (8.0, 0.0)), child: {child})"#
+    )));
 }
 
 #[kithara::test]
-fn an_object_may_not_turn_a_row() {
-    let error = refused(module_root(
-        r#"Object(id: "spin", transform: (rotation: 30.0),
-            child: Row(children: [Button(id: "play", label: "PLAY")]))"#,
-    ));
+#[case::rotation_row(
+    "(rotation: 30.0)",
+    r#"Row(children: [Button(id: "play", label: "PLAY")])"#,
+    "Row"
+)]
+#[case::scale_row(
+    "(scale: (2.0, 2.0))",
+    r#"Row(children: [Button(id: "play", label: "PLAY")])"#,
+    "Row"
+)]
+#[case::rotation_stage(
+    "(rotation: 30.0)",
+    r#"Stage(id: "scene", children: [Button(id: "play", label: "PLAY")])"#,
+    "Stage"
+)]
+fn an_object_may_not_turn_or_scale_a_group(
+    #[case] transform: &str,
+    #[case] child: &str,
+    #[case] rejected: &str,
+) {
+    let error = refused(module_root(&format!(
+        r#"Object(id: "pose", transform: {transform}, child: {child})"#
+    )));
 
     assert!(
-        matches!(error, UiDocError::ObjectGroup { child: "Row", .. }),
+        matches!(&error, UiDocError::ObjectGroup { child, path, .. }
+            if *child == rejected && path == "root/Object(pose)"),
         "{error:?}"
     );
-}
-
-#[kithara::test]
-fn an_object_may_not_scale_a_row_either() {
-    refused(module_root(
-        r#"Object(id: "grow", transform: (scale: (2.0, 2.0)),
-            child: Row(children: [Button(id: "play", label: "PLAY")]))"#,
-    ));
 }
 
 /// A visualiser paints its own pass, so an object over it would move the
@@ -342,49 +350,6 @@ fn an_object_may_not_even_move_a_native_pass() {
 fn a_still_object_may_wrap_anything() {
     accepted(module_root(
         r#"Object(id: "still", child: Vis(id: "scope"))"#,
-    ));
-}
-
-/// A container the walk does not name would be validated as a leaf and its
-/// children never looked at, so a duplicate under a stage is the proof the
-/// walk goes in.
-#[kithara::test]
-fn a_stage_walks_its_children() {
-    let error = refused(module_root(
-        r#"Stage(id: "scene", children: [
-            Button(id: "play", label: "PLAY"),
-            Button(id: "play", label: "AGAIN"),
-        ])"#,
-    ));
-
-    assert!(
-        matches!(&error, UiDocError::DuplicateId { id, .. } if id == "play"),
-        "{error:?}"
-    );
-}
-
-/// Every child of a stage gets the whole box, so a stage is several boxes,
-/// and a turn about one origin would take them apart.
-#[kithara::test]
-fn an_object_may_not_turn_a_stage() {
-    let error = refused(module_root(
-        r#"Object(id: "spin", transform: (rotation: 30.0),
-            child: Stage(id: "scene", children: [Button(id: "play", label: "PLAY")]))"#,
-    ));
-
-    assert!(
-        matches!(error, UiDocError::ObjectGroup { child: "Stage", .. }),
-        "{error:?}"
-    );
-}
-
-/// A move carries every box by the same vector, so it reaches a stage the
-/// way it reaches a row.
-#[kithara::test]
-fn an_object_may_move_a_whole_stage() {
-    accepted(module_root(
-        r#"Object(id: "shift", transform: (position: (8.0, 0.0)),
-            child: Stage(id: "scene", children: [Button(id: "play", label: "PLAY")]))"#,
     ));
 }
 
@@ -453,6 +418,14 @@ fn adaptive(steps: &str) -> Result<CompiledUi, UiDocError> {
     ))
 }
 
+fn layout_adaptive(steps: &str) -> Result<CompiledUi, UiDocError> {
+    layout_root(&format!(
+        r#"Adaptive(id: "bank", measure: Width, size: (w: Fill, h: Fill),
+            base: Module(instance: "base", source: "m.ron"),
+            steps: [{steps}])"#
+    ))
+}
+
 #[kithara::test]
 fn an_adaptive_node_without_steps_is_rejected() {
     let error = refused(adaptive(""));
@@ -465,24 +438,46 @@ fn an_adaptive_node_without_steps_is_rejected() {
 }
 
 #[kithara::test]
-fn adaptive_steps_must_climb() {
-    for (steps, at) in [
-        (
-            r#"(from: 4.0, node: Knob(id: "a")), (from: 2.0, node: Knob(id: "b"))"#,
-            1,
-        ),
-        (
-            r#"(from: 4.0, node: Knob(id: "a")), (from: 4.0, node: Knob(id: "b"))"#,
-            1,
-        ),
-        (r#"(from: NaN, node: Knob(id: "a"))"#, 0),
-    ] {
-        let error = refused(adaptive(steps));
-        assert!(
-            matches!(&error, UiDocError::AdaptiveStepOrder { index, .. } if *index == at),
-            "{steps}: {error:?}"
-        );
-    }
+#[case::module_descending(
+    adaptive,
+    r#"(from: 4.0, node: Knob(id: "a")), (from: 2.0, node: Knob(id: "b"))"#,
+    1
+)]
+#[case::module_equal(
+    adaptive,
+    r#"(from: 4.0, node: Knob(id: "a")), (from: 4.0, node: Knob(id: "b"))"#,
+    1
+)]
+#[case::module_non_finite(adaptive, r#"(from: NaN, node: Knob(id: "a"))"#, 0)]
+#[case::layout_descending(
+    layout_adaptive,
+    r#"(from: 4.0, node: Module(instance: "a", source: "m.ron")),
+        (from: 2.0, node: Module(instance: "b", source: "m.ron"))"#,
+    1
+)]
+#[case::layout_equal(
+    layout_adaptive,
+    r#"(from: 4.0, node: Module(instance: "a", source: "m.ron")),
+        (from: 4.0, node: Module(instance: "b", source: "m.ron"))"#,
+    1
+)]
+#[case::layout_non_finite(
+    layout_adaptive,
+    r#"(from: NaN, node: Module(instance: "a", source: "m.ron"))"#,
+    0
+)]
+fn adaptive_steps_must_climb(
+    #[case] document: fn(&str) -> Result<CompiledUi, UiDocError>,
+    #[case] steps: &str,
+    #[case] at: usize,
+) {
+    let error = refused(document(steps));
+
+    assert!(
+        matches!(&error, UiDocError::AdaptiveStepOrder { index, path, .. }
+            if *index == at && path == "root/Adaptive(bank)"),
+        "{error:?}"
+    );
 }
 
 fn measured(measure: &str, size: &str) -> Result<CompiledUi, UiDocError> {
@@ -498,18 +493,29 @@ fn measured(measure: &str, size: &str) -> Result<CompiledUi, UiDocError> {
 }
 
 #[kithara::test]
-fn a_self_measured_node_must_declare_the_axis_it_measures() {
-    for (measure, size) in [
-        ("Width", ""),
-        ("Height", ""),
-        ("Width", "size: Some((w: Shrink, h: Fill)),"),
-        ("Height", "size: Some((w: Fill, h: Shrink)),"),
+#[case::width_without_size("Width", "")]
+#[case::height_without_size("Height", "")]
+#[case::width_with_shrink("Width", "size: (w: Shrink, h: Fill),")]
+#[case::height_with_shrink("Height", "size: (w: Fill, h: Shrink),")]
+fn a_measuring_node_must_declare_the_axis_it_measures(#[case] measure: &str, #[case] size: &str) {
+    for (at, result) in [
+        (
+            "root/Group(bar)",
+            module_root(&format!(
+                r#"Row(id: "bar", measure: {measure}, {size} children: [Knob(id: "a")])"#
+            )),
+        ),
+        ("root/Adaptive(bank)", measured(measure, size)),
+        (
+            "root/Split",
+            split_cell(&format!("measure: {measure}, {size}"), ""),
+        ),
     ] {
-        let error = refused(measured(measure, size));
+        let error = refused(result);
         assert!(
             matches!(&error, UiDocError::UnmeasuredAxis { path, .. }
-                if path == "root/Adaptive(bank)"),
-            "{measure} {size}: {error:?}",
+                if path == at),
+            "{at}: {error:?}",
         );
     }
 }
@@ -572,25 +578,6 @@ fn a_measuring_container_reveals_its_own_children() {
 }
 
 #[kithara::test]
-fn a_measuring_container_must_declare_the_axis_it_measures() {
-    for (measure, size) in [
-        ("Width", ""),
-        ("Height", ""),
-        ("Width", "size: (w: Shrink, h: Fill),"),
-        ("Height", "size: (w: Fill, h: Shrink),"),
-    ] {
-        let root =
-            format!(r#"Row(id: "bar", measure: {measure}, {size} children: [Knob(id: "a")])"#);
-        let error = refused(module_root(&root));
-        assert!(
-            matches!(&error, UiDocError::UnmeasuredAxis { path, .. }
-                if path == "root/Group(bar)"),
-            "{root}: {error:?}",
-        );
-    }
-}
-
-#[kithara::test]
 fn a_threshold_is_finite_and_not_negative() {
     for from in ["-1.0", "inf", "-inf", "NaN"] {
         let root = format!(r#"Row({BAR} children: [Reveal(from: {from}, child: Knob(id: "a"))])"#);
@@ -643,38 +630,6 @@ fn adaptive_branches_may_name_the_same_place() {
 }
 
 #[kithara::test]
-fn a_duplicate_id_inside_one_adaptive_branch_is_rejected() {
-    let error = refused(adaptive(
-        r#"(from: 4.0, node: Row(children: [Knob(id: "dup"), Knob(id: "dup")]))"#,
-    ));
-
-    assert!(
-        matches!(&error, UiDocError::DuplicateId { id, .. } if id == "dup"),
-        "{error:?}"
-    );
-}
-
-#[kithara::test]
-fn a_sibling_after_an_adaptive_node_sees_every_branch_id() {
-    let error = refused(module_root(
-        r#"Row(children: [
-            Adaptive(
-                id: "bank",
-                measure: Read(Model(id: "ui.measure")),
-                base: Knob(id: "low"),
-                steps: [(from: 4.0, node: Knob(id: "low-mid"))],
-            ),
-            Knob(id: "low-mid"),
-        ])"#,
-    ));
-
-    assert!(
-        matches!(&error, UiDocError::DuplicateId { id, .. } if id == "low-mid"),
-        "{error:?}"
-    );
-}
-
-#[kithara::test]
 fn unique_ids_pass() {
     accepted(module_root(
         r#"Row(children: [
@@ -693,31 +648,62 @@ fn valid_command_binding_passes() {
 }
 
 #[kithara::test]
-fn tree_query_binding_must_be_text() {
-    let error = refused(module_as(
-        "tree",
-        "tree",
-        r#"Tree(id: "browser", query: Parameter(id: "player.output.volume"))"#,
-    ));
+#[case::query(
+    "tree",
+    r#"Tree(id: "browser", query: Parameter(id: "player.output.volume"))"#,
+    "Text",
+    "Scalar",
+    "tree/browser"
+)]
+#[case::zoom(
+    "deck",
+    r#"Wave(id: "wave", zoom: Model(id: "library.breadcrumb"))"#,
+    "Scalar",
+    "Text",
+    "deck/wave"
+)]
+#[case::scope(
+    "library",
+    r#"ContextBar(
+        id: "context",
+        scope_items: ["LOCAL"],
+        scope: Model(id: "library.breadcrumb"),
+        write: Parameter(id: "player.output.volume"),
+    )"#,
+    "Scalar",
+    "Text",
+    "library/context"
+)]
+#[case::read(
+    "mixer",
+    r#"Crossfader(
+        id: "xfade",
+        read: Model(id: "library.breadcrumb"),
+        write: Parameter(id: "player.output.volume"),
+    )"#,
+    "Scalar",
+    "Text",
+    "mixer/xfade"
+)]
+#[case::status(
+    "library",
+    r#"Table(id: "tracks", status: Parameter(id: "player.output.volume"))"#,
+    "Text",
+    "Scalar",
+    "library/tracks"
+)]
+fn a_read_slot_refuses_a_binding_of_another_kind(
+    #[case] instance: &str,
+    #[case] root: &str,
+    #[case] expected_kind: &str,
+    #[case] actual_kind: &str,
+    #[case] at: &str,
+) {
+    let error = refused(module_as(instance, instance, root));
 
     assert!(
         matches!(&error, UiDocError::BindingType { expected, got, path, .. }
-            if expected == "Text" && got == "Scalar" && path == "tree/browser"),
-        "{error:?}"
-    );
-}
-
-#[kithara::test]
-fn wave_zoom_binding_must_be_scalar() {
-    let error = refused(module_as(
-        "deck",
-        "deck",
-        r#"Wave(id: "wave", zoom: Model(id: "library.breadcrumb"))"#,
-    ));
-
-    assert!(
-        matches!(&error, UiDocError::BindingType { expected, got, path, .. }
-            if expected == "Scalar" && got == "Text" && path == "deck/wave"),
+            if expected == expected_kind && got == actual_kind && path == at),
         "{error:?}"
     );
 }
@@ -732,26 +718,6 @@ fn context_scope_items_require_scope_binding() {
 
     assert!(
         matches!(&error, UiDocError::InvalidContextScope { path, .. } if path == "library/context"),
-        "{error:?}"
-    );
-}
-
-#[kithara::test]
-fn context_scope_binding_must_be_scalar() {
-    let error = refused(module_as(
-        "library",
-        "library",
-        r#"ContextBar(
-            id: "context",
-            scope_items: ["LOCAL"],
-            scope: Model(id: "library.breadcrumb"),
-            write: Parameter(id: "player.output.volume"),
-        )"#,
-    ));
-
-    assert!(
-        matches!(&error, UiDocError::BindingType { expected, got, path, .. }
-            if expected == "Scalar" && got == "Text" && path == "library/context"),
         "{error:?}"
     );
 }
@@ -791,25 +757,6 @@ fn scope_on_unscoped_parameter_is_reported() {
     assert!(
         matches!(&error, UiDocError::UnknownScope { id, scope, path, .. }
             if id == "player.output.volume" && scope == "deck" && path == "demo/volume"),
-        "{error:?}"
-    );
-}
-
-#[kithara::test]
-fn crossfader_requires_scalar_read_and_write_endpoints() {
-    let error = refused(module_as(
-        "mixer",
-        "mixer",
-        r#"Crossfader(
-            id: "xfade",
-            read: Model(id: "library.breadcrumb"),
-            write: Parameter(id: "player.output.volume"),
-        )"#,
-    ));
-
-    assert!(
-        matches!(&error, UiDocError::BindingType { expected, got, path, .. }
-            if expected == "Scalar" && got == "Text" && path == "mixer/xfade"),
         "{error:?}"
     );
 }

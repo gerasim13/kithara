@@ -107,6 +107,14 @@ mod binding {
         /// The session's output changed: every deck it holds reads this from
         /// now on.
         pub fn publish(&self, sample_rate: SessionSampleRate, stream_shape: Option<StreamShape>) {
+            let current = self.0.load();
+            if current.sample_rate.measured == sample_rate.measured
+                && current.sample_rate.requested == sample_rate.requested
+                && current.stream_shape == stream_shape
+            {
+                return;
+            }
+            drop(current);
             self.0.store(Arc::new(OutputSnapshot {
                 sample_rate,
                 stream_shape,
@@ -118,6 +126,53 @@ mod binding {
         #[must_use]
         pub fn get(&self) -> OutputSnapshot {
             **self.0.load()
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use kithara_test_utils::kithara;
+
+        use super::*;
+
+        #[kithara::test]
+        fn unchanged_output_reuses_its_snapshot_and_every_changed_field_publishes() {
+            let output = SessionOutputView::new(NonZeroU32::new(48_000).expect("sample rate"));
+            let original = output.0.load_full();
+            output.publish(original.sample_rate, original.stream_shape);
+            assert!(Arc::ptr_eq(&original, &output.0.load_full()));
+
+            let shape = StreamShape {
+                sample_rate: NonZeroU32::new(48_000).expect("sample rate"),
+                max_block_frames: NonZeroU32::new(512).expect("block frames"),
+            };
+            let mut previous = original.clone();
+            for (rate, shape) in [
+                (SessionSampleRate::new(Some(48_000), 48_000), None),
+                (SessionSampleRate::new(Some(48_000), 44_100), None),
+                (SessionSampleRate::new(Some(48_000), 44_100), Some(shape)),
+                (
+                    SessionSampleRate::new(Some(48_000), 44_100),
+                    Some(StreamShape {
+                        max_block_frames: NonZeroU32::new(256).expect("block frames"),
+                        ..shape
+                    }),
+                ),
+                (SessionSampleRate::new(None, 44_100), None),
+            ] {
+                output.publish(rate, shape);
+                let published = output.0.load_full();
+                assert!(!Arc::ptr_eq(&previous, &published));
+                assert_eq!(published.sample_rate.measured, rate.measured);
+                assert_eq!(published.sample_rate.requested, rate.requested);
+                assert_eq!(published.stream_shape, shape);
+                output.publish(rate, shape);
+                assert!(Arc::ptr_eq(&published, &output.0.load_full()));
+                previous = published;
+            }
+            assert_eq!(original.sample_rate.measured, None);
+            assert_eq!(original.sample_rate.requested, 48_000);
+            assert_eq!(original.stream_shape, None);
         }
     }
 }

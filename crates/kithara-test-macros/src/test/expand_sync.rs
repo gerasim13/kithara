@@ -6,8 +6,8 @@ use super::{
     expand_async::{emit_async_runtime_test, emit_async_timeout_test},
     parse::TestArgs,
     shared::{
-        finalize_body, make_ambient_stmt, make_serial_attr, make_sync_body, make_test_setup,
-        make_wasm_serial_guard, wrap_with_model, wrap_with_timeout,
+        finalize_body, make_ambient_stmt, make_serial_attr, make_test_setup,
+        make_wasm_serial_guard, wrap_with_model, wrap_with_sync_participation, wrap_with_timeout,
     },
 };
 
@@ -28,8 +28,13 @@ pub(crate) fn emit_one_test(
     // Async-native emissions install mode per poll; wasm and sync emissions
     // hold both ambient and active scopes in the body.
     let full_plain = quote! { #preamble #(#body_stmts)* };
-    let full_held = quote! { #test_setup #preamble #ambient #(#body_stmts)* };
-    let full_sync = make_sync_body(&test_setup, preamble, &ambient, body_stmts);
+    let body = quote! { #(#body_stmts)* };
+    let held_body = if is_async {
+        body
+    } else {
+        wrap_with_sync_participation(&body, args)
+    };
+    let full_held = quote! { #test_setup #preamble #ambient #held_body };
     let serial_attr = make_serial_attr(args);
     let wasm_serial_guard = make_wasm_serial_guard(args);
 
@@ -81,7 +86,7 @@ pub(crate) fn emit_one_test(
         return output;
     }
 
-    let modeled = wrap_with_model(&full_sync, args);
+    let modeled = wrap_with_model(&full_held, args);
     let with_timeout = wrap_with_timeout(&modeled, &args.timeout, false, fn_name);
     let wrapped = finalize_body(&with_timeout, args, fn_name, false);
 
@@ -112,13 +117,13 @@ pub(crate) fn emit_one_test(
 }
 
 /// `full_plain` feeds the async branches (per-poll `with_ambient` is the sole
-/// ambient holder there); `full_sync` (body-head `ambient_scope`, participating
-/// statements) feeds the sync branch.
+/// ambient holder there); `full_held` (body-head `ambient_scope`) feeds the
+/// sync branch.
 pub(crate) fn emit_native_only_one(
     ctx: &super::entry::GenCtx<'_>,
     name: &Ident,
     full_plain: &TokenStream2,
-    full_sync: &TokenStream2,
+    full_held: &TokenStream2,
     serial_attr: &TokenStream2,
     native_is_async: bool,
 ) -> TokenStream2 {
@@ -149,7 +154,7 @@ pub(crate) fn emit_native_only_one(
             serial_attr,
         );
     }
-    let modeled = wrap_with_model(full_sync, args);
+    let modeled = wrap_with_model(full_held, args);
     let with_timeout = wrap_with_timeout(&modeled, &args.timeout, false, name);
     let wrapped = finalize_body(&with_timeout, args, name, false);
     quote! {

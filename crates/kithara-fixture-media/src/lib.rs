@@ -5,10 +5,14 @@
 //! in, and the content-addressed store it is kept in. The build that produces
 //! fixtures and the accessors that read them compile these same types.
 
+mod consts;
+
 /// The gapless request shape is portable; the muxer is native-only.
 pub mod fmp4;
 #[cfg(all(feature = "native", not(target_arch = "wasm32")))]
 pub mod hls_manifest;
+pub mod reconstruction;
+pub mod reference;
 pub mod signal;
 #[cfg(all(feature = "native", not(target_arch = "wasm32")))]
 pub mod store;

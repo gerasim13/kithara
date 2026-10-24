@@ -1,3 +1,4 @@
+use fearless_simd::{Level, Simd, dispatch};
 use kithara_bufpool::{HasPool, PoolError};
 use kithara_signal::AudioChunk;
 
@@ -6,6 +7,7 @@ use crate::{AudioEffect, GainDb};
 
 #[non_exhaustive]
 pub struct EqEffect {
+    level: Level,
     eq_l: IsolatorEq,
     eq_r: IsolatorEq,
     bands: Vec<EqBandConfig>,
@@ -31,6 +33,7 @@ impl EqEffect {
         let eq_l = IsolatorEq::new(config, &bands, sample_rate)?;
         let eq_r = IsolatorEq::new(config, &bands, sample_rate)?;
         Ok(Self {
+            level: Level::new(),
             eq_l,
             eq_r,
             bands,
@@ -83,14 +86,7 @@ impl AudioEffect for EqEffect {
             return Some(chunk);
         }
 
-        let samples = &mut chunk.samples;
-
-        for frame in samples.chunks_exact_mut(channels) {
-            frame[0] = self.eq_l.process_sample(frame[0]);
-            if channels >= 2 {
-                frame[1] = self.eq_r.process_sample(frame[1]);
-            }
-        }
+        dispatch!(self.level, simd => render_interleaved(simd, self, &mut chunk.samples, channels));
 
         Some(chunk)
     }
@@ -101,6 +97,16 @@ impl AudioEffect for EqEffect {
         }
         self.eq_l.reset();
         self.eq_r.reset();
+    }
+}
+
+#[inline(always)]
+fn render_interleaved<S: Simd>(_simd: S, eq: &mut EqEffect, samples: &mut [f32], channels: usize) {
+    for frame in samples.chunks_exact_mut(channels) {
+        frame[0] = eq.eq_l.process_sample(frame[0]);
+        if channels >= 2 {
+            frame[1] = eq.eq_r.process_sample(frame[1]);
+        }
     }
 }
 
@@ -542,5 +548,60 @@ mod tests {
         .sqrt();
 
         output_rms / input_rms
+    }
+
+    #[kithara::test]
+    #[case(0)]
+    #[case(1)]
+    #[case(2)]
+    #[case(3)]
+    #[case(4)]
+    fn eq_blocks_preserve_extra_channels_and_incomplete_tails(#[case] channels: u16) {
+        let pools = pools();
+        let bands = generate_log_spaced_bands(3);
+        let config = EqConfig::builder(pools.clone()).build();
+        let mut actual = make_eq(&pools, bands.clone(), 44_100, channels);
+        let mut scalar_left = IsolatorEq::new(&config, &bands, 44_100).expect("left filter");
+        let mut scalar_right = IsolatorEq::new(&config, &bands, 44_100).expect("right filter");
+        actual.set_gain(0, GainDb::MAX);
+        scalar_left.set_gain(0, GainDb::MAX);
+        scalar_right.set_gain(0, GainDb::MAX);
+        let samples = [
+            0.2,
+            -0.4,
+            0.6,
+            f32::from_bits(0x7fc0_1234),
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::from_bits(1),
+            -f32::from_bits(1),
+            0.375,
+            0.125,
+            0.5,
+        ];
+        for _ in 0..3 {
+            let mut expected = samples;
+            if channels != 0 {
+                for frame in expected.chunks_exact_mut(usize::from(channels)) {
+                    frame[0] = scalar_left.process_sample(frame[0]);
+                    if channels >= 2 {
+                        frame[1] = scalar_right.process_sample(frame[1]);
+                    }
+                }
+            }
+            let input = test_chunk(&pools, EqFixture::spec(channels.max(1), 44_100), &samples);
+            let info = input.meta;
+            let output = actual.process(input).expect("processed EQ chunk");
+            assert_eq!(output.meta, info);
+            assert_eq!(output.samples.len(), expected.len());
+            assert!(
+                output
+                    .samples
+                    .iter()
+                    .zip(expected)
+                    .all(|(a, b)| a.to_bits() == b.to_bits()),
+                "channels{channels}"
+            );
+        }
     }
 }

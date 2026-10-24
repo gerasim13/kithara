@@ -114,22 +114,21 @@ impl<D: DriverIo> ResourceCore<D> {
         self.inner.driver.write_at(offset, data, committed)?;
 
         let range = offset..end;
-        self.inner.driver.notify_write(&range);
 
         {
-            let mut state = self.inner.gate.lock();
-            state.available.insert(range.clone());
-
-            if let Some(window) = self.inner.driver.valid_window() {
-                if window.start > 0 {
-                    state.available.remove(0..window.start);
+            let state = self.inner.gate.lock();
+            let upper = state.final_len.unwrap_or(u64::MAX);
+            self.inner.edit_available(state, |available| {
+                available.insert(range.clone());
+                if let Some(window) = self.inner.driver.valid_window() {
+                    if window.start > 0 {
+                        available.remove(0..window.start);
+                    }
+                    if window.end < upper {
+                        available.remove(window.end..upper);
+                    }
                 }
-                let upper = state.final_len.unwrap_or(u64::MAX);
-                if window.end < upper {
-                    state.available.remove(window.end..upper);
-                }
-            }
-            self.inner.publish_available(state);
+            });
         }
         self.inner.gate.notify_all();
 
@@ -394,7 +393,7 @@ mod tests {
         let core = open_mem();
         core.write_at_inner(0, b"hello world")
             .expect("active write must succeed");
-        let snapshot = core.inner.available_snapshot.load_full();
+        let snapshot = core.inner.available.load_full();
         let owners = Arc::strong_count(&snapshot);
 
         let covered = (0..BURST)
@@ -420,7 +419,7 @@ mod tests {
         let core = open_mem();
         core.write_at_inner(0, b"hello")
             .expect("active write must succeed");
-        let reader = core.inner.available_snapshot.load();
+        let reader = core.inner.available.load();
         let displaced: Weak<RangeSet<u64>> = Arc::downgrade(&reader);
 
         core.write_at_inner(5, b" world")

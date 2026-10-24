@@ -1,9 +1,8 @@
 #![forbid(unsafe_code)]
 
-use std::{fs, ops::Range, path::PathBuf};
+use std::{fs, path::PathBuf};
 
 use arc_swap::ArcSwapOption;
-use crossbeam_queue::SegQueue;
 use kithara_config::Config;
 use kithara_platform::sync::{Arc, Mutex, Retired};
 use mmap_io::MemoryMappedFile;
@@ -73,9 +72,6 @@ impl MmapState {
 }
 
 /// Mmap-backed storage driver.
-///
-/// Uses `mmap-io` for file-backed storage with a lock-free `SegQueue`
-/// for fast-path wait notifications.
 #[derive(derive_more::Debug)]
 pub struct MmapDriver {
     /// Immutable committed snapshot for the lock-free read fast path.
@@ -86,9 +82,6 @@ pub struct MmapDriver {
     #[debug(skip)]
     pub(super) mmap: Mutex<MmapState>,
     pub(super) config: MmapOptions,
-    /// Lock-free queue for fast-path range notifications.
-    #[debug(skip)]
-    pub(super) ready_ranges: SegQueue<Range<u64>>,
 }
 
 impl Driver for MmapDriver {
@@ -146,7 +139,6 @@ impl Driver for MmapDriver {
             committed,
             retired: Mutex::default(),
             mmap: Mutex::new(mmap_state),
-            ready_ranges: SegQueue::new(),
         };
 
         Ok((driver, init))

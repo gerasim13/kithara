@@ -16,8 +16,8 @@ use super::{
     parse::TestArgs,
     shared::{
         finalize_body, make_ambient_stmt, make_dedicated_worker_config, make_serial_attr,
-        make_sync_body, make_sync_test_attrs, make_test_setup, make_wasm_serial_guard,
-        wrap_with_timeout,
+        make_sync_test_attrs, make_test_setup, make_wasm_serial_guard,
+        wrap_with_sync_participation, wrap_with_timeout,
     },
 };
 
@@ -151,15 +151,15 @@ fn generate_native_only(ctx: &GenCtx<'_>) -> TokenStream2 {
         let ambient = make_ambient_stmt(ctx.args);
         let body_stmts = ctx.body_stmts;
         // Plain body for the async-native branches (sole ambient holder there
-        // is the per-poll `with_ambient`); held, participating body for the
-        // sync branch.
+        // is the per-poll `with_ambient`); held body for the sync branch.
         let full_plain = quote! { #preamble #(#body_stmts)* };
-        let full_sync = make_sync_body(&test_setup, &preamble, &ambient, body_stmts);
+        let sync_body = wrap_with_sync_participation(&quote! { #(#body_stmts)* }, ctx.args);
+        let full_held = quote! { #test_setup #preamble #ambient #sync_body };
         tests.extend(emit_native_only_one(
             ctx,
             name,
             &full_plain,
-            &full_sync,
+            &full_held,
             &serial_attr,
             native_is_async,
         ));
@@ -363,6 +363,59 @@ mod tests {
         let expanded = generate(args, function)?.to_string();
 
         assert!(!expanded.contains("suppress_expected_panic_dumps"));
+        Ok(())
+    }
+
+    #[test]
+    fn synchronous_native_entries_participate_after_installing_ambient() -> syn::Result<()> {
+        for attrs in [
+            "",
+            "native",
+            "serial",
+            "native, browser",
+            "native, timeout(std::time::Duration::from_secs(2))",
+        ] {
+            let args = syn::parse_str::<TestArgs>(attrs)?;
+            let function = syn::parse_str("fn contract() -> Result<(), String> { Ok(()) }")?;
+            let expanded = generate(args, function)?;
+            let file = syn::parse2::<syn::File>(expanded)?;
+            let native = file
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    syn::Item::Fn(function) if function.sig.asyncness.is_none() => Some(function),
+                    _ => None,
+                })
+                .expect("synchronous native entry");
+            let expanded = quote::quote!(#native).to_string();
+            assert_eq!(expanded.matches("participate_sync").count(), 1, "{attrs}");
+            let ambient = expanded.find("ambient_scope").expect("ambient mode");
+            let participation = expanded.find("participate_sync").expect("driver ownership");
+            assert!(ambient < participation, "{attrs}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn async_wasm_loom_and_manual_clock_entries_keep_their_owner() -> syn::Result<()> {
+        for (attrs, source) in [
+            ("tokio, native", "async fn contract() {}"),
+            ("", "async fn contract() {}"),
+            ("wasm", "fn contract() {}"),
+            ("browser", "async fn contract() {}"),
+            ("loom", "fn contract() {}"),
+            ("flash(false)", "fn contract() {}"),
+            ("native, flash(false)", "fn contract() {}"),
+            ("native, browser, flash(false)", "fn contract() {}"),
+        ] {
+            let args = syn::parse_str::<TestArgs>(attrs)?;
+            let function = syn::parse_str(source)?;
+            let expanded = generate(args, function)?.to_string();
+            assert!(
+                !expanded.contains("participate_sync"),
+                "{attrs}: {expanded}"
+            );
+        }
         Ok(())
     }
 }

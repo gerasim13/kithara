@@ -58,6 +58,11 @@ impl Routes {
 
     fn dispatch(&self, data: &JsValue) {
         let scope = scope(data);
+        if scope.as_deref() == Some("analysis")
+            && get_id_req(data, "trackId").is_none_or(|id| self.item(id).is_none())
+        {
+            return;
+        }
         if self.analysis.dispatch(scope.as_deref(), data) {
             return;
         }

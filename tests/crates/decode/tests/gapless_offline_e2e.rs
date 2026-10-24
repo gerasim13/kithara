@@ -182,13 +182,10 @@ async fn two_tracks_gapless_stitch_continuity_metric(
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
 async fn fused_gapless_tail_compensation_restores_exact_length_at_stitch(
-    fused_seam: Vec<f32>,
     fused_seam_stereo: Vec<f32>,
 ) {
-    let compensated =
-        render_synthetic_fused_deficit_seam(true, &fused_seam, &fused_seam_stereo).await;
-    let uncompensated =
-        render_synthetic_fused_deficit_seam(false, &fused_seam, &fused_seam_stereo).await;
+    let compensated = render_synthetic_fused_deficit_seam(true, &fused_seam_stereo).await;
+    let uncompensated = render_synthetic_fused_deficit_seam(false, &fused_seam_stereo).await;
 
     let stitch_frame = FUSED_FIXTURE_IDEAL_DEVICE_FRAMES;
     let compensated_db = seam_step_db(&compensated.left, stitch_frame);

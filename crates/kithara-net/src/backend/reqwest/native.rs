@@ -1,4 +1,4 @@
-pub(crate) use ::reqwest::{Client, ClientBuilder, RequestBuilder, Response, StatusCode};
+pub(crate) use ::reqwest::{Client, ClientBuilder};
 
 use super::metrics::CountConnectionsLayer;
 use crate::{metrics::ConnectionMetrics, types::NetOptions};

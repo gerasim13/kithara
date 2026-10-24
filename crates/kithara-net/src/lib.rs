@@ -1,10 +1,8 @@
 #![forbid(unsafe_code)]
 
 mod backend;
-#[cfg(reqwest_backend)]
 mod client;
 mod error;
-#[cfg(not(feature = "client-host"))]
 mod metrics;
 mod observe;
 mod range_response;
@@ -13,6 +11,7 @@ mod retry;
 #[cfg(test)]
 pub(crate) use kithara_test_utils::bufpool as test_pools;
 mod traits;
+mod transport;
 mod types;
 
 #[cfg(any(test, feature = "mock"))]
@@ -34,10 +33,11 @@ pub mod host {
 use humantime_serde as _;
 
 pub use crate::{
-    backend::HttpClient,
+    client::HttpClient,
     error::{NetError, NetResult, Retryability},
     observe::{NetObserver, Observer},
-    traits::{ByteStream, Net},
+    traits::{ByteStream, HttpBody, Net},
+    transport::HttpTransport,
     types::{
         Compression, CompressionAlgorithm, Headers, ImpersonatePreset, NetOptions, NetOptionsPatch,
         RangeSpec, RetryPolicy, RetryPolicyPatch,

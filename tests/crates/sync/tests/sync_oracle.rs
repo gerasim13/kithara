@@ -17,14 +17,9 @@ const SAMPLE_RATE: u32 = 48_000;
 const TARGET_BPM: f64 = 120.0;
 
 fn samples(asset: &Asset) -> Vec<f32> {
-    let bytes = asset.bytes();
-    let header = kithara_test_fixtures::signal::header(SAMPLE_RATE, CHANNELS, Some(0));
-    bytes[header.len()..]
-        .as_chunks::<{ size_of::<i16>() }>()
-        .0
-        .iter()
-        .map(|sample| f32::from(i16::from_le_bytes([sample[0], sample[1]])) / f32::from(i16::MAX))
-        .collect()
+    kithara_test_fixtures::reference::authored(asset)
+        .expect("prepared authored rhythm samples")
+        .samples
 }
 
 fn rhythm(style: &str, control: &str) -> Vec<f32> {

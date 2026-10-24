@@ -2,6 +2,7 @@
   "goog:chromeOptions": {
     "args": [
       "--headless=new",
+      "--enable-logging=stderr",
       "--mute-audio",
       "--disable-background-networking",
       "--disable-extensions",

@@ -9,21 +9,21 @@ use kithara::{
         flash::real_io,
         time::{self, Duration},
     },
-    play::{PlayerEvent, Resource, ResourceConfig, ResourceSrc},
-    queue::{QueueEvent, TrackStatus},
+    play::{PlayerEvent, ResourceConfig, ResourceSrc},
+    queue::{QueueEvent, TrackSource, TrackStatus},
     warp::{StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
     disk_asset_store,
     event::TestEvent,
-    offline::{OfflinePlayer, OfflinePlayerOptions, offline_queue_fixture, resource_from_reader},
+    offline::{OfflinePlayer, OfflinePlayerOptions, offline_queue_fixture},
     test_defaults::consts,
     waits::{
         wait_for_event, wait_for_loader_done_event, wait_for_position_event,
         wait_for_position_near_event,
     },
 };
-use kithara_test_fixtures::integration_fixtures::{constant_half, drain_tone};
+use kithara_test_fixtures::{assets, integration_fixtures::drain_tone};
 use kithara_test_utils::{TestTempDir, temp_dir};
 
 const BLOCK_FRAMES: usize = 512;
@@ -43,14 +43,6 @@ const MIN_SHARE_NUM: usize = 7;
 const MAX_SHARE_NUM: usize = 9;
 const SHARE_DEN: usize = 10;
 const DRAIN_BLOCK_BUDGET: usize = 2_000;
-
-fn make_resource(constant_half: &'static [u8], duration_secs: f64) -> Resource {
-    resource_from_reader(kithara::audio::mock::TestPcmReader::with_pcm(
-        consts::AUDIO_SPEC,
-        duration_secs,
-        constant_half,
-    ))
-}
 
 fn file_resource(
     path: &Path,
@@ -86,7 +78,7 @@ async fn render_target(harness: &OfflinePlayer) -> Vec<f32> {
 }
 
 #[kithara::test(tokio)]
-async fn offline_harness_smoke(constant_half: &'static [u8]) {
+async fn offline_harness_smoke() {
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder().build(),
         consts::SAMPLE_RATE,
@@ -96,7 +88,13 @@ async fn offline_harness_smoke(constant_half: &'static [u8]) {
         let _real_io = real_io();
         harness.render(BLOCK_FRAMES).await;
     }
-    let deck_source = harness.pcm_deck((make_resource(constant_half, 0.1)).into());
+    let deck_source = TrackSource::Uri(
+        assets::fixed_constant_wav_cd_half_4410()
+            .path()
+            .expect("prepared smoke WAV")
+            .to_string_lossy()
+            .into_owned(),
+    );
     let mut events = harness.player().subscribe();
     let deck_id = harness
         .with_queue(move |player| {
@@ -274,6 +272,62 @@ async fn event_waits_keep_the_callers_deadline_during_unrelated_events() {
         assert!(result.expect_err("no requested milestone").contains("50ms"));
     }
     harness.close().await;
+}
+
+#[cfg(feature = "flash")]
+#[kithara::test(tokio)]
+async fn position_event_wait_keeps_a_virtual_deadline() {
+    let (harness, queue) = offline_queue_fixture(consts::SAMPLE_RATE).await;
+    let mut events = queue.subscribe();
+    let budget = Duration::from_secs(5);
+    let clock_start = time::Instant::now();
+    let wall_start = time::WallInstant::now();
+    let result = wait_for_position_event(&mut events, &queue, 1.0, budget).await;
+    let wall_elapsed = wall_start.elapsed();
+    let clock_elapsed = clock_start.elapsed();
+    harness.close().await;
+
+    assert!(
+        result
+            .expect_err("an empty queue cannot advance")
+            .contains("5s")
+    );
+    assert!(
+        clock_elapsed >= budget,
+        "the whole virtual deadline must elapse"
+    );
+    assert!(
+        wall_elapsed < Duration::from_secs(1),
+        "a position event wait is not real I/O: {wall_elapsed:?}",
+    );
+}
+
+#[cfg(feature = "flash")]
+#[kithara::test(tokio)]
+async fn near_position_event_wait_keeps_a_virtual_deadline() {
+    let (harness, queue) = offline_queue_fixture(consts::SAMPLE_RATE).await;
+    let mut events = queue.subscribe();
+    let budget = Duration::from_secs(5);
+    let clock_start = time::Instant::now();
+    let wall_start = time::WallInstant::now();
+    let result = wait_for_position_near_event(&mut events, &queue, 1.0, 0.001, budget).await;
+    let wall_elapsed = wall_start.elapsed();
+    let clock_elapsed = clock_start.elapsed();
+    harness.close().await;
+
+    assert!(
+        result
+            .expect_err("an empty queue cannot advance")
+            .contains("5s")
+    );
+    assert!(
+        clock_elapsed >= budget,
+        "the whole virtual deadline must elapse"
+    );
+    assert!(
+        wall_elapsed < Duration::from_secs(1),
+        "a near-position event wait is not real I/O: {wall_elapsed:?}",
+    );
 }
 
 #[kithara::test(tokio)]

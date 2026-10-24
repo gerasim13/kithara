@@ -5,7 +5,7 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     host::{HostConfig, HostSettings, Tap},
     platform::time::Duration,
-    play::{ResourceConfig, ResourceSrc},
+    play::{ResourceConfig, ResourceSrc, SlotSnapshot},
 };
 use kithara_integration_tests::{
     TestServerHelper,
@@ -77,15 +77,16 @@ async fn render_blocks(worker: &OfflineWorker, blocks: usize) -> Vec<f32> {
     rendered
 }
 
-/// Blocks the graph filled, in render order.
-///
-/// A render the decoder could not fill writes what it had, zero-fills the rest
-/// and counts an underrun, so averaging every rendered block together reads how
-/// the OS scheduled two threads rather than what the fixture carries. That is
-/// what put this suite below the band on a loaded stress runner. Rendering
-/// until a fixed number of blocks come back filled keeps the measurement the
-/// same size in both lanes, and gets there without pacing the loop against
-/// wall-clock time, which an offline render has no reason to wait for.
+fn filled_block(before: &SlotSnapshot, after: &SlotSnapshot) -> bool {
+    let (Some(before), Some(after)) = (before.mark, after.mark) else {
+        return false;
+    };
+    before.lane.segment == after.lane.segment
+        && after.lane.frame.checked_sub(before.lane.frame) == Some(BLOCK_FRAMES as u64)
+        && after.session.frames_since(before.session) == Some(BLOCK_FRAMES as u64)
+}
+
+/// Blocks whose consumed lane cursor advanced over every rendered frame.
 async fn render_filled_blocks(worker: &OfflineWorker, blocks: usize) -> Vec<f32> {
     let wanted = blocks * BLOCK_FRAMES * CHANNELS;
     let mut filled = Vec::with_capacity(wanted);
@@ -97,30 +98,27 @@ async fn render_filled_blocks(worker: &OfflineWorker, blocks: usize) -> Vec<f32>
             filled.len() / (BLOCK_FRAMES * CHANNELS)
         );
         renders += 1;
-        let (block, underran) = worker
+        let (block, complete) = worker
             .call(async move |player| {
-                let before = player.metrics().underruns();
+                let before = player.deck_snapshot();
                 let block = player.render(BLOCK_FRAMES).await;
-                (block, player.metrics().underruns() != before)
+                let after = player.deck_snapshot();
+                let filled = before
+                    .slots
+                    .iter()
+                    .zip(&after.slots)
+                    .any(|(before, after)| filled_block(before, after));
+                (block, filled)
             })
             .await;
-        if !underran {
+        if complete {
             filled.extend_from_slice(&block);
         }
     }
     filled
 }
 
-/// The offline render carries the fixture's signal, read off the audio.
-///
-/// Only the blocks the graph filled are measured, because a browser read never
-/// parks and a starved one therefore zero-fills instead of waiting. The player
-/// names those blocks itself by counting an underrun, and how many there are
-/// reads how the OS scheduled two threads: none on an idle machine, runs of
-/// them on a loaded stress runner, whose inserted silence averaged the level
-/// below the band. The silence assertion then holds that counter to its word,
-/// because a gap inside a block the player did not mark survives into the
-/// measurement.
+/// The offline render carries the fixture's signal, read off complete PCM blocks.
 #[kithara::test(
     tokio,
     browser,
@@ -168,4 +166,53 @@ async fn offline_mix_tap_mirrors_render() {
 
     assert_eq!(tapped, rendered, "the tap carries what the sink received");
     assert_eq!(tap.drops(), 0);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+mod tests {
+    use kithara::signal::{SegmentId, SessionFrame};
+    use kithara_render::{LaneFrame, bridge::SlotMark};
+
+    use super::*;
+
+    #[kithara::test]
+    #[case::filled(512, true)]
+    #[case::partial(256, false)]
+    #[case::sustained_gap(0, false)]
+    fn only_fully_consumed_blocks_enter_the_signal_measurement(
+        #[case] consumed: u64,
+        #[case] expected: bool,
+    ) {
+        let mark = SlotMark {
+            session: SessionFrame::new(1_024),
+            lane: LaneFrame {
+                segment: SegmentId::FIRST,
+                frame: 800,
+            },
+            position: Duration::ZERO,
+        };
+        let before = SlotSnapshot {
+            mark: Some(mark),
+            ..SlotSnapshot::default()
+        };
+        let mut after = before;
+        after.mark = Some(SlotMark {
+            session: SessionFrame::new(1_536),
+            lane: LaneFrame {
+                frame: mark.lane.frame + consumed,
+                ..mark.lane
+            },
+            ..mark
+        });
+        assert_eq!(filled_block(&before, &after), expected);
+        if expected {
+            let mut changed_segment = after;
+            changed_segment.mark.as_mut().expect("mark").lane.segment = SegmentId::FIRST.next();
+            assert!(!filled_block(&before, &changed_segment));
+            let mut stale_session = after;
+            stale_session.mark.as_mut().expect("mark").session = mark.session;
+            assert!(!filled_block(&before, &stale_session));
+            assert!(!filled_block(&SlotSnapshot::default(), &after));
+        }
+    }
 }
