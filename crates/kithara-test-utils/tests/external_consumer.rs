@@ -24,6 +24,32 @@ fn run(command: &mut Command, directory: &Path, label: &str, seconds: u64) -> Ou
             break status;
         }
         if WallInstant::now() >= deadline {
+            if cfg!(target_os = "linux") {
+                let pid = child.id();
+                let children = fs::read_dir(format!("/proc/{pid}/task")).map(|tasks| {
+                    tasks
+                        .filter_map(Result::ok)
+                        .filter_map(|task| fs::read_to_string(task.path().join("children")).ok())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                });
+                let processes = children.map(|children| {
+                    children
+                        .split_whitespace()
+                        .map(|pid| {
+                            format!(
+                                "{pid}: {:?}; {:?}\n",
+                                fs::read_to_string(format!("/proc/{pid}/stat")),
+                                fs::read_to_string(format!("/proc/{pid}/wchan"))
+                            )
+                        })
+                        .collect::<String>()
+                });
+                let _ = fs::write(
+                    directory.join(format!("{label}.processes")),
+                    format!("{processes:?}"),
+                );
+            }
             child.kill().expect("kill timed out command");
             child.wait().expect("reap timed out command");
             panic!("external-runtime {label} exceeded {seconds}s; evidence: {directory:?}");
@@ -163,6 +189,7 @@ fn cargo(consumer: &Path, target: &Path, args: &[&str]) -> Command {
         .env_remove("RUSTFLAGS")
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .env_remove("RUSTDOCFLAGS")
+        .arg("--verbose")
         .args(args);
     command
 }
