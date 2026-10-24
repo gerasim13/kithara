@@ -587,6 +587,7 @@ pub(super) async fn render_switch(
     while samples.len() / usize::from(CHANNELS) < observation_frames {
         hang_tick!();
         let before = prepared.player.position();
+        let underruns_before = prepared.player.metrics().underruns();
         let rendered_frames = samples.len() / usize::from(CHANNELS);
         let remaining_frames = observation_frames.saturating_sub(rendered_frames);
         let render_frames = remaining_frames.min(BLOCK_FRAMES);
@@ -600,6 +601,13 @@ pub(super) async fn render_switch(
         // played: one content timeline spans every variant of the stream.
         let advanced = source_frame(prepared.player.position(), transition.label)
             - source_frame(before, transition.label);
+        let underruns_after = prepared.player.metrics().underruns();
+        if underruns_after > underruns_before {
+            println!(
+                "QUALITY_SWITCH_UNDERRUN transition={} backend={backend:?} window_frame={rendered_frames} requested_frames={render_frames} advanced_frames={advanced} underruns_before={underruns_before} underruns_after={underruns_after}",
+                transition.label,
+            );
+        }
         let render_limit = i64::try_from(render_frames).expect("render block fits i64");
         if !(0..=render_limit).contains(&advanced) {
             position_jumps.push((rendered_frames, advanced, render_frames));
