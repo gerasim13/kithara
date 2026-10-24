@@ -3,7 +3,7 @@ set working-directory := "../.."
 
 # This consumer owns its lockfile and builds outside the product workspace.
 external-runtime:
-    cargo test --locked -p kithara-test-utils --test external_consumer -- --include-ignored --nocapture
+    just _xtask external-runtime
 
 # Run workspace tests via the xtask/nextest harness. Use `just test run ...`
 

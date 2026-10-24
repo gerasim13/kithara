@@ -126,7 +126,8 @@ is a separate timeout mechanism; it does not prove an active hang watchdog.
 test. With `usdt` disabled, native consumers need no DTrace or USDT tooling.
 
 The [external fixture](tests/fixtures/external-runtime/Cargo.toml) owns an
-independent workspace and lockfile. Its minimal, mock, multithread, hang, and
+independent workspace. The runner prepares its lockfile outside the checkout
+and records the exact lock used throughout the matrix. Its minimal, mock, multithread, hang, and
 config/derive modes run separately from the product workspace. The negative
 watchdog test is ignored during normal runs and invoked only in a child process
 with an independent deadline. Wasm wrapper checks establish compilation only;
@@ -136,6 +137,7 @@ Run `just test external-runtime` for the full matrix. To verify a published git
 revision, set `KITHARA_EXTERNAL_RUNTIME_REV` to its full SHA and
 `KITHARA_EXTERNAL_RUNTIME_GIT_URL` to its repository URL without credentials.
 The runner prepares dependencies, then repeats tests with locked offline resolution.
+CI pins the consumer to the checked-out revision automatically.
 
 ### Integration tests live elsewhere
 

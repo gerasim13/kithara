@@ -427,37 +427,37 @@
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --touched --selection-output=.ci-artifacts/junit/apple-test.selection.json --flash=on --no-block=on --profile ci
-  sh -eu -c revision=$(git rev-parse HEAD); if repository=$(printenv CI_PROJECT_URL); then repository="$repository.git"; else repository="https://github.com/$GITHUB_REPOSITORY.git"; fi; KITHARA_EXTERNAL_RUNTIME_REV="$revision" KITHARA_EXTERNAL_RUNTIME_GIT_URL="$repository" exec just test external-runtime
+  just test external-runtime
 # apple-test / platforms
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=on --no-block=on --profile ci
-  sh -eu -c revision=$(git rev-parse HEAD); if repository=$(printenv CI_PROJECT_URL); then repository="$repository.git"; else repository="https://github.com/$GITHUB_REPOSITORY.git"; fi; KITHARA_EXTERNAL_RUNTIME_REV="$revision" KITHARA_EXTERNAL_RUNTIME_GIT_URL="$repository" exec just test external-runtime
+  just test external-runtime
 # apple-test / merge-request
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=on --no-block=on --profile ci
-  sh -eu -c revision=$(git rev-parse HEAD); if repository=$(printenv CI_PROJECT_URL); then repository="$repository.git"; else repository="https://github.com/$GITHUB_REPOSITORY.git"; fi; KITHARA_EXTERNAL_RUNTIME_REV="$revision" KITHARA_EXTERNAL_RUNTIME_GIT_URL="$repository" exec just test external-runtime
+  just test external-runtime
 # apple-test / quarantine
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=on --no-block=on --profile ci
-  sh -eu -c revision=$(git rev-parse HEAD); if repository=$(printenv CI_PROJECT_URL); then repository="$repository.git"; else repository="https://github.com/$GITHUB_REPOSITORY.git"; fi; KITHARA_EXTERNAL_RUNTIME_REV="$revision" KITHARA_EXTERNAL_RUNTIME_GIT_URL="$repository" exec just test external-runtime
+  just test external-runtime
 # apple-test / main
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=on --no-block=on --profile ci
-  sh -eu -c revision=$(git rev-parse HEAD); if repository=$(printenv CI_PROJECT_URL); then repository="$repository.git"; else repository="https://github.com/$GITHUB_REPOSITORY.git"; fi; KITHARA_EXTERNAL_RUNTIME_REV="$revision" KITHARA_EXTERNAL_RUNTIME_GIT_URL="$repository" exec just test external-runtime
+  just test external-runtime
 # apple-test / nightly
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=on --no-block=on --profile ci
-  sh -eu -c revision=$(git rev-parse HEAD); if repository=$(printenv CI_PROJECT_URL); then repository="$repository.git"; else repository="https://github.com/$GITHUB_REPOSITORY.git"; fi; KITHARA_EXTERNAL_RUNTIME_REV="$revision" KITHARA_EXTERNAL_RUNTIME_GIT_URL="$repository" exec just test external-runtime
+  just test external-runtime
 # apple-test / weekly
   refused: weekly pipelines do not run the Apple suite
 # apple-test / release
@@ -465,7 +465,7 @@
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=on --no-block=on --profile ci
-  sh -eu -c revision=$(git rev-parse HEAD); if repository=$(printenv CI_PROJECT_URL); then repository="$repository.git"; else repository="https://github.com/$GITHUB_REPOSITORY.git"; fi; KITHARA_EXTERNAL_RUNTIME_REV="$revision" KITHARA_EXTERNAL_RUNTIME_GIT_URL="$repository" exec just test external-runtime
+  just test external-runtime
 # apple-test-flash-off / branch
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
@@ -1985,7 +1985,7 @@
     CARGO_BUILD_JOBS=2
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
-  sh -eu -c revision=$(git rev-parse HEAD); if repository=$(printenv CI_PROJECT_URL); then repository="$repository.git"; else repository="https://github.com/$GITHUB_REPOSITORY.git"; fi; KITHARA_EXTERNAL_RUNTIME_REV="$revision" KITHARA_EXTERNAL_RUNTIME_GIT_URL="$repository" exec just test external-runtime
+  just test external-runtime
     CARGO_BUILD_JOBS=2
 # linux-test-simulated-clock / platforms
   <require os> linux
@@ -1994,7 +1994,7 @@
     CARGO_BUILD_JOBS=2
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
-  sh -eu -c revision=$(git rev-parse HEAD); if repository=$(printenv CI_PROJECT_URL); then repository="$repository.git"; else repository="https://github.com/$GITHUB_REPOSITORY.git"; fi; KITHARA_EXTERNAL_RUNTIME_REV="$revision" KITHARA_EXTERNAL_RUNTIME_GIT_URL="$repository" exec just test external-runtime
+  just test external-runtime
     CARGO_BUILD_JOBS=2
 # linux-test-simulated-clock / merge-request
   <require os> linux
@@ -2003,7 +2003,7 @@
     CARGO_BUILD_JOBS=2
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
-  sh -eu -c revision=$(git rev-parse HEAD); if repository=$(printenv CI_PROJECT_URL); then repository="$repository.git"; else repository="https://github.com/$GITHUB_REPOSITORY.git"; fi; KITHARA_EXTERNAL_RUNTIME_REV="$revision" KITHARA_EXTERNAL_RUNTIME_GIT_URL="$repository" exec just test external-runtime
+  just test external-runtime
     CARGO_BUILD_JOBS=2
 # linux-test-simulated-clock / quarantine
   <require os> linux
@@ -2012,7 +2012,7 @@
     CARGO_BUILD_JOBS=2
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
-  sh -eu -c revision=$(git rev-parse HEAD); if repository=$(printenv CI_PROJECT_URL); then repository="$repository.git"; else repository="https://github.com/$GITHUB_REPOSITORY.git"; fi; KITHARA_EXTERNAL_RUNTIME_REV="$revision" KITHARA_EXTERNAL_RUNTIME_GIT_URL="$repository" exec just test external-runtime
+  just test external-runtime
     CARGO_BUILD_JOBS=2
 # linux-test-simulated-clock / main
   <require os> linux
@@ -2021,7 +2021,7 @@
     CARGO_BUILD_JOBS=2
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
-  sh -eu -c revision=$(git rev-parse HEAD); if repository=$(printenv CI_PROJECT_URL); then repository="$repository.git"; else repository="https://github.com/$GITHUB_REPOSITORY.git"; fi; KITHARA_EXTERNAL_RUNTIME_REV="$revision" KITHARA_EXTERNAL_RUNTIME_GIT_URL="$repository" exec just test external-runtime
+  just test external-runtime
     CARGO_BUILD_JOBS=2
 # linux-test-simulated-clock / nightly
   <require os> linux
@@ -2030,7 +2030,7 @@
     CARGO_BUILD_JOBS=2
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
-  sh -eu -c revision=$(git rev-parse HEAD); if repository=$(printenv CI_PROJECT_URL); then repository="$repository.git"; else repository="https://github.com/$GITHUB_REPOSITORY.git"; fi; KITHARA_EXTERNAL_RUNTIME_REV="$revision" KITHARA_EXTERNAL_RUNTIME_GIT_URL="$repository" exec just test external-runtime
+  just test external-runtime
     CARGO_BUILD_JOBS=2
 # linux-test-simulated-clock / weekly
   <require os> linux
@@ -2039,7 +2039,7 @@
     CARGO_BUILD_JOBS=2
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
-  sh -eu -c revision=$(git rev-parse HEAD); if repository=$(printenv CI_PROJECT_URL); then repository="$repository.git"; else repository="https://github.com/$GITHUB_REPOSITORY.git"; fi; KITHARA_EXTERNAL_RUNTIME_REV="$revision" KITHARA_EXTERNAL_RUNTIME_GIT_URL="$repository" exec just test external-runtime
+  just test external-runtime
     CARGO_BUILD_JOBS=2
 # linux-test-simulated-clock / release
   <require os> linux
@@ -2048,7 +2048,7 @@
     CARGO_BUILD_JOBS=2
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
-  sh -eu -c revision=$(git rev-parse HEAD); if repository=$(printenv CI_PROJECT_URL); then repository="$repository.git"; else repository="https://github.com/$GITHUB_REPOSITORY.git"; fi; KITHARA_EXTERNAL_RUNTIME_REV="$revision" KITHARA_EXTERNAL_RUNTIME_GIT_URL="$repository" exec just test external-runtime
+  just test external-runtime
     CARGO_BUILD_JOBS=2
 # linux-tooling / branch
   <require os> linux

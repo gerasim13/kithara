@@ -5,6 +5,11 @@
 [project]
 name = "kithara"
 
+[format]
+extra_manifests = [
+  "crates/kithara-test-utils/tests/fixtures/external-runtime/Cargo.toml",
+]
+
 [workspace-scan]
 # Cargo build output can also live below an individual crate (for example the
 # multi-target FFI builds). Generated bindings are not workspace source.
@@ -2149,10 +2154,9 @@ steps = [
     "ci",
     "--timings",
   ] }, env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", KITHARA_HANG_PREKILL_SECS = "110" } },
-  { program = "sh", args = [
-    "-eu",
-    "-c",
-    'revision=$(git rev-parse HEAD); if repository=$(printenv CI_PROJECT_URL); then repository="$repository.git"; else repository="https://github.com/$GITHUB_REPOSITORY.git"; fi; KITHARA_EXTERNAL_RUNTIME_REV="$revision" KITHARA_EXTERNAL_RUNTIME_GIT_URL="$repository" exec just test external-runtime',
+  { args = [
+    "test",
+    "external-runtime",
   ], label = "Independent test runtime at checked-out revision", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "gate"
@@ -2937,10 +2941,9 @@ steps = [
     "--profile",
     "ci",
   ] } },
-  { program = "sh", args = [
-    "-eu",
-    "-c",
-    'revision=$(git rev-parse HEAD); if repository=$(printenv CI_PROJECT_URL); then repository="$repository.git"; else repository="https://github.com/$GITHUB_REPOSITORY.git"; fi; KITHARA_EXTERNAL_RUNTIME_REV="$revision" KITHARA_EXTERNAL_RUNTIME_GIT_URL="$repository" exec just test external-runtime',
+  { args = [
+    "test",
+    "external-runtime",
   ], label = "Independent test runtime at checked-out revision" },
 ]
 role = "platforms"
