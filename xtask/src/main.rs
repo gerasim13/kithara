@@ -8,7 +8,6 @@ mod apple_docgen;
 mod child;
 mod ci;
 mod config;
-mod external_runtime;
 mod job;
 mod mutants;
 mod parity;
@@ -17,6 +16,7 @@ mod release;
 mod self_cache;
 mod sysroot;
 mod test_server;
+mod test_utils;
 #[cfg(test)]
 mod testing;
 mod wasm;
@@ -65,8 +65,8 @@ enum Command {
     },
     /// Dedicated `GitLab` CI automation.
     Ci(CiArgs),
-    /// Verify the independent test-runtime consumer.
-    ExternalRuntime,
+    /// Verify test utilities outside workspace feature unification.
+    TestUtils,
     /// Publish all public crates to crates.io in dependency order.
     Publish(PublishArgs),
     /// Run explicitly scoped mutation suites.
@@ -130,7 +130,7 @@ fn work() -> anyhow::Result<()> {
         Command::Apple { command } => apple::run(command, &ctx),
         Command::Wasm { command } => wasm::run(command, &ctx),
         Command::Ci(ref args) => ci::run(args, &ctx),
-        Command::ExternalRuntime => external_runtime::run(&ctx),
+        Command::TestUtils => test_utils::run(&ctx),
         Command::Publish(ref args) => publish::run(args, &ctx),
         Command::Mutants(ref args) => mutants::run(args, &ctx),
         Command::Parity(ref args) => parity::run(args, &ctx),
@@ -160,12 +160,12 @@ mod tests {
     }
 
     #[test]
-    fn external_runtime_has_a_direct_xtask_command() {
+    fn test_utils_has_a_direct_xtask_command() {
         assert!(matches!(
-            Cli::try_parse_from(["xtask", "external-runtime"])
+            Cli::try_parse_from(["xtask", "test-utils"])
                 .unwrap()
                 .command,
-            Command::ExternalRuntime
+            Command::TestUtils
         ));
     }
 

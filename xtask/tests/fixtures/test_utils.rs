@@ -86,7 +86,7 @@ async fn multithread_runtime() {
 mod watchdog {
     use kithara_test_utils::kithara;
 
-    #[kithara::hang_watchdog(name = "external-runtime-hang")]
+    #[kithara::hang_watchdog(name = "test-utils-watchdog")]
     fn hang_without_progress() {
         hang_reset!();
         loop {

@@ -125,20 +125,20 @@ is a separate timeout mechanism; it does not prove an active hang watchdog.
 `hang_timeout_secs(N)` sets the budget for watchdog helpers called inside the
 test. With `usdt` disabled, native consumers need no DTrace or USDT tooling.
 
-The [external consumer tests](../../xtask/tests/fixtures/external_runtime.rs) run
-in a temporary workspace outside the checkout. The runner creates its manifest
-from the root dependency versions and records the lockfile used throughout the
-matrix. Its minimal, mock, multithread, hang, and
-config/derive modes run separately from the product workspace. The negative
-watchdog test is ignored during normal runs and invoked only in a child process
-with an independent deadline. Wasm wrapper checks establish compilation only;
-browser execution remains separate acceptance evidence.
+The [standalone tests](../../xtask/tests/fixtures/test_utils.rs) run in a temporary
+workspace outside the checkout. The runner creates its manifest from the root
+dependency versions and reuses one lockfile throughout the matrix. Its minimal,
+mock, multithread, hang, and config/derive modes run separately from the product
+workspace. The negative watchdog test runs only in a child process with an
+independent deadline. All temporary sources, build output and diagnostic files
+are removed when the command exits; results and failures appear in its normal
+log output. Wasm wrapper checks establish compilation only.
 
-Run `just test external-runtime` for the full matrix. To verify a published git
-revision, set `KITHARA_EXTERNAL_RUNTIME_REV` to its full SHA and
-`KITHARA_EXTERNAL_RUNTIME_GIT_URL` to its repository URL without credentials.
+Run `just test test-utils` for the full matrix. To verify a published git
+revision, set `KITHARA_TEST_UTILS_REV` to its full SHA and
+`KITHARA_TEST_UTILS_GIT_URL` to its repository URL without credentials.
 The runner prepares dependencies, then repeats tests with locked offline resolution.
-CI pins the consumer to the checked-out revision automatically.
+CI pins the tests to the checked-out revision automatically.
 
 ### Integration tests live elsewhere
 

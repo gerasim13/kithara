@@ -16,34 +16,32 @@ use crate::{child, job};
 struct Consumer<'a> {
     cancel: &'a child::Cancel,
     directory: &'a Path,
-    evidence: &'a Path,
+    capture: &'a Path,
     target: &'a Path,
 }
 
 pub(crate) fn run(ctx: &Ctx) -> Result<()> {
     ensure!(
         cfg!(any(target_os = "linux", target_os = "macos")),
-        "external runtime requires Linux or macOS"
+        "test utilities check requires Linux or macOS"
     );
     let cancel = child::Cancel::install()?;
     let root = ctx
         .root
         .join(env::var_os("CARGO_TARGET_DIR").unwrap_or_else(|| "target".into()));
-    fs::create_dir_all(root.join("hang"))?;
+    fs::create_dir_all(&root)?;
     let source = tempfile::tempdir()?;
     let directory = source.path().join("consumer");
+    let capture = source.path().join("capture");
     fs::create_dir(&directory)?;
+    fs::create_dir(&capture)?;
     let target = tempfile::Builder::new()
-        .prefix("external-test-runtime-")
+        .prefix("test-utils-check-")
         .tempdir_in(&root)?;
-    let evidence = tempfile::Builder::new()
-        .prefix("external-test-runtime-")
-        .tempdir_in(root.join("hang"))?
-        .keep();
     let consumer = Consumer {
         cancel: &cancel,
         directory: &directory,
-        evidence: &evidence,
+        capture: &capture,
         target: target.path(),
     };
     consumer.prepare(&ctx.root)?;
@@ -53,7 +51,8 @@ pub(crate) fn run(ctx: &Ctx) -> Result<()> {
 
 impl Consumer<'_> {
     fn capabilities(&self) -> Result<()> {
-        self.checked(Command::new("rustc").arg("-vV"), "toolchain", Some(30))?;
+        let toolchain = self.checked(Command::new("rustc").arg("-vV"), "toolchain", Some(30))?;
+        info!(toolchain = toolchain.trim(), "test utilities toolchain");
         for offline in [false, true] {
             for features in ["", "mock", "multithread", "hang", "devtools"] {
                 let label = format!("native-{features}-offline-{offline}");
@@ -183,9 +182,9 @@ impl Consumer<'_> {
     }
 
     fn execute(&self, command: &mut Command, label: &str, seconds: Option<u64>) -> Result<Output> {
-        let stdout = self.evidence.join(format!("{label}.stdout"));
-        let stderr = self.evidence.join(format!("{label}.stderr"));
-        info!(label, ?command, "external runtime command");
+        let stdout = self.capture.join(format!("{label}.stdout"));
+        let stderr = self.capture.join(format!("{label}.stderr"));
+        info!(label, ?command, "test utilities command");
         command
             .current_dir(self.directory)
             .stdin(Stdio::null())
@@ -196,12 +195,20 @@ impl Consumer<'_> {
             &mut process,
             Some(self.cancel),
             seconds.map(Duration::from_secs),
-        )
-        .with_context(|| format!("{label}; evidence: {}", self.evidence.display()))?;
+        );
+        let stdout = fs::read(stdout)?;
+        let stderr = fs::read(stderr)?;
+        let status = status.with_context(|| {
+            format!(
+                "{label}: {}\n{}",
+                String::from_utf8_lossy(&stdout),
+                String::from_utf8_lossy(&stderr)
+            )
+        })?;
         Ok(Output {
             status,
-            stdout: fs::read(stdout)?,
-            stderr: fs::read(stderr)?,
+            stdout,
+            stderr,
         })
     }
 
@@ -215,8 +222,8 @@ impl Consumer<'_> {
             Some(30),
         )?;
         let pin = match (
-            env::var("KITHARA_EXTERNAL_RUNTIME_REV").ok(),
-            env::var("KITHARA_EXTERNAL_RUNTIME_GIT_URL").ok(),
+            env::var("KITHARA_TEST_UTILS_REV").ok(),
+            env::var("KITHARA_TEST_UTILS_GIT_URL").ok(),
         ) {
             (Some(revision), Some(repository)) => {
                 Some((job::repository_url(&repository)?, revision))
@@ -224,7 +231,7 @@ impl Consumer<'_> {
             (None, None) => job::source_repository(&|name| env::var(name).ok())?
                 .map(|repository| (repository, checkout.trim().to_owned())),
             _ => anyhow::bail!(
-                "a Git pin requires KITHARA_EXTERNAL_RUNTIME_REV and KITHARA_EXTERNAL_RUNTIME_GIT_URL together"
+                "a Git pin requires KITHARA_TEST_UTILS_REV and KITHARA_TEST_UTILS_GIT_URL together"
             ),
         };
         if let Some((_, revision)) = &pin {
@@ -235,7 +242,7 @@ impl Consumer<'_> {
         }
         fs::create_dir_all(self.directory.join("src"))?;
         fs::copy(
-            root.join("xtask/tests/fixtures/external_runtime.rs"),
+            root.join("xtask/tests/fixtures/test_utils.rs"),
             self.directory.join("src/lib.rs"),
         )?;
         fs::write(
@@ -245,7 +252,7 @@ impl Consumer<'_> {
                 pin.as_ref().map(|(url, rev)| (url.as_str(), rev.as_str())),
             )?,
         )?;
-        info!(source = checkout.trim(), pin = ?pin, evidence = %self.evidence.display(), "external runtime");
+        info!(source = checkout.trim(), pin = ?pin, "test utilities");
         self.checked(
             self.cargo(&["generate-lockfile"])
                 .env("CARGO_NET_GIT_FETCH_WITH_CLI", "true"),
@@ -253,9 +260,6 @@ impl Consumer<'_> {
             Some(300),
         )?;
         self.checked(&mut self.cargo(&["fetch", "--locked"]), "fetch", Some(300))?;
-        for file in ["Cargo.toml", "Cargo.lock"] {
-            fs::copy(self.directory.join(file), self.evidence.join(file))?;
-        }
         Ok(())
     }
 
@@ -268,7 +272,7 @@ impl Consumer<'_> {
                     "watchdog::hang_watchdog_fires",
                     "--nocapture",
                 ])
-                .env("KITHARA_HANG_DUMP_DIR", self.evidence),
+                .env("KITHARA_HANG_DUMP_DIR", self.capture),
             "hang-child",
             Some(10),
         )?;
@@ -279,26 +283,25 @@ impl Consumer<'_> {
         );
         ensure!(
             !output.status.success()
+                && diagnostics.contains("[HangDetector] `test-utils-watchdog` no progress for 1s")
                 && diagnostics
-                    .contains("[HangDetector] `external-runtime-hang` no progress for 1s")
-                && diagnostics
-                    .contains("[kithara_hang_detector] hang detected: external-runtime-hang"),
+                    .contains("[kithara_hang_detector] hang detected: test-utils-watchdog"),
             "watchdog did not reject the stuck child: {diagnostics}"
         );
-        let dump = fs::read_dir(self.evidence)?
+        let dump = fs::read_dir(self.capture)?
             .map(|entry| entry.map(|entry| entry.path()))
             .collect::<std::io::Result<Vec<_>>>()?
             .into_iter()
             .find(|path| {
                 path.file_name().is_some_and(|name| {
                     name.to_string_lossy()
-                        .starts_with("kithara-hang-external-runtime-hang-")
+                        .starts_with("kithara-hang-test-utils-watchdog-")
                 })
             })
             .context("watchdog JSON dump")?;
         let dump: serde_json::Value = serde_json::from_slice(&fs::read(dump)?)?;
         ensure!(
-            dump["schema"] == "kithara.hang.v1" && dump["label"] == "external-runtime-hang",
+            dump["schema"] == "kithara.hang.v1" && dump["label"] == "test-utils-watchdog",
             "unexpected watchdog dump: {dump}"
         );
         Ok(())
@@ -317,7 +320,7 @@ fn manifest(root: &Path, pin: Option<(&str, &str)>) -> Result<String> {
 resolver = "2"
 [workspace.dependencies]
 [package]
-name = "external-test-runtime"
+name = "test-utils-check"
 version = "0.0.0"
 edition = "2024"
 publish = false
@@ -455,13 +458,13 @@ mod tests {
         let cancel = child::Cancel::install()?;
         let root = tempfile::tempdir()?;
         let directory = root.path().join("consumer");
-        let evidence = root.path().join("evidence");
+        let capture = root.path().join("capture");
         fs::create_dir(&directory)?;
-        fs::create_dir(&evidence)?;
+        fs::create_dir(&capture)?;
         let consumer = Consumer {
             cancel: &cancel,
             directory: &directory,
-            evidence: &evidence,
+            capture: &capture,
             target: &root.path().join("target"),
         };
         let cwd = consumer.checked(&mut Command::new("pwd"), "cwd", Some(10))?;
@@ -469,6 +472,36 @@ mod tests {
             Path::new(cwd.trim()).canonicalize()?,
             directory.canonicalize()?
         );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failures_include_output_after_temporary_capture_is_removed() -> Result<()> {
+        let _signals = signals();
+        let cancel = child::Cancel::install()?;
+        for (script, seconds) in [
+            ("printf stdout; printf stderr >&2; exit 7", None),
+            ("printf stdout; printf stderr >&2; exec sleep 60", Some(1)),
+        ] {
+            let root = tempfile::tempdir()?;
+            let capture = root.path().join("capture");
+            fs::create_dir(&capture)?;
+            let consumer = Consumer {
+                cancel: &cancel,
+                directory: root.path(),
+                capture: &capture,
+                target: &root.path().join("target"),
+            };
+            let error = consumer
+                .checked(Command::new("sh").args(["-c", script]), "failure", seconds)
+                .expect_err("command must fail");
+            drop(root);
+            assert!(!capture.exists());
+            let diagnostics = format!("{error:#}");
+            assert!(diagnostics.contains("stdout"), "{diagnostics}");
+            assert!(diagnostics.contains("stderr"), "{diagnostics}");
+        }
         Ok(())
     }
 
@@ -557,16 +590,16 @@ mod tests {
     #[test]
     fn test_executable_is_selected_from_cargo_artifacts() -> Result<()> {
         let artifact = serde_json::json!({
-            "reason": "compiler-artifact", "package_id": "path+file:///consumer#external-test-runtime@0.0.0",
+            "reason": "compiler-artifact", "package_id": "path+file:///consumer#test-utils-check@0.0.0",
             "manifest_path": "/consumer/Cargo.toml", "features": [], "filenames": [], "fresh": false,
-            "target": { "kind": ["lib"], "crate_types": ["lib"], "name": "external_test_runtime", "src_path": "/consumer/src/lib.rs", "edition": "2024", "doc": true, "doctest": false, "test": true },
+            "target": { "kind": ["lib"], "crate_types": ["lib"], "name": "test_utils_check", "src_path": "/consumer/src/lib.rs", "edition": "2024", "doc": true, "doctest": false, "test": true },
             "profile": { "opt_level": "0", "debuginfo": 2, "debug_assertions": true, "overflow_checks": true, "test": true },
-            "executable": "/consumer/target/external-test-runtime"
+            "executable": "/consumer/target/test-utils-check"
         });
         let report = artifact.to_string();
         assert_eq!(
             test_binary(&report)?,
-            PathBuf::from("/consumer/target/external-test-runtime")
+            PathBuf::from("/consumer/target/test-utils-check")
         );
         assert!(test_binary("").is_err());
         assert!(test_binary(&format!("{report}\n{report}")).is_err());

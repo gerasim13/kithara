@@ -2151,8 +2151,8 @@ steps = [
   ] }, env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", KITHARA_HANG_PREKILL_SECS = "110" } },
   { args = [
     "test",
-    "external-runtime",
-  ], label = "Independent test runtime at checked-out revision", env = { CARGO_BUILD_JOBS = "2" } },
+    "test-utils",
+  ], label = "Test utilities at checked-out revision", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "gate"
 kinds = ["platforms", "main", "nightly"]
@@ -2938,8 +2938,8 @@ steps = [
   ] } },
   { args = [
     "test",
-    "external-runtime",
-  ], label = "Independent test runtime at checked-out revision" },
+    "test-utils",
+  ], label = "Test utilities at checked-out revision" },
 ]
 role = "platforms"
 kinds = [
