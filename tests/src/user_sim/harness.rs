@@ -111,13 +111,13 @@ fn drain_source_topics(
     receiver: &mut EventReceiver<CaptureSourceEvent>,
     envelopes: &mut Vec<String>,
     closed: bool,
-) {
+) -> Result<(), TryRecvError> {
     loop {
         match receiver.try_recv() {
             Ok(envelope) => envelopes.push(format!("{envelope:?}")),
-            Err(TryRecvError::Empty) => break,
-            Err(TryRecvError::Closed) if closed => break,
-            Err(error) => panic!("incomplete DRM/file-reader observation: {error}"),
+            Err(TryRecvError::Empty) => return Ok(()),
+            Err(TryRecvError::Closed) if closed => return Ok(()),
+            Err(error) => return Err(error),
         }
     }
 }
@@ -132,7 +132,8 @@ fn metrics_value(metrics: RtMetricsSnapshot) -> Value {
 impl SimCapture {
     fn drain(&mut self, rendered: u64, cursor: u64, metrics: RtMetricsSnapshot, closed: bool) {
         self.tap
-            .drain_exact_into(&mut self.pcm, rendered, self.spec.channels);
+            .drain_exact_into(&mut self.pcm, rendered, self.spec.channels)
+            .expect("complete Output PCM");
         self.delivered = self
             .delivered
             .checked_add(rendered)
@@ -174,7 +175,8 @@ impl SimCapture {
                 Err(error) => panic!("incomplete source event observation: {error}"),
             }
         }
-        drain_source_topics(&mut self.source_topics, &mut self.source_events, closed);
+        drain_source_topics(&mut self.source_topics, &mut self.source_events, closed)
+            .unwrap_or_else(|error| panic!("incomplete DRM/file-reader observation: {error}"));
         self.batches.push(json!({
             "delivered_frames": rendered, "session_cursor": cursor,
             "capture_frames": self.delivered, "metrics": metrics_value(metrics),
@@ -1230,7 +1232,7 @@ mod capture_tests {
             to_offset: 11,
         });
         let mut envelopes = Vec::new();
-        drain_source_topics(&mut receiver, &mut envelopes, false);
+        drain_source_topics(&mut receiver, &mut envelopes, false).expect("complete source topics");
         assert_eq!(
             envelopes.len(),
             2,
@@ -1274,11 +1276,11 @@ mod capture_tests {
                     });
                 }
             }
-            let rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                drain_source_topics(&mut receiver, &mut Vec::new(), false);
-            }));
             assert!(
-                rejected.is_err(),
+                matches!(
+                    drain_source_topics(&mut receiver, &mut Vec::new(), false),
+                    Err(TryRecvError::Lagged(lost)) if lost > 0
+                ),
                 "a lost source topic must reject the witness"
             );
         }

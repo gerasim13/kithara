@@ -645,7 +645,12 @@ impl TapProbe {
     }
 
     /// Drains a delivered batch into preallocated storage, rejecting incomplete PCM.
-    pub(crate) fn drain_exact_into(&mut self, samples: &mut Vec<f32>, frames: u64, channels: u16) {
+    pub(crate) fn drain_exact_into(
+        &mut self,
+        samples: &mut Vec<f32>,
+        frames: u64,
+        channels: u16,
+    ) -> Result<(), String> {
         let start = samples.len();
         samples.extend(self.pcm.pop_iter());
         let expected = usize::try_from(frames)
@@ -653,16 +658,22 @@ impl TapProbe {
             .checked_mul(usize::from(channels))
             .expect("batch samples fit usize");
         assert!(channels > 0, "capture channels must be non-zero");
-        assert_eq!(self.drops(), 0, "Output tap lost samples");
-        assert_eq!(
-            samples.len() - start,
-            expected,
-            "Output tap captures every delivered channel"
-        );
-        assert!(
-            samples[start..].iter().all(|sample| sample.is_finite()),
-            "non-finite Output PCM"
-        );
+        let drops = self.drops();
+        if drops != 0 {
+            return Err(format!(
+                "Output tap lost samples: observed {drops}, expected 0"
+            ));
+        }
+        let captured = samples.len() - start;
+        if captured != expected {
+            return Err(format!(
+                "Output tap captures every delivered channel: captured {captured}, expected {expected}"
+            ));
+        }
+        if samples[start..].iter().any(|sample| !sample.is_finite()) {
+            return Err("non-finite Output PCM".to_owned());
+        }
+        Ok(())
     }
 
     #[must_use]
@@ -787,8 +798,10 @@ mod capture_tests {
             pcm,
         };
         let mut captured = Vec::with_capacity(input.len());
-        tap.drain_exact_into(&mut captured, 2, 2);
-        tap.drain_exact_into(&mut captured, 0, 2);
+        tap.drain_exact_into(&mut captured, 2, 2)
+            .expect("complete Output PCM");
+        tap.drain_exact_into(&mut captured, 0, 2)
+            .expect("empty Output tail");
         assert_eq!(
             captured
                 .iter()
@@ -803,12 +816,24 @@ mod capture_tests {
 
     #[kithara_test_utils::kithara::test(native)]
     fn output_capture_rejects_missing_extra_dropped_and_nonfinite_samples() {
-        for (input, drops) in [
-            (vec![0.0_f32], 0),
-            (vec![0.0, 0.0, 0.0], 0),
-            (vec![0.0, 0.0], 1),
-            (vec![0.0, f32::NAN], 0),
-            (vec![f32::INFINITY, 0.0], 0),
+        for (input, drops, expected) in [
+            (
+                vec![0.0_f32],
+                0,
+                "Output tap captures every delivered channel: captured 1, expected 2",
+            ),
+            (
+                vec![0.0, 0.0, 0.0],
+                0,
+                "Output tap captures every delivered channel: captured 3, expected 2",
+            ),
+            (
+                vec![0.0, 0.0],
+                1,
+                "Output tap lost samples: observed 1, expected 0",
+            ),
+            (vec![0.0, f32::NAN], 0, "non-finite Output PCM"),
+            (vec![f32::INFINITY, 0.0], 0, "non-finite Output PCM"),
         ] {
             let (mut writer, pcm) = HeapRb::<f32>::new(4).split();
             assert_eq!(writer.push_slice(&input), input.len());
@@ -816,12 +841,10 @@ mod capture_tests {
                 drops: Arc::new(AtomicU64::new(drops)),
                 pcm,
             };
-            let rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                tap.drain_exact_into(&mut Vec::with_capacity(4), 1, 2);
-            }));
-            assert!(
-                rejected.is_err(),
-                "invalid capture must not become a passing witness"
+            assert_eq!(
+                tap.drain_exact_into(&mut Vec::with_capacity(4), 1, 2)
+                    .expect_err("invalid capture must not become a passing witness"),
+                expected
             );
         }
     }
