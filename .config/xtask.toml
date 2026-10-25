@@ -1873,7 +1873,7 @@ label = "Linux"
 os = "linux"
 tools = ["cargo", "just"]
 program = "just"
-steps = [{ args = ["test", "ui"], label = "UI suite and host parity" }]
+steps = [{ args = ["--command", "python3", ".config/ci/pr731-ui-owner.py"], label = "PR731 original UI cohort with pixels" }]
 role = "deep"
 kinds = []
 kinds_github = []
