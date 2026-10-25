@@ -14,12 +14,22 @@ Validate with `ci bridge validate` (no network mutation), then
 disagree — GitLab `develop`, GitHub `main` — and a swap is silent: GitHub
 answers an unknown base with an empty pull list.
 
-The daemon keeps running the executable that was installed, not the one on
-`develop`: a fix changes nothing until `ci host mac install-services`
-reinstalls it from a reviewed GitLab commit, then `activate-bridge` and
-`activate`. launchd keeps the definition it loaded, so skipping `activate`
-silently leaves the maintenance agents on the old cadence; `launchctl print`
-reports what is loaded.
+The daemon runs the installed executable. Merging a fix into `develop` or
+`main` does not replace it. Initial installation and service/profile changes use
+`ci host mac install-services` from a reviewed commit, followed by loading the
+changed launchd definitions. `launchctl print` reports the loaded definition.
+
+For a binary-only update, the CI user can replace
+`/Volumes/KitharaCI/toolchains/shared-bin/kithara-ci`, which the bridge executes
+through `/usr/bin/env` on each tick. Retain the previous binary, verify the
+reviewed artifact's source revision and checksum, transfer it beside the active
+copy, and replace that copy atomically after verifying the transferred checksum.
+Validate with `ci bridge validate` as the sync user through the existing sudo
+grant, then run one reconciliation and compare the live PR statuses with their
+source jobs. If validation fails, restore the retained binary atomically.
+This path does not require replacing the root-owned `services/bin` copy or
+restarting runners. Changing service arguments or cadence still requires loading
+the changed launchd definition.
 
 The bridge moves either default branch only by fast-forward, in whichever
 direction is behind, and never synthesizes a replacement commit or force-pushes
@@ -61,9 +71,9 @@ incomplete.
 
 Before installing, record the reviewed commit, trusted target policy commit and
 installed binary's hash, and retain the previous reviewed binary for rollback.
-Use `install-services`
-and `activate-bridge` with the reviewed executable and existing host profile;
-validate the private bridge configuration without copying tokens into evidence.
+Use `install-services` and `activate-bridge` when the service definition or host
+profile changes; binary-only updates use the shared-copy procedure above.
+Validate the private bridge configuration without copying tokens into evidence.
 Confirm the active launchd executable matches the installed artifact, then
 verify linked job statuses on a live PR. `activate` also restarts Colima and
 GitLab Runner, so coordinate it with active jobs rather than using it as a
