@@ -399,6 +399,7 @@ mod tests {
                 cancel.child(),
             ))
             .cancel(cancel.child())
+            .runtime(kithara::platform::tokio::runtime::Handle::current())
             .build(),
         );
         let hls = HlsConfig::for_url(fixture.master_url())
