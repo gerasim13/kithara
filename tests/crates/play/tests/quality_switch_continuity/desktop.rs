@@ -21,6 +21,7 @@ use kithara_integration_tests::{
     hls_fixture::create_test_downloader,
     offline::{OfflinePlayer, OfflinePlayerOptions},
 };
+use kithara_test_utils::TestTempDir;
 use num_traits::ToPrimitive;
 
 use super::*;
