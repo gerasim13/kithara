@@ -273,6 +273,19 @@ mod tests {
             ),
             config: Arc::new(
                 HlsConfig::for_url("https://example.com/master.m3u8".parse().expect("url"))
+                    .downloader(kithara_download::Downloader::new({
+                        let config = kithara_download::DownloaderConfig::for_client(
+                            kithara_net::HttpClient::new(
+                                kithara_net::NetOptions::default(),
+                                crate::test_pools::pools(),
+                                CancelToken::never(),
+                            ),
+                        );
+                        #[cfg(not(target_arch = "wasm32"))]
+                        let config =
+                            config.runtime(kithara_platform::tokio::runtime::Handle::current());
+                        config.build()
+                    }))
                     .store((*store).clone())
                     .pools(crate::test_pools::pools())
                     .download_batch_size(1)
@@ -342,13 +355,14 @@ mod tests {
         }
         .into_variant(0, &ctx);
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
-        let publisher = state.publisher();
         let cancel = CancelToken::never();
         let peer: Arc<dyn Abr> = Arc::new(Unimock::new((
             AbrMock::cancel
                 .each_call(matching!())
                 .returns(cancel.clone()),
-            AbrMock::state.each_call(matching!()).returns(Some(state)),
+            AbrMock::state
+                .each_call(matching!())
+                .returns(Some(Arc::clone(&state))),
         )));
         let settings = AbrSettings::builder().cancel(cancel.clone()).build();
         let controller = AbrController::new(settings);
@@ -365,13 +379,13 @@ mod tests {
             Arc::new(PlayheadState::new()),
             ActivityWriter::new(),
             handle,
-            publisher,
+            state,
             Arc::from(vec![variant]),
         ))
     }
 
-    #[kithara::test]
-    fn a_tail_chunk_announces_its_segment_when_the_reader_cursor_is_at_eof() {
+    #[kithara::test(tokio)]
+    async fn a_tail_chunk_announces_its_segment_when_the_reader_cursor_is_at_eof() {
         let bus = EventBus::new(8);
         let mut events = bus.subscribe();
         let coord = coord(&bus);
@@ -390,8 +404,8 @@ mod tests {
         ));
     }
 
-    #[kithara::test]
-    fn segment_read_complete_uses_prior_segment_start_cursor() {
+    #[kithara::test(tokio)]
+    async fn segment_read_complete_uses_prior_segment_start_cursor() {
         let bus = EventBus::new(8);
         let mut events = bus.subscribe();
         let coord = coord(&bus);

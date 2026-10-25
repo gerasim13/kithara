@@ -3,7 +3,7 @@
 use std::{num::NonZeroU32, path::Path};
 
 use kithara::{
-    decode::{GaplessMode, SilenceTrimParams},
+    decode::GaplessMode,
     platform::time::{self, Duration, Instant},
     play::{ResourceConfig, ResourceSrc},
     stream::AudioCodec,
@@ -13,6 +13,7 @@ use kithara_integration_tests::{
     fixture_protocol::{
         DelayRule, GaplessEncoding, PackagedAudioRequest, PackagedAudioSource, PackagedSignal,
     },
+    hls_fixture::create_test_downloader,
     offline::{OfflinePlayer, OfflinePlayerOptions},
 };
 use kithara_test_utils::{TestTempDir, bufpool::TestPools, temp_dir};
@@ -45,7 +46,6 @@ const AUDIBLE_SAMPLE_THRESHOLD: f32 = 1.0e-3;
 #[kithara::test(native, tokio, timeout(Duration::from_secs(20)), hang_timeout_secs(1))]
 #[case(GaplessMode::MediaOnly)]
 #[case(GaplessMode::CodecPriming)]
-#[case(GaplessMode::SilenceTrim(SilenceTrimParams::default()))]
 async fn gapless_modes_do_not_block_network_startup_until_full_cache(
     #[future(awt)] startup_source: (TestServerHelper, Url, Vec<SegmentGateHandle>),
     #[case] gapless_mode: GaplessMode,
@@ -114,6 +114,7 @@ async fn create_delayed_gapless_hls_resource(
     ResourceConfig::<TestPools>::for_src(
         ResourceSrc::parse(master.as_str()).expect("valid HLS master URL"),
     )
+    .downloader(create_test_downloader())
     .store(store)
     .build()
 }

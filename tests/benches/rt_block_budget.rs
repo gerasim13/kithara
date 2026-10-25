@@ -185,7 +185,6 @@ async fn processor(count: usize, lane: Lane) -> BenchMixer {
         let audio = AudioConfig::<File<TestPools>>::for_stream(
             FileConfig::for_src(FileSrc::Local(path.into()))
                 .store(memory_asset_store())
-                .pools(pools.clone())
                 .build(),
         )
         .hint("wav".to_owned())

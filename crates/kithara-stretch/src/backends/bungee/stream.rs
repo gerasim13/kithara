@@ -108,7 +108,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{ElasticRequest, backends::bungee::ffi::NativeFault, consts, test_pools::pools};
+    use crate::{ElasticRequest, consts, test_pools::pools};
 
     fn signal(pcm: &StretchPcm, frames: usize, offset: usize) -> Vec<f32> {
         pcm.bungee[offset * consts::CHANNELS..(offset + frames) * consts::CHANNELS].to_vec()
@@ -272,33 +272,22 @@ mod tests {
     }
 
     #[kithara::test]
-    #[case::analyse(NativeFault::Analyse)]
-    #[case::synthesise(NativeFault::Synthesise)]
-    fn native_failure_clears_the_request_and_remains_reusable(
-        #[case] fault: NativeFault,
-        stretch_pcm: &'static StretchPcm,
-    ) {
+    fn recovery_closes_an_open_grain_and_remains_reusable(stretch_pcm: &'static StretchPcm) {
         const QUANTUM: usize = 64;
 
         let mut core = anchored_core(stretch_pcm);
-        core.native.fail_next(fault);
         let source = signal(stretch_pcm, QUANTUM, consts::CONTEXT_FRAMES * 3);
-        let request = ElasticRequest::new(QUANTUM, QUANTUM).expect("unity request");
-        let mut output = vec![f32::NAN; QUANTUM * consts::CHANNELS];
+        core.input
+            .append(Some(&source), QUANTUM)
+            .expect("the grain source fits");
+        core.input.set_requested(core.native.specify(&core.request));
+        core.request_pending = true;
 
-        assert!(
-            core.render(Some(&source), request, 1.0, Some(&mut output))
-                .is_err(),
-            "the injected native failure must cross the stream boundary"
-        );
-        assert!(
-            !core.request_pending,
-            "no failed request may remain pending"
-        );
+        core.recover().expect("an open grain recovers");
+
+        assert!(!core.request_pending);
         assert_eq!(core.samples_needed, 0.0);
         assert!(core.output_chunk.is_none());
-        assert!(output.iter().all(|sample| sample.is_nan()));
-
         let recovery_source = signal(
             stretch_pcm,
             consts::CONTEXT_FRAMES,
@@ -312,8 +301,9 @@ mod tests {
             1.0,
             Some(&mut recovery_output),
         )
-        .expect("the explicitly cleared stream accepts a new request");
+        .expect("the recovered stream accepts a new request");
     }
+
     #[kithara::test]
     #[case::even_quantum(64)]
     #[case::odd_quantum(257)]

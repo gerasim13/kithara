@@ -1,7 +1,8 @@
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara::{
     abr::{AbrHandle, AbrMode},
+    assets::{AssetStore, StorageBackend},
     audio::{DecoderBackend as DecoderBackendKind, DecoderChangeCause, DecoderEvent},
     decode::DecoderBackend,
     effects::LimiterConfig,
@@ -16,7 +17,7 @@ use kithara::{
     stream::AudioCodec,
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder,
+    HlsFixtureBuilder, TestServerHelper,
     event::TestEvent,
     fixture_protocol::{
         GaplessEncoding, PackagedAudioRequest, PackagedAudioSource, PackagedAudioVariantOverride,
@@ -24,7 +25,6 @@ use kithara_integration_tests::{
     },
     offline::{OfflinePlayer, OfflinePlayerOptions},
 };
-use kithara_test_utils::TestTempDir;
 use num_traits::ToPrimitive;
 
 use crate::bufpool_ext::{TestPools, pools};
@@ -32,9 +32,13 @@ use crate::bufpool_ext::{TestPools, pools};
 pub(super) const SAMPLE_RATE: u32 = 44_100;
 pub(super) const CHANNELS: u16 = 2;
 pub(super) const BLOCK_FRAMES: usize = 512;
+pub(super) const MAX_SWITCH_FRAMES: usize = 44_100;
 pub(super) const SINE_HZ: f64 = 441.0;
 const SEGMENT_SECS: f64 = 0.5;
 const SEGMENTS_PER_VARIANT: usize = 16;
+const VARIANT_COUNT: usize = 3;
+// Each encoded variant can add one tail segment and has one init resource.
+pub(super) const FIXTURE_RESOURCE_CAPACITY: usize = VARIANT_COUNT * (SEGMENTS_PER_VARIANT + 2);
 pub(super) const REQUEST_AT_SECS: f64 = 0.5;
 pub(super) const ACTIVE_SAMPLE_THRESHOLD: f32 = 1.0e-3;
 pub(super) const ORACLE_RATIO: f32 = 3.0;
@@ -125,7 +129,6 @@ pub(super) struct Pacer {
 }
 
 pub(super) struct PreparedPlayer {
-    pub(super) _temp: TestTempDir,
     pub(super) player: OfflinePlayer,
     pub(super) abr: AbrHandle,
     pub(super) events: EventReceiver<TestEvent>,
@@ -136,7 +139,6 @@ pub(super) struct PreparedPlayer {
 impl PreparedPlayer {
     pub(super) async fn close(self) {
         let Self {
-            _temp,
             player,
             abr,
             events,
@@ -146,7 +148,6 @@ impl PreparedPlayer {
         drop(abr);
         drop(events);
         player.close().await;
-        drop(_temp);
     }
 }
 
@@ -181,7 +182,7 @@ pub(super) fn fixture() -> HlsFixtureBuilder {
 
 pub(super) fn fixture_with_signal(signal: PackagedSignal) -> HlsFixtureBuilder {
     HlsFixtureBuilder::new()
-        .variant_count(3)
+        .variant_count(VARIANT_COUNT)
         .variant_bandwidths(vec![64_000, 256_000, 768_000])
         .segments_per_variant(SEGMENTS_PER_VARIANT)
         .segment_duration_secs(SEGMENT_SECS)
@@ -262,7 +263,8 @@ fn capture_frame_target() -> i64 {
 pub(super) fn observation_frames() -> usize {
     usize::try_from(SAMPLE_RATE)
         .expect("fixture sample rate fits usize")
-        .saturating_mul(2)
+        .saturating_mul(5)
+        / 2
 }
 
 /// Audio the observation window must still hold after the target decoder
@@ -341,7 +343,7 @@ pub(super) fn assert_initial_decoder(
     assert_eq!(event.variant, Some(expected_variant), "{label} variant");
 }
 
-#[kithara::flash(io)]
+#[kithara::flash(true)]
 #[kithara_test_utils::kithara::hang_watchdog]
 async fn prepare_player(
     master_url: &url::Url,
@@ -353,13 +355,18 @@ async fn prepare_player(
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let temp = TestTempDir::new();
     let bus = EventBus::new(1_024);
     let mut events = bus.subscribe();
+    let downloader = TestServerHelper::new().await.modeled_downloader();
+    let store = AssetStore::builder(pools())
+        .backend(StorageBackend::Memory)
+        .cache_capacity(NonZeroUsize::new(FIXTURE_RESOURCE_CAPACITY).expect("fixture resources"))
+        .build();
     let config: ResourceConfig<TestPools> = ResourceConfig::for_src(
         ResourceSrc::parse(master_url.as_str()).expect("fixture master URL must be valid"),
     )
-    .store(kithara_integration_tests::disk_asset_store(temp.path()))
+    .store(store)
+    .downloader(downloader)
     .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
     .decoder(
         kithara::audio::AudioDecoderConfig::builder()
@@ -463,7 +470,6 @@ async fn prepare_player(
         "{label} warm-up must stop exactly on the capture frame",
     );
     PreparedPlayer {
-        _temp: temp,
         player,
         abr,
         events,
@@ -559,7 +565,7 @@ async fn a_queued_paced_render_keeps_a_full_callback_period() {
     );
 }
 
-#[kithara::flash(io)]
+#[kithara::flash(true)]
 #[kithara_test_utils::kithara::hang_watchdog]
 pub(super) async fn render_switch(
     master_url: &url::Url,
@@ -584,9 +590,11 @@ pub(super) async fn render_switch(
     let mut applied_frame = None;
     let mut decoder_events = Vec::new();
     let mut position_jumps = Vec::new();
+    let initial_underruns = prepared.player.metrics().underruns();
     while samples.len() / usize::from(CHANNELS) < observation_frames {
         hang_tick!();
         let before = prepared.player.position();
+        let underruns_before = prepared.player.metrics().underruns();
         let rendered_frames = samples.len() / usize::from(CHANNELS);
         let remaining_frames = observation_frames.saturating_sub(rendered_frames);
         let render_frames = remaining_frames.min(BLOCK_FRAMES);
@@ -600,6 +608,21 @@ pub(super) async fn render_switch(
         // played: one content timeline spans every variant of the stream.
         let advanced = source_frame(prepared.player.position(), transition.label)
             - source_frame(before, transition.label);
+        let underruns_after = prepared.player.metrics().underruns();
+        if underruns_after > underruns_before {
+            println!(
+                "QUALITY_SWITCH_UNDERRUN transition={} backend={backend:?} window_frame={rendered_frames} requested_frames={render_frames} advanced_frames={advanced} underruns_before={underruns_before} underruns_after={underruns_after}",
+                transition.label,
+            );
+            if underruns_before == initial_underruns {
+                println!(
+                    "QUALITY_SWITCH_UNDERRUN_FLIGHT transition={} events={:?} probes={:?}",
+                    transition.label,
+                    kithara_test_utils::flight::tail(),
+                    kithara_test_utils::flight::probes_tail(),
+                );
+            }
+        }
         let render_limit = i64::try_from(render_frames).expect("render block fits i64");
         if !(0..=render_limit).contains(&advanced) {
             position_jumps.push((rendered_frames, advanced, render_frames));
@@ -674,7 +697,7 @@ pub(super) async fn render_switch(
     );
     let target_decoder_frame = target_event.frame_end;
     assert!(
-        target_decoder_frame.saturating_add(heard_after_switch_frames()) <= observation_frames,
+        target_decoder_frame <= MAX_SWITCH_FRAMES,
         "{} switched too late to be heard: target_event_frame={target_decoder_frame}, window={observation_frames}",
         transition.label,
     );
@@ -703,7 +726,7 @@ pub(super) async fn render_switch(
     result
 }
 
-#[kithara::flash(io)]
+#[kithara::flash(true)]
 #[kithara_test_utils::kithara::hang_watchdog]
 pub(super) async fn render_no_switch_control(
     master_url: &url::Url,

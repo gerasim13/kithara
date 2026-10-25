@@ -32,34 +32,25 @@ struct ResidentSessions<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
-    first: Arc<HlsSession<S>>,
-    second: Option<Arc<HlsSession<S>>>,
+    active: Arc<HlsSession<S>>,
+    incoming: Option<Arc<HlsSession<S>>>,
 }
 
 impl<S> ResidentSessions<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
-    fn find(&self, variant_index: usize) -> Option<&Arc<HlsSession<S>>> {
-        if self.first.variant_index() == variant_index {
-            return Some(&self.first);
-        }
-        self.second
-            .as_ref()
-            .filter(|session| session.variant_index() == variant_index)
-    }
-
     const fn one(session: Arc<HlsSession<S>>) -> Self {
         Self {
-            first: session,
-            second: None,
+            active: session,
+            incoming: None,
         }
     }
 
-    const fn two(first: Arc<HlsSession<S>>, second: Arc<HlsSession<S>>) -> Self {
+    const fn two(active: Arc<HlsSession<S>>, incoming: Arc<HlsSession<S>>) -> Self {
         Self {
-            first,
-            second: Some(second),
+            active,
+            incoming: Some(incoming),
         }
     }
 }
@@ -78,27 +69,12 @@ where
         }
     }
 
-    pub(in crate::stream) fn active(
-        &self,
-        mut selected_variant: impl FnMut() -> usize,
-    ) -> Arc<HlsSession<S>> {
-        loop {
-            let before = selected_variant();
-            let residents = self.publication.load();
-            let resolved = residents.find(before);
-            let after = selected_variant();
-            if before != after {
-                continue;
-            }
-            return resolved.map_or_else(
-                || panic!("exact resident sessions do not contain published ABR variant {before}"),
-                Arc::clone,
-            );
-        }
+    pub(in crate::stream) fn active(&self) -> Arc<HlsSession<S>> {
+        Arc::clone(&self.publication.load().active)
     }
 
     pub(in crate::stream) fn incoming_session(&self) -> Option<Arc<HlsSession<S>>> {
-        self.publication.load().second.as_ref().map(Arc::clone)
+        self.publication.load().incoming.as_ref().map(Arc::clone)
     }
 
     /// Retain replaced snapshots until readers release them; only writers reclaim.
@@ -114,15 +90,15 @@ where
     pub(super) fn publish_exact_two(
         &self,
         state: &mut TransitionState<S>,
-        first: Arc<HlsSession<S>>,
-        second: Arc<HlsSession<S>>,
+        active: Arc<HlsSession<S>>,
+        incoming: Arc<HlsSession<S>>,
     ) {
-        self.publish(state, ResidentSessions::two(first, second));
+        self.publish(state, ResidentSessions::two(active, incoming));
     }
 
     #[cfg(test)]
     pub(in crate::stream) fn resident_count(&self) -> usize {
-        if self.publication.load().second.is_some() {
+        if self.publication.load().incoming.is_some() {
             2
         } else {
             1
@@ -135,7 +111,7 @@ where
     ) -> bool {
         self.publication
             .load()
-            .second
+            .incoming
             .as_ref()
             .is_some_and(|session| {
                 session.transition() == Some(transition)
@@ -183,11 +159,7 @@ where
     }
 
     pub(crate) fn active_session(&self) -> Arc<HlsSession<S>> {
-        self.sessions.active(|| {
-            self.abr
-                .current_variant_index()
-                .expect("BUG: HLS coordinator lost its stateful ABR selector")
-        })
+        self.sessions.active()
     }
 
     pub(in crate::stream) fn cancel_incoming_for_seek(&self) {
@@ -212,7 +184,7 @@ where
         self.sessions.publish_exact_one(state, active);
         slot.session.abort();
         if abort_intent {
-            let _ = self.abr_publisher.abort_pending(slot.claim.ticket());
+            let _ = self.abr_state.abort_pending(slot.claim.ticket());
         }
     }
 
@@ -335,7 +307,7 @@ where
         drop(state);
 
         let Some(target) = self.variants.get(transition.incoming_variant().get()) else {
-            let _ = self.abr_publisher.abort_pending(claim.ticket());
+            let _ = self.abr_state.abort_pending(claim.ticket());
             return Err(StreamError::Source(SourceError::VariantNotFound(format!(
                 "incoming variant {}",
                 transition.incoming_variant().get()
@@ -346,7 +318,7 @@ where
             _ => false,
         };
         if !claim_matches || self.variant_index() != transition.active_variant().get() {
-            let _ = self.abr_publisher.abort_pending(claim.ticket());
+            let _ = self.abr_state.abort_pending(claim.ticket());
             return Ok(None);
         }
 
@@ -399,7 +371,7 @@ where
         };
         let outgoing = self.active_session();
         let now = Instant::now();
-        if !self.abr_publisher.commit_pending(slot.claim, now) {
+        if !self.abr_state.commit_pending(slot.claim, now) {
             let claim_matches = match self.abr.pending_claim() {
                 PendingAbrClaim::Ready(current) | PendingAbrClaim::Locked(current) => {
                     current == slot.claim
@@ -536,8 +508,8 @@ mod tests {
         error.get_ref()?.downcast_ref::<PendingReason>().copied()
     }
 
-    #[kithara::test]
-    fn a_retired_session_reads_as_an_interrupt_carrying_its_reason() {
+    #[kithara::test(tokio)]
+    async fn a_retired_session_reads_as_an_interrupt_carrying_its_reason() {
         let (coord, _bus, _ctx, _abr) = switch_coord();
         let session = coord.active_session();
         let mut reader = HlsSessionReader::open(
@@ -576,8 +548,8 @@ mod tests {
         );
     }
 
-    #[kithara::test]
-    fn demand_probe_does_not_take_transition_lock() {
+    #[kithara::test(tokio)]
+    async fn demand_probe_does_not_take_transition_lock() {
         let (coord, _bus, _ctx, _abr) = switch_coord();
         let transition = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
@@ -586,8 +558,8 @@ mod tests {
         assert!(coord.sessions.transition_demand_in_flight(transition));
     }
 
-    #[kithara::test]
-    fn published_sessions_are_reclaimed_by_writer_after_readers_release() {
+    #[kithara::test(tokio)]
+    async fn published_sessions_are_reclaimed_by_writer_after_readers_release() {
         let (coord, _bus, _ctx, _abr) = switch_coord();
         let transition = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")

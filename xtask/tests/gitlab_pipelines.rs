@@ -603,6 +603,26 @@ fn child_pipeline_includes_apple_lanes_and_the_blocking_verdict() {
 }
 
 #[test]
+fn the_branch_verdict_expects_only_the_apple_test_producer() {
+    let config = GitlabConfig::load(workspace_root());
+    let jobs = config.lane_jobs();
+    let producers: BTreeSet<&str> = config.definition("verdict")["needs"]
+        .as_sequence()
+        .expect("verdict needs producers")
+        .iter()
+        .map(|need| need["job"].as_str().expect("a verdict need names a job"))
+        .filter(|job| config.admitted_kinds(job).contains("branch"))
+        .map(|job| {
+            jobs.iter()
+                .find(|(name, _)| name == job)
+                .map(|(_, lane)| lane.as_str())
+                .expect("a verdict producer runs a lane")
+        })
+        .collect();
+    assert_eq!(producers, BTreeSet::from(["apple-test"]));
+}
+
+#[test]
 fn judged_jobs_stage_only_checkout_cleaned_verdict_evidence() {
     let root = workspace_root();
     for file in [

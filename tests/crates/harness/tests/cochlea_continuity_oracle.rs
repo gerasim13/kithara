@@ -197,6 +197,7 @@ async fn render_no_switch_control() -> Vec<f32> {
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
+            .block_on_underrun(true)
             .build(),
         SAMPLE_RATE,
     )

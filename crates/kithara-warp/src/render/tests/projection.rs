@@ -383,8 +383,7 @@ fn an_unapplied_activation_splits_every_crossing_source_quantum(#[case] input_fr
     let span = renderer
         .prepared_quantum
         .expect("next interval")
-        .source_span
-        .expect("next interval mapping");
+        .source_span;
     assert_eq!(span.output_frames(), 8);
     assert_eq!(span.start(), 16);
     assert_eq!(span.end(), 28);

@@ -1,4 +1,4 @@
-use std::{fmt::Display, path::Path, process::Command};
+use std::{fmt::Display, fs, path::Path, process::Command};
 
 use anyhow::{Context, Result};
 use clap::Args;
@@ -23,7 +23,8 @@ pub struct TestArgs {
     /// `--lane=<configured-name>`, `--touched`, `--flash=true|false|on|off`, `--no-flash`,
     /// `--loom=true|false|on|off`, `--no-loom`, `--no-block=true|false|on|off`,
     /// `--load=true|false|on|off`, `--net-backend=<configured-name>`, `--narrow=<filterset>`,
-    /// and `--expected-tests=<path>` (UTF-8 TSV: binary ID, tab, full test name per line).
+    /// `--selection-output=<path>` (JSON lane names), and `--expected-tests=<path>`
+    /// (UTF-8 TSV: binary ID, tab, full test name per line).
     #[arg(value_name = "ARGS", allow_hyphen_values = true)]
     pub(crate) args: Vec<String>,
 }
@@ -39,7 +40,11 @@ pub(crate) fn run(args: &TestArgs) -> Result<()> {
     let test = &project.test;
 
     let base = touched::base_branch(&|name| std::env::var_os(name));
-    match plan(test, root, &request, &base)? {
+    let plan = plan(test, root, &request, &base)?;
+    if let Some(output) = &request.selection_output {
+        plan.write_selection(&root.join(output))?;
+    }
+    match plan {
         Plan::Touched(selected) if selected.is_empty() => {
             println!("no owned path touched; the nightly sweep covers these lanes");
             Ok(())
@@ -78,6 +83,20 @@ enum Plan<'a> {
     Touched(Vec<Touched>),
     /// One lane, whole.
     Lane(&'a str),
+}
+
+impl Plan<'_> {
+    fn write_selection(&self, path: &Path) -> Result<()> {
+        let lanes: Vec<&str> = match self {
+            Self::Touched(selected) => selected.iter().map(Touched::lane).collect(),
+            Self::Lane(lane) => vec![lane],
+        };
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+        }
+        fs::write(path, serde_json::to_vec(&lanes)?)
+            .with_context(|| format!("writing {}", path.display()))
+    }
 }
 
 fn plan<'a>(
@@ -216,4 +235,33 @@ pub fn nextest_command_for_lane(
 ) -> Result<Command> {
     let test = &project.test;
     resolve(test, &requested(test, lane_name, None)?)?.command(action, extra)
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+
+    #[test]
+    fn selection_output_names_the_lanes_in_the_execution_plan() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("reports/selection.json");
+        for (plan, expected) in [
+            (Plan::Touched(Vec::new()), vec![]),
+            (Plan::Lane("workspace"), vec!["workspace"]),
+            (
+                Plan::Touched(vec![
+                    Touched::Whole("audio".to_owned()),
+                    Touched::Narrowed {
+                        lane: "workspace".to_owned(),
+                        packages: ["kithara-net".to_owned()].into_iter().collect(),
+                    },
+                ]),
+                vec!["audio", "workspace"],
+            ),
+        ] {
+            plan.write_selection(&path).unwrap();
+            let selected: Vec<String> = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            assert_eq!(selected, expected);
+        }
+    }
 }

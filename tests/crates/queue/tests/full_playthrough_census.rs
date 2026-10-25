@@ -39,6 +39,7 @@ use kithara_integration_tests::{
     cochlea::CochleaReport,
     event::TestEvent,
     fixture_protocol::PcmPattern,
+    hls_fixture::create_test_downloader,
     offline::{
         LOCAL_LOAD_DEADLINE, OfflinePlayer, OfflinePlayerOptions,
         linked::{LinkObservation, ObservedFactory},
@@ -309,6 +310,7 @@ fn census_queue<F: TrackFactory<TestPools>>(
 ) -> Queue<TestPools, F> {
     Queue::new(
         QueueConfig::with_factory(factory)
+            .downloader(create_test_downloader())
             .prep(harness.resource_prep().clone())
             .settings(
                 ::kithara::queue::QueueSettings::builder()
@@ -369,6 +371,7 @@ async fn build_queue(
         let source = match backend {
             Some(backend) => {
                 let config = ResourceConfig::<TestPools>::for_src(source)
+                    .downloader(create_test_downloader())
                     .store(
                         explicit_store
                             .as_ref()
@@ -810,8 +813,7 @@ fn trace_startup(census: &Census, firings: &[Firing], rendered: &[f32]) {
         "queue census startup receipts"
     );
     for record in observed
-        .timeline
-        .iter()
+        .timeline_evidence()
         .filter(|record| record["item"].as_u64() == Some(item))
         .take(24)
     {

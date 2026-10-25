@@ -2,7 +2,6 @@
 
 use std::{
     fs::{self, OpenOptions},
-    ops::Range,
     path::{Path, PathBuf},
 };
 
@@ -112,10 +111,6 @@ impl DriverIo for MmapDriver {
         self.committed.load().as_ref().map(|m| m.len())
     }
 
-    fn notify_write(&self, range: &Range<u64>) {
-        self.ready_ranges.push(range.clone());
-    }
-
     fn path(&self) -> Option<&Path> {
         Some(&self.config.path)
     }
@@ -178,10 +173,13 @@ impl DriverIo for MmapDriver {
         Ok(Some(to_read))
     }
 
-    fn release_backing(&self) -> StorageResult<()> {
+    fn release_backing(&self, final_len: Option<u64>) -> StorageResult<()> {
         let mut mmap_guard = self.mmap.lock();
         if let MmapState::Active(mmap) = &*mmap_guard {
-            mmap.flush()?;
+            match final_len.filter(|len| *len < mmap.len()) {
+                Some(len) => mmap.flush_range(0, len)?,
+                None => mmap.flush()?,
+            }
         }
         let displaced = self.committed.swap(None);
         *mmap_guard = MmapState::Empty;
@@ -195,40 +193,9 @@ impl DriverIo for MmapDriver {
         Ok(())
     }
 
-    /// Flush the written pages and stop, keeping the active mapping. The
-    /// caller renames the file and reopens on its canonical path, so the
-    /// snapshot this would have published is dead on arrival — and the live
-    /// mapping is what serves readers until that reopen lands. A zero-length
-    /// or already-published resource has nothing to keep alive and takes the
-    /// ordinary commit path.
-    ///
-    /// Flushes only the written prefix rather than the whole mapping, since the reservation beyond
-    /// `final_len` is untouched and syncing it would cost more than the re-map this seal avoids.
-    fn seal(&self, final_len: Option<u64>) -> StorageResult<()> {
-        if final_len == Some(0) {
-            return self.commit(final_len);
-        }
-        let mmap_guard = self.mmap.lock();
-        let MmapState::Active(mmap) = &*mmap_guard else {
-            drop(mmap_guard);
-            return self.commit(final_len);
-        };
-        match final_len.filter(|len| *len < mmap.len()) {
-            Some(len) => mmap.flush_range(0, len)?,
-            None => mmap.flush()?,
-        }
-        drop(mmap_guard);
-        Ok(())
-    }
-
     fn storage_len(&self) -> u64 {
         let mmap_guard = self.mmap.lock();
         mmap_guard.len()
-    }
-
-    fn try_fast_check(&self, range: &Range<u64>) -> bool {
-        std::iter::from_fn(|| self.ready_ranges.pop())
-            .any(|ready| ready.start <= range.start && ready.end >= range.end)
     }
 
     #[kithara::measure]

@@ -3,7 +3,7 @@
 use std::ops::Range;
 
 use delegate::delegate;
-use kithara_abr::{AbrHandle, AbrPublisher};
+use kithara_abr::{AbrHandle, AbrState};
 use kithara_assets::{AssetScope, ResourceKey};
 use kithara_bufpool::HasPool;
 use kithara_events::DeferredBus;
@@ -61,7 +61,7 @@ where
     pub(crate) cancel: CancelToken,
     pub(crate) config: Arc<HlsConfig<S>>,
     pub(crate) look_ahead_segments: Option<usize>,
-    pub(super) abr_publisher: AbrPublisher,
+    pub(super) abr_state: Arc<AbrState>,
     /// One authoritative active session and at most one exact incoming session.
     pub(super) sessions: SessionSlots<S>,
     /// Backing playhead state — the coord owns the `Arc` directly and
@@ -81,7 +81,7 @@ where
         playhead: Arc<PlayheadState>,
         writer: ActivityWriter,
         abr: AbrHandle,
-        abr_publisher: AbrPublisher,
+        abr_state: Arc<AbrState>,
         variants: Arc<[Arc<HlsVariant<S>>]>,
     ) -> Self {
         assert!(
@@ -113,7 +113,7 @@ where
             activity,
             activity_writer: Mutex::new(Some(writer)),
             abr,
-            abr_publisher,
+            abr_state,
             variants,
             cancel: env.cancel,
             scope: env.scope,
@@ -320,7 +320,6 @@ where
             pub(crate) fn reset_for_seek(&self);
         }
         to self.active().as_ref() {
-            pub(crate) fn download_head(&self) -> u32;
             pub(crate) fn format_change_segment_range(&self) -> StreamResult<Range<u64>>;
         }
     }
@@ -499,7 +498,7 @@ pub(super) mod tests {
     use kithara_platform::{
         CancelScope,
         sync::{Arc, Mutex, Notify, mpsc},
-        time::{Instant, timeout},
+        time::timeout,
         tokio::{runtime::Handle, task::spawn_blocking_on},
     };
     use kithara_stream::{
@@ -587,6 +586,18 @@ pub(super) mod tests {
             signal: signal.clone(),
             config: Arc::new(
                 HlsConfig::for_url("https://example.com/master.m3u8".parse().expect("url"))
+                    .downloader(kithara_download::Downloader::new({
+                        let config = kithara_download::DownloaderConfig::for_client(
+                            kithara_net::HttpClient::new(
+                                kithara_net::NetOptions::default(),
+                                crate::test_pools::pools(),
+                                CancelToken::never(),
+                            ),
+                        );
+                        #[cfg(not(target_arch = "wasm32"))]
+                        let config = config.runtime(Handle::current());
+                        config.build()
+                    }))
                     .store((*store).clone())
                     .pools(crate::test_pools::pools())
                     .download_batch_size(1)
@@ -618,7 +629,6 @@ pub(super) mod tests {
             .into_variant(1, &ctx),
         ]);
         let abr_state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
-        let abr_publisher = abr_state.publisher();
         let peer: Arc<dyn Abr> = Arc::new(Unimock::new((
             AbrMock::cancel
                 .each_call(matching!())
@@ -643,7 +653,7 @@ pub(super) mod tests {
             Arc::new(PlayheadState::new()),
             ActivityWriter::new(),
             handle,
-            abr_publisher,
+            Arc::clone(&abr_state),
             variants,
         ));
         (coord, bus, ctx, abr_state, v0_slots)
@@ -801,16 +811,16 @@ pub(super) mod tests {
         );
     }
 
-    #[kithara::test]
-    fn exact_session_starts_with_one_resident() {
+    #[kithara::test(tokio)]
+    async fn exact_session_starts_with_one_resident() {
         let (coord, _bus, _ctx, _abr_state) = switch_coord();
 
         assert_eq!(coord.sessions.resident_count(), 1);
         assert_eq!(coord.variant_index(), 0);
     }
 
-    #[kithara::test]
-    fn variant_reader_plan_exposes_target_facts_before_session_creation() {
+    #[kithara::test(tokio)]
+    async fn variant_reader_plan_exposes_target_facts_before_session_creation() {
         let (coord, _bus, _ctx, _abr_state) = switch_coord();
 
         let plan = coord
@@ -834,8 +844,8 @@ pub(super) mod tests {
         );
     }
 
-    #[kithara::test]
-    fn escape_stalled_plan_and_prepare_abandon_the_exact_outgoing_ticket() {
+    #[kithara::test(tokio)]
+    async fn escape_stalled_plan_and_prepare_abandon_the_exact_outgoing_ticket() {
         let (coord, _bus, _ctx, _abr_state) = switch_coord_with_reason(AbrReason::EscapeStalled);
         let plan = coord
             .plan_variant_reader(None)
@@ -862,10 +872,10 @@ pub(super) mod tests {
         assert!(coord.abort_variant(prepared));
     }
 
-    #[kithara::test]
+    #[kithara::test(tokio)]
     #[case::ordinary(AbrReason::UpSwitch)]
     #[case::urgent(AbrReason::UrgentDownSwitch)]
-    fn non_stalled_switch_retains_the_outgoing_variant(#[case] reason: AbrReason) {
+    async fn non_stalled_switch_retains_the_outgoing_variant(#[case] reason: AbrReason) {
         let (coord, _bus, _ctx, _abr_state) = switch_coord_with_reason(reason);
         let plan = coord
             .plan_variant_reader(None)
@@ -891,8 +901,8 @@ pub(super) mod tests {
         assert!(coord.abort_variant(prepared));
     }
 
-    #[kithara::test]
-    fn superseded_escape_ticket_cannot_abandon_a_newer_transition() {
+    #[kithara::test(tokio)]
+    async fn superseded_escape_ticket_cannot_abandon_a_newer_transition() {
         let (coord, _bus, _ctx, abr_state) = switch_coord_with_reason(AbrReason::EscapeStalled);
         let stale = coord
             .plan_variant_reader(None)
@@ -931,8 +941,8 @@ pub(super) mod tests {
         assert!(coord.abort_variant(prepared));
     }
 
-    #[kithara::test]
-    fn stale_variant_reader_plan_cannot_open_a_newer_intent() {
+    #[kithara::test(tokio)]
+    async fn stale_variant_reader_plan_cannot_open_a_newer_intent() {
         let (coord, _bus, _ctx, abr_state) = switch_coord();
         let stale = coord
             .plan_variant_reader(None)
@@ -963,8 +973,8 @@ pub(super) mod tests {
         assert!(coord.abort_variant(current.transition()));
     }
 
-    #[kithara::test]
-    fn promotion_distinguishes_deferred_from_stale_transition() {
+    #[kithara::test(tokio)]
+    async fn promotion_distinguishes_deferred_from_stale_transition() {
         let (coord, _bus, _ctx, abr_state) = switch_coord();
         let plan = coord
             .plan_variant_reader(None)
@@ -980,6 +990,7 @@ pub(super) mod tests {
             coord.promote_planned_variant(transition),
             VariantPromotion::Deferred
         );
+        assert_eq!(coord.variant_index(), 0);
 
         renew_switch_intent(&abr_state);
         assert_eq!(
@@ -988,11 +999,13 @@ pub(super) mod tests {
         );
         assert_eq!(coord.sessions.resident_count(), 1);
         assert_eq!(coord.variant_index(), 0);
+        assert_eq!(abr_state.current_variant_index(), VariantIndex::new(0));
+        assert!(coord.sessions.incoming_session().is_none());
     }
 
-    #[kithara::test]
-    fn incoming_session_does_not_publish_variant_or_cursor_before_promotion() {
-        let (coord, _bus, _ctx, _abr_state) = switch_coord();
+    #[kithara::test(tokio)]
+    async fn incoming_session_does_not_publish_variant_or_cursor_before_promotion() {
+        let (coord, _bus, _ctx, abr_state) = switch_coord();
         coord.set_position(17);
 
         let transition = prepare_incoming(&coord, incremental_profile(32))
@@ -1014,11 +1027,12 @@ pub(super) mod tests {
         assert!(coord.abort_variant(transition));
         assert_eq!(coord.sessions.resident_count(), 1);
         assert_eq!(coord.variant_index(), 0);
+        assert_eq!(abr_state.current_variant_index(), VariantIndex::new(0));
         assert_eq!(coord.position(), 17);
     }
 
-    #[kithara::test]
-    fn transition_demand_in_flight_names_a_planned_incoming_fetch() {
+    #[kithara::test(tokio)]
+    async fn transition_demand_in_flight_names_a_planned_incoming_fetch() {
         let (coord, _bus, _ctx, _abr_state) = switch_coord();
         let transition = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
@@ -1030,8 +1044,8 @@ pub(super) mod tests {
         ));
     }
 
-    #[kithara::test]
-    fn transition_demand_in_flight_rejects_an_aborted_transition() {
+    #[kithara::test(tokio)]
+    async fn transition_demand_in_flight_rejects_an_aborted_transition() {
         let (coord, _bus, _ctx, _abr_state) = switch_coord();
         let transition = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
@@ -1044,47 +1058,9 @@ pub(super) mod tests {
         ));
     }
 
-    #[kithara::test]
-    fn exact_session_resolution_follows_the_committed_abr_selector_before_collapse() {
-        let (coord, _bus, _ctx, _abr_state) = switch_coord();
-        prepare_incoming(&coord, incremental_profile(32))
-            .expect("prepare incoming")
-            .expect("pending switch");
-        let claim = coord
-            .abr
-            .claim_pending_decision()
-            .expect("prepared transition keeps its exact claim");
-
-        assert!(coord.abr_publisher.commit_pending(claim, Instant::now()));
-
-        assert_eq!(
-            coord.active_session().variant_index(),
-            1,
-            "the committed ABR selector must resolve through the resident pair before collapse"
-        );
-    }
-
-    #[kithara::test]
-    fn exact_session_resolution_retries_a_stale_selector_snapshot() {
-        let (coord, _bus, _ctx, _abr_state) = switch_coord();
-        prepare_incoming(&coord, incremental_profile(32))
-            .expect("prepare incoming")
-            .expect("pending switch");
-        let mut selector_observations = [0, 1, 1, 1].into_iter();
-
-        let resolved = coord.sessions.active(|| {
-            selector_observations
-                .next()
-                .expect("resolver performs two selector reads per attempt")
-        });
-
-        assert_eq!(resolved.variant_index(), 1);
-        assert_eq!(selector_observations.next(), None);
-    }
-
     #[kithara::test(tokio)]
     async fn incoming_readiness_tracks_required_bytes_not_delivery_chunks() {
-        let (coord, _bus, ctx, _abr_state) = switch_coord();
+        let (coord, _bus, ctx, abr_state) = switch_coord();
         coord.set_position(17);
         let profile = ReaderProfile::new(
             ReaderInput::InitOnly,
@@ -1149,6 +1125,8 @@ pub(super) mod tests {
         );
         assert_eq!(coord.sessions.resident_count(), 1);
         assert_eq!(coord.variant_index(), 1);
+        assert_eq!(abr_state.current_variant_index(), VariantIndex::new(1));
+        assert_eq!(coord.abr.current_variant_index(), Some(1));
         assert_eq!(coord.position(), first.len() as u64);
 
         let mut second = [0_u8; 8];
@@ -1159,8 +1137,8 @@ pub(super) mod tests {
         assert_eq!(coord.position(), (first.len() + second.len()) as u64);
     }
 
-    #[kithara::test]
-    fn incoming_reader_eviction_reaims_its_exact_segment() {
+    #[kithara::test(tokio)]
+    async fn incoming_reader_eviction_reaims_its_exact_segment() {
         let (coord, _bus, ctx, _abr_state) = switch_coord();
         let transition = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
@@ -1198,23 +1176,8 @@ pub(super) mod tests {
         assert_eq!(refetch.url().as_str(), "https://example.com/v1-seg0.m4s");
     }
 
-    #[kithara::test]
-    fn promotion_requires_the_exact_taken_reader() {
-        let (coord, _bus, _ctx, _abr_state) = switch_coord();
-        let transition = prepare_incoming(&coord, incremental_profile(32))
-            .expect("prepare incoming")
-            .expect("pending switch");
-
-        assert_eq!(
-            coord.promote_planned_variant(transition),
-            VariantPromotion::Deferred
-        );
-        assert_eq!(coord.variant_index(), 0);
-        assert!(coord.abort_variant(transition));
-    }
-
-    #[kithara::test]
-    fn one_transition_rejects_a_different_reader_profile() {
+    #[kithara::test(tokio)]
+    async fn one_transition_rejects_a_different_reader_profile() {
         let (coord, _bus, _ctx, _abr_state) = switch_coord();
         let transition = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
@@ -1237,8 +1200,8 @@ pub(super) mod tests {
         assert!(coord.abort_variant(transition));
     }
 
-    #[kithara::test]
-    fn stale_same_target_identity_cannot_disturb_newer_incoming() {
+    #[kithara::test(tokio)]
+    async fn stale_same_target_identity_cannot_disturb_newer_incoming() {
         let (coord, _bus, ctx, abr_state) = switch_coord();
         let stale = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare first incoming")
@@ -1287,8 +1250,8 @@ pub(super) mod tests {
         assert!(current_cancel.is_cancelled());
     }
 
-    #[kithara::test]
-    fn aborted_exact_intent_keeps_its_claim_without_switching() {
+    #[kithara::test(tokio)]
+    async fn aborted_exact_intent_keeps_its_claim_without_switching() {
         let (coord, _bus, _ctx, abr_state) = switch_coord();
         let transition = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
@@ -1301,9 +1264,9 @@ pub(super) mod tests {
         assert!(coord.abr.claim_pending_decision().is_some());
     }
 
-    #[kithara::test]
-    fn locked_exact_intent_keeps_its_incoming_session() {
-        let (coord, _bus, _ctx, _abr_state) = switch_coord();
+    #[kithara::test(tokio)]
+    async fn a_locked_transition_keeps_its_incoming_and_defers_promotion() {
+        let (coord, _bus, ctx, abr_state) = switch_coord();
         let plan = coord
             .plan_variant_reader(None)
             .expect("plan incoming")
@@ -1315,6 +1278,7 @@ pub(super) mod tests {
             .expect("prepare incoming")
             .expect("pending switch");
         coord.playhead_write().set_position(Duration::from_secs(9));
+        take_ready_incremental_reader(&coord, &ctx, transition);
 
         coord.abr.lock();
         let locked = coord
@@ -1329,6 +1293,13 @@ pub(super) mod tests {
             Some(transition)
         );
         assert!(coord.has_incoming());
+        assert_eq!(
+            coord.promote_planned_variant(transition),
+            VariantPromotion::Deferred
+        );
+        assert_eq!(coord.variant_index(), 0);
+        assert_eq!(abr_state.current_variant_index(), VariantIndex::new(0));
+        assert_eq!(coord.sessions.resident_count(), 2);
 
         coord.abr.unlock();
         let ready = coord
@@ -1342,10 +1313,35 @@ pub(super) mod tests {
                 .expect("unlocked preparation probe"),
             Some(transition)
         );
+        assert_eq!(
+            coord.promote_planned_variant(transition),
+            VariantPromotion::Promoted
+        );
+        assert_eq!(coord.variant_index(), 1);
+        assert_eq!(abr_state.current_variant_index(), VariantIndex::new(1));
+        assert_eq!(coord.sessions.resident_count(), 1);
     }
 
-    #[kithara::test]
-    fn locked_exact_intent_rejects_a_reader_profile_change() {
+    #[kithara::test(tokio)]
+    async fn a_withdrawn_abr_request_drops_the_incoming_and_keeps_the_pair() {
+        let (coord, _bus, _ctx, abr_state) = switch_coord();
+        let transition = prepare_incoming(&coord, incremental_profile(32))
+            .expect("prepare incoming")
+            .expect("pending switch");
+        assert!(abr_state.abort_pending(transition.id().abr_ticket()));
+
+        assert_eq!(
+            coord.plan_variant_reader(None).expect("withdrawn request"),
+            None
+        );
+        assert_eq!(abr_state.current_variant_index(), VariantIndex::new(0));
+        assert_eq!(coord.variant_index(), 0);
+        assert_eq!(coord.sessions.resident_count(), 1);
+        assert!(coord.sessions.incoming_session().is_none());
+    }
+
+    #[kithara::test(tokio)]
+    async fn locked_exact_intent_rejects_a_reader_profile_change() {
         let (coord, _bus, _ctx, _abr_state) = switch_coord();
         prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
@@ -1363,8 +1359,8 @@ pub(super) mod tests {
         assert!(coord.has_incoming());
     }
 
-    #[kithara::test]
-    fn locked_exact_intent_rejects_a_different_reader_plan() {
+    #[kithara::test(tokio)]
+    async fn locked_exact_intent_rejects_a_different_reader_plan() {
         let (coord, _bus, _ctx, _abr_state) = switch_coord();
         let plan = coord
             .plan_variant_reader(None)
@@ -1391,8 +1387,8 @@ pub(super) mod tests {
         assert!(coord.has_incoming());
     }
 
-    #[kithara::test]
-    fn locked_plan_drops_an_incoming_from_an_old_seek_epoch() {
+    #[kithara::test(tokio)]
+    async fn locked_plan_drops_an_incoming_from_an_old_seek_epoch() {
         let (coord, _bus, _ctx, abr_state) = switch_coord();
         let plan = coord
             .plan_variant_reader(None)
@@ -1414,35 +1410,9 @@ pub(super) mod tests {
         assert_eq!(abr_state.pending_target(), Some(VariantIndex::new(1)));
     }
 
-    #[kithara::test]
-    fn a_settled_seek_stops_refusing_a_switch_plan_before_the_next_peer_poll() {
-        let (coord, _bus, _ctx, _abr_state) = switch_coord();
-        coord.prepare_for_seek();
-        assert!(!coord.abr.is_locked());
-
-        let plan = coord
-            .plan_variant_reader(None)
-            .expect("plan after the seek settled")
-            .expect("a settled seek must not refuse the pending switch");
-
-        assert_eq!(plan.transition().incoming_variant(), VariantIndex::new(1));
-    }
-
-    #[kithara::test]
-    fn a_live_seek_refuses_a_switch_plan_without_a_peer_poll() {
-        let (coord, _bus, _ctx, _abr_state) = switch_coord();
-        coord.prepare_for_seek();
-        let plan = coord
-            .plan_variant_reader(None)
-            .expect("plan after synchronous seek")
-            .expect("selection survives seek");
-        assert_eq!(plan.transition().incoming_variant(), VariantIndex::new(1));
-        assert!(!coord.abr.is_locked());
-    }
-
-    #[kithara::test]
-    fn ready_stale_plan_drops_old_epoch_incoming_without_deleting_selection() {
-        let (coord, _bus, _ctx, _abr_state) = switch_coord();
+    #[kithara::test(tokio)]
+    async fn ready_stale_plan_drops_old_epoch_incoming_without_deleting_selection() {
+        let (coord, _bus, _ctx, abr_state) = switch_coord();
         let transition = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
             .expect("pending switch");
@@ -1451,6 +1421,8 @@ pub(super) mod tests {
             .claim_pending_decision()
             .expect("selection remains pending");
         coord.prepare_for_seek();
+        assert_eq!(coord.variant_index(), 0);
+        assert_eq!(abr_state.current_variant_index(), VariantIndex::new(0));
         assert!(matches!(
             coord
                 .take_prepared_variant_reader(transition)
@@ -1461,8 +1433,8 @@ pub(super) mod tests {
         assert_eq!(coord.abr.claim_pending_decision(), Some(claim));
     }
 
-    #[kithara::test]
-    fn exact_session_mode_accepts_intent_created_before_coord() {
+    #[kithara::test(tokio)]
+    async fn exact_session_mode_accepts_intent_created_before_coord() {
         let (coord, _bus, _ctx, _abr_state) = switch_coord();
         let plan = coord
             .plan_variant_reader(None)
@@ -1474,8 +1446,8 @@ pub(super) mod tests {
         assert_eq!(coord.variant_index(), 0);
     }
 
-    #[kithara::test]
-    fn terminal_exact_preparation_error_aborts_its_claim() {
+    #[kithara::test(tokio)]
+    async fn terminal_exact_preparation_error_aborts_its_claim() {
         let (coord, _bus, _ctx, abr_state) = switch_coord();
         abr_state.set_mode(AbrMode::Auto(Some(VariantIndex::new(0))));
         abr_state.request_target(VariantIndex::new(9), AbrReason::UpSwitch);
@@ -1490,8 +1462,8 @@ pub(super) mod tests {
         assert_eq!(coord.variant_index(), 0);
     }
 
-    #[kithara::test]
-    fn active_seek_anchor_updates_the_session_cursor() {
+    #[kithara::test(tokio)]
+    async fn active_seek_anchor_updates_the_session_cursor() {
         let (coord, _bus, _ctx, _abr_state) = switch_coord();
         let deferred = Arc::new(DeferredWake::default());
         coord.set_peer_wake(
@@ -1824,47 +1796,16 @@ pub(super) mod tests {
         assert_active_reader_stays_pinned().await;
     }
 
-    #[kithara::test]
-    fn seek_replaces_the_session_without_deleting_manual_selection() {
-        let (coord, _bus, _ctx, _abr_state) = switch_coord();
-        let claim = coord
-            .abr
-            .claim_pending_decision()
-            .expect("manual selection claim");
-        let stale = prepare_incoming(&coord, incremental_profile(32))
-            .expect("prepare incoming")
-            .expect("pending switch");
-
-        let retired = coord.sessions.incoming_session().expect("prepared session");
-        coord.prepare_for_seek();
-
-        assert_eq!(coord.abr.claim_pending_decision(), Some(claim));
-        let replacement = prepare_incoming(&coord, incremental_profile(32))
-            .expect("prepare replacement")
-            .expect("manual selection survives seek");
-        assert_eq!(replacement.id().abr_ticket(), stale.id().abr_ticket());
-        assert!(matches!(
-            retired.wait_range(0..1, Some(Duration::ZERO), None),
-            Ok(WaitOutcome::Interrupted)
-        ));
-        assert!(!Arc::ptr_eq(
-            &retired,
-            &coord
-                .sessions
-                .incoming_session()
-                .expect("replacement session")
-        ));
-    }
-
-    #[kithara::test]
-    fn seek_replaces_the_session_without_deleting_automatic_selection() {
+    #[kithara::test(tokio)]
+    #[case::manual(false)]
+    #[case::automatic(true)]
+    async fn seek_replaces_the_session_without_deleting_the_selection(#[case] automatic: bool) {
         let (coord, _bus, _ctx, abr_state) = switch_coord();
-        abr_state.set_mode(AbrMode::Auto(Some(VariantIndex::new(0))));
-        abr_state.request_target(VariantIndex::new(1), AbrReason::UpSwitch);
-        let claim = coord
-            .abr
-            .claim_pending_decision()
-            .expect("automatic selection claim");
+        if automatic {
+            abr_state.set_mode(AbrMode::Auto(Some(VariantIndex::new(0))));
+            abr_state.request_target(VariantIndex::new(1), AbrReason::UpSwitch);
+        }
+        let claim = coord.abr.claim_pending_decision().expect("selection claim");
         let stale = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
             .expect("pending switch");
@@ -1875,7 +1816,7 @@ pub(super) mod tests {
         assert_eq!(coord.abr.claim_pending_decision(), Some(claim));
         let replacement = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare replacement")
-            .expect("automatic selection survives seek");
+            .expect("selection survives seek");
         assert_eq!(replacement.id().abr_ticket(), stale.id().abr_ticket());
         assert!(matches!(
             retired.wait_range(0..1, Some(Duration::ZERO), None),
@@ -1930,8 +1871,8 @@ pub(super) mod tests {
             .expect("v0 segment url")
     }
 
-    #[kithara::test]
-    fn seek_preserves_active_fetches_until_their_bytes_commit() {
+    #[kithara::test(tokio)]
+    async fn seek_preserves_active_fetches_until_their_bytes_commit() {
         let (coord, _bus, ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
         coord.variants[0].rebuild(&ctx, 0);
         let mut commands = coord.dispatch_active(&ctx, 6);
@@ -1984,8 +1925,8 @@ pub(super) mod tests {
     /// on, and their bytes lie past the cut the transition latches — measured
     /// on an urgent down-switch, five in-flight look-ahead prefetches kept the
     /// incoming variant's construction queued for seconds.
-    #[kithara::test]
-    fn prepare_retires_the_outgoing_lookahead() {
+    #[kithara::test(tokio)]
+    async fn prepare_retires_the_outgoing_lookahead() {
         let (coord, _bus, ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
         coord.variants[0].rebuild(&ctx, 0);
         let cmds = coord.dispatch_active(&ctx, 10);
@@ -2009,8 +1950,8 @@ pub(super) mod tests {
         }
     }
 
-    #[kithara::test]
-    fn preparing_a_transition_keeps_fetches_the_reader_now_owes() {
+    #[kithara::test(tokio)]
+    async fn preparing_a_transition_keeps_fetches_the_reader_now_owes() {
         let (coord, _bus, ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
         coord.variants[0].rebuild(&ctx, 0);
         let commands = coord.dispatch_active(&ctx, 6);
@@ -2033,8 +1974,8 @@ pub(super) mod tests {
         }
     }
 
-    #[kithara::test]
-    fn dispatch_started_before_prepare_retires_lookahead_before_publication() {
+    #[kithara::test(tokio)]
+    async fn dispatch_started_before_prepare_retires_lookahead_before_publication() {
         let (coord, _bus, ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
         coord.variants[0].rebuild(&ctx, 0);
         let session = coord.active_session();
@@ -2061,8 +2002,8 @@ pub(super) mod tests {
     /// While the incoming slot exists, the audible session re-dispatches only
     /// its owed window; a retire that refills the look-ahead on the next poll
     /// would starve the construction all over again.
-    #[kithara::test]
-    fn dispatch_active_is_capped_while_a_transition_builds() {
+    #[kithara::test(tokio)]
+    async fn dispatch_active_is_capped_while_a_transition_builds() {
         let (coord, _bus, ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
         coord.variants[0].rebuild(&ctx, 0);
         let cmds = coord.dispatch_active(&ctx, 10);
@@ -2125,36 +2066,36 @@ pub(super) mod tests {
             .expect("segment key")
     }
 
-    #[kithara::test]
-    fn find_at_offset_addresses_the_segment_that_owns_the_byte() {
+    #[kithara::test(tokio)]
+    async fn find_at_offset_addresses_the_segment_that_owns_the_byte() {
         let (coord, _bus, _ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
 
         assert_eq!(coord.find_at_offset(250), Some((2, 200, 100)));
     }
 
-    #[kithara::test]
-    fn find_at_offset_is_none_past_the_last_segment() {
+    #[kithara::test(tokio)]
+    async fn find_at_offset_is_none_past_the_last_segment() {
         let (coord, _bus, _ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
 
         assert_eq!(coord.find_at_offset(600), None);
     }
 
-    #[kithara::test]
-    fn demand_segment_at_offset_names_the_segment_that_owns_the_cursor() {
+    #[kithara::test(tokio)]
+    async fn demand_segment_at_offset_names_the_segment_that_owns_the_cursor() {
         let (coord, _bus, _ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
 
         assert_eq!(coord.demand_segment_at_offset(250), Some(2));
     }
 
-    #[kithara::test]
-    fn demand_segment_at_offset_is_none_past_the_last_segment() {
+    #[kithara::test(tokio)]
+    async fn demand_segment_at_offset_is_none_past_the_last_segment() {
         let (coord, _bus, _ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
 
         assert_eq!(coord.demand_segment_at_offset(600), None);
     }
 
-    #[kithara::test]
-    fn byte_map_resolves_the_segment_holding_a_byte() {
+    #[kithara::test(tokio)]
+    async fn byte_map_resolves_the_segment_holding_a_byte() {
         let (coord, _bus, _ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
 
         let descriptor =
@@ -2164,8 +2105,8 @@ pub(super) mod tests {
         assert_eq!(descriptor.byte_range, 200..300);
     }
 
-    #[kithara::test]
-    fn byte_map_resolves_the_segment_after_a_byte() {
+    #[kithara::test(tokio)]
+    async fn byte_map_resolves_the_segment_after_a_byte() {
         let (coord, _bus, _ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
 
         let descriptor = ByteMap::segment_after_byte(coord.as_ref(), 50)
@@ -2175,8 +2116,8 @@ pub(super) mod tests {
         assert_eq!(descriptor.byte_range, 100..200);
     }
 
-    #[kithara::test]
-    fn byte_map_resolves_a_segment_by_index() {
+    #[kithara::test(tokio)]
+    async fn byte_map_resolves_a_segment_by_index() {
         let (coord, _bus, _ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
 
         let descriptor = ByteMap::segment_at_index(coord.as_ref(), 3).expect("segment 3 exists");
@@ -2184,8 +2125,8 @@ pub(super) mod tests {
         assert_eq!(descriptor.byte_range, 300..400);
     }
 
-    #[kithara::test]
-    fn byte_map_resolves_a_segment_by_decode_time() {
+    #[kithara::test(tokio)]
+    async fn byte_map_resolves_a_segment_by_decode_time() {
         let (coord, _bus, _ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
 
         let descriptor = ByteMap::segment_at_time(coord.as_ref(), Duration::from_secs(5))
@@ -2195,8 +2136,8 @@ pub(super) mod tests {
         assert_eq!(descriptor.decode_time, Duration::from_secs(4));
     }
 
-    #[kithara::test]
-    fn phase_at_is_ready_once_the_segment_bytes_land() {
+    #[kithara::test(tokio)]
+    async fn phase_at_is_ready_once_the_segment_bytes_land() {
         let (coord, _bus, ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
         coord.variants[0].rebuild(&ctx, 0);
         deliver_active(&coord, &ctx, 1);
@@ -2204,8 +2145,8 @@ pub(super) mod tests {
         assert_eq!(coord.phase_at(0..1), SourcePhase::Ready);
     }
 
-    #[kithara::test]
-    fn probe_phase_reads_the_range_under_the_cursor() {
+    #[kithara::test(tokio)]
+    async fn probe_phase_reads_the_range_under_the_cursor() {
         let (coord, _bus, ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
         coord.variants[0].rebuild(&ctx, 0);
         deliver_active(&coord, &ctx, 1);
@@ -2215,8 +2156,8 @@ pub(super) mod tests {
         assert_eq!(probe.phase(), SourcePhase::Ready);
     }
 
-    #[kithara::test]
-    fn probe_vends_the_coord_as_its_byte_map() {
+    #[kithara::test(tokio)]
+    async fn probe_vends_the_coord_as_its_byte_map() {
         let (coord, _bus, _ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
         let probe = HlsProbe::new(Arc::clone(&coord));
 
@@ -2230,8 +2171,8 @@ pub(super) mod tests {
         );
     }
 
-    #[kithara::test]
-    fn prepare_for_seek_wakes_a_reader_parked_on_the_pre_seek_range() {
+    #[kithara::test(tokio)]
+    async fn prepare_for_seek_wakes_a_reader_parked_on_the_pre_seek_range() {
         let (coord, _bus, _ctx, _abr) = switch_coord();
         let signal = coord.signal();
         let before = signal.current();
@@ -2244,8 +2185,8 @@ pub(super) mod tests {
         );
     }
 
-    #[kithara::test]
-    fn reconcile_escape_marks_a_reader_stalled_at_a_clean_boundary() {
+    #[kithara::test(tokio)]
+    async fn reconcile_escape_marks_a_reader_stalled_at_a_clean_boundary() {
         let (coord, _bus, ctx, _abr, slots) = switch_coord_slots(AbrReason::ManualOverride, 6, 1);
         coord.variants[0].rebuild(&ctx, 0);
         let _in_flight = coord.dispatch_active(&ctx, 1);
@@ -2256,8 +2197,8 @@ pub(super) mod tests {
         assert!(coord.abr.is_escaping());
     }
 
-    #[kithara::test]
-    fn reconcile_escape_holds_the_mark_while_the_stall_persists() {
+    #[kithara::test(tokio)]
+    async fn reconcile_escape_holds_the_mark_while_the_stall_persists() {
         let (coord, _bus, ctx, _abr, slots) = switch_coord_slots(AbrReason::ManualOverride, 6, 1);
         coord.variants[0].rebuild(&ctx, 0);
         let _in_flight = coord.dispatch_active(&ctx, 1);
@@ -2269,8 +2210,8 @@ pub(super) mod tests {
         assert!(coord.abr.is_escaping());
     }
 
-    #[kithara::test]
-    fn reconcile_escape_clears_the_mark_once_the_stall_lifts() {
+    #[kithara::test(tokio)]
+    async fn reconcile_escape_clears_the_mark_once_the_stall_lifts() {
         let (coord, _bus, _ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
         coord.abr.mark_escape();
 
@@ -2278,16 +2219,16 @@ pub(super) mod tests {
         assert!(!coord.abr.is_escaping());
     }
 
-    #[kithara::test]
-    fn reconcile_escape_leaves_a_delivering_reader_unmarked() {
+    #[kithara::test(tokio)]
+    async fn reconcile_escape_leaves_a_delivering_reader_unmarked() {
         let (coord, _bus, _ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
 
         assert!(!coord.reconcile_escape(0));
         assert!(!coord.abr.is_escaping());
     }
 
-    #[kithara::test]
-    fn seek_epoch_handle_reads_the_live_epoch() {
+    #[kithara::test(tokio)]
+    async fn seek_epoch_handle_reads_the_live_epoch() {
         let (coord, _bus, _ctx, _abr) = switch_coord();
         let handle = coord.activity();
         let mut writer = coord.take_activity_writer().expect("sole activity writer");
@@ -2299,8 +2240,8 @@ pub(super) mod tests {
         assert!(coord.activity().is_playing());
     }
 
-    #[kithara::test]
-    fn set_worker_wake_installs_the_data_arrival_wake() {
+    #[kithara::test(tokio)]
+    async fn set_worker_wake_installs_the_data_arrival_wake() {
         let (coord, _bus, _ctx, _abr) = switch_coord();
         let wake = Arc::new(CountingWake::default());
 
@@ -2310,8 +2251,8 @@ pub(super) mod tests {
         assert_eq!(wake.count(), 1);
     }
 
-    #[kithara::test]
-    fn set_peer_wake_installs_the_direct_peer_poll_wake() {
+    #[kithara::test(tokio)]
+    async fn set_peer_wake_installs_the_direct_peer_poll_wake() {
         let (coord, _bus, _ctx, _abr) = switch_coord();
         let direct = Arc::new(CountingWake::default());
 
@@ -2324,8 +2265,8 @@ pub(super) mod tests {
         assert_eq!(direct.count(), 1);
     }
 
-    #[kithara::test]
-    fn set_peer_wake_installs_the_deferred_peer_wake() {
+    #[kithara::test(tokio)]
+    async fn set_peer_wake_installs_the_deferred_peer_wake() {
         let (coord, _bus, _ctx, _abr) = switch_coord();
         let deferred = Arc::new(DeferredWake::default());
 
@@ -2338,104 +2279,31 @@ pub(super) mod tests {
         assert!(deferred.flush(), "the armed peer wake must be deliverable");
     }
 
-    #[kithara::test]
-    fn sync_abr_lock_locks_abr_while_a_seek_is_pending() {
+    #[kithara::test(tokio)]
+    #[case::no_holder(false)]
+    #[case::other_holder(true)]
+    async fn prepare_for_seek_leaves_the_abr_lock_to_its_holder(#[case] other_holder: bool) {
         let (coord, _bus, _ctx, _abr) = switch_coord();
-        coord.prepare_for_seek();
-
-        coord.prepare_for_seek();
-
-        assert!(!coord.abr.is_locked());
+        if other_holder {
+            coord.abr.lock();
+            coord.prepare_for_seek();
+            assert!(coord.abr.is_locked());
+            coord.abr.unlock();
+            assert!(!coord.abr.is_locked());
+        } else {
+            coord.prepare_for_seek();
+            coord.prepare_for_seek();
+            assert!(!coord.abr.is_locked());
+            let plan = coord
+                .plan_variant_reader(None)
+                .expect("plan after seek")
+                .expect("selection survives seek");
+            assert_eq!(plan.transition().incoming_variant(), VariantIndex::new(1));
+        }
     }
 
-    /// The seek lock is taken through the coord, so it is released through
-    /// the coord: the setup mirrors the production sequence rather than
-    /// reaching past it into the shared counter.
-    #[kithara::test]
-    fn sync_abr_lock_unlocks_abr_once_no_seek_is_pending() {
-        let (coord, _bus, _ctx, _abr) = switch_coord();
-        coord.prepare_for_seek();
-        coord.prepare_for_seek();
-
-        coord.prepare_for_seek();
-
-        assert!(!coord.abr.is_locked());
-    }
-
-    #[kithara::test]
-    fn sync_abr_lock_waits_for_first_post_seek_output() {
-        let (coord, _bus, _ctx, _abr) = switch_coord();
-        coord.prepare_for_seek();
-        coord.prepare_for_seek();
-
-        coord.prepare_for_seek();
-        assert!(!coord.abr.is_locked());
-
-        assert!(coord.take_activity_writer().is_some());
-        coord.prepare_for_seek();
-        assert!(!coord.abr.is_locked());
-    }
-
-    /// `AbrState::unlock` decrements a shared counter under a
-    /// `debug_assert!(prev > 0)`, and `AbrHandle::lock` is public: releasing a
-    /// level this coord did not take unlocks ABR for whoever is still holding
-    /// it, and a second such release trips the assert.
-    #[kithara::test]
-    fn sync_abr_lock_leaves_a_level_it_did_not_take_alone() {
-        let (coord, _bus, _ctx, _abr) = switch_coord();
-        coord.abr.lock();
-
-        coord.prepare_for_seek();
-
-        assert!(coord.abr.is_locked());
-    }
-
-    #[kithara::test]
-    fn sync_abr_lock_leaves_a_quiet_coord_unlocked() {
-        let (coord, _bus, _ctx, _abr) = switch_coord();
-
-        coord.prepare_for_seek();
-
-        assert!(!coord.abr.is_locked());
-    }
-
-    #[kithara::test]
-    fn sync_abr_lock_keeps_a_pending_seek_locked() {
-        let (coord, _bus, _ctx, _abr) = switch_coord();
-        coord.prepare_for_seek();
-        coord.abr.lock();
-
-        coord.prepare_for_seek();
-
-        assert!(coord.abr.is_locked());
-    }
-
-    #[kithara::test]
-    fn variant_control_abort_retires_a_live_transition() {
-        let (coord, _bus, _ctx, _abr) = switch_coord();
-        let transition = prepare_incoming(&coord, incremental_profile(32))
-            .expect("prepare incoming")
-            .expect("pending switch");
-
-        assert!(VariantControl::abort_variant(coord.as_ref(), transition));
-    }
-
-    #[kithara::test]
-    fn variant_control_abort_rejects_a_superseded_transition() {
-        let (coord, _bus, _ctx, abr_state) = switch_coord();
-        let stale = prepare_incoming(&coord, incremental_profile(32))
-            .expect("prepare incoming")
-            .expect("pending switch");
-        renew_switch_intent(&abr_state);
-        prepare_incoming(&coord, incremental_profile(32))
-            .expect("prepare replacement")
-            .expect("replacement switch");
-
-        assert!(!VariantControl::abort_variant(coord.as_ref(), stale));
-    }
-
-    #[kithara::test]
-    fn eviction_rebuilds_the_active_reader_from_its_own_cursor() {
+    #[kithara::test(tokio)]
+    async fn eviction_rebuilds_the_active_reader_from_its_own_cursor() {
         let (coord, _bus, ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
         coord.variants[0].rebuild(&ctx, 0);
         deliver_active(&coord, &ctx, 6);
@@ -2459,8 +2327,8 @@ pub(super) mod tests {
         );
     }
 
-    #[kithara::test]
-    fn eviction_elsewhere_leaves_the_active_reader_alone() {
+    #[kithara::test(tokio)]
+    async fn eviction_elsewhere_leaves_the_active_reader_alone() {
         let (coord, _bus, ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
         coord.variants[0].rebuild(&ctx, 2);
         let foreign = ctx
@@ -2483,8 +2351,8 @@ pub(super) mod tests {
         );
     }
 
-    #[kithara::test]
-    fn eviction_in_the_active_variant_leaves_the_incoming_plan_alone() {
+    #[kithara::test(tokio)]
+    async fn eviction_in_the_active_variant_leaves_the_incoming_plan_alone() {
         let (coord, _bus, ctx, _abr) = switch_coord_variants(AbrReason::ManualOverride, 2, 2);
         prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
@@ -2512,8 +2380,8 @@ pub(super) mod tests {
         );
     }
 
-    #[kithara::test]
-    fn prepare_for_seek_remints_a_layout_frozen_behind_a_seek_tail() {
+    #[kithara::test(tokio)]
+    async fn prepare_for_seek_remints_a_layout_frozen_behind_a_seek_tail() {
         let (coord, _bus, ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
         coord.variants[0].rebuild_with_decoder_probe(&ctx, 2);
         let mut command = coord
