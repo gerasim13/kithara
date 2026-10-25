@@ -596,59 +596,58 @@ fn reference(
         let mut recording = voice.decoded.lock();
         let decoded = recording.view();
         let span = interval.source;
-        // A frame's endpoint is the next frame's start, so each coordinate is
-        // projected once and carried into the following frame.
-        let mut carried = None;
-        for session in active {
-            let offset = u64::try_from(session - interval.start).expect("source offset");
-            let physical = carried.take().unwrap_or_else(|| {
-                let raw = span
-                    .source_ratio_at(offset)
-                    .expect("physical source coordinate");
-                interval
+        {
+            let mut sample_source = decoded
+                .sampler_at_domain(interval.identity, [0, 1], interval.physical_domain.clone())
+                .unwrap_or_else(|error| {
+                    panic!("source {:?} session {}: {error}", voice.item, active.start)
+                });
+            // A frame's endpoint is the next frame's start, so each coordinate is
+            // projected once and carried into the following frame.
+            let mut carried = None;
+            for session in active {
+                let offset = u64::try_from(session - interval.start).expect("source offset");
+                let physical = carried.take().unwrap_or_else(|| {
+                    let raw = span
+                        .source_ratio_at(offset)
+                        .expect("physical source coordinate");
+                    interval
+                        .physical_basis
+                        .output_ratio_at_source(interval.physical_origin, raw)
+                        .expect("actual decoded physical coordinate")
+                });
+                let next = span
+                    .source_ratio_at(offset + 1)
+                    .expect("physical source endpoint");
+                let endpoint = interval
                     .physical_basis
-                    .output_ratio_at_source(interval.physical_origin, raw)
-                    .expect("actual decoded physical coordinate")
-            });
-            let next = span
-                .source_ratio_at(offset + 1)
-                .expect("physical source endpoint");
-            let endpoint = interval
-                .physical_basis
-                .output_ratio_at_source(interval.physical_origin, next)
-                .expect("actual decoded physical endpoint");
-            carried = Some(endpoint);
-            let speed = super::control::physical_source_speed(physical, endpoint)
-                .expect("actual source speed");
-            let position = if shift == Some(interval.voice) {
-                (
-                    physical
-                        .0
-                        .checked_add(physical.1.get())
-                        .expect("negative control source shift"),
-                    physical.1,
-                )
-            } else {
-                physical
-            };
-            let gain = envelope(capture, voice.item, session, mixer);
-            let base = usize::try_from(session - domain.start).expect("reference offset") * 2;
-            for channel in 0..2 {
-                let sample = decoded
-                    .sample_at_domain(
-                        interval.identity,
-                        position,
-                        speed,
-                        channel,
-                        &interval.physical_domain,
+                    .output_ratio_at_source(interval.physical_origin, next)
+                    .expect("actual decoded physical endpoint");
+                carried = Some(endpoint);
+                let speed = super::control::physical_source_speed(physical, endpoint)
+                    .expect("actual source speed");
+                let position = if shift == Some(interval.voice) {
+                    (
+                        physical
+                            .0
+                            .checked_add(physical.1.get())
+                            .expect("negative control source shift"),
+                        physical.1,
                     )
-                    .unwrap_or_else(|error| {
-                        panic!("source {:?} session {session}: {error}", voice.item)
-                    });
-                if gain == 1.0 {
-                    expected[base + channel] += sample;
-                } else if gain != 0.0 {
-                    expected[base + channel] = sample.mul_add(gain, expected[base + channel]);
+                } else {
+                    physical
+                };
+                let gain = envelope(capture, voice.item, session, mixer);
+                let base = usize::try_from(session - domain.start).expect("reference offset") * 2;
+                let samples = sample_source(position, speed).unwrap_or_else(|error| {
+                    panic!("source {:?} session {session}: {error}", voice.item)
+                });
+                for (channel, sample) in samples.into_iter().enumerate() {
+                    if gain == 1.0 {
+                        expected[base + channel] += sample;
+                    } else if gain != 0.0 {
+                        expected[base + channel] = sample.mul_add(gain, expected[base + channel]);
+                    }
                 }
             }
         }
@@ -760,6 +759,7 @@ impl QueueMusic {
             AudioArtifactTap::from_env(&format!("{label}-{}-master", kind.label()), RATE, 2)
                 .expect("Master WAV export");
         let mixer = DeckMixerConfig::builder()
+            .eq_bands(0)
             .sample_rate(sample_rate)
             .slots(NonZeroUsize::new(2).expect("two actual reusable mixer slots"))
             .mix(DeckMixSettings::builder().level(CONTROL_GAIN).build())
@@ -942,7 +942,7 @@ impl QueueMusic {
     }
 
     #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
-    async fn run(&mut self) -> CapturedMusic {
+    async fn run(&mut self, startup_frames: usize) -> CapturedMusic {
         let wall = Instant::now();
         let mut reported = wall;
         let mut starts_seen = 0;
@@ -950,6 +950,17 @@ impl QueueMusic {
         let mut render_time = Duration::ZERO;
         let mut data = CapturedMusic::default();
         self.start_clock(&mut data).await;
+        for offset in (0..startup_frames).step_by(BLOCK - 1) {
+            self.render_block((startup_frames - offset).min(BLOCK - 1), &mut data)
+                .await;
+            hang_reset!();
+        }
+        self.deck.observe(|o| {
+            assert!(
+                o.capture.as_ref().expect("capture").starts.is_empty(),
+                "startup callbacks precede every source Start"
+            );
+        });
         hang_reset!();
         let source_count: f64 = self.kind.sources().len().as_();
         let max_frames: u64 = match self.kind {
@@ -969,15 +980,29 @@ impl QueueMusic {
         let mut postroll = None;
         let mut next_beat = None;
         loop {
+            let (starts, first_start) = self.deck.observe(|o| {
+                let capture = o.capture.as_ref().expect("capture");
+                (
+                    capture.starts.len(),
+                    capture.starts.first().map(|(_, _, at, _)| *at),
+                )
+            });
             hang_tick!(format!(
                 "queue321: real Host frame {}, starts {}, grids {}",
                 self.host.position(),
-                self.deck
-                    .observe(|o| o.capture.as_ref().expect("capture").starts.len()),
+                starts,
                 data.answered.len()
             ));
+            let origin = first_start.map_or(0, |at| {
+                u64::try_from(frame(at)).expect("native Start is nonnegative")
+            });
+            let elapsed = self
+                .host
+                .position()
+                .checked_sub(origin)
+                .expect("native Start precedes the current Host frame");
             assert!(
-                self.host.position() <= max_frames,
+                elapsed <= max_frames,
                 "the fixed Queue scenario must finish within its declared frame bound"
             );
             let control = self.deck.control().clone();
@@ -2751,7 +2776,12 @@ fn output_contract(
 }
 
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
-async fn capture_music(kind: MusicCase, key_lock: bool, tracks: &[(&str, Start)]) {
+async fn capture_music(
+    kind: MusicCase,
+    key_lock: bool,
+    tracks: &[(&str, Start)],
+    startup_seconds: u32,
+) {
     let _trace = usdt_trace::scope();
     let wall = Instant::now();
     tracing::info!(target: "kithara_test::sync::queue321", phase = "setup_begin");
@@ -2771,7 +2801,9 @@ async fn capture_music(kind: MusicCase, key_lock: bool, tracks: &[(&str, Start)]
     case.append_sources(tracks).await;
     tracing::info!(target: "kithara_test::sync::queue321", phase = "render_begin",
         wall_s = wall.elapsed().as_secs_f64(), frame = case.host.position());
-    let mut data = case.run().await;
+    let startup_frames = usize::try_from(u64::from(RATE) * u64::from(startup_seconds))
+        .expect("startup frames fit usize");
+    let mut data = case.run(startup_frames).await;
     if key_lock {
         check_keylock_music(&mut case, data).await;
         return;
@@ -2982,6 +3014,7 @@ async fn one_queue_crossfades_five_music_tracks_and_retargets_host_during_overla
             ("rhythm_wav_trip_hop_74_aligned", Start::Seconds(0.0)),
             ("rhythm_wav_breakbeat_140_aligned", Start::Seconds(0.0)),
         ],
+        0,
     )
     .await;
 }
@@ -2999,19 +3032,27 @@ async fn one_queue_crossfades_five_music_tracks_and_retargets_host_during_overla
     ("library_flac_newtechno", Start::Seconds(0.0)),
     ("library_flac_ryabina", Start::Seconds(0.0)),
     ("library_flac_song1", Start::Seconds(0.0)),
-])]
+], 0)]
 #[case::keylock_with_offsets(true, &[
     ("library_flac_song2", Start::Seconds(0.0)),
     ("library_flac_slowtechno", Start::Seconds(0.0)),
     ("library_flac_newtechno", NEWTECHNO_PHRASE),
     ("library_flac_ryabina", Start::Beat(96)),
     ("library_flac_song1", Start::Beat(64)),
-])]
+], 0)]
+#[case::keylock_after_silent_clock(true, &[
+    ("library_flac_song2", Start::Seconds(0.0)),
+    ("library_flac_slowtechno", Start::Seconds(0.0)),
+    ("library_flac_newtechno", NEWTECHNO_PHRASE),
+    ("library_flac_ryabina", Start::Beat(96)),
+    ("library_flac_song1", Start::Beat(64)),
+], 60)]
 async fn one_queue_crossfades_five_real_tracks_through_four_public_next_requests(
     #[case] key_lock: bool,
     #[case] tracks: &[(&str, Start)],
+    #[case] startup_seconds: u32,
 ) {
-    capture_music(MusicCase::RealNext, key_lock, tracks).await;
+    capture_music(MusicCase::RealNext, key_lock, tracks, startup_seconds).await;
 }
 
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]

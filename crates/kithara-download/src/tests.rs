@@ -24,7 +24,7 @@ use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex, Notify},
     time::{self, Duration, Instant, WallInstant},
-    tokio::task::spawn as tokio_spawn,
+    tokio::task::{spawn as tokio_spawn, yield_now},
 };
 use kithara_test_utils::{TestHttpServer, bufpool::pools as test_pools, kithara, pace};
 use url::Url;
@@ -116,7 +116,9 @@ fn test_client_with_options(options: NetOptions) -> HttpClient {
 }
 
 fn test_config() -> DownloaderConfig {
-    DownloaderConfig::for_client(test_client()).build()
+    DownloaderConfig::for_client(test_client())
+        .runtime(kithara_platform::tokio::runtime::Handle::current())
+        .build()
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(1)))]
@@ -742,7 +744,11 @@ async fn peer_handle_execute_returns_error_on_unreachable() {
     let net = NetOptions::builder()
         .inactivity_timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
         .build();
-    let dl = Downloader::new(DownloaderConfig::for_client(test_client_with_options(net)).build());
+    let dl = Downloader::new(
+        DownloaderConfig::for_client(test_client_with_options(net))
+            .runtime(kithara_platform::tokio::runtime::Handle::current())
+            .build(),
+    );
     let handle = dl.register(Arc::new(MockPeer::new()), None);
 
     let h2 = handle.clone();
@@ -774,6 +780,7 @@ async fn peer_handle_downloader_cancel_cascades() {
     let cancel = CancelToken::never();
     let dl = Downloader::new(
         DownloaderConfig::for_client(test_client())
+            .runtime(kithara_platform::tokio::runtime::Handle::current())
             .cancel(cancel.clone())
             .build(),
     );
@@ -792,9 +799,7 @@ async fn peer_handle_downloader_cancel_cascades() {
 async fn max_concurrent_limits_inflight_connections() {
     const MAX_CONCURRENT: usize = 5;
     const TOTAL_REQUESTS: usize = 1000;
-    const HANDLER_DELAY_MS: u64 = 5;
-
-    let (server, in_flight) = spawn_in_flight_server(HANDLER_DELAY_MS).await;
+    let (server, in_flight) = spawn_in_flight_server().await;
     let url = server.url("/data");
 
     let config = DownloaderConfig {
@@ -828,10 +833,9 @@ async fn many_downloaders_global_peak_stays_bounded() {
     const NUM_DOWNLOADERS: usize = 20;
     const REQUESTS_PER_DL: usize = 30;
     const MAX_CONCURRENT_PER_DL: usize = 3;
-    const HANDLER_DELAY_MS: u64 = 20;
     const GLOBAL_PEAK_LIMIT: usize = NUM_DOWNLOADERS * MAX_CONCURRENT_PER_DL;
 
-    let (server, in_flight) = spawn_in_flight_server(HANDLER_DELAY_MS).await;
+    let (server, in_flight) = spawn_in_flight_server().await;
     let url = server.url("/data");
 
     let mut tasks = Vec::new();
@@ -877,9 +881,7 @@ async fn many_downloaders_global_peak_stays_bounded() {
 async fn poll_next_respects_max_concurrent() {
     const MAX_CONCURRENT: usize = 5;
     const TOTAL_CMDS: usize = 1000;
-    const HANDLER_DELAY_MS: u64 = 5;
-
-    let (server, in_flight) = spawn_in_flight_server(HANDLER_DELAY_MS).await;
+    let (server, in_flight) = spawn_in_flight_server().await;
     let url = server.url("/data");
 
     /// Peer that produces `remaining` HEAD commands via `poll_next`,
@@ -1121,6 +1123,7 @@ async fn soft_timeout_publishes_load_slow_on_peer_bus() {
     let url = server.url("/data");
 
     let config = DownloaderConfig::for_client(test_client())
+        .runtime(kithara_platform::tokio::runtime::Handle::current())
         .soft_timeout(Duration::from_millis(SOFT_TIMEOUT_MS))
         .build();
     let dl = Downloader::new(config);
@@ -1148,6 +1151,7 @@ async fn soft_timeout_covers_response_body() {
     let server = spawn_slow_body_server(SLOW_BODY_DELAY_MS).await;
     let url = server.url("/data");
     let config = DownloaderConfig::for_client(test_client())
+        .runtime(kithara_platform::tokio::runtime::Handle::current())
         .soft_timeout(Duration::from_millis(SOFT_TIMEOUT_MS))
         .build();
     let dl = Downloader::new(config);
@@ -1289,8 +1293,8 @@ struct InFlight {
     peak: AtomicUsize,
 }
 
-/// Serve `/data` slowly, counting the requests in flight.
-async fn spawn_in_flight_server(delay_ms: u64) -> (TestHttpServer, Arc<InFlight>) {
+/// Yield after admission so other handlers can enter before this one replies.
+async fn spawn_in_flight_server() -> (TestHttpServer, Arc<InFlight>) {
     let in_flight = Arc::new(InFlight::default());
     let app = Router::new().route(
         "/data",
@@ -1301,7 +1305,7 @@ async fn spawn_in_flight_server(delay_ms: u64) -> (TestHttpServer, Arc<InFlight>
                 async move {
                     let current = in_flight.now.fetch_add(1, Ordering::SeqCst) + 1;
                     in_flight.peak.fetch_max(current, Ordering::SeqCst);
-                    time::sleep(Duration::from_millis(delay_ms)).await;
+                    yield_now().await;
                     in_flight.now.fetch_sub(1, Ordering::SeqCst);
                     "ok"
                 }
@@ -1360,7 +1364,11 @@ async fn retry_and_first_byte_publish_on_peer_bus() {
                 .build(),
         )
         .build();
-    let dl = Downloader::new(DownloaderConfig::for_client(test_client_with_options(net)).build());
+    let dl = Downloader::new(
+        DownloaderConfig::for_client(test_client_with_options(net))
+            .runtime(kithara_platform::tokio::runtime::Handle::current())
+            .build(),
+    );
     let root = EventBus::new(64);
     let scoped = root.scoped();
     let mut rx = scoped.subscribe();
@@ -1418,7 +1426,11 @@ async fn stalled_body_publishes_resume_and_exhaustion_events() {
                 .build(),
         )
         .build();
-    let dl = Downloader::new(DownloaderConfig::for_client(test_client_with_options(net)).build());
+    let dl = Downloader::new(
+        DownloaderConfig::for_client(test_client_with_options(net))
+            .runtime(kithara_platform::tokio::runtime::Handle::current())
+            .build(),
+    );
     let root = EventBus::new(64);
     let scoped = root.scoped();
     let mut rx = scoped.subscribe();
@@ -1827,4 +1839,47 @@ fn peer_priority_from_handle(_handle: &super::PeerHandle, active: &AtomicBool) -
 enum TestEvent {
     Abr(AbrEvent),
     Downloader(DownloaderEvent),
+}
+
+#[kithara::test(tokio, native, flash(false), timeout(Duration::from_secs(2)))]
+async fn a_peer_registered_outside_a_runtime_leaves_the_loop_serving() {
+    let config = test_config();
+    let (downloader, _idle_handle) = std::thread::scope(|scope| {
+        scope
+            .spawn(move || {
+                let downloader = Downloader::new(config);
+                let idle = Arc::new(QueuedPeer {
+                    cancel: CancelToken::never(),
+                    cmds: Mutex::new(None),
+                    yielded: Notify::default(),
+                });
+                let handle = downloader.register(idle, None);
+                (downloader, handle)
+            })
+            .join()
+            .expect("registration thread")
+    });
+    let server = TestHttpServer::new(Router::new().route("/data", get(|| async { "body" }))).await;
+    let gate = CompletionGate::new(1);
+    let gate_cb = Arc::clone(&gate);
+    let errors: CompletionErrors = Arc::default();
+    let errors_cb = Arc::clone(&errors);
+    let cmd = FetchCmd::get(server.url("/data"))
+        .writer(Box::new(|_chunk: &[u8]| Ok(())))
+        .on_complete(Box::new(move |_bytes, _headers, error| {
+            errors_cb.lock().push(error.cloned());
+            gate_cb.complete();
+        }))
+        .build();
+    let peer = Arc::new(QueuedPeer {
+        cancel: CancelToken::never(),
+        cmds: Mutex::new(Some(vec![cmd])),
+        yielded: Notify::default(),
+    });
+    let _handle = downloader.register(peer, None);
+    gate.wait().await;
+    assert!(
+        errors.lock().iter().all(Option::is_none),
+        "fetch must succeed"
+    );
 }
