@@ -324,12 +324,7 @@ where
 {
     /// Render the quantum's source frames from the residency at the engine's
     /// feed; the chunk has already extended the residency.
-    pub(super) fn process_active(
-        &mut self,
-        chunk: AudioChunk,
-        speed: f32,
-        prepared: Option<PreparedQuantum>,
-    ) -> Option<AudioChunk> {
+    pub(super) fn process_active(&mut self, chunk: AudioChunk, speed: f32) -> Option<AudioChunk> {
         if self.engine.is_none() || self.scratch.is_none() {
             warn!("time-stretch target was not prepared before rendering");
             self.defer_scratch(Some(chunk.samples));
@@ -346,10 +341,7 @@ where
             .frame_offset
             .saturating_add(u64::try_from(samples.len() / channels).unwrap_or(u64::MAX));
         let feed = self.resident_feed.unwrap_or(meta.frame_offset);
-        let frames = prepared.map_or_else(
-            || usize::try_from(source_end.saturating_sub(feed)).unwrap_or(usize::MAX),
-            |quantum| quantum.active_frames,
-        );
+        let frames = usize::try_from(source_end.saturating_sub(feed)).unwrap_or(usize::MAX);
         if frames > self.source_block_frames.get() {
             let error = ElasticError::SourceFrameLimit {
                 frames,
@@ -362,7 +354,6 @@ where
         let mut input = Self::meta_at_frame(meta, feed).ok()?;
         input.frames = u32::try_from(frames).unwrap_or(u32::MAX);
         self.last_input_meta = Some(input);
-        let landing = prepared.and_then(|quantum| quantum.landing_frames);
         let residency = self.residency.take();
         let rendered = residency
             .as_ref()
@@ -376,14 +367,7 @@ where
                 let range = i64::try_from(feed)
                     .map_err(|_| ElasticError::SampleCountOverflow)
                     .and_then(|feed| resident.range(feed, end, channels))?;
-                self.render_active(
-                    input,
-                    &resident.samples[range],
-                    speed,
-                    channels,
-                    frames,
-                    landing,
-                )
+                self.render_active(input, &resident.samples[range], speed, channels, frames)
             });
         self.residency = residency;
         let rendered =
@@ -696,7 +680,7 @@ where
         }
 
         let mut output = self.render_manual(chunk, speed, prepared);
-        if prepared.is_some_and(|quantum| quantum.source_span.is_some())
+        if prepared.is_some()
             && let Some(output) = output.as_mut()
             && let Err(error) = self.map_output(output)
         {
@@ -783,8 +767,8 @@ where
             self.defer_scratch(Some(chunk.samples));
             return None;
         }
-        if let Some(span) = prepared.and_then(|quantum| quantum.source_span) {
-            return self.render_mapped_chunk(chunk, span);
+        if let Some(quantum) = prepared {
+            return self.render_mapped_chunk(chunk, quantum.source_span);
         }
         if self.unity_passthrough(speed) {
             let span = (!self.active && self.pending_frames(usize::from(self.spec.channels)) == 0)
@@ -814,16 +798,7 @@ where
             }
             return Some(output);
         }
-        if let Some(prepared) = prepared
-            && let Err(error) = self.activate_prepared_quantum(&chunk, prepared)
-        {
-            warn!(%error, "time-stretch activation failed; dropping chunk");
-            self.retire_engine();
-            self.clear_render_state();
-            self.defer_scratch(Some(chunk.samples));
-            return None;
-        }
-        self.process_active(chunk, speed, prepared)
+        self.process_active(chunk, speed)
     }
 
     /// Render the physical source window selected by [`Self::prepare_source_window`].

@@ -30,6 +30,13 @@ where
     Ok(buffer)
 }
 
+fn frames_between(begin: i32, end: i32) -> Result<usize, ElasticError> {
+    let frames = end
+        .checked_sub(begin)
+        .ok_or(ElasticError::SampleCountOverflow)?;
+    usize::try_from(frames).map_err(|_| ElasticError::SampleCountOverflow)
+}
+
 pub(super) fn signal_error(error: SignalError) -> ElasticError {
     match error {
         SignalError::ChannelCountZero => ElasticError::InvalidChannelCount,
@@ -109,44 +116,14 @@ impl InputBuffer {
         }
         let available_begin = self.requested.begin.max(self.begin);
         let available_end = self.requested.end.min(self.end).max(available_begin);
-        let copied = usize::try_from(
-            available_end
-                .checked_sub(available_begin)
-                .ok_or(ElasticError::SampleCountOverflow)?,
-        )
-        .map_err(|_| ElasticError::SampleCountOverflow)?;
+        let copied = frames_between(available_begin, available_end)?;
         if copied > 0 {
-            let source_begin = usize::try_from(
-                available_begin
-                    .checked_sub(self.begin)
-                    .ok_or(ElasticError::SampleCountOverflow)?,
-            )
-            .map_err(|_| ElasticError::SampleCountOverflow)?;
-            let destination_begin = usize::try_from(
-                available_begin
-                    .checked_sub(self.requested.begin)
-                    .ok_or(ElasticError::SampleCountOverflow)?,
-            )
-            .map_err(|_| ElasticError::SampleCountOverflow)?;
-            let channels = usize::from(self.audio.spec().channels);
-            kithara::measure_block!("bungee::analysis::copy", {
-                for channel in 0..channels {
-                    let source = &self.audio.channel(channel).map_err(signal_error)?
-                        [source_begin..source_begin + copied];
-                    self.analysis.channel_mut(channel).map_err(signal_error)?
-                        [destination_begin..destination_begin + copied]
-                        .copy_from_slice(source);
-                }
-            });
+            self.copy_available(available_begin, copied)?;
         }
-        let mute_head =
-            usize::try_from((i64::from(self.begin) - i64::from(self.requested.begin)).max(0))
-                .map_err(|_| ElasticError::SampleCountOverflow)?
-                .min(requested_frames);
-        let mute_tail =
-            usize::try_from((i64::from(self.requested.end) - i64::from(self.end)).max(0))
-                .map_err(|_| ElasticError::SampleCountOverflow)?
-                .min(requested_frames);
+        let mute_head = frames_between(self.requested.begin, self.begin.max(self.requested.begin))?
+            .min(requested_frames);
+        let mute_tail = frames_between(self.end.min(self.requested.end), self.requested.end)?
+            .min(requested_frames);
         if mute_tail > 0 && mute_head < requested_frames && !end_of_input {
             return Err(ElasticError::EnginePreparation(
                 "Bungee requested unavailable future input",
@@ -167,36 +144,9 @@ impl InputBuffer {
     ) -> Result<(), ElasticError> {
         let input_frames_i32 = i32::try_from(input_frames)
             .map_err(|_| ElasticError::SourceFrameLimitOutOfRange(input_frames))?;
-        let mut discard = 0;
-        if self.requested.begin < self.end {
-            if self.begin < self.requested.begin {
-                let shift = usize::try_from(self.requested.begin - self.begin)
-                    .map_err(|_| ElasticError::SampleCountOverflow)?;
-                let retained = usize::try_from(self.end - self.begin)
-                    .map_err(|_| ElasticError::SampleCountOverflow)?;
-                let channels = usize::from(self.audio.spec().channels);
-                for channel in 0..channels {
-                    self.audio
-                        .channel_mut(channel)
-                        .map_err(signal_error)?
-                        .copy_within(shift..retained, 0);
-                }
-                self.begin = self.requested.begin;
-            }
-        } else {
-            let skipped = self
-                .requested
-                .begin
-                .checked_sub(self.begin)
-                .ok_or(ElasticError::SampleCountOverflow)?;
-            discard = usize::try_from(skipped)
-                .map_err(|_| ElasticError::SampleCountOverflow)?
-                .min(input_frames);
-            self.begin = self.end;
-        }
+        let discard = self.retain_requested(input_frames)?;
 
-        let buffered = usize::try_from(self.end - self.begin)
-            .map_err(|_| ElasticError::SampleCountOverflow)?;
+        let buffered = frames_between(self.begin, self.end)?;
         let appended = input_frames - discard;
         let required = buffered
             .checked_add(appended)
@@ -230,6 +180,22 @@ impl InputBuffer {
 
     pub(super) fn clear(&mut self) {
         self.set_position(0);
+    }
+
+    fn copy_available(&mut self, available_begin: i32, copied: usize) -> Result<(), ElasticError> {
+        let source_begin = frames_between(self.begin, available_begin)?;
+        let destination_begin = frames_between(self.requested.begin, available_begin)?;
+        let channels = usize::from(self.audio.spec().channels);
+        kithara::measure_block!("bungee::analysis::copy", {
+            for channel in 0..channels {
+                let source = &self.audio.channel(channel).map_err(signal_error)?
+                    [source_begin..source_begin + copied];
+                self.analysis.channel_mut(channel).map_err(signal_error)?
+                    [destination_begin..destination_begin + copied]
+                    .copy_from_slice(source);
+            }
+        });
+        Ok(())
     }
 
     pub(super) fn prepare_source_capacity(&mut self, capacity: usize) -> Result<(), ElasticError> {
@@ -272,6 +238,28 @@ impl InputBuffer {
             ))
     }
 
+    fn retain_requested(&mut self, input_frames: usize) -> Result<usize, ElasticError> {
+        let mut discard = 0;
+        if self.requested.begin < self.end {
+            if self.begin < self.requested.begin {
+                let shift = frames_between(self.begin, self.requested.begin)?;
+                let retained = frames_between(self.begin, self.end)?;
+                let channels = usize::from(self.audio.spec().channels);
+                for channel in 0..channels {
+                    self.audio
+                        .channel_mut(channel)
+                        .map_err(signal_error)?
+                        .copy_within(shift..retained, 0);
+                }
+                self.begin = self.requested.begin;
+            }
+        } else {
+            discard = frames_between(self.end, self.requested.begin)?.min(input_frames);
+            self.begin = self.end;
+        }
+        Ok(discard)
+    }
+
     pub(super) fn set_position(&mut self, position: i32) {
         self.begin = position;
         self.end = position;
@@ -279,5 +267,66 @@ impl InputBuffer {
             begin: position,
             end: position,
         };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::{consts, test_pools::pools};
+
+    fn frames(count: usize, first_sample: usize) -> Vec<f32> {
+        (first_sample..first_sample + count * consts::CHANNELS)
+            .map(|sample| f32::from(u16::try_from(sample).expect("the sample index fits u16")))
+            .collect()
+    }
+
+    #[kithara::test]
+    #[case::empty(0)]
+    #[case::holding_source(4)]
+    fn an_append_behind_the_requested_window_keeps_only_requested_source(
+        #[case] held_frames: usize,
+    ) {
+        const INPUT_FRAMES: usize = 8;
+        const SKIPPED_FRAMES: usize = 3;
+
+        let config = ElasticConfig::builder()
+            .pools(pools())
+            .sample_rate(consts::SAMPLE_RATE)
+            .channels(consts::CHANNELS)
+            .max_source_frames(consts::CONTEXT_FRAMES)
+            .max_output_frames(consts::CONTEXT_FRAMES)
+            .build()
+            .expect("the fixture shape is valid");
+        let mut buffer = InputBuffer::new(&config, consts::CONTEXT_FRAMES, consts::CONTEXT_FRAMES)
+            .expect("the fixture buffer prepares");
+        let held_end = i32::try_from(held_frames).expect("the held end fits i32");
+        buffer.set_requested(InputChunk {
+            begin: 0,
+            end: held_end,
+        });
+        buffer
+            .append(Some(&frames(held_frames, 1000)), held_frames)
+            .expect("the held source fits the buffer");
+        let begin =
+            i32::try_from(held_frames + SKIPPED_FRAMES).expect("the requested frame fits i32");
+        let end = begin + i32::try_from(INPUT_FRAMES).expect("the window fits i32");
+        buffer.set_requested(InputChunk { begin, end });
+        let source = frames(INPUT_FRAMES, 0);
+
+        buffer
+            .append(Some(&source), INPUT_FRAMES)
+            .expect("the append fits the buffer");
+
+        for channel in 0..consts::CHANNELS {
+            let expected: Vec<f32> = (SKIPPED_FRAMES..INPUT_FRAMES)
+                .map(|frame| source[frame * consts::CHANNELS + channel])
+                .collect();
+            let buffered = buffer.audio.channel(channel).expect("the fixture channel");
+            assert_eq!(&buffered[..expected.len()], expected.as_slice());
+        }
+        assert_eq!(buffer.begin, begin);
     }
 }

@@ -245,3 +245,24 @@ fn plan_limits_apply_to_the_complete_backend_block() {
         }
     );
 }
+
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
+#[kithara::test]
+fn one_span_must_fit_the_prepared_source_limit() {
+    let limit = capabilities().max_source_frames();
+    let source_end = f64::from(u32::try_from(limit + 1).expect("the source limit fits u32"));
+    let error = plan(&[span(0.0, source_end, MAX_OUTPUT_FRAMES)], None)
+        .expect_err("one span must fit its prepared source limit");
+
+    assert_eq!(
+        error,
+        ElasticError::SourceFrameLimit {
+            frames: limit + 1,
+            limit,
+        }
+    );
+}
