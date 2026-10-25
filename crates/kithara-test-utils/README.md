@@ -125,9 +125,10 @@ is a separate timeout mechanism; it does not prove an active hang watchdog.
 `hang_timeout_secs(N)` sets the budget for watchdog helpers called inside the
 test. With `usdt` disabled, native consumers need no DTrace or USDT tooling.
 
-The [external fixture](tests/fixtures/external-runtime/Cargo.toml) owns an
-independent workspace. The runner prepares its lockfile outside the checkout
-and records the exact lock used throughout the matrix. Its minimal, mock, multithread, hang, and
+The [external consumer tests](../../xtask/tests/fixtures/external_runtime.rs) run
+in a temporary workspace outside the checkout. The runner creates its manifest
+from the root dependency versions and records the lockfile used throughout the
+matrix. Its minimal, mock, multithread, hang, and
 config/derive modes run separately from the product workspace. The negative
 watchdog test is ignored during normal runs and invoked only in a child process
 with an independent deadline. Wasm wrapper checks establish compilation only;

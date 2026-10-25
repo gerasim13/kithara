@@ -229,7 +229,7 @@ fn selected_targets(args: &FormatArgs) -> Vec<FormatTarget> {
 
 fn run_target(target: FormatTarget, check: bool, ctx: &Ctx) -> Result<()> {
     match target {
-        FormatTarget::Rust => run_rustfmt(check, ctx),
+        FormatTarget::Rust => run_rustfmt(check),
         FormatTarget::Manifest => run_manifest_format(check, ctx),
         FormatTarget::Toml => run_toml_format(check, ctx),
         FormatTarget::Json => run_json_format(check, ctx),
@@ -249,24 +249,13 @@ impl FormatTarget {
     }
 }
 
-fn run_rustfmt(check: bool, ctx: &Ctx) -> Result<()> {
+fn run_rustfmt(check: bool) -> Result<()> {
     let toolchain = format!("+{}", nightly_toolchain());
-    for manifest in std::iter::once("Cargo.toml")
-        .chain(ctx.config.format.extra_manifests.iter().map(String::as_str))
-    {
-        let mut args = vec![
-            toolchain.as_str(),
-            "fmt",
-            "--all",
-            "--manifest-path",
-            manifest,
-        ];
-        if check {
-            args.push("--check");
-        }
-        run_status("cargo", &args)?;
+    let mut args = vec![toolchain.as_str(), "fmt", "--all"];
+    if check {
+        args.push("--check");
     }
-    Ok(())
+    run_status("cargo", &args)
 }
 
 fn run_manifest_format(check: bool, ctx: &Ctx) -> Result<()> {
@@ -281,7 +270,7 @@ fn run_manifest_format(check: bool, ctx: &Ctx) -> Result<()> {
         run_path_status(
             "cargo",
             &["sort", "--grouped", "--config", ".config/tomlfmt.toml"],
-            &manifest::handwritten_workspace_manifest_dirs(ctx)?,
+            &manifest::handwritten_workspace_manifest_dirs()?,
         )?;
     }
 
@@ -585,14 +574,10 @@ mod tests {
 
     use super::{
         FileKind, FormatArgs, FormatTarget, PathFormatTarget, collect_files, format_path,
-        matches_file_kind, nightly_toolchain, path_format_command, run, select_files,
-        selected_targets, should_skip_dir,
+        matches_file_kind, nightly_toolchain, path_format_command, select_files, selected_targets,
+        should_skip_dir,
     };
-    use crate::{
-        Ctx,
-        common::{project::ProjectConfig, tools::ToolsConfig},
-        manifest::{self, DependencyOrderArgs, ManifestArgs, ManifestCommand},
-    };
+    use crate::common::tools::ToolsConfig;
 
     #[test]
     fn an_unscoped_run_formats_every_target_including_markdown() {
@@ -612,50 +597,6 @@ mod tests {
                 FormatTarget::Markdown,
             ]
         );
-    }
-
-    #[test]
-    fn configured_extra_manifests_share_format_fix_and_check() -> Result<()> {
-        let root = tempfile::tempdir()?;
-        let root = root.path().canonicalize()?;
-        fs::create_dir_all(root.join("src"))?;
-        fs::create_dir_all(root.join("fixtures/consumer/src"))?;
-        fs::write(
-            root.join("Cargo.toml"),
-            "[package]\nname = \"format-root\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[workspace]\n",
-        )?;
-        fs::write(root.join("src/lib.rs"), "")?;
-        fs::write(
-            root.join("fixtures/consumer/Cargo.toml"),
-            "[workspace]\n[package]\nname = \"consumer\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[dependencies]\nserde = \"1\"\nkithara-test-utils = \"1\"\n",
-        )?;
-        fs::write(root.join("fixtures/consumer/src/lib.rs"), "")?;
-        let mut config = ProjectConfig::default();
-        config.format.extra_manifests = vec!["fixtures/consumer/Cargo.toml".into()];
-        let ctx = Ctx::new(root.clone(), config);
-
-        assert_eq!(
-            manifest::handwritten_workspace_manifest_dirs(&ctx)?,
-            [root.clone(), root.join("fixtures/consumer")]
-        );
-        let args = FormatArgs {
-            only: vec![FormatTarget::Manifest],
-            allow_dirty: false,
-            check: true,
-        };
-        let error = run(&args, &ctx).expect_err("extra manifest is unordered");
-        assert!(format!("{error:#}").contains("fixtures/consumer/Cargo.toml"));
-        manifest::run(
-            &ManifestArgs {
-                command: ManifestCommand::DependencyOrder(DependencyOrderArgs {
-                    fix: true,
-                    allow_dirty: true,
-                }),
-            },
-            &ctx,
-        )?;
-        run(&args, &ctx)?;
-        Ok(())
     }
 
     #[test]

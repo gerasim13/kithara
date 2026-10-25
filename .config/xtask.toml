@@ -5,11 +5,6 @@
 [project]
 name = "kithara"
 
-[format]
-extra_manifests = [
-  "crates/kithara-test-utils/tests/fixtures/external-runtime/Cargo.toml",
-]
-
 [workspace-scan]
 # Cargo build output can also live below an individual crate (for example the
 # multi-target FFI builds). Generated bindings are not workspace source.

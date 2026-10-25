@@ -233,16 +233,15 @@ impl Consumer<'_> {
                 "Git pin requires a full SHA"
             );
         }
-        let fixture = root.join("crates/kithara-test-utils/tests/fixtures/external-runtime");
         fs::create_dir_all(self.directory.join("src"))?;
         fs::copy(
-            fixture.join("src/lib.rs"),
+            root.join("xtask/tests/fixtures/external_runtime.rs"),
             self.directory.join("src/lib.rs"),
         )?;
         fs::write(
             self.directory.join("Cargo.toml"),
             manifest(
-                &fixture,
+                root,
                 pin.as_ref().map(|(url, rev)| (url.as_str(), rev.as_str())),
             )?,
         )?;
@@ -306,26 +305,68 @@ impl Consumer<'_> {
     }
 }
 
-fn manifest(fixture: &Path, pin: Option<(&str, &str)>) -> Result<String> {
-    let mut manifest: toml::Value =
-        toml::from_str(&fs::read_to_string(fixture.join("Cargo.toml"))?)?;
-    let replace = |dependencies: &mut toml::Value| -> Result<()> {
-        for (name, dependency) in dependencies
-            .as_table_mut()
-            .context("consumer dependencies")?
-        {
+fn manifest(root: &Path, pin: Option<(&str, &str)>) -> Result<String> {
+    let workspace: toml::Value = toml::from_str(&fs::read_to_string(root.join("Cargo.toml"))?)?;
+    let dependencies = workspace
+        .get("workspace")
+        .and_then(|workspace| workspace.get("dependencies"))
+        .context("workspace dependencies")?;
+    let mut manifest: toml::Value = toml::from_str(
+        r#"
+[workspace]
+resolver = "2"
+[workspace.dependencies]
+[package]
+name = "external-test-runtime"
+version = "0.0.0"
+edition = "2024"
+publish = false
+[features]
+default = []
+mock = ["dep:unimock", "kithara-test-utils/mock"]
+multithread = ["dep:kithara-platform", "kithara-platform/tokio-rt-multi-thread"]
+hang = ["kithara-test-utils/hang"]
+devtools = ["dep:kithara-config", "dep:kithara-derive"]
+[dependencies]
+kithara-config = { optional = true }
+kithara-derive = { features = ["config"], optional = true }
+kithara-test-utils = { default-features = false }
+unimock = { workspace = true, optional = true }
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+kithara-platform = { optional = true }
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+kithara-test-utils = { default-features = false, features = ["subscriber"] }
+wasm-bindgen-test = { workspace = true }
+"#,
+    )?;
+    let registry = manifest["workspace"]["dependencies"]
+        .as_table_mut()
+        .context("consumer workspace dependencies")?;
+    for name in ["unimock", "wasm-bindgen-test"] {
+        registry.insert(
+            name.into(),
+            dependencies
+                .get(name)
+                .context("workspace registry dependency")?
+                .clone(),
+        );
+    }
+    let replace = |consumer: &mut toml::Value| -> Result<()> {
+        for (name, dependency) in consumer.as_table_mut().context("consumer dependencies")? {
             if name.starts_with("kithara-") {
                 let table = dependency
                     .as_table_mut()
                     .context("Kithara dependency table")?;
-                let relative = table.remove("path").context("Kithara dependency path")?;
                 if let Some((url, revision)) = pin {
                     table.insert("git".into(), url.into());
                     table.insert("rev".into(), revision.into());
                 } else {
-                    let path = fixture
-                        .join(relative.as_str().context("dependency path string")?)
-                        .canonicalize()?;
+                    let relative = dependencies
+                        .get(name)
+                        .and_then(|dependency| dependency.get("path"))
+                        .and_then(toml::Value::as_str)
+                        .with_context(|| format!("workspace dependency path for {name}"))?;
+                    let path = root.join(relative).canonicalize()?;
                     table.insert(
                         "path".into(),
                         path.to_str().context("UTF-8 dependency path")?.into(),
@@ -335,22 +376,12 @@ fn manifest(fixture: &Path, pin: Option<(&str, &str)>) -> Result<String> {
         }
         Ok(())
     };
-    replace(
-        manifest
-            .get_mut("dependencies")
-            .context("consumer dependencies")?,
-    )?;
-    for (_, target) in manifest
-        .get_mut("target")
-        .and_then(toml::Value::as_table_mut)
+    replace(&mut manifest["dependencies"])?;
+    for (_, target) in manifest["target"]
+        .as_table_mut()
         .context("consumer target dependencies")?
-        .iter_mut()
     {
-        replace(
-            target
-                .get_mut("dependencies")
-                .context("target dependencies")?,
-        )?;
+        replace(&mut target["dependencies"])?;
     }
     toml::to_string(&manifest).context("serialize consumer manifest")
 }
@@ -455,10 +486,9 @@ mod tests {
 
     #[test]
     fn independent_manifest_pins_all_kithara_dependencies() -> Result<()> {
-        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../crates/kithara-test-utils/tests/fixtures/external-runtime");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
         let rendered = manifest(
-            &fixture,
+            root,
             Some((
                 "https://github.example/owner/repo.git",
                 "0123456789abcdef0123456789abcdef01234567",
@@ -491,14 +521,36 @@ mod tests {
             Some(false)
         );
         assert_eq!(
-            parsed["dependencies"]["unimock"]["version"].as_str(),
-            Some("0.6")
+            parsed["dependencies"]["unimock"]["workspace"].as_bool(),
+            Some(true)
         );
-        let local: toml::Value = toml::from_str(&manifest(&fixture, None)?)?;
+        let workspace: toml::Value = toml::from_str(&fs::read_to_string(root.join("Cargo.toml"))?)?;
+        for name in ["unimock", "wasm-bindgen-test"] {
+            assert_eq!(
+                parsed["workspace"]["dependencies"][name],
+                workspace["workspace"]["dependencies"][name]
+            );
+        }
+        let local: toml::Value = toml::from_str(&manifest(root, None)?)?;
         let path = local["dependencies"]["kithara-test-utils"]["path"]
             .as_str()
             .unwrap();
         assert!(Path::new(path).is_absolute());
+        Ok(())
+    }
+
+    #[test]
+    fn manifest_rejects_missing_workspace_paths() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        fs::write(
+            root.path().join("Cargo.toml"),
+            "[workspace.dependencies]\nunimock = \"0.6\"\nwasm-bindgen-test = \"0.3\"\nkithara-config = { version = \"0.0.0\" }\n",
+        )?;
+        let error = manifest(root.path(), None).expect_err("missing dependency path");
+        assert_eq!(
+            error.to_string(),
+            "workspace dependency path for kithara-config"
+        );
         Ok(())
     }
 

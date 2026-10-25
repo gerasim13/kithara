@@ -53,18 +53,18 @@ struct DependencyBlock<'a> {
     lines: Vec<&'a str>,
 }
 
-pub(crate) fn run(args: &ManifestArgs, ctx: &Ctx) -> Result<()> {
+pub(crate) fn run(args: &ManifestArgs, _ctx: &Ctx) -> Result<()> {
     match &args.command {
-        ManifestCommand::DependencyOrder(args) => dependency_order(args, ctx),
+        ManifestCommand::DependencyOrder(args) => dependency_order(args),
     }
 }
 
-fn dependency_order(args: &DependencyOrderArgs, ctx: &Ctx) -> Result<()> {
+fn dependency_order(args: &DependencyOrderArgs) -> Result<()> {
     if args.fix {
         ensure_clean_tree(args.allow_dirty, "manifest dependency-order")?;
     }
 
-    let manifest_set = workspace_manifests(ctx)?;
+    let manifest_set = workspace_manifests()?;
     let mut changed = Vec::new();
 
     for manifest in &manifest_set.manifests {
@@ -109,9 +109,8 @@ fn dependency_order(args: &DependencyOrderArgs, ctx: &Ctx) -> Result<()> {
     )
 }
 
-fn workspace_manifests(ctx: &Ctx) -> Result<ManifestSet> {
+fn workspace_manifests() -> Result<ManifestSet> {
     let metadata = MetadataCommand::new()
-        .manifest_path(ctx.root.join("Cargo.toml"))
         .no_deps()
         .exec()
         .context("load cargo metadata")?;
@@ -122,13 +121,6 @@ fn workspace_manifests(ctx: &Ctx) -> Result<ManifestSet> {
     for package in metadata.workspace_packages() {
         manifests.insert(package.manifest_path.as_std_path().to_path_buf());
     }
-    manifests.extend(
-        ctx.config
-            .format
-            .extra_manifests
-            .iter()
-            .map(|manifest| workspace_root.join(manifest)),
-    );
 
     Ok(ManifestSet {
         workspace_root,
@@ -136,8 +128,8 @@ fn workspace_manifests(ctx: &Ctx) -> Result<ManifestSet> {
     })
 }
 
-pub(crate) fn handwritten_workspace_manifest_dirs(ctx: &Ctx) -> Result<Vec<PathBuf>> {
-    handwritten_manifest_dirs(&workspace_manifests(ctx)?.manifests)
+pub(crate) fn handwritten_workspace_manifest_dirs() -> Result<Vec<PathBuf>> {
+    handwritten_manifest_dirs(&workspace_manifests()?.manifests)
 }
 
 fn handwritten_manifest_dirs(manifests: &[PathBuf]) -> Result<Vec<PathBuf>> {
