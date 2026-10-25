@@ -37,8 +37,7 @@ fn a_renderer_without_an_entered_plan_names_no_entry_source() {
     let span = renderer
         .prepared_quantum
         .expect("ordinary quantum")
-        .source_span
-        .expect("ordinary source mapping");
+        .source_span;
     assert_eq!(span.start(), 0);
     assert_eq!(span.end(), 16);
     let nonlinear = kithara_signal::SourceSpan::approaching(
@@ -121,8 +120,7 @@ fn a_renderer_without_an_entered_plan_names_no_entry_source() {
         let physical = renderer
             .prepared_quantum
             .expect("prepared physical quantum")
-            .source_span
-            .expect("physical mapping");
+            .source_span;
         let samples = (0..frames)
             .flat_map(|offset| {
                 let sample = offset.to_f32().expect("physical PCM index");
@@ -201,7 +199,6 @@ fn a_short_decoder_suffix_requests_the_next_mapped_source_frame() {
             .prepared_quantum
             .expect("prepared request")
             .source_span
-            .expect("projected request")
             .output_frames(),
         1
     );
@@ -227,10 +224,9 @@ fn finite_projection_clips_a_quantum_before_resolving_past_the_recording() {
         .expect("a covered final quantum survives an out-of-domain search midpoint");
     assert_eq!(requested.get(), 32);
     let prepared = renderer.prepared_quantum.expect("prepared quantum");
-    let projection = prepared.source_span.expect("projected quantum");
+    let projection = prepared.source_span;
     assert_eq!(projection.output_frames(), 32);
     assert_eq!(projection.end(), 8_820_000);
-    assert_eq!(prepared.landing_frames, Some(32));
     assert_eq!(prepared.source_start, start);
     assert_eq!(
         projection
@@ -277,13 +273,10 @@ fn terminal_projection_recomputes_both_endpoints_and_keeps_the_selected_rate() {
     assert_eq!(terminal.speed, 1.5);
     assert_eq!(terminal.active_frames, 96);
     assert_eq!(terminal.source_start, 0);
-    let projection = terminal
-        .source_span
-        .expect("terminal projection is retained");
+    let projection = terminal.source_span;
     assert_eq!(projection.start(), 0);
     assert_eq!(projection.output_frames(), 64);
     assert_eq!(projection.end(), 96);
-    assert_eq!(terminal.landing_frames, Some(64));
     assert_eq!(
         projection
             .source_ratio_at(64)

@@ -258,10 +258,8 @@ fn lost_source_history_terminates_until_an_explicit_reset(#[case] start: u64) {
         .prepared_quantum
         .as_mut()
         .expect("prepared mapping")
-        .source_span = Some(
-        kithara_signal::SourceSpan::new(start, start + 160, spec.sample_rate, 128)
-            .expect("lost mapping"),
-    );
+        .source_span = kithara_signal::SourceSpan::new(start, start + 160, spec.sample_rate, 128)
+        .expect("lost mapping");
     let chunk = input(&renderer, source, frames);
     renderer
         .render_quantum(chunk)
