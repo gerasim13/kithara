@@ -57,6 +57,7 @@ impl TestServerHelper {
             DownloaderConfig::for_client(
                 self.modeled_client(NetOptions::default(), cancel_token()),
             )
+            .runtime(kithara::platform::tokio::runtime::Handle::current())
             .build(),
         )
     }

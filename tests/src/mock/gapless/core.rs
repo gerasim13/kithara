@@ -7,10 +7,7 @@ pub use kithara::{
         AudioControl, AudioRead, AudioReadError, AudioSession, ChunkOutcome, ReadOutcome,
         SeekOutcome,
     },
-    decode::{
-        GaplessInfo, GaplessMode, GaplessTailCompensation, GaplessTrimmer, SilenceTrimParams,
-        TrackMetadata,
-    },
+    decode::{GaplessInfo, GaplessMode, GaplessTailCompensation, GaplessTrimmer, TrackMetadata},
     events::{EventBus, TrackId},
     platform::time::{self, Duration},
     play::{PlayerEvent, ResourceConfig, ResourceSrc},
@@ -26,8 +23,7 @@ pub use kithara::{
     audio::{AudioDecoderConfig, DecoderResamplerSettings},
     decode::DecoderBackend,
     platform::time::WallInstant,
-    play::PlaybackResamplerBackend,
-    play::Resource,
+    play::{PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend, Resource},
 };
 pub use kithara_test_fixtures::{
     analysis_beat_fixtures::{fused_seam, fused_seam_stereo},
@@ -41,6 +37,7 @@ pub use kithara_test_utils::{
 };
 
 use super::consts::*;
+use crate::hls_fixture::create_test_downloader;
 pub use crate::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper,
     fixture_protocol::{
@@ -53,10 +50,6 @@ pub use crate::{
     },
     offline::{OfflinePlayer, OfflinePlayerOptions, TimedPlayerEvent},
 };
-
-pub fn silence_trim_with_trailing() -> GaplessMode {
-    GaplessMode::SilenceTrim(SilenceTrimParams::builder().trim_trailing(true).build())
-}
 
 pub fn expected_visible_frames(encoder_delay: u32, trailing_delay: u32) -> usize {
     let packets_per_segment = AAC_GAPLESS_SEGMENT_FRAMES.div_ceil(AAC_FRAME_SAMPLES);
@@ -121,6 +114,7 @@ pub async fn create_resource(
     ResourceConfig::<TestPools>::for_src(
         ResourceSrc::parse(created.master_url().as_str()).expect("valid HLS master URL"),
     )
+    .downloader(create_test_downloader())
     .store(crate::disk_asset_store(cache_dir))
     .build()
 }
@@ -130,7 +124,7 @@ pub async fn create_resource(
     any(target_os = "macos", target_os = "ios")
 ))]
 pub async fn create_apple_fused_resource(
-    _harness: &OfflinePlayer,
+    worker: &PlayWorker<TestPools>,
     created: &CreatedHls,
     cache_dir: &std::path::Path,
 ) -> ResourceConfig<TestPools> {
@@ -145,13 +139,15 @@ pub async fn create_apple_fused_resource(
     ResourceConfig::for_src(
         ResourceSrc::parse(created.master_url().as_str()).expect("valid HLS master URL"),
     )
+    .downloader(create_test_downloader())
     .store(store)
+    .worker(worker.clone())
     .host_sample_rate(NonZeroU32::new(FUSED_FIXTURE_DEVICE_RATE).expect("device rate"))
     .block_on_underrun(true)
     .decoder(
         AudioDecoderConfig::builder()
             .backend(DecoderBackend::Apple)
-            .gapless_mode(silence_trim_with_trailing())
+            .gapless_mode(GaplessMode::MediaOnly)
             .maybe_resampler(decoder_defaults.resampler().cloned())
             .build(),
     )
