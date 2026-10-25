@@ -120,9 +120,8 @@ impl TrackFade {
                 kithara_dsp::affine(gain, self.from, 0.0);
             }
             Direction::DeclickOut => {
-                let first = cast::<u64, f32>(first.saturating_add(1)).unwrap_or(f32::MAX);
                 let frames = cast::<u64, f32>(self.frames).unwrap_or(f32::MAX);
-                kithara_dsp::ramp(gain, first, 1.0);
+                Self::frame_indices(first.saturating_add(1), gain);
                 kithara_dsp::div(gain, frames);
                 kithara_dsp::affine(gain, -1.0, 1.0);
                 kithara_dsp::affine(gain, self.from, 0.0);
@@ -164,16 +163,23 @@ impl TrackFade {
     /// pivot with `CrossfadeSettings::gains`' IEEE operations in the same
     /// order, so every `u` is bit-identical to the law's.
     fn positions(&self, first: u64, u: &mut [f32]) {
-        let first = cast::<u64, f32>(first).unwrap_or(f32::MAX);
         let last = cast::<u64, f32>(self.frames.saturating_sub(1)).unwrap_or(f32::MAX);
         let position = self.settings.position;
-        kithara_dsp::ramp(u, first, 1.0);
+        Self::frame_indices(first, u);
         kithara_dsp::div(u, last);
         let (rising, falling) = u.split_at_mut(u.partition_point(|&x| x <= position));
         kithara_dsp::div(rising, 2.0 * position);
         kithara_dsp::affine(falling, 1.0, -position);
         kithara_dsp::div(falling, 2.0 * (1.0 - position));
         kithara_dsp::affine(falling, 1.0, 0.5);
+    }
+
+    // Advance in integers so rounding above 2^24 does not depend on block boundaries.
+    fn frame_indices(mut frame: u64, output: &mut [f32]) {
+        for value in output {
+            *value = cast::<u64, f32>(frame).unwrap_or(f32::MAX);
+            frame = frame.saturating_add(1);
+        }
     }
 
     pub(super) fn advance(&mut self, frames: usize) {

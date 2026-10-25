@@ -206,3 +206,57 @@ fn long_fades_keep_the_gain_law_at_curve_edges_and_the_settled_tail() {
         }
     }
 }
+
+#[kithara::test]
+fn long_fades_keep_gain_bits_across_block_partitions() {
+    const FRAMES: usize = 517;
+    let rate = NonZeroU32::new(48_000).expect("nonzero rate");
+    for curve in [CrossfadeCurve::Linear, CrossfadeCurve::EqualPower] {
+        let settings = CrossfadeSettings::new(699.050_66, curve, 0.7, 0.5).expect("valid settings");
+        for (outgoing, declick) in [(false, false), (true, false), (true, true)] {
+            for first in [16_777_215, 16_777_216, 16_777_217] {
+                let mut expected = None;
+                for block in [1, 7, 128, 256, FRAMES] {
+                    let mut fade = TrackFade::default();
+                    if outgoing {
+                        fade.play(rate);
+                        if declick {
+                            fade.declick_out(settings, rate);
+                        } else {
+                            fade.fade_out(settings, rate);
+                        }
+                    } else {
+                        fade.fade_in(settings, rate);
+                    }
+                    assert_eq!(fade.remaining(), 33_554_432);
+                    fade.advance(first);
+                    let mut left = [1.0; FRAMES];
+                    let mut right = [-1.0; FRAMES];
+                    let mut output_left = [0.0; FRAMES];
+                    let mut output_right = [0.0; FRAMES];
+                    for start in (0..FRAMES).step_by(block) {
+                        let end = (start + block).min(FRAMES);
+                        fade.mix_range(
+                            &mut [&mut left, &mut right],
+                            &mut [&mut output_left, &mut output_right],
+                            start..end,
+                        );
+                        fade.advance(end - start);
+                    }
+                    let actual = [
+                        output_left.map(f32::to_bits),
+                        output_right.map(f32::to_bits),
+                    ];
+                    if let Some(expected) = &expected {
+                        assert_eq!(
+                            &actual, expected,
+                            "{curve:?}, outgoing={outgoing}, declick={declick}, first={first}, block={block}"
+                        );
+                    } else {
+                        expected = Some(actual);
+                    }
+                }
+            }
+        }
+    }
+}
