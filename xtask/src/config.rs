@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     iter,
+    num::NonZeroU64,
     path::{Component, Path, PathBuf},
     time::Duration,
 };
@@ -26,6 +27,7 @@ pub(crate) struct KitharaExt {
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct CiProjectConfig {
     pub(crate) pins: PathBuf,
+    pub(crate) pr_review_line_limit: Option<NonZeroU64>,
     pub(crate) lanes: BTreeMap<String, CiLaneConfig>,
     pub(crate) verdict: CiVerdictConfig,
     /// How long a lane slot keeps a build unit its builds stopped using,
@@ -37,6 +39,7 @@ impl Default for CiProjectConfig {
     fn default() -> Self {
         Self {
             pins: PathBuf::new(),
+            pr_review_line_limit: None,
             lanes: BTreeMap::new(),
             verdict: CiVerdictConfig::default(),
             lane_unit_window_hours: consts::LANE_UNIT_WINDOW_HOURS,

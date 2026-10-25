@@ -1314,11 +1314,8 @@ fn stress_report_verifies_and_publishes_the_raw_evidence() {
     );
 }
 
-/// Every cadence repeats its own stress tier: the night the player's core,
-/// the week the engine, the month everything. The run is admitted by the
-/// repository switch and the runner pool, not by which cadence fired.
 #[test]
-fn scheduled_stress_repeats_the_tier_of_its_cadence() {
+fn stress_dispatch_keeps_its_tiers_and_admission_guards() {
     let workflow = github_workflow("dispatch.yml");
     let stress = workflow_job(workflow_jobs(&workflow), "stress");
     assert_eq!(
@@ -1331,6 +1328,7 @@ fn scheduled_stress_repeats_the_tier_of_its_cadence() {
     for contract in [
         "vars.KITHARA_STRESS_ENABLED == 'true'",
         "vars.KITHARA_STRESS_RUNNER_LABELS != ''",
+        "(inputs.only || '') == ''",
     ] {
         assert!(
             condition.contains(contract),
@@ -1338,10 +1336,6 @@ fn scheduled_stress_repeats_the_tier_of_its_cadence() {
         );
     }
     let cadence = dispatch_cadence(&workflow);
-    assert!(
-        !condition.contains(cadence_expression(&cadence)),
-        "scheduled stress runs at every cadence: {condition}"
-    );
     let with = mapping_field(stress, "with")
         .as_mapping()
         .expect("scheduled stress names its tier");
@@ -1363,6 +1357,67 @@ fn scheduled_stress_repeats_the_tier_of_its_cadence() {
             "cadence `{kind}` has no stress tier"
         );
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn stress_dispatch_omits_only_scheduled_nightly() -> anyhow::Result<()> {
+    let workflow = github_workflow("dispatch.yml");
+    let stress = workflow_job(workflow_jobs(&workflow), "stress");
+    let condition = mapping_field(stress, "if")
+        .as_str()
+        .expect("stress admission is an expression");
+    let cadence = dispatch_cadence(&workflow);
+    let mut cases = Vec::new();
+    for (cron, kind) in dispatch_crons(&workflow)
+        .into_iter()
+        .zip(dispatch_kinds(&workflow))
+    {
+        for event in ["schedule", "workflow_dispatch"] {
+            for (enabled, labels, only, eligible) in [
+                ("true", "[\"kithara-stress\"]", "", true),
+                ("false", "[\"kithara-stress\"]", "", false),
+                ("true", "", "", false),
+                ("true", "[\"kithara-stress\"]", "gate-test", false),
+            ] {
+                cases.push(serde_json::json!({
+                    "context": {
+                        "github.event_name": event,
+                        "github.event.schedule": if event == "schedule" { cron } else { "" },
+                        "inputs.kind": if event == "schedule" { "" } else { kind },
+                        "inputs.only": only,
+                        "vars.KITHARA_STRESS_ENABLED": enabled,
+                        "vars.KITHARA_STRESS_RUNNER_LABELS": labels,
+                    },
+                    "tier": kind,
+                    "admitted": eligible && (event != "schedule" || kind != "nightly"),
+                }));
+            }
+        }
+    }
+    let output = Command::new("python3")
+        .args([
+            "-c",
+            r#"import json
+import os
+
+for case in json.loads(os.environ["CASES"]):
+    def evaluate(expression):
+        for name, value in case["context"].items():
+            expression = expression.replace(name, repr(value))
+        expression = expression.replace("&&", " and ").replace("||", " or ")
+        return eval(expression, {"__builtins__": {}})
+
+    assert evaluate(os.environ["CADENCE"]) == case["tier"], case
+    assert bool(evaluate(os.environ["CONDITION"])) == case["admitted"], case
+"#,
+        ])
+        .env("CONDITION", condition)
+        .env("CADENCE", cadence_expression(&cadence))
+        .env("CASES", serde_json::to_string(&cases)?)
+        .output()?;
+    assert!(output.status.success(), "{output:?}");
+    Ok(())
 }
 
 /// The crons `dispatch.yml` is scheduled by, in declaration order.

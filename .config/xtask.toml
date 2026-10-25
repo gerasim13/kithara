@@ -1326,6 +1326,7 @@ handler = "format-edited-paths"
 
 [ext.ci]
 pins = ".config/ci-pins.toml"
+pr_review_line_limit = 5000
 
 # Moving integration sources into domain packages changed nextest's package
 # and binary prefix without changing the tests. The verdict canonicalizes both
