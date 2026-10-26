@@ -4,6 +4,8 @@ use std::{fs, path::Path, process::Command};
 
 use tempfile::TempDir;
 
+use crate::ci::config::fixture_directory;
+
 /// Runs git in `dir` against that repository alone: ambient `GIT_*`
 /// variables of a hook would point it at the repository running the test.
 pub(crate) fn git(dir: &Path, args: &[&str]) {
@@ -20,7 +22,7 @@ pub(crate) fn git(dir: &Path, args: &[&str]) {
 
 /// A git checkout tracking `files`.
 pub(crate) fn git_checkout(files: &[(&str, &str)]) -> TempDir {
-    let checkout = tempfile::tempdir().unwrap();
+    let checkout = fixture_directory().unwrap();
     git(checkout.path(), &["init", "-q"]);
     for (path, content) in files {
         let file = checkout.path().join(path);

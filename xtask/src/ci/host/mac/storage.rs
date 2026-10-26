@@ -1117,7 +1117,10 @@ mod tests {
     #[cfg(unix)]
     use crate::testing::install_script;
     use crate::{
-        ci::{config::fixture, previous_layout::previous_layout},
+        ci::{
+            config::{fixture, fixture_directory},
+            previous_layout::previous_layout,
+        },
         testing::install_double,
     };
 
@@ -1152,7 +1155,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn scratch_ownership_outlives_the_expiry_age() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let cfg = config(directory.path());
         let process = Process::recording(directory.path(), Recording::default());
         let storage = HostStorage::for_test(&cfg, &process).unwrap();
@@ -1171,7 +1174,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn cleanup_retains_unowned_vm_and_legacy_workspace_trees() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let trees = [
             "vm/overlays",
             "vm/android/avd",
@@ -1208,8 +1211,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn an_intermediate_symlink_cannot_authorize_external_removal() {
-        let directory = tempfile::tempdir().unwrap();
-        let external = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
+        let external = fixture_directory().unwrap();
         let cfg = config(directory.path());
         fs::create_dir_all(directory.path().join("cache")).unwrap();
         fs::create_dir_all(external.path().join("unused")).unwrap();
@@ -1229,7 +1232,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_preexisting_probe_symlink_cannot_overwrite_external_data() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let external = tempfile::NamedTempFile::new().unwrap();
         fs::write(external.path(), b"credentials").unwrap();
         let probe = directory
@@ -1245,7 +1248,7 @@ mod tests {
 
     #[test]
     fn reported_open_files_survive_lsof_search_errors() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let lsof = install_double(directory.path(), "lsof");
         let process = Process::new(directory.path(), BTreeMap::new());
         for (stdout, active) in [("86343\n", true), ("", false)] {
@@ -1296,7 +1299,7 @@ mod tests {
 
     #[test]
     fn a_volume_smaller_than_the_quota_still_reaches_reject() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let cfg = config(directory.path());
         let process = Process::new(directory.path(), BTreeMap::new());
         let storage = HostStorage::for_test(&cfg, &process).unwrap();
@@ -1321,7 +1324,7 @@ mod tests {
     /// run below is `Normal` — the pressure that used to skip the trim entirely.
     #[test]
     fn the_guest_is_trimmed_even_with_nothing_under_pressure() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let mut cfg = config(directory.path());
         cfg.host.brew_root = directory.path().join("brew");
         install_double(&cfg.host.brew_root.join("bin"), "colima");
@@ -1350,7 +1353,7 @@ mod tests {
     /// however large, and was only asked for once the volume was already short.
     #[test]
     fn every_pass_holds_the_docker_build_cache_to_its_size_before_the_trim() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let mut cfg = config(directory.path());
         cfg.host.brew_root = directory.path().join("brew");
         install_double(&cfg.host.brew_root.join("bin"), "docker");
@@ -1388,7 +1391,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn reject_cleanup_preserves_shared_runtime() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let mut cfg = config(directory.path());
         cfg.host.brew_root = directory.path().join("brew");
         let bin = cfg.host.brew_root.join("bin");
@@ -1465,7 +1468,7 @@ mod tests {
 
     #[test]
     fn a_distinct_checkout_volume_is_monitored() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let host_root = directory.path().join("host");
         let build_root = directory.path().join("builds");
         fs::create_dir_all(&host_root).unwrap();
@@ -1487,7 +1490,7 @@ mod tests {
 
     #[test]
     fn retired_namespaces_without_host_ownership_are_retained() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let cache = directory.path().join("cache");
         for name in [
             "trusted",
@@ -1539,7 +1542,7 @@ mod tests {
     /// back to a cold build.
     #[test]
     fn a_namespace_the_previous_layout_keeps_survives_whatever_the_profile_lists() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let cache = directory.path().join("cache");
         let namespaces = previous_layout().mac.cache_namespaces;
         for name in &namespaces {
@@ -1560,7 +1563,7 @@ mod tests {
     /// a retired namespace sends every Linux job back to the registry.
     #[test]
     fn zero_age_prune_preserves_the_containers_cargo_home() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let registry = directory
             .path()
             .join("cache")
@@ -1578,7 +1581,7 @@ mod tests {
 
     #[test]
     fn a_recent_retired_namespace_is_retained() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let cache = directory.path().join("cache");
         fs::create_dir_all(cache.join("reapi")).unwrap();
         let cfg = config(directory.path());
@@ -1593,7 +1596,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn cleanup_never_leaves_the_ci_root() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let cfg = config(directory.path());
         for name in &cfg.host.removable_roots {
             fs::create_dir_all(directory.path().join(name)).unwrap();
@@ -1612,7 +1615,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn cleanup_allows_only_workspace_descendants_on_the_checkout_root() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let host_root = directory.path().join("host");
         let build_root = directory.path().join("builds");
         fs::create_dir_all(&host_root).unwrap();
@@ -1656,7 +1659,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn scratch_no_job_is_using_is_pruned() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let stale = CacheTrust::ALL
             .map(|trust| scratch_entry(directory.path(), trust.as_str(), 4 * HostStorage::DAY));
         let cfg = config(directory.path());
@@ -1680,7 +1683,7 @@ mod tests {
     /// than ten times the longest lane.
     #[test]
     fn scratch_a_running_job_owns_is_left_alone() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let live = scratch_entry(directory.path(), "trusted", Duration::from_secs(60));
         let cfg = config(directory.path());
         let process = Process::new(directory.path(), BTreeMap::new());
@@ -1701,7 +1704,7 @@ mod tests {
     /// Only their contents are ever a candidate.
     #[test]
     fn a_scratch_namespace_is_never_removable() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let cfg = config(directory.path());
         let process = Process::new(directory.path(), BTreeMap::new());
         let storage = HostStorage::for_test(&cfg, &process).unwrap();
@@ -1714,7 +1717,7 @@ mod tests {
 
     #[test]
     fn cleanup_leaves_gitlab_workspaces_to_the_runner() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let host_root = directory.path().join("host");
         let build_root = directory.path().join("builds");
         fs::create_dir_all(&host_root).unwrap();
@@ -1751,7 +1754,7 @@ mod tests {
 
     #[test]
     fn active_marker_pins_a_workspace() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let cfg = config(directory.path());
         for name in &cfg.host.removable_roots {
             fs::create_dir_all(directory.path().join(name)).unwrap();
@@ -1766,7 +1769,7 @@ mod tests {
 
     #[test]
     fn aggressive_cleanup_retains_expired_markers_with_unknown_ownership() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let namespace = directory.path().join("cache/review/macos-aarch64");
         let leases = namespace.join(".kithara-ci-leases");
         fs::create_dir_all(&leases).unwrap();
@@ -1801,7 +1804,7 @@ mod tests {
 
     #[test]
     fn target_budget_relieving_pressure_preserves_the_review_compiler_cache() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let review = directory.path().join("cache/review/macos-aarch64");
         fs::create_dir_all(review.join("sccache")).unwrap();
         let mut cfg = config(directory.path());
@@ -1829,7 +1832,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_volume_under_the_floor_reclaims_past_the_build_cache_ceiling() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let mut cfg = config(directory.path());
         cfg.host.brew_root = directory.path().join("brew");
         cfg.host.build_root = Some(directory.path().join("builds"));
@@ -1858,7 +1861,7 @@ mod tests {
     /// beside it, is not.
     #[test]
     fn historical_build_reclamation_requires_host_visible_ownership() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let mut cfg = config(directory.path());
         cfg.host.brew_root = directory.path().join("brew");
         // A floor past both idle builds, so the pass has to reach each of them.
@@ -1919,7 +1922,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn an_aggressive_pass_the_cheaper_steps_relieve_keeps_every_build() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let mut cfg = config(directory.path());
         cfg.host.brew_root = directory.path().join("brew");
         let build = a_build_beside_a_checkout(cfg.host.build_root());
@@ -1944,7 +1947,7 @@ mod tests {
     /// it hid a machine that was already refusing jobs.
     #[test]
     fn a_pass_that_leaves_the_pressure_where_it_found_it_is_a_failure() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let mut cfg = config(directory.path());
         cfg.host.brew_root = directory.path().join("brew");
         let process = Process::new(directory.path(), BTreeMap::new());
@@ -1967,7 +1970,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_pass_that_cannot_reach_the_threshold_names_what_holds_the_space() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let heavy = directory.path().join("vm/tart/vms");
         fs::create_dir_all(&heavy).unwrap();
         fs::write(heavy.join("disk.img"), vec![0_u8; 400_000]).unwrap();
@@ -2006,7 +2009,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn the_holders_come_from_one_du_over_the_ci_roots() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let root = directory.path();
         let bin = root.join("bin");
         fs::create_dir_all(&bin).unwrap();
@@ -2071,7 +2074,7 @@ mod tests {
             unistd::Pid,
         };
 
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let root = directory.path();
         let bin = root.join("bin");
         fs::create_dir_all(&bin).unwrap();
@@ -2129,7 +2132,7 @@ mod tests {
     fn unclaimed_namespaces_survive_while_a_native_target_reclaims() {
         use std::os::unix::fs::MetadataExt as _;
 
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let namespaces = [
             "cache/quarantine/macos-aarch64",
             "cache/review/macos-aarch64",
@@ -2234,7 +2237,7 @@ mod tests {
 
     #[test]
     fn critical_cleanup_retains_unowned_job_vm_and_base_images() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let mut cfg = config(directory.path());
         let asked = fake_tart(&mut cfg, directory.path());
         tart_vms(&mut cfg, directory.path(), Some(10 * HostStorage::DAY));
@@ -2269,7 +2272,7 @@ mod tests {
     /// of it: with no clone beside it, cleanup must ask tart for nothing.
     #[test]
     fn the_base_bundle_is_never_a_delete_candidate() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let mut cfg = config(directory.path());
         let asked = fake_tart(&mut cfg, directory.path());
         tart_vms(&mut cfg, directory.path(), None);
@@ -2290,7 +2293,7 @@ mod tests {
     /// Liveness is what separates them.
     #[test]
     fn a_job_vm_a_runner_serves_from_survives() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let mut cfg = config(directory.path());
         let asked = fake_tart(&mut cfg, directory.path());
         tart_vms(&mut cfg, directory.path(), Some(10 * HostStorage::DAY));
@@ -2311,7 +2314,7 @@ mod tests {
     /// runner down with it.
     #[test]
     fn a_freshly_cloned_job_vm_survives() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let mut cfg = config(directory.path());
         let asked = fake_tart(&mut cfg, directory.path());
         tart_vms(&mut cfg, directory.path(), Some(Duration::ZERO));

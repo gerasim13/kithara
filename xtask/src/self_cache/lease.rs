@@ -156,7 +156,12 @@ pub(super) fn build(
     target: &Path,
     var: &dyn Fn(&str) -> Option<OsString>,
 ) -> Result<BuildLock> {
+    #[cfg(not(target_os = "macos"))]
+    fs::create_dir_all(target)
+        .with_context(|| format!("create xtask build directory {}", target.display()))?;
+    #[cfg(target_os = "macos")]
     let scope = var("KITHARA_CI_CACHE_ROOT").map(PathBuf::from);
+    #[cfg(target_os = "macos")]
     let lease = match scope.as_deref().filter(|root| target.starts_with(root)) {
         Some(root) => kithara_devtools::lease::hold_in(root, target.strip_prefix(root)?),
         None => kithara_devtools::lease::hold(target),
@@ -178,6 +183,9 @@ pub(super) fn build(
         },
     )
     .with_context(|| format!("lock {subject}"))?;
+    #[cfg(not(target_os = "macos"))]
+    let lease = kithara_devtools::lease::hold(target)
+        .with_context(|| format!("lease xtask build directory {}", target.display()))?;
     Ok(BuildLock {
         _sources: claim_beside_alias(checkout, target, var)?,
         _lock: lock,
@@ -355,6 +363,24 @@ mod tests {
         consts,
         self_cache::{layout, manifest::CacheManifest, publish},
     };
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn a_mounted_bootstrap_build_needs_no_parent_namespace() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let cache = root.path().join("cache");
+        let target = cache.join("xtask");
+        fs::create_dir_all(&target)?;
+        fs::create_dir(cache.join(".xtask.kithara-job-lease"))?;
+        fs::write(root.path().join(".kithara-job-leases"), b"outside mount")?;
+        let held = super::build(root.path(), &target, &|name| {
+            (name == "KITHARA_CI_CACHE_ROOT").then(|| cache.clone().into_os_string())
+        })?;
+        assert!(kithara_devtools::lease::evict(&target)?.is_none());
+        drop(held);
+        assert!(kithara_devtools::lease::evict(&target)?.is_some());
+        Ok(())
+    }
 
     fn published_fixture() -> Result<(tempfile::TempDir, PathBuf, PathBuf, XtaskCacheConfig)> {
         let temp = tempfile::tempdir()?;

@@ -8,4 +8,4 @@ pub(crate) use host::{
 pub(crate) use pins::CiPins;
 pub(crate) use profile::CiConfig;
 #[cfg(test)]
-pub(crate) use profile::{fixture, workspace_root};
+pub(crate) use profile::{fixture, fixture_directory, workspace_root};

@@ -192,7 +192,7 @@ mod tests {
     use super::*;
     use crate::ci::{
         build_dir::fixture::git,
-        config::{fixture, workspace_root},
+        config::{fixture, fixture_directory, workspace_root},
     };
 
     /// A lane builds where the executor said. These runners are ephemeral and
@@ -381,7 +381,7 @@ label = "run"
     /// execution got there.
     #[test]
     fn a_lane_reaches_its_own_work_with_no_host_profile_resolved() {
-        let temp = tempfile::tempdir().expect("create fixture workspace");
+        let temp = fixture_directory().expect("create fixture workspace");
         let (ctx, args) = trivial_lane(temp.path());
 
         let result = run_in(&args, &ctx, &environment(&[]));
@@ -399,8 +399,8 @@ label = "run"
     #[cfg(unix)]
     #[test]
     fn a_lane_in_a_ci_job_builds_in_its_own_directory_behind_the_alias() {
-        let temp = tempfile::tempdir().expect("create fixture workspace");
-        let builds = tempfile::tempdir().expect("create the runner's build root");
+        let temp = fixture_directory().expect("create fixture workspace");
+        let builds = fixture_directory().expect("create the runner's build root");
         let seen = temp.path().join("seen");
         let record = format!(
             r#"args = ["-c", "printf '%s' \"$CARGO_TARGET_DIR\" > '{}'"]"#,
@@ -451,8 +451,8 @@ label = "run"
     #[cfg(unix)]
     #[test]
     fn a_lane_whose_build_wrote_no_timing_report_tells_the_job_nothing() {
-        let temp = tempfile::tempdir().expect("create fixture workspace");
-        let builds = tempfile::tempdir().expect("create the runner's build root");
+        let temp = fixture_directory().expect("create fixture workspace");
+        let builds = fixture_directory().expect("create the runner's build root");
         let (ctx, args) = trivial_lane(temp.path());
         let earlier = builds
             .path()
@@ -495,8 +495,8 @@ label = "run"
     #[cfg(unix)]
     #[test]
     fn a_lane_tells_the_job_the_timing_report_its_build_wrote() {
-        let temp = tempfile::tempdir().expect("create fixture workspace");
-        let builds = tempfile::tempdir().expect("create the runner's build root");
+        let temp = fixture_directory().expect("create fixture workspace");
+        let builds = fixture_directory().expect("create the runner's build root");
         let (ctx, args) = lane_running(
             temp.path(),
             "sh",
@@ -546,8 +546,8 @@ label = "run"
     #[cfg(unix)]
     #[test]
     fn a_failed_lane_still_tells_the_job_the_timing_report_its_build_wrote() {
-        let temp = tempfile::tempdir().expect("create fixture workspace");
-        let builds = tempfile::tempdir().expect("create the runner's build root");
+        let temp = fixture_directory().expect("create fixture workspace");
+        let builds = fixture_directory().expect("create the runner's build root");
         let (ctx, args) = lane_running(
             temp.path(),
             "sh",
@@ -596,7 +596,7 @@ label = "run"
     #[cfg(unix)]
     #[test]
     fn a_report_a_job_announced_survives_the_next_job_taking_its_slot() {
-        let temp = tempfile::tempdir().expect("create fixture workspace");
+        let temp = fixture_directory().expect("create fixture workspace");
         let builds = temp.path().join("builds");
         let checkout_a = tempfile::tempdir_in(temp.path()).expect("create job A's checkout");
         let runner_temp_a = tempfile::tempdir_in(temp.path()).expect("create job A's RUNNER_TEMP");
@@ -686,7 +686,7 @@ label = "run"
     #[cfg(unix)]
     #[test]
     fn a_lane_tells_the_job_only_the_reports_its_build_directory_holds() {
-        let temp = tempfile::tempdir().expect("create fixture workspace");
+        let temp = fixture_directory().expect("create fixture workspace");
         let builds = temp.path().join("builds");
         let slot = builds.join("trivial-0");
         let elsewhere = temp.path().join("elsewhere");
@@ -754,7 +754,7 @@ label = "run"
     fn a_rebuild_check_fails_a_suite_the_next_job_would_build_again() {
         use std::os::unix::fs::PermissionsExt as _;
 
-        let temp = tempfile::tempdir().expect("create fixture workspace");
+        let temp = fixture_directory().expect("create fixture workspace");
         let status = temp.path().join("status");
         let just = temp.path().join("just");
         fs::write(
@@ -906,8 +906,8 @@ cargo.packages = ["tools"]
     #[cfg(unix)]
     #[test]
     fn a_touched_lane_that_selects_nothing_claims_no_build() {
-        let temp = tempfile::tempdir().expect("create fixture workspace");
-        let builds = tempfile::tempdir().expect("create the runner's build root");
+        let temp = fixture_directory().expect("create fixture workspace");
+        let builds = fixture_directory().expect("create the runner's build root");
 
         let (result, told, called) = run_touched(temp.path(), "xtask/probe.rs", builds.path());
 
@@ -927,8 +927,8 @@ cargo.packages = ["tools"]
     #[cfg(unix)]
     #[test]
     fn a_touched_lane_that_selects_a_lane_builds_it() {
-        let temp = tempfile::tempdir().expect("create fixture workspace");
-        let builds = tempfile::tempdir().expect("create the runner's build root");
+        let temp = fixture_directory().expect("create fixture workspace");
+        let builds = fixture_directory().expect("create the runner's build root");
 
         let (result, _told, called) = run_touched(temp.path(), "crates/probe.rs", builds.path());
 
@@ -988,7 +988,7 @@ cargo.packages = ["tools"]
     #[cfg(unix)]
     #[test]
     fn a_lane_that_compiled_through_the_cache_reads_its_counts() {
-        let temp = tempfile::tempdir().expect("create fixture workspace");
+        let temp = fixture_directory().expect("create fixture workspace");
         let (tools, asked) = cache_doubles(temp.path());
         let (mut ctx, args) = trivial_lane(temp.path());
         ctx.config.tools = tools.try_into().expect("parse the tools table");
@@ -1014,7 +1014,7 @@ cargo.packages = ["tools"]
     #[cfg(unix)]
     #[test]
     fn a_ci_lane_compiles_through_a_kache_of_its_own() {
-        let temp = tempfile::tempdir().expect("create fixture workspace");
+        let temp = fixture_directory().expect("create fixture workspace");
         let (tools, asked) = cache_doubles(temp.path());
         let told = temp.path().join("told");
         let (mut ctx, args) = lane_running(
@@ -1068,8 +1068,8 @@ cargo.packages = ["tools"]
     #[cfg(unix)]
     #[test]
     fn a_lane_outside_a_ci_job_enters_no_build_directory() {
-        let temp = tempfile::tempdir().expect("create fixture workspace");
-        let builds = tempfile::tempdir().expect("create a build root");
+        let temp = fixture_directory().expect("create fixture workspace");
+        let builds = fixture_directory().expect("create a build root");
         let (ctx, args) = trivial_lane(temp.path());
         let own = temp.path().join("target/debug/own-build");
         fs::create_dir_all(own.parent().expect("a build file has a directory"))
@@ -1096,8 +1096,8 @@ cargo.packages = ["tools"]
     #[cfg(unix)]
     #[test]
     fn a_lane_that_cannot_tell_the_job_where_it_built_still_runs() {
-        let temp = tempfile::tempdir().expect("create fixture workspace");
-        let builds = tempfile::tempdir().expect("create the runner's build root");
+        let temp = fixture_directory().expect("create fixture workspace");
+        let builds = fixture_directory().expect("create the runner's build root");
         let (ctx, args) = lane_running(
             temp.path(),
             "sh",

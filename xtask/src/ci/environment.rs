@@ -419,11 +419,13 @@ pub(crate) fn namespace_key(tree: &FsPath, path: &FsPath) -> Result<PathBuf> {
 
 fn claim_namespaces(paths: &[(&FsPath, &FsPath)]) -> Result<Vec<FileLock>> {
     let mut ownership = Vec::new();
-    for &(tree, path) in paths {
-        ownership.push(lease::claim(
-            &namespace_lock_root(tree)?,
-            &namespace_key(tree, path)?,
-        )?);
+    if cfg!(target_os = "macos") {
+        for &(tree, path) in paths {
+            ownership.push(lease::claim(
+                &namespace_lock_root(tree)?,
+                &namespace_key(tree, path)?,
+            )?);
+        }
     }
     Ok(ownership)
 }
@@ -676,6 +678,7 @@ mod tests {
     use kithara_devtools::lease;
 
     use super::*;
+    use crate::ci::config::fixture_directory;
 
     fn reclaim(root: &FsPath) -> usize {
         reclaim_build_caches(&gitlab_workspaces(root), &root.join("cache"), 0, u64::MAX).unwrap()
@@ -898,7 +901,7 @@ mod tests {
             return;
         }
 
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let project = directory
             .path()
             .join("workspaces/gitlab/runner/0/disrupt/kithara");
@@ -977,7 +980,7 @@ mod tests {
             return;
         }
 
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let output = Command::new(env::current_exe().unwrap())
             .arg("failed_prepare_never_publishes_a_cache_lease")
             .arg("--nocapture")
@@ -1059,7 +1062,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn the_gate_reclaims_caches_before_deciding_there_is_no_room() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         let build = build_beside_a_checkout(root.path(), "lint");
 
         reclaim(root.path());
@@ -1077,7 +1080,7 @@ mod tests {
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn the_gate_reclaims_the_slots_the_previous_layout_keeps() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         let build = root
             .path()
             .join("cache")
@@ -1099,7 +1102,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_leased_build_directory_is_left_alone_by_a_sibling_job() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         let build = build_beside_a_checkout(root.path(), "lint");
 
         let held = lease::hold(&build).expect("the running job claims its build");
@@ -1125,8 +1128,8 @@ mod tests {
     /// build fills.
     #[test]
     fn a_refused_job_names_the_volume_it_builds_on() {
-        let volume = tempfile::tempdir().unwrap();
-        let builds = tempfile::tempdir().unwrap();
+        let volume = fixture_directory().unwrap();
+        let builds = fixture_directory().unwrap();
         let mut config = super::super::config::fixture();
         config.host.quota_bytes = u64::MAX;
         config.host.reject_bytes = 0;
@@ -1182,15 +1185,26 @@ mod tests {
 
     #[test]
     fn a_workspace_root_that_does_not_exist_has_nothing_to_reclaim() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
 
         let reclaimed_from = reclaim(root.path());
 
         assert_eq!(reclaimed_from, 0);
     }
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn mounted_cache_preparation_needs_no_parent_namespace() {
+        let root = fixture_directory().unwrap();
+        let tree = root.path().join("cache");
+        let namespace = tree.join("review");
+        fs::write(root.path().join(".kithara-job-leases"), b"outside mount").unwrap();
+        assert!(claim_namespaces(&[(&tree, &namespace)]).unwrap().is_empty());
+        assert!(!namespace.exists());
+    }
+
     #[test]
     fn namespace_guards_protect_ancestors_before_creation() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         let tree = root.path().join("cache");
         let namespace = tree.join("review");
         let locks = namespace_lock_root(&tree).unwrap();
@@ -1215,7 +1229,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn unknown_historical_owners_survive_while_native_peers_reclaim() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         let native = build_beside_a_checkout(root.path(), "lint");
         let historical = root
             .path()

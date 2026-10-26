@@ -489,7 +489,7 @@ fn safe_account(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{super::fixture_directory, *};
 
     #[test]
     fn build_cache_size_converts_decimal_gigabytes_to_bytes() {
@@ -527,7 +527,7 @@ mod tests {
 
     #[test]
     fn ci_host_load_accepts_a_profile_without_a_build_cache_size() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let path = directory.path().join("host.toml");
         let host = super::super::fixture().host;
         host.write(&path).unwrap();
@@ -547,7 +547,7 @@ mod tests {
 
     #[test]
     fn ci_host_load_accepts_a_profile_without_a_docker_build_cache_size() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let path = directory.path().join("host.toml");
         let host = super::super::fixture().host;
         host.write(&path).unwrap();
@@ -577,7 +577,7 @@ mod tests {
     /// without it would take cleanup down on the hosts it was written for.
     #[test]
     fn ci_host_load_accepts_a_profile_without_a_cleanup_deadline() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let path = directory.path().join("host.toml");
         let host = super::super::fixture().host;
         host.write(&path).unwrap();
@@ -619,7 +619,7 @@ mod tests {
     /// yield the wait, not zero, or the gate refuses as instantly as before.
     #[test]
     fn ci_host_load_accepts_a_profile_without_a_job_room_wait() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let path = directory.path().join("host.toml");
         let host = super::super::fixture().host;
         host.write(&path).unwrap();
@@ -655,7 +655,7 @@ mod tests {
     /// take cleanup down on hosts that have nothing to do with Windows.
     #[test]
     fn ci_host_load_accepts_a_profile_with_no_windows_guest() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let path = directory.path().join("host.toml");
         super::super::fixture().host.write(&path).unwrap();
 
@@ -664,7 +664,7 @@ mod tests {
 
     #[test]
     fn a_profile_that_declares_a_windows_guest_carries_its_data_disk() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let path = directory.path().join("host.toml");
         let mut host = super::super::fixture().host;
         host.windows = Some(WindowsGuest {
@@ -682,7 +682,7 @@ mod tests {
 
     #[test]
     fn ci_host_load_rejects_garbage_build_cache_size() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let path = directory.path().join("host.toml");
         let mut host = super::super::fixture().host;
         host.build_cache_size = "25GiB".to_owned();
@@ -823,7 +823,7 @@ mod tests {
     /// take every lane down with it.
     #[test]
     fn a_profile_without_a_topology_still_loads() {
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = fixture_directory().expect("temp dir");
         let path = directory.path().join("mac-host.toml");
         let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ci-mac-host.toml");
         let text = fs::read_to_string(&source).expect("fixture profile");
@@ -855,7 +855,7 @@ mod tests {
     /// corner case: they are what every host on the fleet actually loads.
     #[test]
     fn the_storage_policy_defaults_match_the_constants_they_replace() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let path = directory.path().join("ci-host.toml");
         let host = super::super::fixture().host;
         host.write(&path).unwrap();

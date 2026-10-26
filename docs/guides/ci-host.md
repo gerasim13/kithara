@@ -295,6 +295,8 @@ is the whole answer.
 
 Active and uncertain owners retain their data, including across guest
 boundaries.
+Startup fencing applies to native macOS; Linux and Windows retain their
+existing lease layout.
 
 `build_cache_size` caps one cache and cannot see whether the volume has room:
 two checkouts each under a 100 GB cap held 183 GB between them while every pass
