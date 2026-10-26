@@ -130,10 +130,25 @@ native registration can take them. Each registration retains its own checkout,
 build root and compiler-cache socket. Device builds retain `kithara-macos-2`;
 measured jobs still serialize through `kithara-suite`.
 
-Host-shell registrations run the installed host preflight before fetching sources.
-Critical disk pressure refuses the job before checkout or compilation can spend
-the remaining space. Provisioning installs the executable, host profile and pins
-together; the admission hook uses that installed set.
+Host-shell registrations run installed `ci host mac --config <installed-profile> --pins <installed-pins> preflight` before fetching sources, with the runner
+agent's Homebrew/Cargo PATH. This covers every native macOS registration,
+Android and the protected release runner. `linux:image` and `host:provision`
+also reach that hook through their native registrations. Provisioning installs
+the executable, host profile and pins together; checkout content does not
+select host maintenance policy.
+
+Preflight requests bounded cleanup before its final capacity decision. Safely
+stopped cleanup errors or timeouts, and contention with another cleanup, permit
+admission with a warning only when fresh capacity, root writability and required
+tool checks pass. Unsafe or unknown capacity, unusable required roots/tools,
+or unconfirmed worker termination refuse work before checkout. Cancellation
+remains cancellation. Admission releases maintenance ownership before the job
+body, preserving independent registrations and slots.
+
+This is native-only coverage. Docker jobs on Colima and enabled Windows or
+alternative macOS guests need the host adapters and host-visible ownership in
+the companion `mac-ci-job-admission-coverage` change. Native hook evidence
+alone does not establish admission for every Mac-hosted job.
 
 Superseded branch and merge-request child pipelines cancel interruptible checks,
 including iOS and end-to-end review suites. Main, scheduled, release, and explicit
@@ -293,8 +308,12 @@ are never deleted in place; sccache keeps its own LRU limit. No `diskutil apfs`
 verb accepts `-quota` after creation, so the quota cannot be raised and cleanup
 is the whole answer.
 
-Active and uncertain owners retain their data, including across guest
-boundaries.
+Host service installation creates `<host_root>/locks/cleanup.lock` for the CI
+user, retaining an existing lock inode and rejecting symlink lock paths.
+`locks` is excluded from `removable_roots`. Automatic, periodic and manual
+cleanup all use that OS-owned maintenance lock; it serializes reclamation,
+and no admitted job holds it during checkout or compilation. Active and
+uncertain owners retain their data, including across guest boundaries.
 
 `build_cache_size` caps one cache and cannot see whether the volume has room:
 two checkouts each under a 100 GB cap held 183 GB between them while every pass
@@ -315,12 +334,13 @@ soft floor, evicting past the cap. What its sweeps cannot show:
   fence. An idle snapshot cannot exclude a later old-head starter. Namespace
   eviction requires proven participation or installed lifetime ownership;
   native `.target` budgets remain protected by their independent slot, lease
-  and Cargo locks.
+  and Cargo locks. The companion owns guest lifecycle integration.
 - Build-cache bytes for a lane's leased build directory still count against
   the ceiling.
 - A macOS job VM clone can outlive its runner. Cleanup retains unproven clones:
   age and a stopped-state observation from Tart do not fence a new user.
   Base images, shared runtimes, guest disks and running guests stay protected.
+  Guest cleanup eligibility depends on the companion's host-visible ownership.
 - `CiEnvironment` points every lane's `TMPDIR` under `/tmp/kithara-ci`: outside
   the checkout and both CI roots, short enough for the Unix sockets the suite
   binds, on storage the macOS guest can bind. Killed jobs leak there steadily
@@ -329,8 +349,9 @@ soft floor, evicting past the cap. What its sweeps cannot show:
 
 Automatic cleanup preserves the shared Colima VM, its Docker data disk and the
 services running inside it. If safe cache reclamation cannot restore the free-space
-floor, cleanup reports failure and preflight refuses new jobs.
-Cleanup never deletes runtimes or their disks.
+floor, explicit cleanup reports failure. Preflight uses fresh mandatory
+admission checks after safe cleanup shutdown; a cleanup warning alone does not
+decide admission. Cleanup never deletes runtimes or their disks.
 
 Health and cleanup run through launchd, and directly as `ci host mac health` /
 `ci host mac cleanup`. A `KeepAlive` agent that dies on startup stays loaded
@@ -340,10 +361,25 @@ sitting `pending` while the pipeline reads as hung.
 
 launchd starts no second instance while the first is alive, so a wedged pass
 silences `StartInterval` outright: one hung for over a day inside `opendir` on a
-volume that had stopped answering, and nothing said so. A watchdog thread ends
-the process at `cleanup_deadline_seconds`, thirty minutes by default, so the
-next tick gets a machine that can try again. It cannot be a check between steps,
-because such a pass never reaches the next step.
+volume that had stopped answering, and nothing said so. Explicit cleanup now
+uses an owned supervisor and a separate worker process group. After profile
+validation and `Process` setup, `cleanup_deadline_seconds`, thirty minutes by
+default, bounds the caller's wait. The supervisor stops and reaps its worker
+group before confirming completion. If stop cannot be confirmed, the caller
+reports failure and the supervisor retains maintenance exclusion until the
+group is stopped; a later launch cannot start competing cleanup.
+
+Per-job admission has its own `job_admission_deadline_seconds`, default 60,
+positive and no greater than `cleanup_deadline_seconds`. Contention,
+maintenance, fresh mandatory checks and shutdown share that budget, starting
+after profile validation and `Process` setup. Each supervised operation reserves
+up to ten seconds for shutdown within its remaining budget, at most half of a
+shorter budget. An optional timeout warns
+only after the owned worker and descendants are confirmed stopped and reaped;
+otherwise admission refuses and the live worker retains maintenance exclusion.
+An admission never cancels peer maintenance or leaves a watchdog that can stop
+an admitted job. Explicit cleanup and per-job admission use the same supervisor
+and process-group lifecycle with their respective deadlines.
 
 ## GitLab project settings
 

@@ -752,6 +752,8 @@ mod tests {
     };
 
     use super::*;
+    #[cfg(unix)]
+    use crate::testing::install_script;
     use crate::{ci::config::fixture, testing::install_double};
 
     /// A token for every registration the host renders: one per macOS job it
@@ -772,10 +774,13 @@ mod tests {
     fn shell_jobs_stop_before_sources_when_host_preflight_rejects() {
         let directory = tempfile::tempdir().unwrap();
         let mut config = fixture();
-        config.host.host_root = directory.path().join("host root");
+        config.host.host_root = directory.path().join("host's root");
         let bin = config.host.host_root.join("toolchains/shared-bin");
         fs::create_dir_all(&bin).unwrap();
-        install_double(&bin, "kithara-ci");
+        install_script(
+            &bin.join("kithara-ci"),
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$KITHARA_TEST_TRACE\"\nexit \"$KITHARA_TEST_EXIT\"\n",
+        );
         let process = Process::new(directory.path(), BTreeMap::new());
         let manager = RunnerManager::new(&config, &process);
         let rendered: toml::Value = toml::from_str(
@@ -796,7 +801,7 @@ mod tests {
                 let trace = directory.path().join("preflight-arguments");
                 let output = std::process::Command::new("bash")
                     .args(["-e", "-c", &format!("{hook}\nprintf 'admitted\\n'")])
-                    .env("KITHARA_TEST_RULES", format!("kithara-ci:ci:*={code}"))
+                    .env("KITHARA_TEST_EXIT", code.to_string())
                     .env("KITHARA_TEST_TRACE", &trace)
                     .output()
                     .unwrap();
@@ -810,10 +815,17 @@ mod tests {
                     },
                     "a rejected host must not start the source step"
                 );
-                assert!(
-                    fs::read_to_string(&trace)
-                        .unwrap()
-                        .ends_with(" preflight\n")
+                assert_eq!(
+                    fs::read_to_string(&trace).unwrap(),
+                    format!(
+                        "ci\nhost\nmac\n--config\n{}\n--pins\n{}\npreflight\n",
+                        config
+                            .host
+                            .host_root
+                            .join("services/mac-host.toml")
+                            .display(),
+                        config.host.host_root.join("services/pins.toml").display()
+                    )
                 );
             }
         }
@@ -901,6 +913,17 @@ mod tests {
         assert!(colima.contains("<key>ProcessType</key><string>Background</string>"));
         assert!(runner.contains("<key>ProcessType</key><string>Interactive</string>"));
         assert!(!runner.contains("<key>ProcessType</key><string>Background</string>"));
+        let plist = plist::Value::from_reader_xml(runner.as_bytes()).expect("runner launch agent");
+        let path = plist
+            .as_dictionary()
+            .and_then(|dictionary| dictionary.get("EnvironmentVariables"))
+            .and_then(plist::Value::as_dictionary)
+            .and_then(|environment| environment.get("PATH"))
+            .and_then(plist::Value::as_string);
+        assert_eq!(
+            path,
+            Some(config.host.agent_path(&manager.ci_home()).as_str())
+        );
     }
 
     #[test]
@@ -1082,11 +1105,19 @@ mod tests {
                 .find(|runner| runner["token"].as_str() == Some(token))
                 .unwrap_or_else(|| panic!("{token} has no runner, so its jobs will never be taken"))
         };
-        for token in [&tokens.linux, &tokens.android, &tokens.release] {
-            runner(token);
-        }
-        for token in &tokens.macos {
+        assert_eq!(runner(&tokens.linux)["executor"].as_str(), Some("docker"));
+        assert!(
+            runner(&tokens.linux)
+                .get("pre_get_sources_script")
+                .is_none()
+        );
+        for token in tokens
+            .macos
+            .iter()
+            .chain([&tokens.android, &tokens.release])
+        {
             assert_eq!(runner(token)["executor"].as_str(), Some("shell"));
+            assert!(runner(token).get("pre_get_sources_script").is_some());
         }
     }
 

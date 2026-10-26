@@ -222,7 +222,7 @@ impl Process {
         if timeout.is_zero() {
             bail!("maintenance operation exceeded its deadline");
         }
-        let output = crate::child::output(command, None, timeout);
+        let output = crate::child::member_output(command, None, timeout);
         output.with_context(|| format!("running {label}")).map(Some)
     }
 

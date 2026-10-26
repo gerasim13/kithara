@@ -317,6 +317,7 @@ impl<'a> ServiceInstaller<'a> {
     }
 
     fn install_config(&self, config_path: &Path, pins_path: &Path) -> Result<()> {
+        self.config.host.validate()?;
         for (label, path) in [
             ("CI host profile", config_path),
             ("CI build pins", pins_path),
@@ -926,6 +927,33 @@ mod tests {
     }
 
     #[test]
+    fn installed_profile_carries_admission_and_cleanup_policy() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let mut config = fixture();
+        config.host.host_root = directory.path().to_path_buf();
+        let profile = directory.path().join("host.toml");
+        let pins = directory.path().join("pins.toml");
+        config.host.write(&profile)?;
+        config.pins.write(&pins)?;
+        let process = Process::recording(directory.path(), Recording::default());
+        let services = ServiceInstaller::new(&config, &process);
+        fs::create_dir_all(services.service_root())?;
+
+        services.install_config(&profile, &pins)?;
+
+        let installed = CiConfig::load(&services.installed_config(), &services.installed_pins())?;
+        let host = toml::Value::try_from(installed.host)?;
+        assert_eq!(
+            host.get("job_admission_deadline_seconds")
+                .and_then(toml::Value::as_integer),
+            Some(60)
+        );
+        assert_eq!(host["cleanup_deadline_seconds"].as_integer(), Some(1800));
+        assert_eq!(host["reject_bytes"].as_integer(), Some(285_000_000_000));
+        Ok(())
+    }
+
+    #[test]
     fn periodic_agent_commands_are_accepted_by_the_host_cli() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let mut config = fixture();
@@ -948,6 +976,20 @@ mod tests {
                 .iter()
                 .map(|value| value.as_string().context("string command argument"))
                 .collect::<Result<Vec<_>>>()?;
+            assert_eq!(
+                arguments,
+                [
+                    path_text(&services.replaceable_binary())?,
+                    "ci",
+                    "host",
+                    "mac",
+                    "--config",
+                    path_text(&services.installed_config())?,
+                    "--pins",
+                    path_text(&services.installed_pins())?,
+                    name,
+                ]
+            );
             Cli::try_parse_from(arguments)?;
         }
         Ok(())

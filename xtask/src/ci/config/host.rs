@@ -65,6 +65,9 @@ pub(crate) struct CiHost {
     /// oldest first. Defaulted for the same reason `build_cache_size` is.
     #[serde(default = "default_docker_build_cache_size")]
     pub(crate) docker_build_cache_size: String,
+    /// Total admission maintenance budget, including contention and shutdown.
+    #[serde(default = "default_job_admission_deadline_seconds")]
+    pub(crate) job_admission_deadline_seconds: u64,
     /// Maximum jobs admitted at once.
     ///
     /// Runner rendering and per-job cache partitioning share this value.
@@ -193,6 +196,14 @@ impl CiHost {
         if self.cleanup_deadline_seconds == 0 {
             bail!("CI host profile cleanup_deadline_seconds must be positive");
         }
+        if self.job_admission_deadline_seconds == 0
+            || self.job_admission_deadline_seconds > self.cleanup_deadline_seconds
+        {
+            bail!(
+                "CI host profile job_admission_deadline_seconds must be positive and no greater \
+                 than cleanup_deadline_seconds"
+            );
+        }
         if self
             .removable_roots
             .iter()
@@ -298,6 +309,10 @@ impl CiHost {
 
     pub(crate) fn cleanup_deadline(&self) -> Duration {
         Duration::from_secs(self.cleanup_deadline_seconds)
+    }
+
+    pub(crate) const fn job_admission_deadline(&self) -> Duration {
+        Duration::from_secs(self.job_admission_deadline_seconds)
     }
 
     /// The headroom a job insists on before it starts. The host stops handing
@@ -452,6 +467,10 @@ pub(crate) fn default_cleanup_deadline_seconds() -> u64 {
     30 * 60
 }
 
+const fn default_job_admission_deadline_seconds() -> u64 {
+    60
+}
+
 /// Matched to the heartbeat a dead job leaves behind.
 ///
 /// A checkout is held either by a live job or by the stale claim of one that
@@ -603,6 +622,76 @@ mod tests {
         host.cleanup_deadline_seconds = 0;
 
         assert!(host.validate().is_err());
+    }
+
+    #[test]
+    fn ci_host_load_defaults_job_admission_deadline_to_sixty_seconds() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("host.toml");
+        let mut profile = toml::Value::try_from(super::super::fixture().host).unwrap();
+        profile
+            .as_table_mut()
+            .unwrap()
+            .remove("job_admission_deadline_seconds");
+        fs::write(&path, toml::to_string_pretty(&profile).unwrap()).unwrap();
+
+        let host = CiHost::load(&path).unwrap();
+        let loaded = toml::Value::try_from(host).unwrap();
+
+        assert_eq!(
+            loaded
+                .get("job_admission_deadline_seconds")
+                .and_then(toml::Value::as_integer),
+            Some(60)
+        );
+    }
+
+    #[test]
+    fn ci_host_validates_job_admission_deadline() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("host.toml");
+        let mut profile = toml::Value::try_from(super::super::fixture().host).unwrap();
+        profile["cleanup_deadline_seconds"] = toml::Value::Integer(60);
+        for (seconds, valid) in [(0, false), (61, false), (1, true), (60, true)] {
+            profile.as_table_mut().unwrap().insert(
+                "job_admission_deadline_seconds".to_owned(),
+                toml::Value::Integer(seconds),
+            );
+            fs::write(&path, toml::to_string_pretty(&profile).unwrap()).unwrap();
+
+            let result = CiHost::load(&path);
+
+            assert_eq!(result.is_ok(), valid, "deadline {seconds}: {result:?}");
+        }
+    }
+
+    #[test]
+    fn ci_host_roundtrips_admission_and_cleanup_policy() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("host.toml");
+        let mut profile = toml::Value::try_from(super::super::fixture().host).unwrap();
+        let policy = [
+            ("job_admission_deadline_seconds", 75),
+            ("cleanup_deadline_seconds", 90),
+            ("soft_cleanup_bytes", 210),
+            ("aggressive_cleanup_bytes", 250),
+            ("reject_bytes", 280),
+            ("quota_bytes", 300),
+        ];
+        for (key, value) in policy {
+            profile
+                .as_table_mut()
+                .unwrap()
+                .insert(key.to_owned(), toml::Value::Integer(value));
+        }
+        fs::write(&path, toml::to_string_pretty(&profile).unwrap()).unwrap();
+
+        CiHost::load(&path).unwrap().write(&path).unwrap();
+
+        let loaded: toml::Value = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        for (key, value) in policy {
+            assert_eq!(loaded[key].as_integer(), Some(value), "{key}");
+        }
     }
 
     #[test]

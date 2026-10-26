@@ -3,7 +3,6 @@
 #[cfg(unix)]
 use std::os::unix::process::CommandExt as _;
 use std::{
-    io::Read as _,
     process::{Child, Command, ExitStatus, Output, Stdio},
     sync::{
         Arc,
@@ -50,6 +49,57 @@ fn kill_owned(child: &mut Child) -> Result<()> {
     match killpg(Pid::from_raw(pid), Signal::SIGKILL) {
         Ok(()) | Err(Errno::ESRCH) => Ok(()),
         Err(error) => Err(error).context("stopping owned process group"),
+    }
+}
+
+/// Observe exit without releasing the PID that anchors the owned group.
+#[cfg(unix)]
+pub(crate) fn leader_exited(child: &Child) -> Result<bool> {
+    let mut status = std::mem::MaybeUninit::<nix::libc::siginfo_t>::zeroed();
+    // SAFETY: waitid initializes status; WNOWAIT preserves this unreaped child's PID.
+    let result = unsafe {
+        nix::libc::waitid(
+            nix::libc::P_PID,
+            child.id(),
+            status.as_mut_ptr(),
+            nix::libc::WEXITED | nix::libc::WNOHANG | nix::libc::WNOWAIT,
+        )
+    };
+    if result < 0 {
+        return Err(std::io::Error::last_os_error()).context("observing owned group leader");
+    }
+    // SAFETY: status was initialized above, including zero si_pid when no child exited.
+    Ok(unsafe { status.assume_init().si_pid() } != 0)
+}
+
+/// Only observe after the final signal: a reaped leader's PID may be reused.
+#[cfg(unix)]
+pub(crate) fn group_stopped(child: &mut Child) -> Result<Option<ExitStatus>> {
+    let Some(status) = child.try_wait().context("reaping owned group leader")? else {
+        return Ok(None);
+    };
+    let pid = i32::try_from(child.id()).context("child process group id")?;
+    match killpg(Pid::from_raw(pid), None) {
+        Err(Errno::ESRCH) => Ok(Some(status)),
+        Ok(()) => Ok(None),
+        Err(error) => Err(error).context("checking owned process group"),
+    }
+}
+
+/// Send the last group signal before reaping its leader, then only observe.
+#[cfg(unix)]
+pub(crate) fn stop_group(child: &mut Child, deadline: Instant) -> Result<ExitStatus> {
+    if leader_exited(child).is_ok() {
+        let _ = kill_owned(child);
+    }
+    loop {
+        if Instant::now() >= deadline {
+            bail!("owned process group stop is unconfirmed");
+        }
+        if let Ok(Some(status)) = group_stopped(child) {
+            return Ok(status);
+        }
+        thread::sleep(consts::CHILD_POLL.min(deadline.saturating_duration_since(Instant::now())));
     }
 }
 
@@ -161,17 +211,8 @@ pub(crate) fn output(
     let mut child = spawn(command)?;
     let stdout = child.stdout.take().context("captured stdout")?;
     let stderr = child.stderr.take().context("captured stderr")?;
-    let read = |mut stream: Box<dyn std::io::Read + Send>| {
-        let (sender, receiver) = mpsc::channel();
-        thread::spawn(move || {
-            let mut bytes = Vec::new();
-            let result = stream.read_to_end(&mut bytes).map(|_| bytes);
-            let _ = sender.send(result);
-        });
-        receiver
-    };
-    let stdout = read(Box::new(stdout));
-    let stderr = read(Box::new(stderr));
+    let stdout = read_pipe(stdout);
+    let stderr = read_pipe(stderr);
     let status = supervise(&mut child, cancel, Some(timeout))?;
     let stdout = stdout
         .recv_timeout(consts::GRACE)
@@ -186,6 +227,72 @@ pub(crate) fn output(
     })
 }
 
+/// Keep descendants in the enclosing pass group, whose supervisor proves stop.
+pub(crate) fn member_output(
+    command: &mut Command,
+    cancel: Option<&Cancel>,
+    timeout: Duration,
+) -> Result<Output> {
+    check(cancel)?;
+    let deadline = Instant::now() + timeout;
+    let work_deadline = deadline - consts::CONTROL_TIMEOUT.min(timeout / 2);
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command.spawn().context("spawning pass command")?;
+    let stdout = read_pipe(child.stdout.take().context("captured stdout")?);
+    let stderr = read_pipe(child.stderr.take().context("captured stderr")?);
+    let status = (|| loop {
+        check(cancel)?;
+        if Instant::now() >= work_deadline {
+            bail!("pass command exceeded its deadline");
+        }
+        if let Some(status) = child.try_wait().context("waiting on pass command")? {
+            return Ok(status);
+        }
+        thread::sleep(
+            consts::CHILD_POLL.min(work_deadline.saturating_duration_since(Instant::now())),
+        );
+    })();
+    let status = match status {
+        Ok(status) => status,
+        Err(error) => {
+            child.kill().context("stopping pass command")?;
+            reap(
+                &mut child,
+                deadline.saturating_duration_since(Instant::now()),
+                "pass command",
+            )?
+            .context("pass command stop is unconfirmed")?;
+            return Err(error);
+        }
+    };
+    let stdout = stdout
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        .context("draining pass stdout")??;
+    let stderr = stderr
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        .context("draining pass stderr")??;
+    if Instant::now() >= deadline {
+        bail!("pass command exceeded its deadline");
+    }
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+fn read_pipe(
+    mut stream: impl std::io::Read + Send + 'static,
+) -> mpsc::Receiver<std::io::Result<Vec<u8>>> {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let result = stream.read_to_end(&mut bytes).map(|_| bytes);
+        let _ = sender.send(result);
+    });
+    receiver
+}
+
 fn reap(child: &mut Child, grace: Duration, what: &str) -> Result<Option<ExitStatus>> {
     let deadline = Instant::now() + grace;
     loop {
@@ -198,7 +305,7 @@ fn reap(child: &mut Child, grace: Duration, what: &str) -> Result<Option<ExitSta
         if Instant::now() >= deadline {
             return Ok(None);
         }
-        thread::sleep(consts::CHILD_POLL);
+        thread::sleep(consts::CHILD_POLL.min(deadline.saturating_duration_since(Instant::now())));
     }
 }
 
@@ -236,7 +343,7 @@ impl Drop for Cancel {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use std::os::unix::process::ExitStatusExt as _;
+    use std::{io::Read as _, os::unix::process::ExitStatusExt as _};
 
     use super::*;
     use crate::testing::signals;
@@ -342,6 +449,86 @@ mod tests {
         );
         assert!(result.unwrap_err().to_string().contains("deadline"));
         assert!(start.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn a_pass_control_command_inherits_its_process_group() {
+        let output = member_output(
+            Command::new("sh").args(["-c", "ps -o pgid= -p $$"]),
+            None,
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        let group: i32 = String::from_utf8(output.stdout)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert_eq!(group, nix::unistd::getpgrp().as_raw());
+    }
+
+    #[test]
+    fn pass_command_stop_and_pipe_drain_share_the_total_budget() {
+        let started = Instant::now();
+        let error = member_output(
+            Command::new("sleep").arg("30"),
+            None,
+            Duration::from_millis(200),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("deadline"));
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert_eq!(
+            nix::sys::wait::waitpid(
+                Pid::from_raw(-1),
+                Some(nix::sys::wait::WaitPidFlag::WNOHANG)
+            ),
+            Err(Errno::ECHILD)
+        );
+
+        let started = Instant::now();
+        assert!(
+            member_output(
+                Command::new("sh").args(["-c", "sleep 2 & exit 0"]),
+                None,
+                Duration::from_millis(200),
+            )
+            .is_err()
+        );
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn a_nonreaping_leader_observation_preserves_its_status() {
+        let mut child = shell("exit 7");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !leader_exited(&child).unwrap() {
+            assert!(Instant::now() < deadline);
+            thread::sleep(consts::CHILD_POLL);
+        }
+        assert!(leader_exited(&child).unwrap());
+        assert_eq!(stop_group(&mut child, deadline).unwrap().code(), Some(7));
+    }
+
+    #[test]
+    fn cancelling_a_pass_control_command_keeps_unrelated_children_alive() {
+        let _signals = signals();
+        let cancel = Cancel::install().unwrap();
+        let pending = Arc::clone(&cancel.pending);
+        let mut unrelated = shell("sleep 30");
+        let request = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
+            pending.store(usize::try_from(SIGTERM).unwrap(), Ordering::SeqCst);
+        });
+        let result = member_output(
+            Command::new("sleep").arg("30"),
+            Some(&cancel),
+            Duration::from_secs(2),
+        );
+        request.join().unwrap();
+        assert!(result.unwrap_err().to_string().contains("cancelled"));
+        assert!(unrelated.try_wait().unwrap().is_none());
+        stop(&mut unrelated, "unrelated pass test process").unwrap();
     }
 
     #[test]

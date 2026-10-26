@@ -184,6 +184,11 @@ impl<'a> HostStorage<'a> {
         Ok(())
     }
 
+    pub(super) fn cleanup_until(mut self, deadline: Instant) -> Result<()> {
+        self.deadline = deadline;
+        self.cleanup()
+    }
+
     fn control(&self, command: &mut Command, label: &str) -> Result<Option<Output>> {
         self.process.control_output(command, label, self.deadline)
     }
@@ -1149,6 +1154,71 @@ mod tests {
         config
     }
 
+    fn mandatory_directories(root: &Path) {
+        for name in ["cache", "logs", "toolchains", "vm", "workspaces"] {
+            fs::create_dir_all(root.join(name)).unwrap();
+        }
+    }
+
+    #[test]
+    fn fresh_preflight_refuses_each_missing_mandatory_tool() {
+        for missing in ["git", "kache", "sccache"] {
+            let directory = tempfile::tempdir().unwrap();
+            mandatory_directories(directory.path());
+            let bin = directory.path().join("bin");
+            for tool in ["git", "kache", "sccache"] {
+                if tool != missing {
+                    install_double(&bin, tool);
+                }
+            }
+            let process = Process::new(
+                directory.path(),
+                BTreeMap::from([
+                    (OsString::from("PATH"), bin.into_os_string()),
+                    (OsString::from("PATHEXT"), OsString::from(".EXE")),
+                ]),
+            );
+            let cfg = config(directory.path());
+            let storage = HostStorage::for_test(&cfg, &process).unwrap();
+
+            let error = storage.preflight().unwrap_err();
+
+            assert_eq!(
+                error.to_string(),
+                format!("required CI command is missing: {missing}")
+            );
+        }
+    }
+
+    #[test]
+    fn fresh_preflight_refuses_unmeasurable_or_unusable_roots() {
+        for absent in [true, false] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path().join("host");
+            mandatory_directories(&root);
+            let cfg = config(&root);
+            let process = Process::recording(&root, Recording::default());
+            let storage = HostStorage::for_test(&cfg, &process).unwrap();
+            if absent {
+                fs::rename(&root, directory.path().join("unavailable")).unwrap();
+            } else {
+                fs::remove_dir(root.join("vm")).unwrap();
+                fs::write(root.join("vm"), b"not a directory").unwrap();
+            }
+
+            let error = storage.preflight().unwrap_err().to_string();
+
+            assert!(
+                error.contains(if absent {
+                    "reading total space"
+                } else {
+                    "missing CI directory"
+                }),
+                "{error}"
+            );
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn scratch_ownership_outlives_the_expiry_age() {
@@ -1830,25 +1900,36 @@ mod tests {
     #[test]
     fn a_volume_under_the_floor_reclaims_past_the_build_cache_ceiling() {
         let directory = tempfile::tempdir().unwrap();
+        mandatory_directories(directory.path());
         let mut cfg = config(directory.path());
         cfg.host.brew_root = directory.path().join("brew");
         cfg.host.build_root = Some(directory.path().join("builds"));
         let build = a_build_beside_a_checkout(cfg.host.build_root());
-        let process = Process::new(directory.path(), BTreeMap::new());
+        let bin = directory.path().join("bin");
+        for tool in ["git", "kache", "sccache"] {
+            install_double(&bin, tool);
+        }
+        let process = Process::new(
+            directory.path(),
+            BTreeMap::from([(OsString::from("PATH"), bin.into_os_string())]),
+        );
         let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
-        storage.set_available_sequence([
-            consts::FREE_AGGRESSIVE,
-            consts::FREE_AGGRESSIVE,
-            consts::FREE_AGGRESSIVE,
-            consts::FREE_NORMAL,
-        ]);
+        storage.set_available_sequence([0, 0, 0, 0, consts::FREE_NORMAL, consts::FREE_NORMAL]);
 
+        assert!(
+            storage
+                .preflight()
+                .unwrap_err()
+                .to_string()
+                .contains("is full; new jobs stop here")
+        );
         storage.cleanup().unwrap();
 
         assert!(
             !build.join("debug").exists(),
             "the pass stopped at the build cache ceiling the caches were already under"
         );
+        storage.preflight().unwrap();
     }
 
     /// A host deployed from a branch serves `production/main` until the branch

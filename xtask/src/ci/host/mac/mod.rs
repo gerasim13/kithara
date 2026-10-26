@@ -1,3 +1,4 @@
+mod admission;
 pub(crate) mod command;
 mod runner_guest;
 mod runner_images;

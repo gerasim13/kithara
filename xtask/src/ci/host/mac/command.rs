@@ -2,15 +2,15 @@ use std::{
     collections::BTreeMap,
     ffi::OsString,
     path::{Path, PathBuf},
-    thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
-use tracing::{error, info};
+use tracing::info;
 
 use super::{
+    admission,
     runners::RunnerManager,
     services::ServiceInstaller,
     storage::HostStorage,
@@ -77,6 +77,16 @@ enum MacCommand {
     Preflight,
     /// Remove expired job state and bounded cache entries.
     Cleanup,
+    #[command(hide = true)]
+    Maintenance {
+        work_budget_ms: u64,
+        #[arg(long)]
+        check: bool,
+    },
+    #[command(hide = true)]
+    CleanupPass { budget_ms: u64 },
+    #[command(hide = true)]
+    PreflightCheck,
     /// Emit host storage and runner health as JSON.
     Health,
 }
@@ -149,63 +159,41 @@ pub(crate) fn run(args: &MacArgs) -> Result<()> {
                 Boot::Installed
             })
         }
-        MacCommand::Preflight => HostStorage::new(&config, &process)?.preflight(),
-        MacCommand::Cleanup => {
-            let deadline = config.host.cleanup_deadline();
-            end_the_process_after(deadline, move || {
-                error!(
-                    deadline_seconds = deadline.as_secs(),
-                    "cleanup pass outlived its deadline; ending it so the next one can start"
-                );
-                std::process::exit(1);
-            });
-            HostStorage::new(&config, &process)?.cleanup()
+        MacCommand::Preflight => admission::preflight(&config, &process, &args.config, &args.pins),
+        MacCommand::Cleanup => admission::cleanup(&config, &process, &args.config, &args.pins),
+        MacCommand::Maintenance {
+            work_budget_ms,
+            check,
+        } => admission::supervisor(
+            &config,
+            &process,
+            &args.config,
+            &args.pins,
+            if *check {
+                admission::Operation::Check
+            } else {
+                admission::Operation::Cleanup
+            },
+            *work_budget_ms,
+        ),
+        MacCommand::CleanupPass { budget_ms } => {
+            let _proof = admission::validate_pass(&config)?;
+            let deadline = Instant::now()
+                .checked_add(Duration::from_millis(*budget_ms))
+                .context("cleanup pass deadline overflow")?;
+            HostStorage::new(&config, &process)?.cleanup_until(deadline)
         }
+        MacCommand::PreflightCheck => HostStorage::new(&config, &process)?.preflight(),
         MacCommand::Health => HostStorage::new(&config, &process)?.health(),
     }
 }
 
-/// Ends the process once the pass outlives `limit`, from a thread the pass
-/// cannot block.
-///
-/// The cleanup agent on this host hung for over a day inside `opendir` on a
-/// volume that had stopped answering, having done no work. `launchd` starts no
-/// second instance while the first is alive, so `StartInterval` stopped meaning
-/// anything and cleanup was simply gone with nothing saying so. A check between
-/// steps could not have ended it: the thread never reached the next step.
-fn end_the_process_after(limit: Duration, expire: impl FnOnce() + Send + 'static) {
-    thread::spawn(move || {
-        thread::sleep(limit);
-        expire();
-    });
-}
-
 #[cfg(test)]
 mod tests {
-    use std::{sync::mpsc, time::Duration};
-
     use clap::Parser;
 
     use super::*;
     use crate::Cli;
-
-    /// The pass this replaces a between-steps check for: the cleanup agent on
-    /// this host hung for over a day inside `opendir` on a volume that had
-    /// stopped answering. A thread that never reaches its next step cannot be
-    /// ended by a check placed between steps, so the deadline has to fire from
-    /// somewhere the pass does not touch.
-    #[test]
-    fn the_deadline_fires_while_the_pass_is_parked() {
-        let (expired, waiting) = mpsc::channel();
-
-        end_the_process_after(Duration::from_millis(10), move || {
-            let _ = expired.send(());
-        });
-
-        waiting
-            .recv_timeout(Duration::from_secs(10))
-            .expect("the deadline never fired");
-    }
 
     fn parse(command: &[&str]) -> Result<Cli, clap::Error> {
         let mut argv = vec![
@@ -238,6 +226,10 @@ mod tests {
             ["run-macos-runner"].as_slice(),
             ["preflight"].as_slice(),
             ["cleanup"].as_slice(),
+            ["maintenance", "1000"].as_slice(),
+            ["maintenance", "1000", "--check"].as_slice(),
+            ["cleanup-pass", "1000"].as_slice(),
+            ["preflight-check"].as_slice(),
             ["health"].as_slice(),
         ] {
             assert!(parse(command).is_ok(), "{command:?} must parse");
