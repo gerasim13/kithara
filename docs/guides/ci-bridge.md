@@ -2,9 +2,13 @@
 
 ## Repository bridge
 
+The macOS host profile supplied with `ci host mac --config` defines the
+top-level `host_root` key. `<host_root>` below denotes that configured installation
+root; it is not a fixed volume name.
+
 Copy `.config/bridge/config.example.toml` to
-`/Volumes/KitharaCI/services/bridge/config.toml`; it and the two tokens belong
-to UID 504 (`kithara-sync`), mode `0600`. The GitHub token needs
+`<host_root>/services/bridge/config.toml`; it and the two tokens belong
+to the profile's `sync_user` (`sync_uid`), mode `0600`. The GitHub token needs
 `Contents: write`, `Pull requests: read`, `Actions: read`, `Checks: read` and
 `Commit statuses: write`. Reading Actions, checks and commit statuses must also
 cover each contributing repository whose CI is mirrored.
@@ -20,7 +24,7 @@ The daemon runs the installed executable. Merging a fix into `develop` or
 changed launchd definitions. `launchctl print` reports the loaded definition.
 
 For a binary-only update, the CI user can replace
-`/Volumes/KitharaCI/toolchains/shared-bin/kithara-ci`, which the bridge executes
+`<host_root>/toolchains/shared-bin/kithara-ci`, which the bridge executes
 through `/usr/bin/env` on each tick. Retain the previous binary, verify the
 reviewed artifact's source revision and checksum, transfer it beside the active
 copy, and replace that copy atomically after verifying the transferred checksum.
