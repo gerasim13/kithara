@@ -98,6 +98,10 @@ fn run_in(args: &LaneArgs, ctx: &Ctx, var: &dyn Fn(&str) -> Option<OsString>) ->
         );
         return Ok(());
     }
+    let stores = var("KITHARA_CI_CACHE_ROOT")
+        .into_iter()
+        .map(|root| PathBuf::from(root).join("verdict"))
+        .collect::<Vec<_>>();
     let target = Target::enter(
         &ctx.root,
         LaneTarget {
@@ -105,6 +109,7 @@ fn run_in(args: &LaneArgs, ctx: &Ctx, var: &dyn Fn(&str) -> Option<OsString>) ->
             window: ext.ci.lane_unit_window(),
         },
         var,
+        &stores,
     )?;
     let text = |name: &str| var(name).and_then(|value| value.into_string().ok());
     let wrapped = var("RUSTC_WRAPPER").is_some_and(|wrapper| !wrapper.is_empty());
@@ -194,6 +199,116 @@ mod tests {
         build_dir::fixture::git,
         config::{fixture, fixture_directory, workspace_root},
     };
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn direct_lane_rejects_verdict_storage_before_slot_garbage_collection() {
+        for (scratch, linked) in [
+            ("tmp", false),
+            ("cargo-timings", false),
+            ("tmp", true),
+            ("cargo-timings", true),
+            ("checkout-target", false),
+            ("inside-store", true),
+        ] {
+            let root = fixture_directory().unwrap();
+            let project = root.path().join("project");
+            fs::create_dir(&project).unwrap();
+            let (ctx, args) = trivial_lane(&project);
+            let target = root.path().join(".kithara.target");
+            let slot = if scratch == "inside-store" {
+                root.path().join("shared-cache/verdict/archive")
+            } else if linked {
+                root.path().join("physical-slot")
+            } else {
+                target.join("trivial-0")
+            };
+            let cache = if scratch == "inside-store" {
+                root.path().join("shared-cache")
+            } else if scratch == "checkout-target" {
+                project.join("target")
+            } else {
+                slot.join(scratch)
+            };
+            let store = if scratch == "inside-store" {
+                slot.join("tmp")
+            } else {
+                cache.join("verdict")
+            };
+            fs::create_dir_all(&store).unwrap();
+            if linked {
+                fs::create_dir_all(&target).unwrap();
+                std::os::unix::fs::symlink(&slot, target.join("trivial-0")).unwrap();
+            }
+            let files = [
+                (
+                    "journal.json",
+                    br#"{"runs":[{"sha":"main","tests":[],"jobs":[]}]}"#.as_slice(),
+                ),
+                ("journal.json.lock", b"baseline lock".as_slice()),
+                ("journal.json.42.tmp", b"publication".as_slice()),
+            ];
+            let identities = files.map(|(name, bytes)| {
+                fs::write(store.join(name), bytes).unwrap();
+                same_file::Handle::from_path(store.join(name)).unwrap()
+            });
+            let result = run_in(
+                &args,
+                &ctx,
+                &environment(&[
+                    ("CI", "true"),
+                    ("CARGO_TARGET_DIR", target.to_str().unwrap()),
+                    ("KITHARA_CI_CACHE_ROOT", cache.to_str().unwrap()),
+                ]),
+            );
+            for ((name, bytes), identity) in files.into_iter().zip(identities) {
+                assert!(
+                    store.join(name).is_file(),
+                    "direct lane removed {name}: {scratch}, linked={linked}"
+                );
+                assert_eq!(fs::read(store.join(name)).unwrap(), bytes);
+                assert_eq!(
+                    same_file::Handle::from_path(store.join(name)).unwrap(),
+                    identity
+                );
+            }
+            assert!(result.is_err());
+            assert_eq!(
+                project.join("target").is_dir(),
+                scratch == "checkout-target"
+            );
+            assert!(!project.join("target").is_symlink());
+            assert!(!target.join(consts::BUILD_ALIAS).exists());
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_native_direct_lane_without_verdict_storage_refuses_before_gc() {
+        let root = fixture_directory().unwrap();
+        let project = root.path().join("project");
+        fs::create_dir(&project).unwrap();
+        let (ctx, args) = trivial_lane(&project);
+        let target = root.path().join("builds");
+        let sentinel = target.join("trivial-0/tmp/sentinel");
+        fs::create_dir_all(sentinel.parent().unwrap()).unwrap();
+        fs::write(&sentinel, b"unproven").unwrap();
+        let error = run_in(
+            &args,
+            &ctx,
+            &environment(&[
+                ("CI", "true"),
+                ("CARGO_TARGET_DIR", target.to_str().unwrap()),
+            ]),
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("persistent verdict store"),
+            "{error:#}"
+        );
+        assert_eq!(fs::read(sentinel).unwrap(), b"unproven");
+        assert!(!project.join("target").exists());
+    }
 
     /// A lane builds where the executor said. These runners are ephemeral and
     /// the checkout is deleted before the lane starts, so a build directory
@@ -416,6 +531,7 @@ label = "run"
             &ctx,
             &environment(&[
                 ("CI", "true"),
+                ("KITHARA_CI_CACHE_ROOT", temp.path().to_str().unwrap()),
                 (
                     "CARGO_TARGET_DIR",
                     builds.path().to_str().expect("a UTF-8 build root"),
@@ -467,6 +583,7 @@ label = "run"
             &ctx,
             &environment(&[
                 ("CI", "true"),
+                ("KITHARA_CI_CACHE_ROOT", temp.path().to_str().unwrap()),
                 (
                     "CARGO_TARGET_DIR",
                     builds.path().to_str().expect("a UTF-8 build root"),
@@ -511,6 +628,7 @@ label = "run"
             &ctx,
             &environment(&[
                 ("CI", "true"),
+                ("KITHARA_CI_CACHE_ROOT", temp.path().to_str().unwrap()),
                 (
                     "CARGO_TARGET_DIR",
                     builds.path().to_str().expect("a UTF-8 build root"),
@@ -562,6 +680,7 @@ label = "run"
             &ctx,
             &environment(&[
                 ("CI", "true"),
+                ("KITHARA_CI_CACHE_ROOT", temp.path().to_str().unwrap()),
                 (
                     "CARGO_TARGET_DIR",
                     builds.path().to_str().expect("a UTF-8 build root"),
@@ -613,6 +732,7 @@ label = "run"
             &ctx_a,
             &environment(&[
                 ("CI", "true"),
+                ("KITHARA_CI_CACHE_ROOT", temp.path().to_str().unwrap()),
                 (
                     "CARGO_TARGET_DIR",
                     builds.to_str().expect("a UTF-8 build root"),
@@ -646,6 +766,7 @@ label = "run"
             &ctx_b,
             &environment(&[
                 ("CI", "true"),
+                ("KITHARA_CI_CACHE_ROOT", temp.path().to_str().unwrap()),
                 (
                     "CARGO_TARGET_DIR",
                     builds.to_str().expect("a UTF-8 build root"),
@@ -710,6 +831,7 @@ label = "run"
             &ctx,
             &environment(&[
                 ("CI", "true"),
+                ("KITHARA_CI_CACHE_ROOT", temp.path().to_str().unwrap()),
                 (
                     "CARGO_TARGET_DIR",
                     builds.to_str().expect("a UTF-8 build root"),
@@ -885,6 +1007,7 @@ cargo.packages = ["tools"]
             &ctx,
             &environment(&[
                 ("CI", "true"),
+                ("KITHARA_CI_CACHE_ROOT", root.to_str().unwrap()),
                 (
                     "CARGO_TARGET_DIR",
                     builds.to_str().expect("a UTF-8 build root"),
@@ -1032,6 +1155,7 @@ cargo.packages = ["tools"]
             &ctx,
             &environment(&[
                 ("CI", "true"),
+                ("KITHARA_CI_CACHE_ROOT", temp.path().to_str().unwrap()),
                 ("RUSTC_WRAPPER", "kache"),
                 ("SCCACHE_BUCKET", "kithara-review"),
                 ("SCCACHE_ENDPOINT", "http://kithara-ci-cache:9000"),
@@ -1111,6 +1235,7 @@ cargo.packages = ["tools"]
             &ctx,
             &environment(&[
                 ("CI", "true"),
+                ("KITHARA_CI_CACHE_ROOT", temp.path().to_str().unwrap()),
                 (
                     "CARGO_TARGET_DIR",
                     builds.path().to_str().expect("a UTF-8 build root"),

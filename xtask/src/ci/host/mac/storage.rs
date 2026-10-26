@@ -198,6 +198,11 @@ impl<'a> HostStorage<'a> {
     }
 
     pub(super) fn cleanup(&self) -> Result<()> {
+        let build_roots = build_cache::budget_roots(
+            &self.build_root.join("workspaces/gitlab"),
+            &self.host_root.join("cache"),
+        )?;
+        self.config.host.validate_verdict_layout(&build_roots)?;
         // The worst single volume, not the sum: adding a second volume's bytes
         // to the first and comparing that against thresholds calibrated for the
         // first reads every machine with a guest volume as full, and the branch
@@ -217,10 +222,6 @@ impl<'a> HostStorage<'a> {
         self.rotate_logs()?;
         self.retain_retired_caches(7 * Self::DAY)?;
 
-        let build_roots = build_cache::budget_roots(
-            &self.build_root.join("workspaces/gitlab"),
-            &self.host_root.join("cache"),
-        )?;
         build_cache::enforce_budget(&build_roots, self.config.host.build_cache_budget_bytes()?)?;
 
         // Cargo targets are the largest reproducible caches and already have a
@@ -506,6 +507,10 @@ impl<'a> HostStorage<'a> {
             let entry = entry?;
             let name = entry.file_name();
             let name = name.to_string_lossy();
+            let path = entry.path();
+            if self.config.host.is_verdict_storage(&path)? {
+                continue;
+            }
             if self
                 .config
                 .host
@@ -517,7 +522,6 @@ impl<'a> HostStorage<'a> {
             {
                 continue;
             }
-            let path = entry.path();
             let Ok(candidate) = self.candidate(&path) else {
                 warn!(path = %path.display(), "keeping CI candidate with unconfirmed path identity");
                 continue;
@@ -822,7 +826,7 @@ impl<'a> HostStorage<'a> {
     }
 
     fn remove_path(&self, path: &Path) -> Result<()> {
-        if !self.is_removable(path) {
+        if !self.is_removable(path)? {
             bail!("refusing to remove unsafe CI path: {}", path.display());
         }
         if !path.try_exists()? {
@@ -833,7 +837,7 @@ impl<'a> HostStorage<'a> {
     }
 
     fn candidate(&self, path: &Path) -> Result<lease::Candidate> {
-        if !self.is_removable(path) {
+        if !self.is_removable(path)? {
             bail!("refusing to remove unsafe CI path: {}", path.display());
         }
         for root in [&self.host_root, &self.build_root, &self.scratch_root] {
@@ -897,14 +901,16 @@ impl<'a> HostStorage<'a> {
         }
     }
 
-    fn is_removable(&self, target: &Path) -> bool {
-        is_removable_under(&self.host_root, target, &self.config.host.removable_roots)
-            || is_removable_under(&self.build_root, target, &["workspaces"])
-            || is_removable_under(
-                &self.scratch_root,
-                target,
-                &CacheTrust::ALL.map(CacheTrust::as_str),
-            )
+    fn is_removable(&self, target: &Path) -> Result<bool> {
+        let allowed =
+            is_removable_under(&self.host_root, target, &self.config.host.removable_roots)
+                || is_removable_under(&self.build_root, target, &["workspaces"])
+                || is_removable_under(
+                    &self.scratch_root,
+                    target,
+                    &CacheTrust::ALL.map(CacheTrust::as_str),
+                );
+        Ok(allowed && !self.config.host.is_verdict_storage(target)?)
     }
 
     /// The largest trees under the CI roots, largest first.
@@ -1486,6 +1492,193 @@ mod tests {
                 .iter()
                 .any(|volume| volume.path == build_root.canonicalize().unwrap())
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn verdict_journals_are_never_removable_and_survive_pressure_cleanup() {
+        use std::os::unix::fs::MetadataExt;
+
+        let directory = fixture_directory().unwrap();
+        let mut cfg = config(directory.path());
+        cfg.host.cache_root_macos = directory.path().join("workspaces/shared-cache");
+        let stores = [
+            directory.path().join("cache/verdict"),
+            cfg.host.cache_root_macos.join("verdict"),
+        ];
+        let baseline = br#"{"runs":[{"sha":"recorded-main","tests":["suite::case"],"jobs":[]}]}"#;
+        for store in &stores {
+            fs::create_dir_all(store).unwrap();
+            fs::write(store.join("journal.json"), baseline).unwrap();
+            fs::write(store.join("journal.json.lock"), []).unwrap();
+            fs::write(
+                store.join("journal.json.17.23.tmp"),
+                b"unpublished baseline",
+            )
+            .unwrap();
+            fs::File::open(store)
+                .unwrap()
+                .set_modified(SystemTime::now() - 30 * HostStorage::DAY)
+                .unwrap();
+        }
+        let identities: Vec<_> = stores
+            .iter()
+            .flat_map(|store| {
+                [
+                    store.clone(),
+                    store.join("journal.json"),
+                    store.join("journal.json.lock"),
+                    store.join("journal.json.17.23.tmp"),
+                ]
+            })
+            .map(|path| {
+                let metadata = fs::metadata(&path).unwrap();
+                (path, metadata.dev(), metadata.ino())
+            })
+            .collect();
+        let build = a_build_beside_a_checkout(cfg.host.build_root());
+        let process = Process::recording(directory.path(), Recording::default());
+        let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
+
+        for (path, _, _) in &identities {
+            assert!(
+                !storage.is_removable(path).unwrap(),
+                "{} is durable verdict state",
+                path.display()
+            );
+            assert!(storage.remove_path(path).is_err());
+        }
+        assert!(storage.remove_path(&cfg.host.cache_root_macos).is_err());
+        storage.set_available_sequence([0, 0, 0, consts::FREE_NORMAL]);
+        storage.cleanup().unwrap();
+
+        assert!(!build.join("debug/artifact.bin").exists());
+        for store in &stores {
+            assert_eq!(fs::read(store.join("journal.json")).unwrap(), baseline);
+            assert!(
+                fs::read(store.join("journal.json.lock"))
+                    .unwrap()
+                    .is_empty()
+            );
+            assert_eq!(
+                fs::read(store.join("journal.json.17.23.tmp")).unwrap(),
+                b"unpublished baseline"
+            );
+        }
+        for (path, device, inode) in identities {
+            let metadata = fs::metadata(path).unwrap();
+            assert_eq!((metadata.dev(), metadata.ino()), (device, inode));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ambiguous_or_build_nested_verdict_layouts_refuse_cleanup_before_mutation() {
+        use std::os::unix::fs::MetadataExt;
+
+        for layout in [
+            "parent",
+            "symlink",
+            "build",
+            "default-store-link",
+            "configured-store-link",
+            "case",
+        ] {
+            let directory = fixture_directory().unwrap();
+            let root = directory.path();
+            let mut cfg = config(root);
+            let build = a_build_beside_a_checkout(cfg.host.build_root());
+            fs::create_dir_all(root.join("cache")).unwrap();
+            let store_link = layout.ends_with("store-link");
+            let physical_cache = if layout == "build" || store_link || layout == "case" {
+                build.join("shared-cache")
+            } else {
+                root.join("logs/shared-cache")
+            };
+            let store = physical_cache.join("verdict");
+            fs::create_dir_all(&store).unwrap();
+            cfg.host.cache_root_macos = match layout {
+                "parent" => root.join("cache/../logs/shared-cache"),
+                "symlink" => {
+                    let alias = root.join("cache-alias");
+                    std::os::unix::fs::symlink(&physical_cache, &alias).unwrap();
+                    alias
+                }
+                "build" => physical_cache,
+                "default-store-link" => root.join("cache"),
+                "configured-store-link" => root.join("native-cache"),
+                "case" => root.join("WORKSPACES").join(
+                    physical_cache
+                        .strip_prefix(root.join("workspaces"))
+                        .unwrap(),
+                ),
+                _ => unreachable!(),
+            };
+            if store_link {
+                fs::create_dir_all(&cfg.host.cache_root_macos).unwrap();
+                std::os::unix::fs::symlink(&store, cfg.host.cache_root_macos.join("verdict"))
+                    .unwrap();
+            }
+            let store = if layout == "case" {
+                let declared = cfg.host.cache_root_macos.join("verdict");
+                fs::create_dir_all(&declared).unwrap();
+                declared
+            } else {
+                store
+            };
+            let same_workspace = layout != "case" || {
+                let lower = fs::metadata(root.join("workspaces")).unwrap();
+                let upper = fs::metadata(root.join("WORKSPACES")).unwrap();
+                (lower.dev(), lower.ino()) == (upper.dev(), upper.ino())
+            };
+            let journal = store.join("journal.json");
+            let baseline = br#"{"runs":[{"sha":"main","tests":[],"jobs":[]}]}"#;
+            fs::write(&journal, baseline).unwrap();
+            let stale = SystemTime::now() - 30 * HostStorage::DAY;
+            fs::File::open(&journal)
+                .unwrap()
+                .set_modified(stale)
+                .unwrap();
+            let scratch = root.join("scratch/trusted/retired");
+            fs::create_dir_all(&scratch).unwrap();
+            fs::write(scratch.join("sentinel"), b"scratch").unwrap();
+            fs::File::open(&scratch)
+                .unwrap()
+                .set_modified(stale)
+                .unwrap();
+            let process = Process::recording(root, Recording::default());
+            let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
+            storage.set_available_sequence([0, 0, 0, consts::FREE_NORMAL]);
+
+            let result = storage.cleanup();
+            assert!(
+                journal.is_file(),
+                "{layout} (same identity={same_workspace}): cleanup removed the verdict journal"
+            );
+            assert_eq!(fs::read(journal).unwrap(), baseline, "{layout}");
+            if !same_workspace {
+                assert!(!build.join("debug/artifact.bin").exists());
+                result.unwrap();
+                continue;
+            }
+            assert_eq!(
+                fs::read(scratch.join("sentinel")).unwrap(),
+                b"scratch",
+                "{layout}"
+            );
+            assert!(build.join("debug/artifact.bin").is_file(), "{layout}");
+            let error = result.unwrap_err();
+            assert!(
+                error.to_string().contains(if layout == "parent" {
+                    "without aliases"
+                } else if matches!(layout, "build" | "case") {
+                    "must not overlap"
+                } else {
+                    "traverses a symlink"
+                }),
+                "{layout}: {error:#}"
+            );
+        }
     }
 
     #[test]

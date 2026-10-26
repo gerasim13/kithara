@@ -18,7 +18,10 @@ use super::{
     sources::{Claim, claim},
     timings,
 };
-use crate::{ci::build_cache, consts};
+use crate::{
+    ci::{build_cache, config::validate_verdict_paths},
+    consts,
+};
 
 /// A job's hold on its build directory: a slot of its lane, taken, leased,
 /// with the alias naming it and the checkout claimed for it, for as long as
@@ -53,6 +56,7 @@ impl BuildDir {
         slots: &Path,
         lane: &str,
         window: Duration,
+        verdict_stores: &[PathBuf],
     ) -> Result<Self> {
         ensure!(
             alias.file_name() == Some(OsStr::new(consts::BUILD_ALIAS)),
@@ -62,6 +66,9 @@ impl BuildDir {
         );
         validate(lane)?;
         let (path, slot) = take(slots, lane)?;
+        if cfg!(target_os = "macos") {
+            validate_verdict_paths(std::slice::from_ref(&path), verdict_stores)?;
+        }
         #[cfg(target_os = "macos")]
         let lease = lease::hold_in(slots, path.strip_prefix(slots)?);
         #[cfg(not(target_os = "macos"))]
@@ -211,8 +218,15 @@ mod tests {
     /// checkout of its own.
     fn enter_in(alias: &Path, slots: &Path, lane: &str) -> anyhow::Result<(BuildDir, TempDir)> {
         let checkout = git_checkout(&[]);
-        BuildDir::enter(checkout.path(), alias, slots, lane, consts::GARBAGE_WINDOW)
-            .map(|build| (build, checkout))
+        BuildDir::enter(
+            checkout.path(),
+            alias,
+            slots,
+            lane,
+            consts::GARBAGE_WINDOW,
+            &[checkout.path().join("verdict")],
+        )
+        .map(|build| (build, checkout))
     }
 
     /// Enters `lane`'s build in a slot beside `alias`.

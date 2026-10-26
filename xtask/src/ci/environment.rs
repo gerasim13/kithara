@@ -17,7 +17,7 @@ use super::{
     build_cache,
     build_dir::{LaneTarget, Target},
     cache::missing_defaults,
-    config::CiConfig,
+    config::{CiConfig, validate_verdict_paths},
     kache::{KacheJob, LocalStore},
     run::CacheGroup,
 };
@@ -171,14 +171,7 @@ impl CiEnvironment {
             .with_context(|| format!("creating CI cache root {}", shared_root.display()))?;
         // Entered before anything is reclaimed, including by this job itself:
         // its lease keeps every reclaim away from the directory it builds in.
-        let target = Target::enter(&project_root, lane, &process_var)?;
-        if is_ci() {
-            let volume = match &target {
-                Target::Alias { build, .. } => build.path(),
-                Target::Named(_) => &project_root,
-            };
-            ensure_room_for_a_job(config, volume)?;
-        }
+        let target = enter_target(&project_root, &shared_root, config, lane)?;
 
         let sccache = SccachePaths::for_job(cfg!(windows), &cache_root, config, cache_group);
         let gradle_home = cache_root.join("gradle");
@@ -417,6 +410,28 @@ pub(crate) fn namespace_key(tree: &FsPath, path: &FsPath) -> Result<PathBuf> {
     Ok(FsPath::new(tree.file_name().context("cache tree must have a name")?).join(relative))
 }
 
+fn enter_target(
+    project_root: &FsPath,
+    shared_root: &FsPath,
+    config: &CiConfig,
+    lane: LaneTarget<'_>,
+) -> Result<Target> {
+    if cfg!(target_os = "macos") && is_ci() {
+        config.host.validate_verdict_layout(&[])?;
+    }
+    let mut stores = config.host.verdict_stores().to_vec();
+    stores.push(shared_root.join("verdict"));
+    let target = Target::enter(project_root, lane, &process_var, &stores)?;
+    if is_ci() {
+        let volume = match &target {
+            Target::Alias { build, .. } => build.path(),
+            Target::Named(_) => project_root,
+        };
+        ensure_room_for_a_job(config, volume, &stores)?;
+    }
+    Ok(target)
+}
+
 fn claim_namespaces(paths: &[(&FsPath, &FsPath)]) -> Result<Vec<FileLock>> {
     let mut ownership = Vec::new();
     if cfg!(target_os = "macos") {
@@ -466,17 +481,16 @@ pub(super) fn process_var(name: &str) -> Option<OsString> {
 /// poll instead of a whole job.
 ///
 /// The room asked for is on `volume`, the one the job builds on.
-fn ensure_room_for_a_job(config: &CiConfig, volume: &FsPath) -> Result<()> {
+fn ensure_room_for_a_job(config: &CiConfig, volume: &FsPath, stores: &[PathBuf]) -> Result<()> {
     let required = config.host.free_bytes_for_a_job();
     if free_bytes(volume)? >= required {
         return Ok(());
     }
     let workspaces = gitlab_workspaces(config.host.build_root());
-    let cache = config.host.host_root.join("cache");
     let deadline = Instant::now() + config.host.job_room_wait();
     loop {
         let free = free_bytes(volume)?;
-        let reclaimed_from = reclaim_build_caches(&workspaces, &cache, free, required)?;
+        let reclaimed_from = reclaim_build_caches(config, free, required, stores)?;
         let free = free_bytes(volume)?;
         if free >= required {
             return Ok(());
@@ -555,12 +569,18 @@ fn refusal(
 /// Failing to reclaim is not itself a refusal — the gate re-reads free space
 /// and answers on that.
 fn reclaim_build_caches(
-    workspaces: &FsPath,
-    cache: &FsPath,
+    config: &CiConfig,
     free: u64,
     required: u64,
+    stores: &[PathBuf],
 ) -> Result<usize> {
-    let targets = build_cache::budget_roots(workspaces, cache)?;
+    let workspaces = gitlab_workspaces(config.host.build_root());
+    let cache = config.host.host_root.join("cache");
+    let targets = build_cache::budget_roots(&workspaces, &cache)?;
+    if cfg!(target_os = "macos") {
+        config.host.validate_verdict_layout(&targets)?;
+        validate_verdict_paths(&targets, stores)?;
+    }
     if targets.is_empty() {
         warn!(
             free_bytes = free,
@@ -681,7 +701,11 @@ mod tests {
     use crate::ci::config::fixture_directory;
 
     fn reclaim(root: &FsPath) -> usize {
-        reclaim_build_caches(&gitlab_workspaces(root), &root.join("cache"), 0, u64::MAX).unwrap()
+        let mut config = super::super::config::fixture();
+        config.host.host_root = root.to_path_buf();
+        config.host.build_root = Some(root.to_path_buf());
+        config.host.cache_root_macos = root.join("cache");
+        reclaim_build_caches(&config, 0, u64::MAX, &config.host.verdict_stores()).unwrap()
     }
 
     #[cfg(target_os = "macos")]
@@ -1055,6 +1079,308 @@ mod tests {
         build_root.join(id)
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn preparation_rejects_verdict_storage_before_slot_garbage_collection() {
+        if env::var_os(consts::FAILED_PREPARE).is_some() {
+            let root = PathBuf::from(env::var_os(consts::CACHE_ROOT).unwrap());
+            let project = PathBuf::from(env::var_os("CI_PROJECT_DIR").unwrap());
+            let store = PathBuf::from(env::var_os("EXPECTED_VERDICT_STORE").unwrap());
+            let mut config = super::super::config::fixture();
+            config.host.host_root = root.clone();
+            config.host.build_root = Some(root);
+            config.host.cache_root_macos =
+                PathBuf::from(env::var_os("EXPECTED_PROFILE_CACHE").unwrap());
+            config.host.reject_bytes = config.host.quota_bytes - 1;
+            let ctx = Ctx::new(project.clone(), ProjectConfig::default());
+            let result = CiEnvironment::prepare(
+                &ctx,
+                &config,
+                CacheGroup::Macos,
+                LaneTarget {
+                    name: "apple-lint",
+                    window: consts::DAY,
+                },
+            );
+            for name in ["journal.json", "journal.json.lock", "journal.json.42.tmp"] {
+                assert!(
+                    store.join(name).is_file(),
+                    "prepare removed verdict file {name}"
+                );
+            }
+            let Err(error) = result else {
+                panic!("overlapping storage was accepted");
+            };
+            assert!(error.to_string().contains("must not overlap"), "{error:#}");
+            assert!(!project.join("target").exists());
+            return;
+        }
+        for (scratch, linked) in [
+            ("tmp", false),
+            ("cargo-timings", false),
+            ("tmp", true),
+            ("cargo-timings", true),
+            ("override", false),
+        ] {
+            let directory = fixture_directory().unwrap();
+            let project = directory
+                .path()
+                .join("workspaces/gitlab/runner/0/disrupt/kithara");
+            fs::create_dir_all(&project).unwrap();
+            let target = project.with_file_name(".kithara.target");
+            let slot = if linked {
+                directory.path().join("physical-slot")
+            } else {
+                target.join("apple-lint-0")
+            };
+            let store = slot
+                .join(if scratch == "override" {
+                    "tmp"
+                } else {
+                    scratch
+                })
+                .join("verdict");
+            fs::create_dir_all(&store).unwrap();
+            if linked {
+                fs::create_dir_all(&target).unwrap();
+                std::os::unix::fs::symlink(&slot, target.join("apple-lint-0")).unwrap();
+            }
+            let files = [
+                (
+                    "journal.json",
+                    br#"{"runs":[{"sha":"main","tests":[],"jobs":[]}]}"#.as_slice(),
+                ),
+                ("journal.json.lock", b"baseline lock".as_slice()),
+                ("journal.json.42.tmp", b"publication".as_slice()),
+            ];
+            let identities = files.map(|(name, bytes)| {
+                fs::write(store.join(name), bytes).unwrap();
+                same_file::Handle::from_path(store.join(name)).unwrap()
+            });
+            let output = Command::new(env::current_exe().unwrap())
+                .args([
+                    "preparation_rejects_verdict_storage_before_slot_garbage_collection",
+                    "--nocapture",
+                ])
+                .env(consts::FAILED_PREPARE, "1")
+                .env(consts::CACHE_ROOT, directory.path())
+                .env("EXPECTED_VERDICT_STORE", &store)
+                .env("CI_PROJECT_DIR", &project)
+                .env("CARGO_TARGET_DIR", &target)
+                .env("CI", "true")
+                .env("KITHARA_CACHE_TRUST", "review")
+                .env("KITHARA_CI_CACHE_ROOT", store.parent().unwrap())
+                .env(
+                    "EXPECTED_PROFILE_CACHE",
+                    if scratch == "override" {
+                        directory.path().join("configured-cache")
+                    } else {
+                        store.parent().unwrap().to_path_buf()
+                    },
+                )
+                .env_remove(consts::BUILD_SLOTS_ENV)
+                .env_remove("GIT_DIR")
+                .env_remove("GIT_INDEX_FILE")
+                .env_remove("GIT_WORK_TREE")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{scratch}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            for ((name, bytes), identity) in files.into_iter().zip(identities) {
+                assert_eq!(fs::read(store.join(name)).unwrap(), bytes);
+                assert_eq!(
+                    same_file::Handle::from_path(store.join(name)).unwrap(),
+                    identity
+                );
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn preparation_preserves_a_peer_verdict_store_under_pressure() {
+        if env::var_os(consts::FAILED_PREPARE).is_some() {
+            let root = PathBuf::from(env::var_os(consts::CACHE_ROOT).unwrap());
+            let project = PathBuf::from(env::var_os("CI_PROJECT_DIR").unwrap());
+            let store =
+                PathBuf::from(env::var_os("KITHARA_CI_CACHE_ROOT").unwrap()).join("verdict");
+            let mut config = super::super::config::fixture();
+            config.host.host_root = root.clone();
+            config.host.build_root = Some(root.clone());
+            config.host.cache_root_macos = root.join("configured-cache");
+            config.host.quota_bytes = u64::MAX;
+            config.host.job_room_wait_seconds = 1;
+            let result = CiEnvironment::prepare(
+                &Ctx::new(project, ProjectConfig::default()),
+                &config,
+                CacheGroup::Macos,
+                LaneTarget {
+                    name: "apple-lint",
+                    window: consts::DAY,
+                },
+            );
+            for name in ["journal.json", "journal.json.lock", "journal.json.42.tmp"] {
+                assert!(
+                    store.join(name).is_file(),
+                    "pressure reclaim removed peer verdict file {name}"
+                );
+            }
+            let Err(error) = result else {
+                panic!("overlapping peer storage was accepted");
+            };
+            assert!(error.to_string().contains("must not overlap"), "{error:#}");
+            return;
+        }
+        let root = fixture_directory().unwrap();
+        let peer = build_beside_a_checkout(root.path(), "lint");
+        let store = peer.join("shared-cache/verdict");
+        fs::create_dir_all(&store).unwrap();
+        let project = root
+            .path()
+            .join("workspaces/gitlab/runner-b/0/disrupt/kithara");
+        fs::create_dir_all(&project).unwrap();
+        let init = Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(&project)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("GIT_WORK_TREE")
+            .status()
+            .unwrap();
+        assert!(init.success());
+        let files = [
+            (
+                "journal.json",
+                br#"{"runs":[{"sha":"main","tests":[],"jobs":[]}]}"#.as_slice(),
+            ),
+            ("journal.json.lock", b"baseline lock".as_slice()),
+            ("journal.json.42.tmp", b"publication".as_slice()),
+        ];
+        let identities = files.map(|(name, bytes)| {
+            fs::write(store.join(name), bytes).unwrap();
+            same_file::Handle::from_path(store.join(name)).unwrap()
+        });
+        let output = Command::new(env::current_exe().unwrap())
+            .args([
+                "preparation_preserves_a_peer_verdict_store_under_pressure",
+                "--nocapture",
+            ])
+            .env(consts::FAILED_PREPARE, "1")
+            .env(consts::CACHE_ROOT, root.path())
+            .env("CI_PROJECT_DIR", &project)
+            .env(
+                "CARGO_TARGET_DIR",
+                project.with_file_name(".kithara.target"),
+            )
+            .env("CI", "true")
+            .env("KITHARA_CACHE_TRUST", "review")
+            .env("KITHARA_CI_CACHE_ROOT", store.parent().unwrap())
+            .env_remove(consts::BUILD_SLOTS_ENV)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("GIT_WORK_TREE")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        for ((name, bytes), identity) in files.into_iter().zip(identities) {
+            assert_eq!(fs::read(store.join(name)).unwrap(), bytes);
+            assert_eq!(
+                same_file::Handle::from_path(store.join(name)).unwrap(),
+                identity
+            );
+        }
+        assert!(peer.join("debug/artifact").is_file());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn job_side_reclamation_refuses_a_verdict_store_inside_a_build() {
+        use std::os::unix::fs::MetadataExt;
+
+        for layout in [
+            "direct",
+            "default-store-link",
+            "configured-store-link",
+            "case",
+        ] {
+            let root = fixture_directory().unwrap();
+            let build = build_beside_a_checkout(root.path(), "lint");
+            let mut config = super::super::config::fixture();
+            config.host.host_root = root.path().to_path_buf();
+            config.host.build_root = Some(root.path().to_path_buf());
+            config.host.cache_root_macos = match layout {
+                "direct" => build.join("shared-cache"),
+                "default-store-link" => root.path().join("cache"),
+                "configured-store-link" => root.path().join("native-cache"),
+                "case" => root.path().join("WORKSPACES").join(
+                    build
+                        .join("shared-cache")
+                        .strip_prefix(root.path().join("workspaces"))
+                        .unwrap(),
+                ),
+                _ => unreachable!(),
+            };
+            config.host.quota_bytes = u64::MAX;
+            config.host.job_room_wait_seconds = 1;
+            let store = if layout == "case" {
+                config.host.cache_root_macos.join("verdict")
+            } else {
+                build.join("shared-cache/verdict")
+            };
+            fs::create_dir_all(&store).unwrap();
+            if matches!(layout, "default-store-link" | "configured-store-link") {
+                fs::create_dir_all(&config.host.cache_root_macos).unwrap();
+                std::os::unix::fs::symlink(&store, config.host.cache_root_macos.join("verdict"))
+                    .unwrap();
+            }
+            let same_workspace = layout != "case" || {
+                let lower = fs::metadata(root.path().join("workspaces")).unwrap();
+                let upper = fs::metadata(root.path().join("WORKSPACES")).unwrap();
+                (lower.dev(), lower.ino()) == (upper.dev(), upper.ino())
+            };
+            let baseline = br#"{"runs":[{"sha":"main","tests":[],"jobs":[]}]}"#;
+            fs::write(store.join("journal.json"), baseline).unwrap();
+            assert_eq!(
+                fs::read(config.host.cache_root_macos.join("verdict/journal.json")).unwrap(),
+                baseline
+            );
+
+            let error = ensure_room_for_a_job(&config, root.path(), &config.host.verdict_stores())
+                .unwrap_err();
+            assert!(
+                store.join("journal.json").is_file(),
+                "{layout} (same identity={same_workspace}): job-side eviction removed the verdict journal"
+            );
+            assert_eq!(
+                fs::read(store.join("journal.json")).unwrap(),
+                baseline,
+                "{layout}"
+            );
+            if !same_workspace {
+                assert!(!build.join("debug/artifact").exists());
+                continue;
+            }
+            assert!(build.join("debug/artifact").exists(), "{layout}");
+            assert!(
+                error
+                    .to_string()
+                    .contains(if matches!(layout, "direct" | "case") {
+                        "must not overlap"
+                    } else {
+                        "traverses a symlink"
+                    }),
+                "{layout}: {error:#}"
+            );
+        }
+    }
+
     /// A host under a build spends a whole cleanup pass's worth of space before
     /// the next pass fires, so a job arriving in that window used to be refused
     /// while evictable caches sat beside it. The gate reclaims them itself now;
@@ -1136,7 +1462,7 @@ mod tests {
         config.host.job_room_wait_seconds = 0;
         config.host.build_root = Some(builds.path().to_path_buf());
 
-        let error = ensure_room_for_a_job(&config, volume.path())
+        let error = ensure_room_for_a_job(&config, volume.path(), &config.host.verdict_stores())
             .expect_err("no volume has u64::MAX bytes free");
 
         assert!(

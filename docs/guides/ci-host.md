@@ -320,6 +320,11 @@ soft floor, evicting past the cap. What its sweeps cannot show:
   and Cargo locks.
 - Build-cache bytes for a lane's leased build directory still count against
   the ceiling.
+- Default and configured native verdict directories, including journal locks
+  and publication temporaries, persist through cleanup. Host and job reclamation
+  reject aliased store paths or overlapping build roots before deleting data.
+  Native `ci lane` uses the executor's `KITHARA_CI_CACHE_ROOT` and refuses
+  managed slot entry when persistent verdict storage is not identified.
 - A macOS job VM clone can outlive its runner. Cleanup retains unproven clones:
   age and a stopped-state observation from Tart do not fence a new user.
   Base images, shared runtimes, guest disks and running guests stay protected.

@@ -8,7 +8,10 @@ use std::{
 use anyhow::{Context, Result, bail};
 
 use super::BuildDir;
-use crate::{ci::environment::ci_in, consts};
+use crate::{
+    ci::{config::validate_verdict_paths, environment::ci_in},
+    consts,
+};
 
 /// A lane asking for a build directory of its own, and how long that
 /// directory keeps a build unit the lane stopped using.
@@ -46,13 +49,28 @@ impl Target {
         checkout: &Path,
         lane: LaneTarget<'_>,
         var: &dyn Fn(&str) -> Option<OsString>,
+        verdict_stores: &[PathBuf],
     ) -> Result<Self> {
         match var("CARGO_TARGET_DIR") {
             Some(root) if ci_in(var) => {
                 let root = PathBuf::from(root);
                 let alias = root.join(consts::BUILD_ALIAS);
-                let slots = var(consts::BUILD_SLOTS_ENV).map_or(root, PathBuf::from);
-                let build = BuildDir::enter(checkout, &alias, &slots, lane.name, lane.window)?;
+                let slots =
+                    var(consts::BUILD_SLOTS_ENV).map_or_else(|| root.clone(), PathBuf::from);
+                if cfg!(target_os = "macos") {
+                    validate_verdict_paths(
+                        &[root, slots.clone(), checkout.join("target")],
+                        verdict_stores,
+                    )?;
+                }
+                let build = BuildDir::enter(
+                    checkout,
+                    &alias,
+                    &slots,
+                    lane.name,
+                    lane.window,
+                    verdict_stores,
+                )?;
                 // Artifact paths name the checkout's `target`; Cargo is told
                 // the alias, the one path every lane's compilations share.
                 expose_build_target(checkout, build.path())?;
@@ -153,6 +171,7 @@ mod tests {
             checkout.path(),
             lane(),
             &environment(&[("CARGO_TARGET_DIR", root)]),
+            &[checkout.path().join("verdict")],
         )
         .unwrap()
         {
@@ -168,6 +187,7 @@ mod tests {
             checkout.path(),
             lane(),
             &environment(&[("CI", "true"), ("CARGO_TARGET_DIR", root)]),
+            &[checkout.path().join("verdict")],
         )
         .unwrap()
         {
@@ -180,7 +200,13 @@ mod tests {
             }
         }
         assert!(matches!(
-            Target::enter(checkout.path(), lane(), &environment(&[("CI", "true")])).unwrap(),
+            Target::enter(
+                checkout.path(),
+                lane(),
+                &environment(&[("CI", "true")]),
+                &[checkout.path().join("verdict")],
+            )
+            .unwrap(),
             Target::Named(None)
         ));
     }
@@ -202,6 +228,7 @@ mod tests {
                 ("CARGO_TARGET_DIR", builds.path().to_str().unwrap()),
                 (consts::BUILD_SLOTS_ENV, slots.path().to_str().unwrap()),
             ]),
+            &[checkout.path().join("verdict")],
         )
         .unwrap();
 

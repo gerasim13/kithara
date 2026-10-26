@@ -4,6 +4,7 @@ mod profile;
 
 pub(crate) use host::{
     WindowsGuest, default_build_cache_size, is_whole_gigabytes, parse_build_cache_size,
+    validate_verdict_paths,
 };
 pub(crate) use pins::CiPins;
 pub(crate) use profile::CiConfig;
