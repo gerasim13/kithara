@@ -196,7 +196,7 @@ mod tests {
 
     use super::BuildDir;
     use crate::{
-        ci::{build_cache, build_dir::fixture::git_checkout},
+        ci::{build_cache, build_dir::fixture::git_checkout, config::fixture_directory},
         consts,
     };
 
@@ -219,7 +219,7 @@ mod tests {
 
     #[test]
     fn entering_points_the_alias_at_the_build_directory() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
 
         let (build, _checkout) = enter(&alias(root.path()), "lint").unwrap();
 
@@ -230,7 +230,7 @@ mod tests {
 
     #[test]
     fn simultaneous_first_claims_take_independent_reusable_slots() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         let barrier = Arc::new(Barrier::new(2));
         let workers = (0..2)
             .map(|_| {
@@ -267,7 +267,7 @@ mod tests {
     /// while keeping build files for reuse.
     #[test]
     fn entering_a_slot_removes_the_timing_reports_an_earlier_job_left() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         let slot = root.path().join("lint-0");
         let timings = slot.join("cargo-timings");
         let nested_timings = slot.join("nested/cargo-timings");
@@ -298,7 +298,7 @@ mod tests {
 
     #[test]
     fn the_next_build_re_points_the_alias_and_keeps_the_last_one() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         fs::create_dir_all(root.path().join("lint-0/debug")).unwrap();
         drop(enter(&alias(root.path()), "lint").unwrap());
 
@@ -314,8 +314,8 @@ mod tests {
     /// and a slot let go is the first the job after takes.
     #[test]
     fn a_held_slot_sends_the_next_job_of_the_lane_to_the_next_slot() {
-        let slots = tempfile::tempdir().unwrap();
-        let [first, second, third] = [(); 3].map(|()| tempfile::tempdir().unwrap());
+        let slots = fixture_directory().unwrap();
+        let [first, second, third] = [(); 3].map(|()| fixture_directory().unwrap());
 
         let (held, _checkout) = enter_in(&alias(first.path()), slots.path(), "lint").unwrap();
         let (beside, _beside) = enter_in(&alias(second.path()), slots.path(), "lint").unwrap();
@@ -332,7 +332,7 @@ mod tests {
 
     #[test]
     fn an_entered_build_directory_is_leased() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
 
         let (build, _checkout) = enter(&alias(root.path()), "lint").unwrap();
 
@@ -345,7 +345,7 @@ mod tests {
     /// evicted build does, and the next lane still enters its own.
     #[test]
     fn a_directory_at_the_alias_is_moved_aside_for_the_build_cache_to_remove() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         fs::create_dir_all(alias(root.path()).join("debug")).unwrap();
 
         let (build, _checkout) = enter(&alias(root.path()), "lint").unwrap();
@@ -366,7 +366,7 @@ mod tests {
 
     #[test]
     fn a_lane_is_one_plain_name_that_is_not_hidden() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         for lane in ["", ".evicting-lint", "lint/flash-off", ".."] {
             assert!(
                 enter(&alias(root.path()), lane).is_err(),
@@ -377,7 +377,7 @@ mod tests {
 
     #[test]
     fn an_alias_is_named_build() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
 
         let error = enter(&root.path().join("target"), "lint").unwrap_err();
 

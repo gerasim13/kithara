@@ -48,7 +48,7 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Result<Self> {
-        let temp = tempfile::tempdir()?;
+        let temp = tempfile::tempdir_in(env::temp_dir().canonicalize()?)?;
         let root = temp.path().join("repo");
         let fake_bin = temp.path().join("bin");
         let cargo_log = temp.path().join("cargo.log");
@@ -395,7 +395,7 @@ fn fixture_metadata_does_not_inherit_compiler_wrappers() -> Result<()> {
         return Ok(());
     }
 
-    let temp = tempfile::tempdir()?;
+    let temp = tempfile::tempdir_in(env::temp_dir().canonicalize()?)?;
     let wrapper = temp.path().join("compiler-wrapper");
     let log = temp.path().join("wrapper.log");
     write_executable(
@@ -881,7 +881,7 @@ fn foreign_schema_drift_does_not_wedge_the_cached_transport() -> Result<()> {
 
 #[test]
 fn linked_worktrees_publish_distinct_caches() -> Result<()> {
-    let common = tempfile::tempdir()?;
+    let common = tempfile::tempdir_in(env::temp_dir().canonicalize()?)?;
     let first = Fixture::new()?;
     let second = Fixture::new()?;
     let worktrees = common.path().join("common.git/worktrees");

@@ -671,7 +671,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::ci::build_dir::fixture::git_checkout;
+    use crate::ci::{build_dir::fixture::git_checkout, config::fixture_directory};
 
     fn entry(path: &str, size_bytes: u64, age: u64) -> CacheEntry {
         CacheEntry {
@@ -707,7 +707,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_lease_held_in_an_entry_keeps_that_entry_and_not_its_siblings() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         let build = root.path().join("lint");
         let idle = root.path().join("usdt");
         fs::create_dir_all(&idle).unwrap();
@@ -742,7 +742,7 @@ mod tests {
     /// an idle one, and leaves both locks where main's next claim opens them.
     #[test]
     fn a_slot_whose_lock_is_held_beside_it_survives_the_budget() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         let taken = build_dir(root.path(), "review-lane-lint-0", 4096);
         let idle = build_dir(root.path(), "review-lane-lint-1", 4096);
         let _claim = locked(&root.path().join("review-lane-lint-0.lock"));
@@ -761,7 +761,7 @@ mod tests {
     /// builds, with or without a target triple.
     #[test]
     fn a_build_cargo_is_running_in_survives_the_budget() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         let network = build_dir(root.path(), "lane-network", 4096);
         let bootstrap = root.path().join("target-macos-aarch64-local");
         let triple = bootstrap.join("aarch64-apple-darwin/debug");
@@ -786,7 +786,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_lease_one_level_down_dates_its_entry() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         let recent = build_dir(root.path(), "a-recent", 4096);
         let stale = build_dir(root.path(), "b-stale", 4096);
         for (slot, age) in [(&recent, 20), (&stale, 10)] {
@@ -808,7 +808,7 @@ mod tests {
     /// A lease one level down that a job holds keeps its entry.
     #[test]
     fn a_lease_held_one_level_down_keeps_its_entry() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         let slot = build_dir(root.path(), "review-lane-lint-0", 4096);
         let _lease = lease::hold(&slot.join("cargo")).unwrap();
 
@@ -822,7 +822,7 @@ mod tests {
     /// reclaimed.
     #[test]
     fn an_unheld_lease_leaves_its_entry_evictable() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         let build = root.path().join("lint");
         drop(lease::hold(&build).expect("claim and release"));
 
@@ -838,7 +838,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn using_an_old_cache_refreshes_its_eviction_order() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         let used = root.path().join("old-but-used");
         let idle = root.path().join("newer-but-idle");
         fs::create_dir_all(&idle).unwrap();
@@ -870,7 +870,7 @@ mod tests {
     #[test]
     fn a_long_job_finishing_last_keeps_its_cache_over_a_later_short_job() {
         for lease_dir in [".", "cargo"] {
-            let root = tempfile::tempdir().unwrap();
+            let root = fixture_directory().unwrap();
             let long = build_dir(root.path(), "long", 4096);
             let short = build_dir(root.path(), "short", 4096);
             let running = lease::hold(&long.join(lease_dir)).unwrap();
@@ -918,7 +918,7 @@ mod tests {
     /// directory a lane has used, however recently something wrote into it.
     #[test]
     fn an_entry_no_job_ever_leased_goes_before_any_leased_one() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         let leased = root.path().join("lint");
         let legacy = root.path().join("debug");
         drop(lease::hold(&leased).unwrap());
@@ -953,7 +953,7 @@ mod tests {
     /// is what tells the host evictor the job lives.
     #[test]
     fn a_fresh_heartbeat_inside_an_entry_keeps_it() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         let lane = root.path().join("lint");
         fs::create_dir_all(&lane).unwrap();
         fs::write(lane.join(lease::HEARTBEAT), b"").unwrap();
@@ -973,7 +973,7 @@ mod tests {
     /// A job that died in its virtual machine stops beating.
     #[test]
     fn a_stale_heartbeat_leaves_its_entry_evictable() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         let lane = root.path().join("lint");
         fs::create_dir_all(&lane).unwrap();
         File::create(lane.join(lease::HEARTBEAT))
@@ -1024,7 +1024,7 @@ mod tests {
 
     #[test]
     fn a_cargo_home_inside_a_build_root_is_never_evicted() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         let target = root.path().join("target");
         let sources = target.join(".kithara-ci/review/linux-x86_64/cargo/registry/src");
         fs::create_dir_all(&sources).unwrap();
@@ -1041,7 +1041,7 @@ mod tests {
     /// is the state that produced `bytes_freed=0` on every pass for hours.
     #[test]
     fn the_budget_is_a_ceiling_over_every_root_together() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         let first = root.path().join("one");
         let second = root.path().join("two");
         build_dir(&first, "lint", 100_000);
@@ -1061,7 +1061,7 @@ mod tests {
     /// gigabyte with 15.7 GB of evictable cache beside it.
     #[test]
     fn a_shortfall_is_reclaimed_even_though_the_caches_are_under_the_ceiling() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         let first = root.path().join("one");
         let second = root.path().join("two");
         build_dir(&first, "lint", 100_000);
@@ -1093,7 +1093,7 @@ mod tests {
     /// survives, and its bytes are still spent, so the idle one is what pays.
     #[test]
     fn the_directory_a_lane_runs_from_survives_and_the_idle_one_pays() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         let running = build_dir(root.path(), "lint", 400_000);
         let idle = build_dir(root.path(), "usdt", 400_000);
         let lane = lease::hold(&running).expect("the lane claims what it builds");
@@ -1117,7 +1117,7 @@ mod tests {
     /// it.
     #[test]
     fn an_entry_a_job_leases_after_the_scan_is_kept() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         let lane = build_dir(root.path(), "lint", 1);
         let scanned = candidate_entries(root.path()).unwrap().entries;
 
@@ -1132,7 +1132,7 @@ mod tests {
     /// either is left.
     #[test]
     fn an_evicted_entry_leaves_nothing_behind() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         build_dir(root.path(), "lint", 1);
         let scanned = candidate_entries(root.path()).unwrap().entries;
 
@@ -1146,7 +1146,7 @@ mod tests {
     /// to make it a candidate.
     #[test]
     fn what_an_interrupted_eviction_left_is_removed() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         let left = root.path().join(".evicting-lint-1");
         fs::create_dir_all(left.join("debug")).unwrap();
         fs::write(left.join("debug/artifact"), b"half removed").unwrap();
@@ -1167,7 +1167,7 @@ mod tests {
     fn a_directory_that_cannot_be_removed_holds_back_no_other() {
         use std::os::unix::fs::PermissionsExt;
 
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         let roots = [root.path().to_path_buf()];
         let stuck = build_dir(root.path(), "stuck", 1);
         let sealed = stuck.join("debug").join("sealed");
@@ -1195,7 +1195,7 @@ mod tests {
     /// The eviction that moved this entry aside is still removing it.
     #[test]
     fn what_another_eviction_is_removing_is_left_to_it() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         let left = root.path().join(".evicting-lint-1");
         fs::create_dir_all(left.join("debug")).unwrap();
         let removing = lease::evict(&left).unwrap().expect("nobody holds it");
@@ -1211,7 +1211,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn the_build_roots_are_the_directories_beside_the_checkouts() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         let mut expected = Vec::new();
         for slot in ["runner-a/0", "runner-b/1"] {
             let checkout = root.path().join(slot).join("disrupt/kithara");
@@ -1245,7 +1245,7 @@ mod tests {
         let told = common[".builds-beside-checkout"]["variables"]["CARGO_TARGET_DIR"]
             .as_str()
             .expect("a GitLab job is told a build root");
-        let builds = tempfile::tempdir().unwrap();
+        let builds = fixture_directory().unwrap();
         let checkout = builds.path().join("runner/0/disrupt/kithara");
         fs::create_dir_all(&checkout).unwrap();
         fs::write(checkout.join("Cargo.toml"), b"").unwrap();
@@ -1273,7 +1273,7 @@ mod tests {
     /// belongs.
     #[test]
     fn a_build_alias_is_not_leased_through() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         let alias = root.path().join(consts::BUILD_ALIAS);
         let checkout = git_checkout(&[]);
         let told = alias.clone().into_os_string();
@@ -1297,7 +1297,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_ci_job_claims_the_directory_it_names_beside_the_alias() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         std::os::unix::fs::symlink("lint", root.path().join(consts::BUILD_ALIAS)).unwrap();
         let named = root.path().join("network");
         let checkout = git_checkout(&[("src/lib.rs", "")]);
@@ -1333,7 +1333,7 @@ mod tests {
             "a cache this sweep cannot read is a real failure, not a race"
         );
 
-        let directory = tempfile::tempdir().expect("temporary directory");
+        let directory = fixture_directory().expect("temporary directory");
         let present = still_there(fs::symlink_metadata(directory.path()))
             .expect("reading an entry that is there")
             .expect("an entry that is there is measured");

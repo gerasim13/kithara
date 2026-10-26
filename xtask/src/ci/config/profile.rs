@@ -1,6 +1,10 @@
 use std::path::Path;
+#[cfg(test)]
+use std::{env, io};
 
 use anyhow::Result;
+#[cfg(test)]
+use tempfile::TempDir;
 
 use super::{host::CiHost, pins::CiPins};
 
@@ -35,6 +39,11 @@ pub(crate) fn workspace_root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("xtask lives inside the workspace")
+}
+
+#[cfg(test)]
+pub(crate) fn fixture_directory() -> io::Result<TempDir> {
+    TempDir::new_in(env::temp_dir().canonicalize()?)
 }
 
 #[cfg(test)]

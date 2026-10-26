@@ -321,7 +321,7 @@ mod tests {
 
     #[test]
     fn a_lease_names_a_directory_that_did_not_exist_yet() {
-        let temp = TempDir::new().unwrap();
+        let temp = TempDir::new_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
         let build = temp.path().join("target-stress");
 
         let lease = hold(&build).expect("claim a build directory before it is built into");
@@ -332,7 +332,7 @@ mod tests {
 
     #[test]
     fn two_holders_of_one_directory_coexist() {
-        let temp = TempDir::new().unwrap();
+        let temp = TempDir::new_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
 
         let first = hold(temp.path()).expect("first holder");
         let second = hold(temp.path()).expect("a spawned harness run must not be refused");
@@ -344,7 +344,7 @@ mod tests {
     /// says it is alive in a file an evictor on the other side can read.
     #[test]
     fn a_held_lease_beats() {
-        let temp = TempDir::new().unwrap();
+        let temp = TempDir::new_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
 
         let lease = hold(temp.path()).unwrap();
 
@@ -354,7 +354,7 @@ mod tests {
 
     #[test]
     fn the_last_holder_takes_the_heartbeat_with_it() {
-        let temp = TempDir::new().unwrap();
+        let temp = TempDir::new_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
         let first = hold(temp.path()).unwrap();
         let second = hold(temp.path()).unwrap();
         let lease_file = open(&temp.path().join(FILE)).unwrap();
@@ -380,7 +380,7 @@ mod tests {
 
     #[test]
     fn an_eviction_is_refused_while_a_lease_is_held() {
-        let temp = TempDir::new().unwrap();
+        let temp = TempDir::new_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
         let lease = hold(temp.path()).unwrap();
 
         assert!(evict(temp.path()).unwrap().is_none());
@@ -390,7 +390,7 @@ mod tests {
 
     #[test]
     fn a_released_holder_does_not_touch_a_replacement_directory() {
-        let temp = TempDir::new().unwrap();
+        let temp = TempDir::new_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
         let build = temp.path().join("lane");
         let mut lease = hold(&build).unwrap();
         let heartbeat = lease.heartbeat.take().unwrap();
@@ -417,7 +417,7 @@ mod tests {
 
     #[test]
     fn a_lease_waits_out_an_eviction() {
-        let temp = TempDir::new().unwrap();
+        let temp = TempDir::new_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
         let eviction = evict(temp.path())
             .unwrap()
             .expect("nobody leases the directory");
@@ -434,7 +434,7 @@ mod tests {
 
     #[test]
     fn a_lease_not_taken_within_its_bound_fails() {
-        let temp = TempDir::new().unwrap();
+        let temp = TempDir::new_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
         let eviction = evict(temp.path())
             .unwrap()
             .expect("nobody leases the directory");
@@ -450,7 +450,7 @@ mod tests {
     /// the lock a waiting job then gets guards a directory that is gone.
     #[test]
     fn a_lock_on_a_lease_moved_away_is_no_lease() {
-        let temp = TempDir::new().unwrap();
+        let temp = TempDir::new_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
         let build = temp.path().join("lane");
         fs::create_dir_all(&build).unwrap();
         let path = build.join(FILE);
@@ -469,7 +469,7 @@ mod tests {
     /// taking it for the new one would move a live build away.
     #[test]
     fn an_eviction_lock_on_a_lease_moved_away_is_no_eviction() {
-        let temp = TempDir::new().unwrap();
+        let temp = TempDir::new_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
         let build = temp.path().join("lane");
         fs::create_dir_all(&build).unwrap();
         let path = build.join(FILE);
@@ -485,7 +485,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn confined_removal_retains_replaced_candidates_and_parents() {
-        let root = TempDir::new().unwrap();
+        let root = TempDir::new_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
         let original = root.path().join("parent/entry");
         fs::create_dir_all(&original).unwrap();
         fs::write(original.join("sentinel"), b"original").unwrap();
@@ -508,8 +508,8 @@ mod tests {
     #[test]
     fn confined_removal_never_follows_root_or_intermediate_or_child_links() {
         use std::os::unix::fs::symlink;
-        let root = TempDir::new().unwrap();
-        let external = TempDir::new().unwrap();
+        let root = TempDir::new_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+        let external = TempDir::new_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
         fs::write(external.path().join("sentinel"), b"keep").unwrap();
         symlink(external.path(), root.path().join("link")).unwrap();
         assert!(
@@ -529,7 +529,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn file_access_and_metadata_stay_with_the_inspected_parent() {
-        let root = TempDir::new().unwrap();
+        let root = TempDir::new_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
         fs::create_dir(root.path().join("logs")).unwrap();
         fs::write(root.path().join("logs/current"), b"original").unwrap();
         let candidate =
@@ -556,8 +556,8 @@ mod tests {
     #[test]
     fn writable_handles_refuse_hardlinks_and_unlink_preserves_the_external_file() {
         for operation in ["lease", "file", "sibling", "unlink"] {
-            let root = TempDir::new().unwrap();
-            let external = TempDir::new().unwrap();
+            let root = TempDir::new_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+            let external = TempDir::new_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
             let sentinel = external.path().join("sentinel");
             fs::write(&sentinel, b"external").unwrap();
             let key = std::path::Path::new("cache/review");

@@ -632,6 +632,7 @@ mod tests {
     use kithara_devtools::lease;
 
     use super::*;
+    use crate::ci::config::fixture_directory;
 
     fn reclaim(root: &FsPath) -> usize {
         reclaim_build_caches(&gitlab_workspaces(root), &root.join("cache"), 0, u64::MAX).unwrap()
@@ -854,7 +855,7 @@ mod tests {
             return;
         }
 
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let project = directory
             .path()
             .join("workspaces/gitlab/runner/0/disrupt/kithara");
@@ -933,7 +934,7 @@ mod tests {
             return;
         }
 
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let output = Command::new(env::current_exe().unwrap())
             .arg("failed_prepare_never_publishes_a_cache_lease")
             .arg("--nocapture")
@@ -1011,7 +1012,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn the_gate_reclaims_caches_before_deciding_there_is_no_room() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         let build = build_beside_a_checkout(root.path(), "lint");
 
         reclaim(root.path());
@@ -1028,7 +1029,7 @@ mod tests {
     /// checkouts.
     #[test]
     fn the_gate_reclaims_the_slots_the_previous_layout_keeps() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         let build = root
             .path()
             .join("cache")
@@ -1050,7 +1051,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_leased_build_directory_is_left_alone_by_a_sibling_job() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         let build = build_beside_a_checkout(root.path(), "lint");
 
         let held = lease::hold(&build).expect("the running job claims its build");
@@ -1076,8 +1077,8 @@ mod tests {
     /// build fills.
     #[test]
     fn a_refused_job_names_the_volume_it_builds_on() {
-        let volume = tempfile::tempdir().unwrap();
-        let builds = tempfile::tempdir().unwrap();
+        let volume = fixture_directory().unwrap();
+        let builds = fixture_directory().unwrap();
         let mut config = super::super::config::fixture();
         config.host.quota_bytes = u64::MAX;
         config.host.reject_bytes = 0;
@@ -1133,7 +1134,7 @@ mod tests {
 
     #[test]
     fn a_workspace_root_that_does_not_exist_has_nothing_to_reclaim() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
 
         let reclaimed_from = reclaim(root.path());
 
