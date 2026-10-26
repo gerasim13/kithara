@@ -2,6 +2,6 @@
 mod filesystem;
 mod ownership;
 
-pub use ownership::{
-    Candidate, Eviction, FILE, HEARTBEAT, Lease, claim, evict, exclude, hold, hold_in,
-};
+#[cfg(target_os = "macos")]
+pub use ownership::hold_in;
+pub use ownership::{Candidate, Eviction, FILE, HEARTBEAT, Lease, claim, evict, exclude, hold};

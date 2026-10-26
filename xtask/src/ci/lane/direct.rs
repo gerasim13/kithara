@@ -98,6 +98,10 @@ fn run_in(args: &LaneArgs, ctx: &Ctx, var: &dyn Fn(&str) -> Option<OsString>) ->
         );
         return Ok(());
     }
+    let stores = var("KITHARA_CI_CACHE_ROOT")
+        .into_iter()
+        .map(|root| PathBuf::from(root).join("verdict"))
+        .collect::<Vec<_>>();
     let target = Target::enter(
         &ctx.root,
         LaneTarget {
@@ -105,6 +109,7 @@ fn run_in(args: &LaneArgs, ctx: &Ctx, var: &dyn Fn(&str) -> Option<OsString>) ->
             window: ext.ci.lane_unit_window(),
         },
         var,
+        &stores,
     )?;
     let text = |name: &str| var(name).and_then(|value| value.into_string().ok());
     let wrapped = var("RUSTC_WRAPPER").is_some_and(|wrapper| !wrapper.is_empty());
@@ -192,8 +197,118 @@ mod tests {
     use super::*;
     use crate::ci::{
         build_dir::fixture::git,
-        config::{fixture, workspace_root},
+        config::{fixture, fixture_directory, workspace_root},
     };
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn direct_lane_rejects_verdict_storage_before_slot_garbage_collection() {
+        for (scratch, linked) in [
+            ("tmp", false),
+            ("cargo-timings", false),
+            ("tmp", true),
+            ("cargo-timings", true),
+            ("checkout-target", false),
+            ("inside-store", true),
+        ] {
+            let root = fixture_directory().unwrap();
+            let project = root.path().join("project");
+            fs::create_dir(&project).unwrap();
+            let (ctx, args) = trivial_lane(&project);
+            let target = root.path().join(".kithara.target");
+            let slot = if scratch == "inside-store" {
+                root.path().join("shared-cache/verdict/archive")
+            } else if linked {
+                root.path().join("physical-slot")
+            } else {
+                target.join("trivial-0")
+            };
+            let cache = if scratch == "inside-store" {
+                root.path().join("shared-cache")
+            } else if scratch == "checkout-target" {
+                project.join("target")
+            } else {
+                slot.join(scratch)
+            };
+            let store = if scratch == "inside-store" {
+                slot.join("tmp")
+            } else {
+                cache.join("verdict")
+            };
+            fs::create_dir_all(&store).unwrap();
+            if linked {
+                fs::create_dir_all(&target).unwrap();
+                std::os::unix::fs::symlink(&slot, target.join("trivial-0")).unwrap();
+            }
+            let files = [
+                (
+                    "journal.json",
+                    br#"{"runs":[{"sha":"main","tests":[],"jobs":[]}]}"#.as_slice(),
+                ),
+                ("journal.json.lock", b"baseline lock".as_slice()),
+                ("journal.json.42.tmp", b"publication".as_slice()),
+            ];
+            let identities = files.map(|(name, bytes)| {
+                fs::write(store.join(name), bytes).unwrap();
+                same_file::Handle::from_path(store.join(name)).unwrap()
+            });
+            let result = run_in(
+                &args,
+                &ctx,
+                &environment(&[
+                    ("CI", "true"),
+                    ("CARGO_TARGET_DIR", target.to_str().unwrap()),
+                    ("KITHARA_CI_CACHE_ROOT", cache.to_str().unwrap()),
+                ]),
+            );
+            for ((name, bytes), identity) in files.into_iter().zip(identities) {
+                assert!(
+                    store.join(name).is_file(),
+                    "direct lane removed {name}: {scratch}, linked={linked}"
+                );
+                assert_eq!(fs::read(store.join(name)).unwrap(), bytes);
+                assert_eq!(
+                    same_file::Handle::from_path(store.join(name)).unwrap(),
+                    identity
+                );
+            }
+            assert!(result.is_err());
+            assert_eq!(
+                project.join("target").is_dir(),
+                scratch == "checkout-target"
+            );
+            assert!(!project.join("target").is_symlink());
+            assert!(!target.join(consts::BUILD_ALIAS).exists());
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_native_direct_lane_without_verdict_storage_refuses_before_gc() {
+        let root = fixture_directory().unwrap();
+        let project = root.path().join("project");
+        fs::create_dir(&project).unwrap();
+        let (ctx, args) = trivial_lane(&project);
+        let target = root.path().join("builds");
+        let sentinel = target.join("trivial-0/tmp/sentinel");
+        fs::create_dir_all(sentinel.parent().unwrap()).unwrap();
+        fs::write(&sentinel, b"unproven").unwrap();
+        let error = run_in(
+            &args,
+            &ctx,
+            &environment(&[
+                ("CI", "true"),
+                ("CARGO_TARGET_DIR", target.to_str().unwrap()),
+            ]),
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("persistent verdict store"),
+            "{error:#}"
+        );
+        assert_eq!(fs::read(sentinel).unwrap(), b"unproven");
+        assert!(!project.join("target").exists());
+    }
 
     /// A lane builds where the executor said. These runners are ephemeral and
     /// the checkout is deleted before the lane starts, so a build directory
@@ -381,7 +496,7 @@ label = "run"
     /// execution got there.
     #[test]
     fn a_lane_reaches_its_own_work_with_no_host_profile_resolved() {
-        let temp = tempfile::tempdir().expect("create fixture workspace");
+        let temp = fixture_directory().expect("create fixture workspace");
         let (ctx, args) = trivial_lane(temp.path());
 
         let result = run_in(&args, &ctx, &environment(&[]));
@@ -399,8 +514,8 @@ label = "run"
     #[cfg(unix)]
     #[test]
     fn a_lane_in_a_ci_job_builds_in_its_own_directory_behind_the_alias() {
-        let temp = tempfile::tempdir().expect("create fixture workspace");
-        let builds = tempfile::tempdir().expect("create the runner's build root");
+        let temp = fixture_directory().expect("create fixture workspace");
+        let builds = fixture_directory().expect("create the runner's build root");
         let seen = temp.path().join("seen");
         let record = format!(
             r#"args = ["-c", "printf '%s' \"$CARGO_TARGET_DIR\" > '{}'"]"#,
@@ -416,6 +531,7 @@ label = "run"
             &ctx,
             &environment(&[
                 ("CI", "true"),
+                ("KITHARA_CI_CACHE_ROOT", temp.path().to_str().unwrap()),
                 (
                     "CARGO_TARGET_DIR",
                     builds.path().to_str().expect("a UTF-8 build root"),
@@ -451,8 +567,8 @@ label = "run"
     #[cfg(unix)]
     #[test]
     fn a_lane_whose_build_wrote_no_timing_report_tells_the_job_nothing() {
-        let temp = tempfile::tempdir().expect("create fixture workspace");
-        let builds = tempfile::tempdir().expect("create the runner's build root");
+        let temp = fixture_directory().expect("create fixture workspace");
+        let builds = fixture_directory().expect("create the runner's build root");
         let (ctx, args) = trivial_lane(temp.path());
         let earlier = builds
             .path()
@@ -467,6 +583,7 @@ label = "run"
             &ctx,
             &environment(&[
                 ("CI", "true"),
+                ("KITHARA_CI_CACHE_ROOT", temp.path().to_str().unwrap()),
                 (
                     "CARGO_TARGET_DIR",
                     builds.path().to_str().expect("a UTF-8 build root"),
@@ -495,8 +612,8 @@ label = "run"
     #[cfg(unix)]
     #[test]
     fn a_lane_tells_the_job_the_timing_report_its_build_wrote() {
-        let temp = tempfile::tempdir().expect("create fixture workspace");
-        let builds = tempfile::tempdir().expect("create the runner's build root");
+        let temp = fixture_directory().expect("create fixture workspace");
+        let builds = fixture_directory().expect("create the runner's build root");
         let (ctx, args) = lane_running(
             temp.path(),
             "sh",
@@ -511,6 +628,7 @@ label = "run"
             &ctx,
             &environment(&[
                 ("CI", "true"),
+                ("KITHARA_CI_CACHE_ROOT", temp.path().to_str().unwrap()),
                 (
                     "CARGO_TARGET_DIR",
                     builds.path().to_str().expect("a UTF-8 build root"),
@@ -546,8 +664,8 @@ label = "run"
     #[cfg(unix)]
     #[test]
     fn a_failed_lane_still_tells_the_job_the_timing_report_its_build_wrote() {
-        let temp = tempfile::tempdir().expect("create fixture workspace");
-        let builds = tempfile::tempdir().expect("create the runner's build root");
+        let temp = fixture_directory().expect("create fixture workspace");
+        let builds = fixture_directory().expect("create the runner's build root");
         let (ctx, args) = lane_running(
             temp.path(),
             "sh",
@@ -562,6 +680,7 @@ label = "run"
             &ctx,
             &environment(&[
                 ("CI", "true"),
+                ("KITHARA_CI_CACHE_ROOT", temp.path().to_str().unwrap()),
                 (
                     "CARGO_TARGET_DIR",
                     builds.path().to_str().expect("a UTF-8 build root"),
@@ -596,7 +715,7 @@ label = "run"
     #[cfg(unix)]
     #[test]
     fn a_report_a_job_announced_survives_the_next_job_taking_its_slot() {
-        let temp = tempfile::tempdir().expect("create fixture workspace");
+        let temp = fixture_directory().expect("create fixture workspace");
         let builds = temp.path().join("builds");
         let checkout_a = tempfile::tempdir_in(temp.path()).expect("create job A's checkout");
         let runner_temp_a = tempfile::tempdir_in(temp.path()).expect("create job A's RUNNER_TEMP");
@@ -613,6 +732,7 @@ label = "run"
             &ctx_a,
             &environment(&[
                 ("CI", "true"),
+                ("KITHARA_CI_CACHE_ROOT", temp.path().to_str().unwrap()),
                 (
                     "CARGO_TARGET_DIR",
                     builds.to_str().expect("a UTF-8 build root"),
@@ -646,6 +766,7 @@ label = "run"
             &ctx_b,
             &environment(&[
                 ("CI", "true"),
+                ("KITHARA_CI_CACHE_ROOT", temp.path().to_str().unwrap()),
                 (
                     "CARGO_TARGET_DIR",
                     builds.to_str().expect("a UTF-8 build root"),
@@ -686,7 +807,7 @@ label = "run"
     #[cfg(unix)]
     #[test]
     fn a_lane_tells_the_job_only_the_reports_its_build_directory_holds() {
-        let temp = tempfile::tempdir().expect("create fixture workspace");
+        let temp = fixture_directory().expect("create fixture workspace");
         let builds = temp.path().join("builds");
         let slot = builds.join("trivial-0");
         let elsewhere = temp.path().join("elsewhere");
@@ -710,6 +831,7 @@ label = "run"
             &ctx,
             &environment(&[
                 ("CI", "true"),
+                ("KITHARA_CI_CACHE_ROOT", temp.path().to_str().unwrap()),
                 (
                     "CARGO_TARGET_DIR",
                     builds.to_str().expect("a UTF-8 build root"),
@@ -754,7 +876,7 @@ label = "run"
     fn a_rebuild_check_fails_a_suite_the_next_job_would_build_again() {
         use std::os::unix::fs::PermissionsExt as _;
 
-        let temp = tempfile::tempdir().expect("create fixture workspace");
+        let temp = fixture_directory().expect("create fixture workspace");
         let status = temp.path().join("status");
         let just = temp.path().join("just");
         fs::write(
@@ -885,6 +1007,7 @@ cargo.packages = ["tools"]
             &ctx,
             &environment(&[
                 ("CI", "true"),
+                ("KITHARA_CI_CACHE_ROOT", root.to_str().unwrap()),
                 (
                     "CARGO_TARGET_DIR",
                     builds.to_str().expect("a UTF-8 build root"),
@@ -906,8 +1029,8 @@ cargo.packages = ["tools"]
     #[cfg(unix)]
     #[test]
     fn a_touched_lane_that_selects_nothing_claims_no_build() {
-        let temp = tempfile::tempdir().expect("create fixture workspace");
-        let builds = tempfile::tempdir().expect("create the runner's build root");
+        let temp = fixture_directory().expect("create fixture workspace");
+        let builds = fixture_directory().expect("create the runner's build root");
 
         let (result, told, called) = run_touched(temp.path(), "xtask/probe.rs", builds.path());
 
@@ -927,8 +1050,8 @@ cargo.packages = ["tools"]
     #[cfg(unix)]
     #[test]
     fn a_touched_lane_that_selects_a_lane_builds_it() {
-        let temp = tempfile::tempdir().expect("create fixture workspace");
-        let builds = tempfile::tempdir().expect("create the runner's build root");
+        let temp = fixture_directory().expect("create fixture workspace");
+        let builds = fixture_directory().expect("create the runner's build root");
 
         let (result, _told, called) = run_touched(temp.path(), "crates/probe.rs", builds.path());
 
@@ -988,7 +1111,7 @@ cargo.packages = ["tools"]
     #[cfg(unix)]
     #[test]
     fn a_lane_that_compiled_through_the_cache_reads_its_counts() {
-        let temp = tempfile::tempdir().expect("create fixture workspace");
+        let temp = fixture_directory().expect("create fixture workspace");
         let (tools, asked) = cache_doubles(temp.path());
         let (mut ctx, args) = trivial_lane(temp.path());
         ctx.config.tools = tools.try_into().expect("parse the tools table");
@@ -1014,7 +1137,7 @@ cargo.packages = ["tools"]
     #[cfg(unix)]
     #[test]
     fn a_ci_lane_compiles_through_a_kache_of_its_own() {
-        let temp = tempfile::tempdir().expect("create fixture workspace");
+        let temp = fixture_directory().expect("create fixture workspace");
         let (tools, asked) = cache_doubles(temp.path());
         let told = temp.path().join("told");
         let (mut ctx, args) = lane_running(
@@ -1032,6 +1155,7 @@ cargo.packages = ["tools"]
             &ctx,
             &environment(&[
                 ("CI", "true"),
+                ("KITHARA_CI_CACHE_ROOT", temp.path().to_str().unwrap()),
                 ("RUSTC_WRAPPER", "kache"),
                 ("SCCACHE_BUCKET", "kithara-review"),
                 ("SCCACHE_ENDPOINT", "http://kithara-ci-cache:9000"),
@@ -1068,8 +1192,8 @@ cargo.packages = ["tools"]
     #[cfg(unix)]
     #[test]
     fn a_lane_outside_a_ci_job_enters_no_build_directory() {
-        let temp = tempfile::tempdir().expect("create fixture workspace");
-        let builds = tempfile::tempdir().expect("create a build root");
+        let temp = fixture_directory().expect("create fixture workspace");
+        let builds = fixture_directory().expect("create a build root");
         let (ctx, args) = trivial_lane(temp.path());
         let own = temp.path().join("target/debug/own-build");
         fs::create_dir_all(own.parent().expect("a build file has a directory"))
@@ -1096,8 +1220,8 @@ cargo.packages = ["tools"]
     #[cfg(unix)]
     #[test]
     fn a_lane_that_cannot_tell_the_job_where_it_built_still_runs() {
-        let temp = tempfile::tempdir().expect("create fixture workspace");
-        let builds = tempfile::tempdir().expect("create the runner's build root");
+        let temp = fixture_directory().expect("create fixture workspace");
+        let builds = fixture_directory().expect("create the runner's build root");
         let (ctx, args) = lane_running(
             temp.path(),
             "sh",
@@ -1111,6 +1235,7 @@ cargo.packages = ["tools"]
             &ctx,
             &environment(&[
                 ("CI", "true"),
+                ("KITHARA_CI_CACHE_ROOT", temp.path().to_str().unwrap()),
                 (
                     "CARGO_TARGET_DIR",
                     builds.path().to_str().expect("a UTF-8 build root"),

@@ -48,7 +48,7 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Result<Self> {
-        let temp = tempfile::tempdir()?;
+        let temp = tempfile::tempdir_in(env::temp_dir().canonicalize()?)?;
         let root = temp.path().join("repo");
         let fake_bin = temp.path().join("bin");
         let cargo_log = temp.path().join("cargo.log");
@@ -395,7 +395,7 @@ fn fixture_metadata_does_not_inherit_compiler_wrappers() -> Result<()> {
         return Ok(());
     }
 
-    let temp = tempfile::tempdir()?;
+    let temp = tempfile::tempdir_in(env::temp_dir().canonicalize()?)?;
     let wrapper = temp.path().join("compiler-wrapper");
     let log = temp.path().join("wrapper.log");
     write_executable(
@@ -693,6 +693,34 @@ fn ci_public_just_runner_holds_the_xtask_build_an_eviction_moved_away() -> Resul
     Ok(())
 }
 
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn public_bootstrap_routes_need_no_unmounted_parent_claims() -> Result<()> {
+    for route in ["_xtask", "_xtask-refresh"] {
+        let fixture = Fixture::new()?;
+        let cache = fixture._temp.path().join("builds");
+        let target = cache.join("xtask");
+        fs::create_dir_all(&target)?;
+        fs::create_dir(cache.join(".xtask.kithara-job-lease"))?;
+        fs::write(
+            fixture._temp.path().join(".kithara-job-leases"),
+            b"outside mount",
+        )?;
+        let output = fixture
+            .just_command(&fixture.root, &[route])?
+            .env("KITHARA_XTASK_TARGET", &target)
+            .env("KITHARA_CI_CACHE_ROOT", &cache)
+            .output()?;
+        assert_eq!(output.status.code(), Some(97), "{route}: {output:?}");
+        assert!(
+            fs::read_to_string(&fixture.cargo_log)?
+                .contains(&format!("target={}\n", target.display()))
+        );
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
 #[test]
 fn cold_refresh_holds_the_target_before_the_first_cargo_build() -> Result<()> {
     struct PendingRefresh {
@@ -963,7 +991,7 @@ fn foreign_schema_drift_does_not_wedge_the_cached_transport() -> Result<()> {
 
 #[test]
 fn linked_worktrees_publish_distinct_caches() -> Result<()> {
-    let common = tempfile::tempdir()?;
+    let common = tempfile::tempdir_in(env::temp_dir().canonicalize()?)?;
     let first = Fixture::new()?;
     let second = Fixture::new()?;
     let worktrees = common.path().join("common.git/worktrees");

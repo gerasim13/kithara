@@ -18,7 +18,10 @@ use super::{
     sources::{Claim, claim},
     timings,
 };
-use crate::{ci::build_cache, consts};
+use crate::{
+    ci::{build_cache, config::validate_verdict_paths},
+    consts,
+};
 
 /// A job's hold on its build directory: a slot of its lane, taken, leased,
 /// with the alias naming it and the checkout claimed for it, for as long as
@@ -53,6 +56,7 @@ impl BuildDir {
         slots: &Path,
         lane: &str,
         window: Duration,
+        verdict_stores: &[PathBuf],
     ) -> Result<Self> {
         ensure!(
             alias.file_name() == Some(OsStr::new(consts::BUILD_ALIAS)),
@@ -62,8 +66,14 @@ impl BuildDir {
         );
         validate(lane)?;
         let (path, slot) = take(slots, lane)?;
-        let lease = lease::hold_in(slots, path.strip_prefix(slots)?)
-            .with_context(|| format!("leasing build {}", path.display()))?;
+        if cfg!(target_os = "macos") {
+            validate_verdict_paths(std::slice::from_ref(&path), verdict_stores)?;
+        }
+        #[cfg(target_os = "macos")]
+        let lease = lease::hold_in(slots, path.strip_prefix(slots)?);
+        #[cfg(not(target_os = "macos"))]
+        let lease = lease::hold(&path);
+        let lease = lease.with_context(|| format!("leasing build {}", path.display()))?;
         point(alias, &path)?;
         if let Err(error) = super::garbage::collect(&path, window) {
             warn!(
@@ -196,7 +206,7 @@ mod tests {
 
     use super::BuildDir;
     use crate::{
-        ci::{build_cache, build_dir::fixture::git_checkout},
+        ci::{build_cache, build_dir::fixture::git_checkout, config::fixture_directory},
         consts,
     };
 
@@ -208,8 +218,15 @@ mod tests {
     /// checkout of its own.
     fn enter_in(alias: &Path, slots: &Path, lane: &str) -> anyhow::Result<(BuildDir, TempDir)> {
         let checkout = git_checkout(&[]);
-        BuildDir::enter(checkout.path(), alias, slots, lane, consts::GARBAGE_WINDOW)
-            .map(|build| (build, checkout))
+        BuildDir::enter(
+            checkout.path(),
+            alias,
+            slots,
+            lane,
+            consts::GARBAGE_WINDOW,
+            &[checkout.path().join("verdict")],
+        )
+        .map(|build| (build, checkout))
     }
 
     /// Enters `lane`'s build in a slot beside `alias`.
@@ -217,9 +234,22 @@ mod tests {
         enter_in(alias, alias.parent().unwrap(), lane)
     }
 
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn mounted_slots_do_not_claim_the_unmounted_parent_namespace() {
+        let root = fixture_directory().unwrap();
+        let slots = root.path().join("slots");
+        fs::write(root.path().join(".kithara-job-leases"), b"outside mount").unwrap();
+        let (build, _checkout) = enter_in(&alias(root.path()), &slots, "lint").unwrap();
+        assert!(lease::evict(build.path()).unwrap().is_none());
+        let path = build.path().clone();
+        drop(build);
+        assert!(lease::evict(&path).unwrap().is_some());
+    }
+
     #[test]
     fn entering_points_the_alias_at_the_build_directory() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
 
         let (build, _checkout) = enter(&alias(root.path()), "lint").unwrap();
 
@@ -230,7 +260,7 @@ mod tests {
 
     #[test]
     fn simultaneous_first_claims_take_independent_reusable_slots() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         let barrier = Arc::new(Barrier::new(2));
         let workers = (0..2)
             .map(|_| {
@@ -267,7 +297,7 @@ mod tests {
     /// while keeping build files for reuse.
     #[test]
     fn entering_a_slot_removes_the_timing_reports_an_earlier_job_left() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         let slot = root.path().join("lint-0");
         let timings = slot.join("cargo-timings");
         let nested_timings = slot.join("nested/cargo-timings");
@@ -298,7 +328,7 @@ mod tests {
 
     #[test]
     fn the_next_build_re_points_the_alias_and_keeps_the_last_one() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         fs::create_dir_all(root.path().join("lint-0/debug")).unwrap();
         drop(enter(&alias(root.path()), "lint").unwrap());
 
@@ -314,8 +344,8 @@ mod tests {
     /// and a slot let go is the first the job after takes.
     #[test]
     fn a_held_slot_sends_the_next_job_of_the_lane_to_the_next_slot() {
-        let slots = tempfile::tempdir().unwrap();
-        let [first, second, third] = [(); 3].map(|()| tempfile::tempdir().unwrap());
+        let slots = fixture_directory().unwrap();
+        let [first, second, third] = [(); 3].map(|()| fixture_directory().unwrap());
 
         let (held, _checkout) = enter_in(&alias(first.path()), slots.path(), "lint").unwrap();
         let (beside, _beside) = enter_in(&alias(second.path()), slots.path(), "lint").unwrap();
@@ -332,7 +362,7 @@ mod tests {
 
     #[test]
     fn an_entered_build_directory_is_leased() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
 
         let (build, _checkout) = enter(&alias(root.path()), "lint").unwrap();
 
@@ -345,7 +375,7 @@ mod tests {
     /// evicted build does, and the next lane still enters its own.
     #[test]
     fn a_directory_at_the_alias_is_moved_aside_for_the_build_cache_to_remove() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         fs::create_dir_all(alias(root.path()).join("debug")).unwrap();
 
         let (build, _checkout) = enter(&alias(root.path()), "lint").unwrap();
@@ -366,7 +396,7 @@ mod tests {
 
     #[test]
     fn a_lane_is_one_plain_name_that_is_not_hidden() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
         for lane in ["", ".evicting-lint", "lint/flash-off", ".."] {
             assert!(
                 enter(&alias(root.path()), lane).is_err(),
@@ -377,7 +407,7 @@ mod tests {
 
     #[test]
     fn an_alias_is_named_build() {
-        let root = tempfile::tempdir().unwrap();
+        let root = fixture_directory().unwrap();
 
         let error = enter(&root.path().join("target"), "lint").unwrap_err();
 

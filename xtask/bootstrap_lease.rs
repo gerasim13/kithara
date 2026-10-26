@@ -1,9 +1,10 @@
+#[cfg(target_os = "macos")]
+use std::ffi::OsString;
 use std::{
     env,
     fs::{self, File, OpenOptions},
     io,
     os::unix::fs::{MetadataExt, OpenOptionsExt as _},
-    ffi::OsString,
     path::{Path, PathBuf},
     process::{self, Command, ExitStatus},
     thread,
@@ -63,8 +64,10 @@ impl Drop for Heartbeat {
     }
 }
 
+#[cfg(target_os = "macos")]
 struct Shared(File);
 
+#[cfg(target_os = "macos")]
 impl Drop for Shared {
     fn drop(&mut self) {
         let _ = self.0.unlock();
@@ -93,6 +96,7 @@ fn open_lock(path: &Path) -> io::Result<File> {
     Ok(file)
 }
 
+#[cfg(target_os = "macos")]
 fn claim(path: &Path) -> io::Result<Shared> {
     fs::create_dir_all(path.parent().ok_or_else(|| io::Error::other("lease needs a parent"))?)
         .map_err(|error| context(error, "creating lease parent", path))?;
@@ -120,6 +124,7 @@ fn physical(directory: &Path) -> io::Result<PathBuf> {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn sidecar(directory: &Path) -> io::Result<PathBuf> {
     let directory = std::path::absolute(directory)?;
     let name = directory.file_name().ok_or_else(|| io::Error::other("build needs a name"))?;
@@ -129,6 +134,7 @@ fn sidecar(directory: &Path) -> io::Result<PathBuf> {
     Ok(directory.parent().ok_or_else(|| io::Error::other("build needs a parent"))?.join(sidecar))
 }
 
+#[cfg(target_os = "macos")]
 fn namespace_claims(directory: &Path) -> io::Result<Vec<Shared>> {
     let Some(tree) = env::var_os("KITHARA_CI_CACHE_ROOT").map(PathBuf::from) else {
         return Ok(Vec::new());
@@ -236,7 +242,9 @@ fn run() -> io::Result<ExitStatus> {
         .next()
         .ok_or_else(|| io::Error::other("missing command"))?;
     let directory = physical(&directory).map_err(|error| context(error, "resolving build directory", &directory))?;
+    #[cfg(target_os = "macos")]
     let _namespace = namespace_claims(&directory)?;
+    #[cfg(target_os = "macos")]
     let _stable = claim(&sidecar(&directory)?)?;
     let lease = directory.join(consts::LEASE_FILE);
     let _file = take(&directory, &lease)?;
@@ -299,6 +307,7 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn startup_sidecar_precedes_creation_and_matches_shared_ownership() {
         let root = env::temp_dir().join(format!("kithara-bootstrap-{}", process::id()));

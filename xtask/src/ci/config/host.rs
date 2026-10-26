@@ -1,11 +1,14 @@
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::{
-    fs,
-    path::{Path, PathBuf},
+    fs, io,
+    path::{self, Component, Path, PathBuf},
     time::Duration,
 };
 
 use anyhow::{Context, Result, bail};
 use reqwest::Url;
+use same_file::Handle;
 use serde::{Deserialize, Serialize};
 
 use crate::consts;
@@ -297,6 +300,25 @@ impl CiHost {
         self.build_root.as_deref().unwrap_or(&self.host_root)
     }
 
+    pub(crate) fn verdict_stores(&self) -> [PathBuf; 2] {
+        [
+            self.host_root.join("cache/verdict"),
+            self.cache_root_macos.join("verdict"),
+        ]
+    }
+
+    pub(crate) fn validate_verdict_layout(&self, build_roots: &[PathBuf]) -> Result<()> {
+        for root in [self.host_root.as_path(), self.build_root()] {
+            refuse_alias(root)?;
+        }
+        validate_verdict_paths(build_roots, &self.verdict_stores())
+    }
+
+    /// Whether removing this path would intersect persistent verdict storage.
+    pub(crate) fn is_verdict_storage(&self, target: &Path) -> Result<bool> {
+        is_verdict_storage(target, &self.verdict_stores())
+    }
+
     pub(crate) fn build_cache_budget_bytes(&self) -> Result<u64> {
         parse_build_cache_size(&self.build_cache_size)
             .context("CI host profile build_cache_size is invalid")
@@ -506,9 +528,126 @@ fn safe_account(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
+pub(crate) fn validate_verdict_paths(roots: &[PathBuf], stores: &[PathBuf]) -> Result<()> {
+    if stores.is_empty() {
+        bail!("native CI builds need a persistent verdict store");
+    }
+    for store in stores {
+        refuse_alias(store)?;
+    }
+    for root in roots {
+        if is_verdict_storage(root, stores)? {
+            bail!("build cache roots must not overlap persistent verdict storage");
+        }
+    }
+    Ok(())
+}
+
+fn refuse_alias(root: &Path) -> Result<()> {
+    if !root.is_absolute()
+        || root
+            .components()
+            .any(|part| matches!(part, Component::ParentDir))
+    {
+        bail!(
+            "cleanup roots must be absolute paths without aliases: {}",
+            root.display()
+        );
+    }
+    for ancestor in root.ancestors() {
+        match fs::symlink_metadata(ancestor) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                bail!("cleanup root traverses a symlink: {}", ancestor.display());
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
+fn is_verdict_storage(target: &Path, stores: &[PathBuf]) -> Result<bool> {
+    for store in stores {
+        if target.starts_with(store)
+            || store.starts_with(target)
+            || physically_contains(store, target)?
+            || physically_contains(target, store)?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn physically_contains(root: &Path, path: &Path) -> Result<bool> {
+    let path = path::absolute(path)?;
+    let expected = match path_identity(root) {
+        Ok(handle) => handle,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(error).with_context(|| format!("identifying CI path {}", root.display()));
+        }
+    };
+    for ancestor in path.ancestors() {
+        let physical = match fs::canonicalize(ancestor) {
+            Ok(physical) => physical,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("resolving CI ancestor {}", ancestor.display()));
+            }
+        };
+        for parent in physical.ancestors() {
+            match path_identity(parent) {
+                Ok(found) if found == expected => return Ok(true),
+                Ok(_) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(error)
+                        .with_context(|| format!("identifying CI ancestor {}", parent.display()));
+                }
+            }
+        }
+        return Ok(false);
+    }
+    Ok(false)
+}
+
+fn path_identity(path: &Path) -> io::Result<Handle> {
+    #[cfg(unix)]
+    {
+        Handle::from_file(
+            fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(nix::libc::O_NONBLOCK)
+                .open(path)?,
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        Handle::from_path(path)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{super::fixture_directory, *};
+
+    #[cfg(unix)]
+    #[test]
+    fn verdict_storage_identification_does_not_wait_for_fifo_writers() {
+        let root = fixture_directory().unwrap();
+        let mut host = super::super::fixture().host;
+        host.host_root = root.path().to_path_buf();
+        host.cache_root_macos = root.path().join("native-cache");
+        for store in host.verdict_stores() {
+            fs::create_dir_all(store).unwrap();
+        }
+        let fifo = root.path().join("leftover.pipe");
+        nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::S_IRUSR).unwrap();
+        assert!(!host.is_verdict_storage(&fifo).unwrap());
+    }
 
     #[test]
     fn build_cache_size_converts_decimal_gigabytes_to_bytes() {
@@ -546,7 +685,7 @@ mod tests {
 
     #[test]
     fn ci_host_load_accepts_a_profile_without_a_build_cache_size() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let path = directory.path().join("host.toml");
         let host = super::super::fixture().host;
         host.write(&path).unwrap();
@@ -566,7 +705,7 @@ mod tests {
 
     #[test]
     fn ci_host_load_accepts_a_profile_without_a_docker_build_cache_size() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let path = directory.path().join("host.toml");
         let host = super::super::fixture().host;
         host.write(&path).unwrap();
@@ -596,7 +735,7 @@ mod tests {
     /// without it would take cleanup down on the hosts it was written for.
     #[test]
     fn ci_host_load_accepts_a_profile_without_a_cleanup_deadline() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let path = directory.path().join("host.toml");
         let host = super::super::fixture().host;
         host.write(&path).unwrap();
@@ -626,7 +765,7 @@ mod tests {
 
     #[test]
     fn ci_host_load_defaults_job_admission_deadline_to_sixty_seconds() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let path = directory.path().join("host.toml");
         let mut profile = toml::Value::try_from(super::super::fixture().host).unwrap();
         profile
@@ -648,7 +787,7 @@ mod tests {
 
     #[test]
     fn ci_host_validates_job_admission_deadline() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let path = directory.path().join("host.toml");
         let mut profile = toml::Value::try_from(super::super::fixture().host).unwrap();
         profile["cleanup_deadline_seconds"] = toml::Value::Integer(60);
@@ -667,7 +806,7 @@ mod tests {
 
     #[test]
     fn ci_host_roundtrips_admission_and_cleanup_policy() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let path = directory.path().join("host.toml");
         let mut profile = toml::Value::try_from(super::super::fixture().host).unwrap();
         let policy = [
@@ -708,7 +847,7 @@ mod tests {
     /// yield the wait, not zero, or the gate refuses as instantly as before.
     #[test]
     fn ci_host_load_accepts_a_profile_without_a_job_room_wait() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let path = directory.path().join("host.toml");
         let host = super::super::fixture().host;
         host.write(&path).unwrap();
@@ -744,7 +883,7 @@ mod tests {
     /// take cleanup down on hosts that have nothing to do with Windows.
     #[test]
     fn ci_host_load_accepts_a_profile_with_no_windows_guest() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let path = directory.path().join("host.toml");
         super::super::fixture().host.write(&path).unwrap();
 
@@ -753,7 +892,7 @@ mod tests {
 
     #[test]
     fn a_profile_that_declares_a_windows_guest_carries_its_data_disk() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let path = directory.path().join("host.toml");
         let mut host = super::super::fixture().host;
         host.windows = Some(WindowsGuest {
@@ -771,7 +910,7 @@ mod tests {
 
     #[test]
     fn ci_host_load_rejects_garbage_build_cache_size() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let path = directory.path().join("host.toml");
         let mut host = super::super::fixture().host;
         host.build_cache_size = "25GiB".to_owned();
@@ -912,7 +1051,7 @@ mod tests {
     /// take every lane down with it.
     #[test]
     fn a_profile_without_a_topology_still_loads() {
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = fixture_directory().expect("temp dir");
         let path = directory.path().join("mac-host.toml");
         let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ci-mac-host.toml");
         let text = fs::read_to_string(&source).expect("fixture profile");
@@ -944,7 +1083,7 @@ mod tests {
     /// corner case: they are what every host on the fleet actually loads.
     #[test]
     fn the_storage_policy_defaults_match_the_constants_they_replace() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = fixture_directory().unwrap();
         let path = directory.path().join("ci-host.toml");
         let host = super::super::fixture().host;
         host.write(&path).unwrap();

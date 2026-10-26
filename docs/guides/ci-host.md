@@ -314,6 +314,8 @@ user, retaining an existing lock inode and rejecting symlink lock paths.
 cleanup all use that OS-owned maintenance lock; it serializes reclamation,
 and no admitted job holds it during checkout or compilation. Active and
 uncertain owners retain their data, including across guest boundaries.
+Startup fencing applies to native macOS; Linux and Windows retain their
+existing lease layout.
 
 `build_cache_size` caps one cache and cannot see whether the volume has room:
 two checkouts each under a 100 GB cap held 183 GB between them while every pass
@@ -337,6 +339,11 @@ soft floor, evicting past the cap. What its sweeps cannot show:
   and Cargo locks. The companion owns guest lifecycle integration.
 - Build-cache bytes for a lane's leased build directory still count against
   the ceiling.
+- Default and configured native verdict directories, including journal locks
+  and publication temporaries, persist through cleanup. Host and job reclamation
+  reject aliased store paths or overlapping build roots before deleting data.
+  Native `ci lane` uses the executor's `KITHARA_CI_CACHE_ROOT` and refuses
+  managed slot entry when persistent verdict storage is not identified.
 - A macOS job VM clone can outlive its runner. Cleanup retains unproven clones:
   age and a stopped-state observation from Tart do not fence a new user.
   Base images, shared runtimes, guest disks and running guests stay protected.
