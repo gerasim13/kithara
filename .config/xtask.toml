@@ -2840,6 +2840,7 @@ timeout_minutes = 90
 # wrong Xcode has to fail in the job that would have used it.
 [ext.ci.lanes.apple-lint]
 cache_group = "macos"
+publishes_sources = true
 label = "Apple"
 os = "macos"
 tools = ["cargo", "just", "sccache", "kache", "swift", "xcodebuild", "xcodegen"]

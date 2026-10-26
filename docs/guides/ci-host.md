@@ -31,10 +31,17 @@ those installed copies.
 
 The Linux image is built from the pins alone: `RUST_VERSION` and
 `RUST_BASE_DIGEST` select the base, every tool version arrives as a build
-argument. The runners name the floating tag — `kithara-ci:linux-latest` and
-its siblings — never the pin, so a pin bump cannot strand a lane on an image
-nobody built: the pin says what to build, the floating tag says what to run,
-and whatever builds an image moves the tag onto it.
+argument. GitHub fleet provisioning retains its floating runner tags. On the
+Mac, `linux:image` prepares and smoke-tests the pinned toolchain image, then
+publishes its local `kithara-ci@sha256:...` repository digest in a dotenv report.
+Every Linux consumer requires that producer and selects its digest before
+container creation, with `pull_policy = never` and the same repository allowlist.
+The Docker runner has no default image: missing producer identity cannot fall
+back to a tag another branch moved. This requires Docker's local repository
+digest support; a config ID is not substituted for a missing manifest digest.
+`KITHARA_CI_LINUX_IMAGE` is reserved for this producer; project, group and pipeline
+variables must not override it. Verify the deployed provider's dotenv resolution
+and absence of higher-precedence overrides during rollout.
 
 Declared lanes select the checkout's nextest pin in child `PATH` from a
 versioned cache scoped to trust and host platform. A cache miss installs it as
@@ -48,8 +55,8 @@ reading everything from the commit it runs on. The macOS host reinstalls its
 services, rewrites its runner configuration, makes sure the pinned Linux image
 is present and reloads its agents; a Linux host builds the images its profile
 asks for, creates every cache mount its runners use and hands it to the job
-user, and installs its units. Every step is idempotent — an image that is
-already there is only retagged — so a run costs seconds when nothing moved.
+user, and installs its units. Repeated provisioning reuses installed images
+and verifies their selected identities.
 
 Neither pipeline runs it on a push. On GitLab it is `host:provision`, reached
 only by a pipeline started on the default branch with `KITHARA_PROVISION=1`;
@@ -127,8 +134,11 @@ change, not a prerequisite for removing idle time between pipelines.
 
 Native lint, tests and verdict jobs use the shared `kithara-macos` tag so either
 native registration can take them. Each registration retains its own checkout,
-build root and compiler-cache socket. Device builds retain `kithara-macos-2`;
-measured jobs still serialize through `kithara-suite`.
+build root and compiler-cache socket. Host image preparation and framework
+packaging also use the common native pool; bindings, staging and Xcode
+DerivedData stay in each job's checkout. Simulator/server work retains
+`kithara-macos-2` through shutdown and device deletion; measured jobs still
+serialize through `kithara-suite`.
 
 Host-shell registrations run the installed host preflight before fetching sources.
 Critical disk pressure refuses the job before checkout or compilation can spend
@@ -161,6 +171,23 @@ See [CI bridge and verdict](ci-bridge.md#the-verdict) for lane reports and the
 shared regression journal.
 
 ## Object cache service
+
+Each independent host store needs a default-branch dependency-source publisher:
+`linux-lint` on GitHub and `apple-lint` on the Mac's GitLab pipeline. Publication
+uses the bucket named by the job's actual credentials; a claimed trust label
+does not select another bucket. Branch and quarantine runs only restore the
+layer. A main publisher fails if its upload fails. A main run on another host
+does not fill this host's store.
+
+Before its compiler daemon stops, a lane retains sanitized observations in
+a job-keyed file under `.ci-artifacts/cache/`. The report separates kache and sccache, records
+the checkout revision and available step/cache costs, and carries bounded
+key-history digests for that job. Missing earlier history, provider queue
+timestamps or a binary linker observation remain unknown. The report contains
+neither raw configuration/environment data nor compiler arguments. GitHub and
+GitLab retain it as a job artifact even when the lane fails. Provider upload
+paths select only the current job key, so inherited upstream reports are never
+re-uploaded as a consumer result if bootstrap fails.
 
 Linux CI containers leave compile admission to their CPU and memory limits.
 The root `justfile` disables kache's store-wide scheduler for configured Linux
@@ -280,6 +307,23 @@ it is. `docker logs kithara-ci-cache` prints one line per pass among the
 store's own lines.
 
 ## Storage policy
+
+The host profile's `sccache_size` also sets kache's local store target, including
+the runner host layer and each job's scoped store. The S3-backed fallback does
+not reserve its local limit in advance. Keep this one policy consistent before
+introducing a second budget. Protected/import-pinned entries can leave actual
+usage above the target; lowering a target does not make those bytes reclaimable.
+Size it against the protected working set, persistent Cargo slots, RustFS and
+guest disks, retaining the existing physical free-space floor. Unknown protected
+byte counts must stay unknown rather than being inferred from entry counts.
+
+Keep two admitted jobs until matched trials qualify a larger setting. For ten
+cores the existing worker budget gives four Cargo workers per job at two slots
+and three at three slots, including bootstrap. Compare the same revision cohort
+and cache-state class in at least three paired runs, retaining failures, swap,
+storage pressure and measured-suite timing. More slots are accepted only when
+cohort completion improves without violating those contracts; inconclusive
+results keep the previous profile.
 
 Profile thresholds are bytes used against the quota; cleanup takes each as the
 free space to keep. On an APFS container shared with other volumes those differ:

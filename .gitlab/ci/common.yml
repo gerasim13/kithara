@@ -24,6 +24,9 @@
 
 .linux-job:
   extends: .builds-beside-checkout
+  image:
+    name: $KITHARA_CI_LINUX_IMAGE
+    pull_policy: never
   tags:
     - kithara-linux
 

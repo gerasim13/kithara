@@ -441,9 +441,8 @@ pub(crate) const HOST_PACKAGES: [&str; 10] = [
 /// mount elsewhere fixes it, so the guest moves the share here on startup.
 pub(crate) const GUEST_SHARE: &str = "/opt/kithara";
 
-/// The floating tag the Linux runner runs. It always names the image the most
-/// recent pipeline pinned, so the runner configuration never changes with a pin.
-pub(crate) const LINUX_LATEST_IMAGE: &str = "kithara-ci:linux-latest";
+pub(crate) const LINUX_IMAGE_REPOSITORY: &str = "kithara-ci";
+pub(crate) const LINUX_IMAGE_ENV_FILE: &str = ".ci-artifacts/linux-image.env";
 
 /// The throwaway VM the macOS lane clones for every job.
 pub(crate) const JOB_VM_NAME: &str = "kithara-ci-job";
@@ -626,6 +625,13 @@ pub(crate) const SCCACHE_MISSING_UDS_CODE: Option<&str> = if cfg!(unix) {
 };
 
 pub(crate) const SCCACHE_STOP_MESSAGE: &str = "Stopping sccache server...";
+
+pub(crate) const CACHE_EVIDENCE_INPUT_LIMIT: usize = 8 * 1024 * 1024;
+
+pub(crate) const CACHE_EVIDENCE_RECORD_LIMIT: usize = 128;
+
+pub(crate) const CACHE_EVIDENCE_KEY_GROUPS: &str =
+    "compiler args sources env_deps externs link env_cfg remap crate";
 
 /// How `simctl delete` refuses a device that does not exist.
 pub(crate) const SIMCTL_INVALID_DEVICE: &str = "Invalid device";

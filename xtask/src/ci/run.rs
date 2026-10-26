@@ -15,6 +15,7 @@ use tracing::{info, warn};
 
 use super::{
     build_dir::LaneTarget,
+    cache::evidence,
     config::CiConfig,
     environment::CiEnvironment,
     kache::KacheJob,
@@ -262,17 +263,19 @@ fn execute_lane(
     dispatch: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
     journalled(process, lane, || {
-        if kache.is_some() {
-            retire_sccache_server(process, tools)?;
-            process.run(
-                tools.program("sccache"),
-                &["--start-server"],
-                "start the compiler cache",
-            )?;
-        }
-        let result = dispatch();
+        let result = (|| {
+            if kache.is_some() {
+                retire_sccache_server(process, tools)?;
+                process.run(
+                    tools.program("sccache"),
+                    &["--start-server"],
+                    "start the compiler cache",
+                )?;
+            }
+            dispatch()
+        })();
         if let Some(kache) = kache {
-            note_compiler_cache(process, tools, crate::job::is_github());
+            note_compiler_cache(process, tools, crate::job::is_github(), lane);
             kache.stop(process, tools);
         }
         result
@@ -292,6 +295,9 @@ pub(crate) fn journalled(
     lane: &str,
     dispatch: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
+    if !process.is_recording() {
+        evidence::clear(process, lane);
+    }
     let (event, detail) = crate::self_cache::provenance();
     process.note_cache("xtask self-cache", event, detail);
     let result = dispatch();
@@ -307,24 +313,48 @@ pub(crate) fn journalled(
 /// build takes as long as a cold one, and only the write errors say that
 /// nothing it compiled will be there for the next job. That number is raised
 /// to the job's summary rather than left in a table of thirty.
-pub(crate) fn note_compiler_cache(process: &Process, tools: &ToolsConfig, on_github: bool) {
+pub(crate) fn note_compiler_cache(
+    process: &Process,
+    tools: &ToolsConfig,
+    on_github: bool,
+    lane: &str,
+) {
     if process.is_recording() {
         return;
     }
     let kache = tools.program("kache");
-    let (event, detail) = match process.capture(kache, &["stats", "--json"], "kache statistics") {
-        Ok(stats) => kache_note(&stats),
-        Err(error) => (CompilerCache::Unreadable, format!("{error:#}")),
-    };
+    let primary = process.capture_bounded(
+        kache,
+        &["stats", "--json"],
+        "kache statistics",
+        consts::CACHE_EVIDENCE_INPUT_LIMIT,
+    );
+    let (event, detail) = primary.as_ref().map_or_else(
+        |_| {
+            (
+                CompilerCache::Unreadable,
+                "kache statistics unavailable".into(),
+            )
+        },
+        |stats| kache_note(stats),
+    );
     process.note_cache("compiler cache", event.name(), detail);
     let sccache = tools.program("sccache");
-    let (event, detail) = match process.capture(sccache, &["--show-stats"], "sccache statistics") {
-        Ok(stats) => {
-            println!("{stats}");
-            compiler_cache_note(&stats)
-        }
-        Err(error) => (CompilerCache::Unreadable, format!("{error:#}")),
-    };
+    let fallback = process.capture_bounded(
+        sccache,
+        &["--show-stats"],
+        "sccache statistics",
+        consts::CACHE_EVIDENCE_INPUT_LIMIT,
+    );
+    let (event, detail) = fallback.as_ref().map_or_else(
+        |_| {
+            (
+                CompilerCache::Unreadable,
+                "sccache statistics unavailable".into(),
+            )
+        },
+        |stats| compiler_cache_note(stats),
+    );
     if event == CompilerCache::WriteFailed {
         warn!(%detail, "the compiler cache could not store what this lane compiled");
         if on_github {
@@ -335,6 +365,9 @@ pub(crate) fn note_compiler_cache(process: &Process, tools: &ToolsConfig, on_git
         }
     }
     process.note_cache("compiler cache fallback", event.name(), detail);
+    if evidence::retain(process, tools, &primary, &fallback, lane).is_err() {
+        warn!("cache evidence unavailable; the lane outcome is unchanged");
+    }
 }
 
 /// What the compiler cache did for a lane, as its counts tell it.
@@ -395,16 +428,7 @@ fn kache_note(stats: &str) -> (CompilerCache, String) {
 
 /// The journal entry for what `sccache --show-stats` counted.
 fn compiler_cache_note(stats: &str) -> (CompilerCache, String) {
-    let count = |label: &str| {
-        stats.lines().find_map(|line| {
-            let (name, value) = line.trim_end().rsplit_once(char::is_whitespace)?;
-            if name.trim() == label {
-                value.parse::<u64>().ok()
-            } else {
-                None
-            }
-        })
-    };
+    let count = |label| evidence::sccache_count(stats, label);
     let (Some(hits), Some(misses), Some(failed)) = (
         count("Cache hits"),
         count("Cache misses"),
@@ -632,7 +656,7 @@ mod tests {
 
     use super::{
         super::{config::fixture, kache::KacheJob, process::Step},
-        CacheGroup, CompilerCache, Lane, PipelineKind, command_lane, compiler_cache_note,
+        CacheGroup, CompilerCache, Lane, PipelineKind, command_lane, compiler_cache_note, evidence,
         execute_lane, executor_replies, kache_note, sccache_server_is_stopped,
     };
     use crate::{
@@ -1097,8 +1121,7 @@ mod tests {
 
     #[test]
     fn sccache_lifecycle_precedes_real_lane_dispatch() {
-        const READY: &str =
-            "--stop-server\n--start-server\nlane\nstats --json\n--show-stats\ndaemon stop\n";
+        const READY: &str = "--stop-server\n--start-server\nlane\nstats --json\n--show-stats\nstats --full --json\nexplain --json\ndaemon stop\n";
 
         let directory = tempfile::tempdir().unwrap();
         let bin = directory.path().join("bin");
@@ -1114,11 +1137,27 @@ mod tests {
             // What kache did not upload is lost to the next job, not to this
             // one: the lane's own outcome stands.
             ("daemon-stop-failure", true, READY),
-            ("stop-failure", true, "--stop-server\n"),
-            ("start-failure", true, "--stop-server\n--start-server\n"),
+            ("lane-failure", true, READY),
+            ("report-failure", true, READY),
+            ("stats-failure", true, READY),
+            (
+                "stop-failure",
+                true,
+                "--stop-server\nstats --json\n--show-stats\nstats --full --json\nexplain --json\ndaemon stop\n",
+            ),
+            (
+                "start-failure",
+                true,
+                "--stop-server\n--start-server\nstats --json\n--show-stats\nstats --full --json\nexplain --json\ndaemon stop\n",
+            ),
             ("success", false, "lane\n"),
         ] {
             let _ = fs::remove_file(&trace);
+            let artifacts = directory.path().join(".ci-artifacts");
+            let _ = fs::remove_dir_all(&artifacts);
+            if scenario == "report-failure" {
+                fs::write(&artifacts, "prevent evidence creation").unwrap();
+            }
             let mut vars = BTreeMap::from([
                 (OsString::from("PATH"), bin.clone().into_os_string()),
                 (
@@ -1135,7 +1174,9 @@ mod tests {
                         "sccache:--stop-server:stop-failure=7,\
                          sccache:--start-server:start-failure=8,\
                          sccache:--stop-server:already-stopped=2,\
-                         kache:daemon:daemon-stop-failure=1",
+                         kache:daemon:daemon-stop-failure=1,\
+                         kache:stats:stats-failure=9,\
+                         kache:explain:stats-failure=9",
                     ),
                 ),
             ]);
@@ -1166,12 +1207,31 @@ mod tests {
                     let mut sequence = fs::read_to_string(&trace).unwrap_or_default();
                     sequence.push_str("lane\n");
                     fs::write(&trace, sequence)?;
+                    if matches!(scenario, "lane-failure" | "report-failure") {
+                        anyhow::bail!("original lane failure");
+                    }
                     Ok(())
                 },
             );
 
-            let succeeds = !scenario.ends_with("failure") || scenario.starts_with("daemon");
+            let succeeds = matches!(
+                scenario,
+                "success" | "already-stopped" | "daemon-stop-failure" | "stats-failure"
+            );
             assert_eq!(outcome.is_ok(), succeeds, "{scenario}: {outcome:?}");
+            if matches!(scenario, "lane-failure" | "report-failure") {
+                assert_eq!(outcome.unwrap_err().to_string(), "original lane failure");
+            }
+            if scenario == "report-failure" {
+                fs::remove_file(&artifacts).unwrap();
+            } else {
+                assert_eq!(
+                    evidence::report_path(&process, "recorded")
+                        .unwrap()
+                        .is_file(),
+                    uses_kache
+                );
+            }
             assert_eq!(
                 fs::read_to_string(&trace).unwrap(),
                 expected_trace,
@@ -1181,23 +1241,21 @@ mod tests {
     }
 
     #[test]
-    fn the_linux_pipeline_uses_the_runner_provisioned_image() {
+    fn the_linux_pipeline_uses_its_producers_immutable_image() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("xtask has a workspace root");
-        let common = fs::read_to_string(root.join(".gitlab/ci/common.yml"))
-            .expect("the shared pipeline definition is readable");
-        let (_, after_linux) = common
-            .split_once(".linux-job:")
-            .expect("the Linux job template exists");
-        let linux_job = after_linux
-            .split_once("\n.")
-            .map_or(after_linux, |(job, _)| job);
-        assert!(
-            linux_job
-                .lines()
-                .all(|line| !line.trim().starts_with("image:")),
-            "the pipeline must not override the local image provisioned in runner config"
+        let common: serde_yaml_ng::Value = serde_yaml_ng::from_str(
+            &fs::read_to_string(root.join(".gitlab/ci/common.yml")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            common[".linux-job"]["image"]["name"].as_str(),
+            Some("$KITHARA_CI_LINUX_IMAGE")
+        );
+        assert_eq!(
+            common[".linux-job"]["image"]["pull_policy"].as_str(),
+            Some("never")
         );
     }
 
@@ -1312,23 +1370,16 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("xtask has a workspace root");
-        let linux = fs::read_to_string(root.join(".gitlab/ci/linux.yml"))
-            .expect("the Linux pipeline definition is readable");
-        let (_, after_test) = linux
-            .split_once("linux:test:")
-            .expect("the Linux test job exists");
-        let (test_job, coverage_job) = after_test
-            .split_once("linux:coverage:")
-            .expect("the coverage job follows Linux test");
-
-        for (name, job) in [("linux:test", test_job), ("linux:coverage", coverage_job)] {
-            assert!(
-                job.contains("needs:\n    - job: linux:image\n      optional: true\n  script:"),
-                "{name} waits on a job other than the image it runs in"
-            );
-            assert!(
-                !job.contains("linux:check"),
-                "{name} disappears when linux:check fails"
+        let linux: serde_yaml_ng::Value = serde_yaml_ng::from_str(
+            &fs::read_to_string(root.join(".gitlab/ci/linux.yml")).unwrap(),
+        )
+        .unwrap();
+        let expected: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str("- job: linux:image\n  artifacts: true\n").unwrap();
+        for name in ["linux:test", "linux:coverage"] {
+            assert_eq!(
+                linux[name]["needs"], expected,
+                "{name} must wait only for its image, independently of linux:check"
             );
         }
     }

@@ -103,16 +103,8 @@ pub(crate) struct CiLaneConfig {
     /// Immutable trusted Cargo target snapshot this lane restores before it
     /// builds. The key names a compatible Cargo invocation, not a revision.
     pub(crate) target_snapshot: Option<String>,
-    /// Whether this lane records the dependency sources it ended up with, for
-    /// every other lane to restore.
-    ///
-    /// Exactly one lane should, and it must be a Linux lane: a Linux runner
-    /// receives its trust scope and its cache credentials together, while a
-    /// Mac host carries one credential set for every lane it runs whatever
-    /// `KITHARA_CACHE_TRUST` says. Publishing from there wrote the trusted
-    /// bucket with review keys and was refused on every run. Sources are
-    /// platform-independent, so the object serves both fleets wherever it is
-    /// produced.
+    /// Whether this lane publishes dependency sources on its scope's default
+    /// branch. The client's credentials select the bucket on either host.
     #[serde(default)]
     pub(crate) publishes_sources: bool,
     pub(crate) timeout_minutes: u32,
@@ -296,9 +288,11 @@ impl CiProjectConfig {
             if lane.target_snapshot.as_deref().is_some_and(str::is_empty) {
                 bail!("ext.ci.lanes.{name}.target_snapshot must not be empty");
             }
-            if lane.publishes_sources && !lane.runs_only_on_linux() {
+            if lane.publishes_sources
+                && !matches!(lane.os.as_slice(), [os] if matches!(os.as_str(), "linux" | "macos"))
+            {
                 bail!(
-                    "ext.ci.lanes.{name}.publishes_sources requires a Linux-only lane: only a Linux runner is handed its trust scope and its cache credentials together"
+                    "ext.ci.lanes.{name}.publishes_sources requires one supported native platform (linux or macos)"
                 );
             }
             if lane.label.is_empty() {
@@ -1071,20 +1065,17 @@ timeout_minutes = 30
         );
     }
 
-    /// A Mac host carries one cache identity for every lane it runs, so a
-    /// publish declared there writes the trusted bucket with whatever keys the
-    /// host happens to hold. Refuse the declaration rather than the upload.
     #[test]
-    fn only_a_linux_only_lane_may_publish_the_source_layer() {
-        let declared = |os: &str| {
+    fn only_a_supported_native_lane_may_publish_the_source_layer() {
+        let declared = |cache_group: &str, os: &str| {
             let ctx = ctx_from_config(&format!(
                 r#"
 [ext.ci]
 pins = "ci-pins.toml"
 
 [ext.ci.lanes.publisher]
-cache_group = "linux"
-label = "Linux"
+cache_group = "{cache_group}"
+label = "Publisher"
 os = {os}
 program = "just"
 role = "gate"
@@ -1099,9 +1090,21 @@ publishes_sources = true
                 .validate()
         };
 
-        declared(r#""linux""#).expect("a Linux lane may publish");
-        for os in [r#"["macos", "linux"]"#, r#""macos""#] {
-            let refusal = declared(os).expect_err("a lane that can land on a Mac must not publish");
+        for (cache_group, os) in [
+            ("linux", r#""linux""#),
+            ("macos", r#""macos""#),
+            ("linux", r#"["linux"]"#),
+            ("macos", r#"["macos"]"#),
+        ] {
+            declared(cache_group, os).expect("a supported native lane may publish");
+        }
+        for (cache_group, os) in [
+            ("windows", r#""windows""#),
+            ("host", r#"["macos", "linux"]"#),
+            ("host", r#"["linux", "windows"]"#),
+            ("host", r#"["macos", "windows"]"#),
+        ] {
+            let refusal = declared(cache_group, os).expect_err(os);
             assert!(
                 refusal.to_string().contains("publishes_sources"),
                 "the refusal must name the field: {refusal}"

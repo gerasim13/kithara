@@ -8,7 +8,7 @@
   timeout: 180 minutes
   needs:
     - job: linux:image
-      optional: true
+      artifacts: true
 
 lanes:doc:
   extends: .lane-job
@@ -63,7 +63,7 @@ lanes:usdt:
   timeout: 180 minutes
   needs:
     - job: linux:image
-      optional: true
+      artifacts: true
   script:
     - just ci run linux-usdt
 

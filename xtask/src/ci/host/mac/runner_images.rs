@@ -1,42 +1,64 @@
-use std::{fs, path::Path, process::Stdio, thread, time::Duration};
+use std::{
+    fs::{self, OpenOptions},
+    path::Path,
+    process::Stdio,
+    thread,
+    time::Duration,
+};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
+use kithara_devtools::lock::{FileLock, Wait};
+use sha2::{Digest, Sha256};
 use tracing::info;
 
 use super::{
     runner_guest::guest_developer_dir,
-    runners::{
-        RunnerManager, Tokens, docker_host, path_text, read_trimmed, require_macos, write_secure,
-    },
+    runners::{RunnerManager, Tokens, docker_host, path_text, require_macos},
 };
 use crate::{ci::image::linux_build_args, consts};
 
 impl RunnerManager<'_> {
-    /// Makes the image this commit pins the one every Linux job runs.
-    ///
-    /// The runner names `LINUX_LATEST_IMAGE`, not the pin, so a pin bump no
-    /// longer strands the lane on an image nobody built by hand: the pipeline
-    /// runs this first, and it builds the pinned image only when the host does
-    /// not have it yet. When it does, this only moves the floating tag, which
-    /// takes seconds, so the step is cheap enough to run on every pipeline.
-    pub(super) fn build_linux_image(&self, dockerfile: &Path) -> Result<()> {
+    /// Prepare this commit's pinned image and return its immutable local reference.
+    pub(super) fn build_linux_image(&self, dockerfile: &Path) -> Result<String> {
         require_macos()?;
         self.require_ci_user()?;
+        permitted_pin(&self.config.pins.linux_image)?;
         if !dockerfile.is_file() {
             bail!("missing Linux CI Dockerfile: {}", dockerfile.display());
         }
         let home = self.ci_home();
-        let digest = match self.linux_image_digest(&home) {
-            Ok(digest) => {
-                info!(image = self.config.pins.linux_image, %digest, "pinned Linux CI image already present");
-                digest
-            }
-            Err(error) => {
-                info!(image = self.config.pins.linux_image, %error, "pinned Linux CI image missing, building");
-                self.build_pinned_linux_image(&home, dockerfile)?;
-                self.linux_image_digest(&home)?
-            }
-        };
+        let locks = self.config.host.host_root.join("workspaces/image-locks");
+        fs::create_dir_all(&locks)?;
+        let key = hex::encode(Sha256::digest(self.config.pins.linux_image.as_bytes()));
+        let lock = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(locks.join(format!("image-{key}.lock")))?;
+        let holder = crate::job::lock_holder();
+        let _guard = FileLock::exclusive(
+            lock,
+            &Wait {
+                subject: "pinned Linux CI image",
+                holder: &holder,
+            },
+        )?;
+        let mut lookup = self.process.command(self.config.host.brew_tool("docker"));
+        lookup
+            .env(
+                "DOCKER_HOST",
+                docker_host(&home, &self.config.host.colima_profile),
+            )
+            .args(["image", "ls", "--no-trunc", "--quiet", "--filter"])
+            .arg(format!("reference={}", self.config.pins.linux_image));
+        let existing = self
+            .process
+            .capture_command(&mut lookup, "find pinned Linux image")?;
+        if existing.is_empty() {
+            self.build_pinned_linux_image(&home, dockerfile)?;
+        }
+        let digest = self.linux_image_digest(&home, &self.config.pins.linux_image)?;
         if !valid_digest(&digest) {
             bail!("Docker returned invalid Linux image digest: {digest}");
         }
@@ -47,20 +69,25 @@ impl RunnerManager<'_> {
                 docker_host(&home, &self.config.host.colima_profile),
             )
             .args([
-                "tag",
+                "image",
+                "inspect",
+                "--format",
+                "{{json .RepoDigests}}",
                 &self.config.pins.linux_image,
-                consts::LINUX_LATEST_IMAGE,
             ]);
-        self.process
-            .run_command(&mut command, "tag pinned Linux CI image as latest")?;
-        let config_root = home.join(".config/kithara-ci");
-        fs::create_dir_all(&config_root)?;
-        write_secure(
-            &config_root.join("linux-image.digest"),
-            &format!("{digest}\n"),
-        )?;
-        info!(image = self.config.pins.linux_image, latest = consts::LINUX_LATEST_IMAGE, %digest, "Linux CI image active");
-        Ok(())
+        let response = self
+            .process
+            .capture_command(&mut command, "read pinned image references")?;
+        let references: Vec<String> =
+            serde_json::from_str(&response).context("read Docker repository digests")?;
+        let reference = repository_reference(&self.config.pins.linux_image, &references)?;
+        let actual = self.linux_image_digest(&home, reference)?;
+        ensure!(
+            actual == digest,
+            "immutable Linux image reference disagrees with its pinned image"
+        );
+        info!(image = reference, %digest, "Linux CI image prepared");
+        Ok(reference.to_owned())
     }
 
     fn build_pinned_linux_image(&self, home: &Path, dockerfile: &Path) -> Result<()> {
@@ -110,15 +137,14 @@ impl RunnerManager<'_> {
         result.and(cleanup)
     }
 
-    pub(super) fn smoke_linux(&self) -> Result<()> {
+    pub(super) fn smoke_linux(&self, image: &str) -> Result<()> {
         require_macos()?;
         self.require_ci_user()?;
         let home = self.ci_home();
-        let expected = read_trimmed(&home.join(".config/kithara-ci/linux-image.digest"))?;
-        let actual = self.linux_image_digest(&home)?;
-        if actual != expected {
-            bail!("Linux CI image digest changed: expected {expected}, found {actual}");
-        }
+        ensure!(
+            valid_reference(image),
+            "Linux smoke requires a permitted immutable image reference"
+        );
         let checks = [
             vec!["rustc".to_owned(), "--version".to_owned()],
             vec![
@@ -169,16 +195,12 @@ impl RunnerManager<'_> {
                     "DOCKER_HOST",
                     docker_host(&home, &self.config.host.colima_profile),
                 )
-                .args(["run", "--rm", &self.config.pins.linux_image])
+                .args(["run", "--rm", image])
                 .args(&check);
             self.process
                 .run_command(&mut command, "verify Linux CI image tool")?;
         }
-        info!(
-            image = self.config.pins.linux_image,
-            digest = actual,
-            "Linux image smoke passed"
-        );
+        info!(image, "Linux image smoke passed");
         Ok(())
     }
 
@@ -495,32 +517,16 @@ impl RunnerManager<'_> {
             .best_effort(tart, &["delete", consts::JOB_VM_NAME], "delete CI macOS VM");
     }
 
-    pub(super) fn linux_image_digest(&self, home: &Path) -> Result<String> {
+    fn linux_image_digest(&self, home: &Path, image: &str) -> Result<String> {
         let mut command = self.process.command(self.config.host.brew_tool("docker"));
         command
             .env(
                 "DOCKER_HOST",
                 docker_host(home, &self.config.host.colima_profile),
             )
-            .args([
-                "image",
-                "inspect",
-                "--format",
-                "{{.Id}}",
-                &self.config.pins.linux_image,
-            ]);
-        let output = command
-            .output()
-            .context("starting Docker image inspection")?;
-        if !output.status.success() {
-            bail!(
-                "Docker image inspection failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            );
-        }
-        String::from_utf8(output.stdout)
-            .context("Docker image digest is not UTF-8")
-            .map(|digest| digest.trim().to_owned())
+            .args(["image", "inspect", "--format", "{{.Id}}", image]);
+        self.process
+            .capture_command(&mut command, "inspect Linux image identity")
     }
 }
 
@@ -530,20 +536,54 @@ fn valid_digest(value: &str) -> bool {
     })
 }
 
+fn valid_reference(value: &str) -> bool {
+    value
+        .strip_prefix(consts::LINUX_IMAGE_REPOSITORY)
+        .and_then(|suffix| suffix.strip_prefix('@'))
+        .is_some_and(valid_digest)
+}
+
+fn repository_reference<'a>(pinned: &str, references: &'a [String]) -> Result<&'a str> {
+    permitted_pin(pinned)?;
+    references
+        .iter()
+        .find(|reference| valid_reference(reference))
+        .map(String::as_str)
+        .context("pinned Linux image has no local immutable repository digest")
+}
+
+fn permitted_pin(pinned: &str) -> Result<()> {
+    ensure!(
+        pinned.split_once(':').map(|(repo, _)| repo) == Some(consts::LINUX_IMAGE_REPOSITORY),
+        "Linux image pin uses an unpermitted repository"
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "macos")]
+    use crate::ci::{
+        config::fixture,
+        process::{Process, Recording},
+    };
 
-    /// Both hosts have to agree on the one name a Linux job runs under: this
-    /// machine writes it into the runner configuration, and the Linux fleet
-    /// derives it from the same pin.
     #[test]
-    fn the_runner_runs_the_floating_tag_of_the_pinned_image() {
+    fn only_a_real_digest_of_the_permitted_repository_is_selected() {
+        let digest = format!("kithara-ci@sha256:{}", "a".repeat(64));
+        let references = vec![format!("other@sha256:{}", "a".repeat(64)), digest.clone()];
         assert_eq!(
-            crate::ci::image::floating_tag(&crate::ci::config::fixture().pins.linux_image)
-                .expect("the pin carries a tag"),
-            consts::LINUX_LATEST_IMAGE
+            repository_reference("kithara-ci:linux-test", &references).unwrap(),
+            digest
         );
+        assert!(repository_reference("other:linux-test", &references).is_err());
+        assert!(
+            repository_reference("kithara-ci:linux-test", &["kithara-ci:linux-latest".into()])
+                .is_err()
+        );
+        assert!(repository_reference("kithara-ci:linux-test", &[]).is_err());
+        assert!(!valid_reference("kithara-ci-foreign@sha256:abcd"));
     }
 
     #[test]
@@ -551,5 +591,79 @@ mod tests {
         assert!(valid_digest(&format!("sha256:{}", "a".repeat(64))));
         assert!(!valid_digest(&format!("sha256:{}", "a".repeat(63))));
         assert!(!valid_digest(&format!("md5:{}", "a".repeat(64))));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn image_preparation_uses_owned_paths_and_smokes_its_immutable_identity() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = fixture();
+        config.host.host_root = directory.path().to_path_buf();
+        let dockerfile = directory.path().join("Dockerfile");
+        fs::write(&dockerfile, "FROM scratch\n").unwrap();
+        let id = format!("sha256:{}", "a".repeat(64));
+        let reference = format!("kithara-ci@sha256:{}", "b".repeat(64));
+        let references = serde_json::to_string(&vec![reference.clone()]).unwrap();
+        let recording = Recording::default()
+            .with_reply(&["/usr/bin/id", "-un"], &config.host.ci_user)
+            .with_reply(&["/opt/homebrew/bin/docker", "image", "ls"], &id)
+            .with_reply(
+                &[
+                    "/opt/homebrew/bin/docker",
+                    "image",
+                    "inspect",
+                    "--format",
+                    "{{.Id}}",
+                ],
+                &id,
+            )
+            .with_reply(
+                &[
+                    "/opt/homebrew/bin/docker",
+                    "image",
+                    "inspect",
+                    "--format",
+                    "{{json .RepoDigests}}",
+                ],
+                &references,
+            );
+        let process = Process::recording(directory.path(), recording);
+        let manager = RunnerManager::new(&config, &process);
+        fs::create_dir(directory.path().join("workspaces")).unwrap();
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o500)).unwrap();
+        let prepared = manager.build_linux_image(&dockerfile);
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let prepared = prepared.unwrap();
+        assert_eq!(prepared, reference);
+        assert!(!directory.path().join("locks").exists());
+        assert_eq!(
+            fs::read_dir(directory.path().join("workspaces/image-locks"))
+                .unwrap()
+                .count(),
+            1
+        );
+        manager.smoke_linux(&prepared).unwrap();
+        let steps = process.recorded().unwrap();
+        let runs: Vec<_> = steps
+            .steps()
+            .iter()
+            .filter(|step| step.args.first().is_some_and(|arg| arg == "run"))
+            .collect();
+        assert!(!runs.is_empty());
+        assert!(runs.iter().all(|step| step.args[2] == reference));
+        assert!(
+            !steps
+                .steps()
+                .iter()
+                .any(|step| step.args.first().is_some_and(|arg| arg == "tag"))
+        );
+        assert!(
+            !directory
+                .path()
+                .join("home/kithara-ci/.config/kithara-ci/linux-image.digest")
+                .exists()
+        );
     }
 }

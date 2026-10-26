@@ -39,6 +39,7 @@ impl KacheJob {
         fs::create_dir_all(&runtime)
             .with_context(|| format!("creating kache's directory {}", runtime.display()))?;
         let mut cache = toml::Table::new();
+        cache.insert("explain_miss".into(), true.into());
         cache.insert("runtime_dir".into(), path_value(&runtime)?);
         cache.insert(
             "daemon_idle_timeout_secs".into(),

@@ -892,5 +892,7 @@ test "$1" = install
     fn only_the_default_branch_publishes_the_source_layer() {
         assert!(is_source_publisher(PipelineKind::Main.name()));
         assert!(!is_source_publisher(PipelineKind::Branch.name()));
+        assert!(!is_source_publisher(PipelineKind::MergeRequest.name()));
+        assert!(!is_source_publisher(PipelineKind::Quarantine.name()));
     }
 }

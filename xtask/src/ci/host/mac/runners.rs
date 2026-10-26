@@ -58,12 +58,6 @@ impl<'a> RunnerManager<'a> {
         let home = self.ci_home();
         let config_root = home.join(".config/kithara-ci");
         let runner_root = home.join(".gitlab-runner");
-        let image_digest_path = config_root.join("linux-image.digest");
-        let expected_linux = read_trimmed(&image_digest_path)?;
-        let actual_linux = self.linux_image_digest(&home)?;
-        if expected_linux != actual_linux {
-            bail!("Linux CI image digest changed: expected {expected_linux}, found {actual_linux}");
-        }
         let tokens = Tokens::load(&config_root, self.config.host.job_concurrency)?;
         for path in [
             &config_root,
@@ -325,7 +319,11 @@ impl<'a> RunnerManager<'a> {
         let cache = self.config.host.cache_root_linux.display();
         let lane_config = consts::MAC_CONFIG_PATH;
         let cargo_home = consts::CARGO_HOME_DIR;
-        let image = consts::LINUX_LATEST_IMAGE;
+        let image_pattern = format!(
+            "{}@sha256:{}",
+            consts::LINUX_IMAGE_REPOSITORY,
+            "?".repeat(64)
+        );
         let sccache_environment = self.store_environment()?;
         let kache = |file: PathBuf| {
             sccache_environment
@@ -367,7 +365,7 @@ impl<'a> RunnerManager<'a> {
         Ok(format!(
             "concurrent = {concurrency}\ncheck_interval = 3\nshutdown_timeout = 30\n\n\
              [[runners]]\n  name = \"kithara-mac-mini-linux\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"docker\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={cache}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={cache}\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"RUSTUP_HOME=/usr/local/rustup\", \"{cargo_build_jobs}\"{docker_sccache_s3}]\n\
-             [runners.docker]\n    host = \"{}\"\n    image = \"{image}\"\n    pull_policy = \"never\"\n    allowed_pull_policies = [\"never\"]\n    allowed_images = [\"{image}\"]\n    cpus = \"5\"\n    memory = \"6500m\"\n    privileged = false\n    disable_cache = true\n    shm_size = 1073741824\n    volumes = [\"{root}/cache:{cache}:rw\", \"{root}/cache/gitlab-runner:/cache:rw\", \"{root}/services/mac-host.toml:{lane_config}:ro\", \"{container_builds}:{builds}/workspaces/gitlab:rw\"]\n\n\
+             [runners.docker]\n    host = \"{}\"\n    image = \"\"\n    pull_policy = \"never\"\n    allowed_pull_policies = [\"never\"]\n    allowed_images = [\"{image_pattern}\"]\n    cpus = \"5\"\n    memory = \"6500m\"\n    privileged = false\n    disable_cache = true\n    shm_size = 1073741824\n    volumes = [\"{root}/cache:{cache}:rw\", \"{root}/cache/gitlab-runner:/cache:rw\", \"{root}/services/mac-host.toml:{lane_config}:ro\", \"{container_builds}:{builds}/workspaces/gitlab:rw\"]\n\n\
              {macos}\
              [[runners]]\n  name = \"kithara-mac-mini-android\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  pre_get_sources_script = {preflight}\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"SCCACHE_SERVER_UDS=/tmp/kithara-mac-mini-android-sccache.sock\", \"{cargo_build_jobs}\"{sccache_s3}]\n\n\
              [[runners]]\n  name = \"kithara-mac-mini-release\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  pre_get_sources_script = {preflight}\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"SCCACHE_SERVER_UDS=/tmp/kithara-mac-mini-release-sccache.sock\", \"{cargo_build_jobs}\"{sccache_s3}]\n",
@@ -1247,10 +1245,7 @@ mod tests {
             .iter()
             .find(|runner| runner["name"].as_str() == Some("kithara-mac-mini-linux"))
             .unwrap();
-        assert_eq!(
-            linux["docker"]["image"].as_str(),
-            Some(consts::LINUX_LATEST_IMAGE)
-        );
+        assert_eq!(linux["docker"]["image"].as_str(), Some(""));
         assert_eq!(linux["docker"]["pull_policy"].as_str(), Some("never"));
         assert_eq!(
             linux["docker"]["allowed_pull_policies"][0].as_str(),
@@ -1258,7 +1253,14 @@ mod tests {
         );
         assert_eq!(
             linux["docker"]["allowed_images"][0].as_str(),
-            Some(consts::LINUX_LATEST_IMAGE)
+            Some(
+                format!(
+                    "{}@sha256:{}",
+                    consts::LINUX_IMAGE_REPOSITORY,
+                    "?".repeat(64)
+                )
+                .as_str()
+            )
         );
     }
 
