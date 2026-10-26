@@ -469,7 +469,7 @@ mod keyed_parity;
 mod tests {
     use kithara_platform::time::{Duration, WallInstant};
 
-    use super::{MAX_EVENTS, count, events, events_of, recorded, scope};
+    use super::{MAX_EVENTS, SCOPE, count, events, events_of, lock, recorded, scope};
 
     fn fire(probe: &'static str, value: u64) {
         tracing::event!(target: "kithara_test_probe", tracing::Level::TRACE, probe = probe, value = value);
@@ -626,6 +626,7 @@ mod tests {
 
         drop(outer);
 
+        let _serial = lock(&SCOPE);
         assert!(events().is_empty());
     }
 }

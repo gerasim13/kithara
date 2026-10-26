@@ -3,7 +3,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use tracing_subscriber::layer::SubscriberExt;
 
 use super::{
-    MAX_EVENTS, ProbeEvent, STATE, count, events, events_of, last, layer, lock, recorded, scope,
+    MAX_EVENTS, ProbeEvent, SCOPE, STATE, count, events, events_of, last, layer, lock, recorded,
+    scope,
 };
 
 #[derive(Default)]
@@ -195,9 +196,11 @@ fn keyed_high_fanout_recording_matches_the_linear_reference() {
         assert_eq!(lock(&STATE).names.len(), names_before);
         let first = last(&names[0]).expect("an interned name").probe.as_ptr();
         drop(trace);
+        let serial = lock(&SCOPE);
         assert!(events().is_empty());
         assert_eq!(count(&names[0]), 0);
         assert!(last(&names[0]).is_none());
+        drop(serial);
         let _next = scope();
         emit(&mut LinearRecording::default(), &names[0], 999);
         assert_eq!(
