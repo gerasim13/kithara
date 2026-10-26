@@ -16,6 +16,7 @@ mod release;
 mod self_cache;
 mod sysroot;
 mod test_server;
+mod test_utils;
 #[cfg(test)]
 mod testing;
 mod wasm;
@@ -64,6 +65,8 @@ enum Command {
     },
     /// Dedicated `GitLab` CI automation.
     Ci(CiArgs),
+    /// Verify test utilities outside workspace feature unification.
+    TestUtils,
     /// Publish all public crates to crates.io in dependency order.
     Publish(PublishArgs),
     /// Run explicitly scoped mutation suites.
@@ -127,6 +130,7 @@ fn work() -> anyhow::Result<()> {
         Command::Apple { command } => apple::run(command, &ctx),
         Command::Wasm { command } => wasm::run(command, &ctx),
         Command::Ci(ref args) => ci::run(args, &ctx),
+        Command::TestUtils => test_utils::run(&ctx),
         Command::Publish(ref args) => publish::run(args, &ctx),
         Command::Mutants(ref args) => mutants::run(args, &ctx),
         Command::Parity(ref args) => parity::run(args, &ctx),
@@ -153,6 +157,16 @@ mod tests {
     #[test]
     fn self_cache_command_is_available_to_just_transport() {
         assert!(Cli::try_parse_from(["xtask", "self-cache", "probe"]).is_ok());
+    }
+
+    #[test]
+    fn test_utils_has_a_direct_xtask_command() {
+        assert!(matches!(
+            Cli::try_parse_from(["xtask", "test-utils"])
+                .unwrap()
+                .command,
+            Command::TestUtils
+        ));
     }
 
     /// `.cargo/config.toml` aliases `cargo xtask` to `cargo run --package xtask`,

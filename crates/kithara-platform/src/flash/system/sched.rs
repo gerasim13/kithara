@@ -384,7 +384,9 @@ impl FlashInner {
         let wait = self.enter_wait_locked(&mut s);
         let deadline = self.clock.now_nanos().saturating_add(delta);
         let id = s.registry.fresh_id();
-        s.bound_pace_lag(&self.clock);
+        if role == ParkRole::Deadline {
+            s.bound_pace_lag(&self.clock);
+        }
         s.sched.timed.insert(
             (deadline, id),
             Entry::with_role(
