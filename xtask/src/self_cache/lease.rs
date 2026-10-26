@@ -156,16 +156,18 @@ pub(super) fn build(
     target: &Path,
     var: &dyn Fn(&str) -> Option<OsString>,
 ) -> Result<BuildLock> {
-    fs::create_dir_all(target)
-        .with_context(|| format!("create xtask build directory {}", target.display()))?;
-    let path = target.join(consts::BUILD_LOCK);
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&path)
-        .with_context(|| format!("open xtask build lock {}", path.display()))?;
+    let scope = var("KITHARA_CI_CACHE_ROOT").map(PathBuf::from);
+    let lease = match scope.as_deref().filter(|root| target.starts_with(root)) {
+        Some(root) => kithara_devtools::lease::hold_in(root, target.strip_prefix(root)?),
+        None => kithara_devtools::lease::hold(target),
+    }
+    .with_context(|| format!("lease xtask build directory {}", target.display()))?;
+    let path = target
+        .canonicalize()
+        .with_context(|| format!("resolve xtask build directory {}", target.display()))?
+        .join(consts::BUILD_LOCK);
+    let file =
+        lock::open(&path).with_context(|| format!("open xtask build lock {}", path.display()))?;
     let subject = format!("xtask build {}", path.display());
     let holder = crate::job::lock_holder();
     let lock = FileLock::exclusive(
@@ -176,8 +178,6 @@ pub(super) fn build(
         },
     )
     .with_context(|| format!("lock {subject}"))?;
-    let lease = kithara_devtools::lease::hold(target)
-        .with_context(|| format!("lease xtask build directory {}", target.display()))?;
     Ok(BuildLock {
         _sources: claim_beside_alias(checkout, target, var)?,
         _lock: lock,

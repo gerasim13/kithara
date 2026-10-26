@@ -62,8 +62,8 @@ impl BuildDir {
         );
         validate(lane)?;
         let (path, slot) = take(slots, lane)?;
-        let lease =
-            lease::hold(&path).with_context(|| format!("leasing build {}", path.display()))?;
+        let lease = lease::hold_in(slots, path.strip_prefix(slots)?)
+            .with_context(|| format!("leasing build {}", path.display()))?;
         point(alias, &path)?;
         if let Err(error) = super::garbage::collect(&path, window) {
             warn!(

@@ -94,6 +94,15 @@ pub fn claim(root: &Path, key: &Path) -> io::Result<FileLock> {
     )
 }
 
+/// Excludes claims on a resource key until the returned guard drops.
+/// Lock files must remain outside swept trees and must never be unlinked.
+///
+/// # Errors
+/// Invalid keys, unsafe lock files, or lock errors other than contention.
+pub fn exclude(root: &Path, key: &Path) -> io::Result<Option<FileLock>> {
+    try_exclude(open(&claim_path(root, key)?)?)
+}
+
 fn claim_path(root: &Path, key: &Path) -> io::Result<PathBuf> {
     if key.as_os_str().is_empty()
         || !key
@@ -138,6 +147,29 @@ fn physical(directory: &Path) -> io::Result<PathBuf> {
     }
 }
 
+fn sidecar(directory: &Path) -> io::Result<PathBuf> {
+    let directory = path::absolute(directory)?;
+    let parent = directory
+        .parent()
+        .ok_or_else(|| io::Error::other("leased directory needs a parent"))?;
+    let name = directory
+        .file_name()
+        .ok_or_else(|| io::Error::other("leased directory needs a name"))?;
+    let mut sidecar = std::ffi::OsString::from(".");
+    sidecar.push(name);
+    sidecar.push(FILE);
+    fs::create_dir_all(parent)?;
+    Ok(parent.join(sidecar))
+}
+
+fn try_exclude(file: File) -> io::Result<Option<FileLock>> {
+    match FileLock::try_exclusive(file) {
+        Ok(lock) => Ok(Some(lock)),
+        Err(fs4::TryLockError::WouldBlock) => Ok(None),
+        Err(fs4::TryLockError::Error(error)) => Err(error),
+    }
+}
+
 /// Lease filename protecting a build directory during compilation and execution.
 pub const FILE: &str = ".kithara-job-lease";
 
@@ -153,12 +185,15 @@ pub struct Lease {
     heartbeat: Option<Heartbeat>,
     lock: Option<FileLock>,
     probe: File,
+    _stable: Option<FileLock>,
+    _ancestors: Vec<FileLock>,
 }
 
 /// A reclaim's hold on a build directory: no lease can be taken while it lives.
 #[derive(Debug)]
 pub struct Eviction {
     _lock: FileLock,
+    _stable: Option<FileLock>,
 }
 
 #[derive(Debug)]
@@ -181,14 +216,66 @@ pub fn hold(directory: &Path) -> io::Result<Lease> {
     hold_within(directory, consts::LEASE_WAIT)
 }
 
+/// Claims a relative build path and its removable ancestors before creating them.
+/// `root` itself must not be reclaimed while this scope is in use.
+///
+/// # Errors
+/// Non-normal keys, creation failures, or an eviction outlasting the wait.
+pub fn hold_in(root: &Path, key: &Path) -> io::Result<Lease> {
+    if key.as_os_str().is_empty()
+        || !key
+            .components()
+            .all(|part| matches!(part, path::Component::Normal(_)))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "build key must be a normal relative path",
+        ));
+    }
+    let deadline = Instant::now() + consts::LEASE_WAIT;
+    let root = physical(root)?;
+    let lock_root = root
+        .parent()
+        .ok_or_else(|| io::Error::other("build scope needs a parent"))?
+        .join(".kithara-job-leases");
+    let mut scoped_key = PathBuf::from(
+        root.file_name()
+            .ok_or_else(|| io::Error::other("build scope needs a name"))?,
+    );
+    let mut directory = root.to_path_buf();
+    let mut ancestors = Vec::new();
+    let mut parts = key.components().peekable();
+    while let Some(part) = parts.next() {
+        directory.push(part.as_os_str());
+        scoped_key.push(part.as_os_str());
+        ancestors.push(claim(&lock_root, &scoped_key)?);
+        if parts.peek().is_some() {
+            ancestors.push(FileLock::shared_until(
+                open(&sidecar(&directory)?)?,
+                "build ancestor ownership",
+                deadline,
+            )?);
+            fs::create_dir_all(&directory)?;
+        }
+    }
+    let mut lease = hold_within(
+        &directory,
+        deadline.saturating_duration_since(Instant::now()),
+    )?;
+    lease._ancestors = ancestors;
+    Ok(lease)
+}
+
 fn hold_within(directory: &Path, bound: Duration) -> io::Result<Lease> {
     let directory = physical(directory)?;
     let directory = directory.as_path();
     let deadline = Instant::now() + bound;
+    let stable = FileLock::shared_until(open(&sidecar(directory)?)?, "build ownership", deadline)?;
     loop {
         fs::create_dir_all(directory)?;
         let path = path::absolute(directory)?.join(FILE);
-        if let Some(lease) = take(open(&path)?, &path, deadline)? {
+        if let Some(mut lease) = take(open(&path)?, &path, deadline)? {
+            lease._stable = Some(stable);
             return Ok(lease);
         }
     }
@@ -216,6 +303,8 @@ fn take(file: File, path: &Path, deadline: Instant) -> io::Result<Option<Lease>>
         directory,
         lock: Some(lock),
         probe,
+        _stable: None,
+        _ancestors: Vec::new(),
     }))
 }
 
@@ -227,8 +316,14 @@ fn take(file: File, path: &Path, deadline: Instant) -> io::Result<Option<Lease>>
 /// When the lease file cannot be opened or locked for a reason other than a
 /// holder.
 pub fn evict(directory: &Path) -> io::Result<Option<Eviction>> {
+    let Some(stable) = try_exclude(open(&sidecar(directory)?)?)? else {
+        return Ok(None);
+    };
     let path = directory.join(FILE);
-    fence(open(&path)?, &path)
+    Ok(fence(open(&path)?, &path)?.map(|mut eviction| {
+        eviction._stable = Some(stable);
+        eviction
+    }))
 }
 
 /// Takes the exclusive lock on the open lease `file` at `path`, or nothing
@@ -242,7 +337,10 @@ fn fence(file: File, path: &Path) -> io::Result<Option<Eviction>> {
         Err(fs4::TryLockError::WouldBlock) => return Ok(None),
         Err(fs4::TryLockError::Error(error)) => return Err(error),
     };
-    Ok(still_at(&probe, path)?.then_some(Eviction { _lock: lock }))
+    Ok(still_at(&probe, path)?.then_some(Eviction {
+        _lock: lock,
+        _stable: None,
+    }))
 }
 
 /// Whether the open lease `file` is still the one at `path`.
@@ -397,6 +495,7 @@ mod tests {
         drop(heartbeat.stop);
         heartbeat.beating.join().unwrap();
         drop(lease.lock.take());
+        drop(lease._stable.take());
 
         let eviction = evict(&build).unwrap().unwrap();
         fs::rename(&build, temp.path().join(".evicting-lane")).unwrap();
@@ -481,6 +580,58 @@ mod tests {
 
         assert!(fenced.is_none(), "a lock on the moved lease fences nothing");
     }
+    #[test]
+    fn eviction_fences_creation_and_survives_replacement() {
+        let temp = TempDir::new().unwrap();
+        let build = temp.path().join("not-created");
+        let stable = super::try_exclude(open(&super::sidecar(&build).unwrap()).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            hold_within(&build, Duration::ZERO).unwrap_err().kind(),
+            io::ErrorKind::TimedOut
+        );
+        assert!(!build.exists());
+        fs::create_dir(&build).unwrap();
+        fs::rename(&build, temp.path().join("moved")).unwrap();
+        fs::create_dir(&build).unwrap();
+        assert_eq!(
+            hold_within(&build, Duration::ZERO).unwrap_err().kind(),
+            io::ErrorKind::TimedOut
+        );
+        drop(stable);
+        assert!(hold(&build).is_ok());
+    }
+
+    #[test]
+    fn namespace_ownership_outlives_recency_and_does_not_block_peers() {
+        let root = TempDir::new().unwrap();
+        let key = std::path::Path::new("cache/review");
+        let first = super::claim(root.path(), key).unwrap();
+        let second = super::claim(root.path(), key).unwrap();
+        open(&super::claim_path(root.path(), key).unwrap())
+            .unwrap()
+            .set_modified(UNIX_EPOCH)
+            .unwrap();
+        assert!(super::exclude(root.path(), key).unwrap().is_none());
+        assert!(
+            super::exclude(root.path(), std::path::Path::new("cache/trusted"))
+                .unwrap()
+                .is_some()
+        );
+        drop(first);
+        assert!(super::exclude(root.path(), key).unwrap().is_none());
+        drop(second);
+        assert!(super::exclude(root.path(), key).unwrap().is_some());
+        assert!(super::claim(root.path(), std::path::Path::new("../external")).is_err());
+        let normalized = super::claim(root.path(), std::path::Path::new("a/b")).unwrap();
+        assert!(
+            super::exclude(root.path(), std::path::Path::new("a//./b"))
+                .unwrap()
+                .is_none()
+        );
+        drop(normalized);
+    }
 
     #[cfg(unix)]
     #[test]
@@ -550,6 +701,93 @@ mod tests {
         );
         assert!(root.path().join("old/current.1").exists());
         assert!(!root.path().join("logs/current.1").exists());
+    }
+
+    #[test]
+    fn scoped_ownership_prevents_ancestor_eviction_after_enumeration() {
+        let root = TempDir::new().unwrap();
+        let slot = root.path().join("slot");
+        let running = super::hold_in(root.path(), std::path::Path::new("slot/cargo")).unwrap();
+        assert!(evict(&slot).unwrap().is_none());
+        drop(running);
+        let removing = evict(&slot).unwrap().unwrap();
+        assert_eq!(
+            hold_within(&slot, Duration::ZERO).unwrap_err().kind(),
+            io::ErrorKind::TimedOut
+        );
+        drop(removing);
+        assert!(evict(&slot).unwrap().is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn interrupted_recovery_keeps_a_replacement_on_every_pass() {
+        let root = TempDir::new().unwrap();
+        let aside = root.path().join(".evicting-interrupted");
+        fs::create_dir_all(aside.join("data")).unwrap();
+        fs::write(aside.join("data/sentinel"), b"replacement").unwrap();
+        fs::write(aside.join(FILE), b"eviction=0:0\n").unwrap();
+        let identity = super::Handle::from_path(&aside).unwrap();
+        let entries = fs::read_dir(root.path()).unwrap().count();
+        for _ in 0..3 {
+            let candidate =
+                super::Candidate::open(root.path(), std::path::Path::new(".evicting-interrupted"))
+                    .unwrap();
+            assert!(!candidate.remove().unwrap());
+            assert_eq!(super::Handle::from_path(&aside).unwrap(), identity);
+            assert_eq!(fs::read_dir(root.path()).unwrap().count(), entries);
+            assert_eq!(
+                fs::read(aside.join("data/sentinel")).unwrap(),
+                b"replacement"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn namespace_removal_retains_an_active_nested_eviction() {
+        let root = TempDir::new().unwrap();
+        let namespace = root.path().join("namespace");
+        let nested = namespace.join(".evicting-inner");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("sentinel"), b"active").unwrap();
+        let active = evict(&nested).unwrap().unwrap();
+        let candidate =
+            super::Candidate::open(root.path(), std::path::Path::new("namespace")).unwrap();
+        assert_eq!(
+            candidate.remove().unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+        let aside = fs::read_dir(root.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| path.is_dir())
+            .unwrap();
+        assert_eq!(
+            fs::read(aside.join("data/.evicting-inner/sentinel")).unwrap(),
+            b"active"
+        );
+        drop(active);
+        let candidate = super::Candidate::open(
+            root.path(),
+            std::path::Path::new(aside.file_name().unwrap()),
+        )
+        .unwrap();
+        assert!(candidate.remove().unwrap());
+    }
+
+    #[test]
+    fn configured_checkout_relative_targets_claim_the_physical_directory() {
+        let root = TempDir::new().unwrap();
+        let checkout = root.path().join("project");
+        fs::create_dir(&checkout).unwrap();
+        let target = checkout.join("../.target/xtask");
+        let held = hold(&target).unwrap();
+        let physical = root.path().join(".target/xtask");
+        assert!(physical.join(FILE).is_file());
+        assert!(evict(&physical).unwrap().is_none());
+        drop(held);
+        assert!(evict(&physical).unwrap().is_some());
     }
 
     #[cfg(unix)]

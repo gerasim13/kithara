@@ -1,9 +1,23 @@
+#[cfg(unix)]
+use std::{
+    ffi::OsStr,
+    fs::{File, Permissions},
+    os::unix::fs::{MetadataExt, PermissionsExt, fchown},
+};
 use std::{
     fs,
     path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result, bail};
+#[cfg(unix)]
+use kithara_devtools::lock;
+#[cfg(unix)]
+use nix::{
+    errno::Errno,
+    fcntl::{AtFlags, OFlag, open, openat},
+    sys::stat::{Mode, fstat, fstatat, mkdirat},
+};
 use tracing::info;
 
 use crate::{
@@ -160,6 +174,7 @@ impl<'a> ServiceInstaller<'a> {
     }
 
     fn ensure_layout(&self) -> Result<()> {
+        self.install_cleanup_lock()?;
         for (path, mode, owner) in [
             (self.service_root().join("bin"), "0755", "root"),
             (self.service_root().join("bridge"), "0755", "root"),
@@ -185,6 +200,105 @@ impl<'a> ServiceInstaller<'a> {
         let log = self.config.host.host_root.join("logs/bridge.log");
         if !log.exists() {
             self.install_empty_file(&log, "0640", &self.config.host.sync_user)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn install_cleanup_lock(&self) -> Result<()> {
+        let (host, directory, file) = self.open_cleanup_lock()?;
+        let uid = self
+            .process
+            .capture(
+                "/usr/bin/id",
+                &["-u", &self.config.host.ci_user],
+                "lookup CI user id",
+            )?
+            .parse::<u32>()
+            .context("invalid CI user id")?;
+        let group = self.process.capture(
+            "/usr/bin/dscl",
+            &[".", "-read", "/Groups/staff", "PrimaryGroupID"],
+            "lookup staff group id",
+        )?;
+        let gid = group
+            .strip_prefix("PrimaryGroupID: ")
+            .context("invalid staff group record")?
+            .parse::<u32>()
+            .context("invalid staff group id")?;
+        // fchown treats all-bits-one IDs as "leave unchanged".
+        if uid == u32::MAX || gid == u32::MAX {
+            bail!("cleanup lock ownership must name a user and group");
+        }
+        self.set_cleanup_lock_metadata(&host, &directory, &file, (uid, gid))
+    }
+
+    #[cfg(not(unix))]
+    fn install_cleanup_lock(&self) -> Result<()> {
+        bail!("cleanup lock installation requires Unix ownership metadata")
+    }
+
+    #[cfg(unix)]
+    fn open_cleanup_lock(&self) -> Result<(File, File, File)> {
+        let flags = OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC;
+        let host = File::from(
+            open(&self.config.host.host_root, flags, Mode::empty())
+                .context("opening CI host root for cleanup lock installation")?,
+        );
+        match mkdirat(&host, "locks", Mode::from_bits_truncate(0o750)) {
+            Ok(()) | Err(Errno::EEXIST) => {}
+            Err(error) => return Err(error).context("creating cleanup lock directory"),
+        }
+        let directory = File::from(
+            openat(&host, "locks", flags, Mode::empty())
+                .context("opening cleanup lock directory")?,
+        );
+        let file = lock::open_at(&directory, OsStr::new("cleanup.lock"))
+            .context("opening cleanup lock file")?;
+        Ok((host, directory, file))
+    }
+
+    #[cfg(unix)]
+    fn set_cleanup_lock_metadata(
+        &self,
+        host: &File,
+        directory: &File,
+        file: &File,
+        owner: (u32, u32),
+    ) -> Result<()> {
+        let metadata = file.metadata().context("reading cleanup lock metadata")?;
+        if !directory.metadata()?.is_dir() || !metadata.is_file() || metadata.nlink() != 1 {
+            bail!("cleanup lock requires a directory and a singly linked regular file");
+        }
+        for (handle, mode) in [(directory, 0o750), (file, 0o600)] {
+            fchown(handle, Some(owner.0), Some(owner.1))
+                .context("setting cleanup lock ownership")?;
+            handle
+                .set_permissions(Permissions::from_mode(mode))
+                .context("setting cleanup lock permissions")?;
+        }
+        let current_host = File::from(
+            open(
+                &self.config.host.host_root,
+                OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
+                Mode::empty(),
+            )
+            .context("rechecking CI host root after cleanup lock installation")?,
+        );
+        for (expected, current) in [
+            (fstat(host)?, fstat(&current_host)?),
+            (
+                fstat(directory)?,
+                fstatat(host, "locks", AtFlags::AT_SYMLINK_NOFOLLOW)?,
+            ),
+            (
+                fstat(file)?,
+                fstatat(directory, "cleanup.lock", AtFlags::AT_SYMLINK_NOFOLLOW)?,
+            ),
+        ] {
+            if expected.st_dev != current.st_dev || expected.st_ino != current.st_ino {
+                bail!("cleanup lock path changed during installation");
+            }
         }
         Ok(())
     }
@@ -323,8 +437,6 @@ impl<'a> ServiceInstaller<'a> {
 
     #[cfg(unix)]
     fn require_private_sync_file(&self, path: &Path) -> Result<()> {
-        use std::os::unix::fs::{MetadataExt, PermissionsExt};
-
         let metadata = fs::metadata(path).with_context(|| format!("reading {}", path.display()))?;
         if metadata.uid() != self.config.host.sync_uid {
             bail!(
@@ -535,6 +647,8 @@ fn bridge_launchd(binary: &str, config: &str, log: &Path, path: &str, user: &str
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    #[cfg(unix)]
+    use std::{io::Read as _, os::unix::fs::symlink};
 
     use clap::Parser;
 
@@ -543,6 +657,273 @@ mod tests {
         Cli,
         ci::{config::fixture, process::Recording},
     };
+
+    #[cfg(unix)]
+    #[test]
+    fn service_layout_installs_cleanup_lock_without_replacing_its_inode() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let mut config = fixture();
+        config.host.host_root = directory.path().to_path_buf();
+        let locks = directory.path().join("locks");
+        fs::create_dir(&locks)?;
+        let owner = fs::metadata(&locks)?;
+        let process = Process::recording(
+            directory.path(),
+            Recording::default()
+                .with_reply(
+                    &["/usr/bin/id", "-u", &config.host.ci_user],
+                    &owner.uid().to_string(),
+                )
+                .with_reply(
+                    &[
+                        "/usr/bin/dscl",
+                        ".",
+                        "-read",
+                        "/Groups/staff",
+                        "PrimaryGroupID",
+                    ],
+                    &format!("PrimaryGroupID: {}", owner.gid()),
+                ),
+        );
+        let services = ServiceInstaller::new(&config, &process);
+
+        services.ensure_layout()?;
+
+        let lock = locks.join("cleanup.lock");
+        let original = fs::metadata(&lock)?;
+        fs::write(&lock, b"held by a cleanup worker")?;
+        services.ensure_layout()?;
+
+        let installed = fs::metadata(&lock)?;
+        let installed_directory = fs::metadata(&locks)?;
+        assert_eq!(
+            (installed_directory.dev(), installed_directory.ino()),
+            (owner.dev(), owner.ino())
+        );
+        assert_eq!(
+            (installed.dev(), installed.ino()),
+            (original.dev(), original.ino())
+        );
+        assert_eq!(fs::read(&lock)?, b"held by a cleanup worker");
+        for (path, mode) in [(&locks, 0o750), (&lock, 0o600)] {
+            let installed = fs::metadata(path)?;
+            assert_eq!(
+                (installed.uid(), installed.gid()),
+                (owner.uid(), owner.gid())
+            );
+            assert_eq!(installed.mode() & 0o7777, mode);
+        }
+        let recording = process.recorded().unwrap();
+        assert!(!recording.steps().iter().any(|step| {
+            matches!(
+                step.program.as_str(),
+                "/usr/bin/install" | "/usr/sbin/chown" | "/bin/chmod"
+            ) && step.args.iter().any(|argument| {
+                argument == path_text(&locks).unwrap() || argument == path_text(&lock).unwrap()
+            })
+        }));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_lock_rejects_invalid_owner_records_before_metadata_changes() -> Result<()> {
+        for (bad_uid, bad_group) in [
+            (Some("not-a-uid"), None),
+            (Some("4294967295"), None),
+            (None, Some("UniqueID: 20")),
+            (None, Some("PrimaryGroupID: 20\nPrimaryGroupID: 21")),
+            (None, Some("PrimaryGroupID: 4294967295")),
+        ] {
+            let directory = tempfile::tempdir()?;
+            let mut config = fixture();
+            config.host.host_root = directory.path().to_path_buf();
+            let locks = directory.path().join("locks");
+            fs::create_dir(&locks)?;
+            let lock = locks.join("cleanup.lock");
+            fs::write(&lock, b"held by a cleanup worker")?;
+            fs::set_permissions(&locks, Permissions::from_mode(0o700))?;
+            fs::set_permissions(&lock, Permissions::from_mode(0o640))?;
+            let owner = fs::metadata(&lock)?;
+            let uid = owner.uid().to_string();
+            let group = format!("PrimaryGroupID: {}", owner.gid());
+            let process = Process::recording(
+                directory.path(),
+                Recording::default()
+                    .with_reply(
+                        &["/usr/bin/id", "-u", &config.host.ci_user],
+                        bad_uid.unwrap_or(&uid),
+                    )
+                    .with_reply(
+                        &[
+                            "/usr/bin/dscl",
+                            ".",
+                            "-read",
+                            "/Groups/staff",
+                            "PrimaryGroupID",
+                        ],
+                        bad_group.unwrap_or(&group),
+                    ),
+            );
+            let services = ServiceInstaller::new(&config, &process);
+
+            assert!(services.install_cleanup_lock().is_err());
+
+            for (path, mode) in [(&locks, 0o700), (&lock, 0o640)] {
+                let after = fs::metadata(path)?;
+                assert_eq!((after.uid(), after.gid()), (owner.uid(), owner.gid()));
+                assert_eq!(after.mode() & 0o7777, mode);
+            }
+            assert_eq!(fs::read(&lock)?, b"held by a cleanup worker");
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_lock_metadata_stays_on_opened_inodes_after_path_replacement() -> Result<()> {
+        for replacement in ["file", "directory", "host"] {
+            let directory = tempfile::tempdir()?;
+            let external = tempfile::tempdir()?;
+            let sentinel = external.path().join("cleanup.lock");
+            fs::write(&sentinel, b"outside CI storage")?;
+            fs::set_permissions(external.path(), Permissions::from_mode(0o711))?;
+            fs::set_permissions(&sentinel, Permissions::from_mode(0o644))?;
+            let sentinel_before = fs::metadata(&sentinel)?;
+            let external_before = fs::metadata(external.path())?;
+            let mut config = fixture();
+            config.host.host_root = directory.path().join("host");
+            fs::create_dir(&config.host.host_root)?;
+            let locks = config.host.host_root.join("locks");
+            let path = locks.join("cleanup.lock");
+            let process = Process::recording(directory.path(), Recording::default());
+            let services = ServiceInstaller::new(&config, &process);
+            let (host, opened_directory, file) = services.open_cleanup_lock()?;
+            fs::write(&path, b"held by a cleanup worker")?;
+            opened_directory.set_permissions(Permissions::from_mode(0o700))?;
+            file.set_permissions(Permissions::from_mode(0o640))?;
+            let directory_before = opened_directory.metadata()?;
+            let file_before = file.metadata()?;
+            assert!(file_before.is_file());
+            assert_eq!(file_before.nlink(), 1);
+            match replacement {
+                "file" => {
+                    fs::rename(&path, locks.join("retained.lock"))?;
+                    symlink(&sentinel, &path)?;
+                }
+                "directory" => {
+                    fs::rename(&locks, config.host.host_root.join("retained-locks"))?;
+                    symlink(external.path(), &locks)?;
+                }
+                "host" => {
+                    fs::rename(
+                        &config.host.host_root,
+                        directory.path().join("retained-host"),
+                    )?;
+                    symlink(external.path(), &config.host.host_root)?;
+                }
+                _ => unreachable!(),
+            }
+
+            assert!(
+                services
+                    .set_cleanup_lock_metadata(
+                        &host,
+                        &opened_directory,
+                        &file,
+                        (file_before.uid(), file_before.gid()),
+                    )
+                    .is_err(),
+                "{replacement}"
+            );
+
+            for (handle, before, mode) in [
+                (&opened_directory, &directory_before, 0o750),
+                (&file, &file_before, 0o600),
+            ] {
+                let after = handle.metadata()?;
+                assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+                assert_eq!((after.uid(), after.gid()), (before.uid(), before.gid()));
+                assert_eq!(after.mode() & 0o7777, mode);
+            }
+            let mut contents = Vec::new();
+            (&file).read_to_end(&mut contents)?;
+            assert_eq!(contents, b"held by a cleanup worker");
+            assert_eq!(fs::read(&sentinel)?, b"outside CI storage");
+            for (path, before) in [
+                (sentinel.as_path(), &sentinel_before),
+                (external.path(), &external_before),
+            ] {
+                let after = fs::metadata(path)?;
+                assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+                assert_eq!(
+                    (after.uid(), after.gid(), after.mode()),
+                    (before.uid(), before.gid(), before.mode())
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn service_layout_rejects_cleanup_lock_symlinks() -> Result<()> {
+        for link in ["directory", "file", "hard", "nonregular"] {
+            let directory = tempfile::tempdir()?;
+            let external = tempfile::tempdir()?;
+            let sentinel = external.path().join("cleanup.lock");
+            fs::write(&sentinel, b"outside CI storage")?;
+            let sentinel_before = fs::metadata(&sentinel)?;
+            let external_before = fs::metadata(external.path())?;
+            let mut config = fixture();
+            config.host.host_root = directory.path().to_path_buf();
+            let locks = directory.path().join("locks");
+            if link == "directory" {
+                symlink(external.path(), &locks)?;
+            } else {
+                fs::create_dir(&locks)?;
+                if link == "file" {
+                    symlink(&sentinel, locks.join("cleanup.lock"))?;
+                } else if link == "hard" {
+                    fs::hard_link(&sentinel, locks.join("cleanup.lock"))?;
+                } else {
+                    fs::create_dir(locks.join("cleanup.lock"))?;
+                }
+            }
+            let locks_before = fs::symlink_metadata(&locks)?;
+            let process = Process::recording(directory.path(), Recording::default());
+            let services = ServiceInstaller::new(&config, &process);
+
+            assert!(services.ensure_layout().is_err(), "{link}");
+
+            assert_eq!(fs::read(&sentinel)?, b"outside CI storage");
+            let locks_after = fs::symlink_metadata(&locks)?;
+            assert_eq!(
+                (locks_after.uid(), locks_after.gid(), locks_after.mode()),
+                (locks_before.uid(), locks_before.gid(), locks_before.mode())
+            );
+            for (path, before) in [
+                (sentinel.as_path(), &sentinel_before),
+                (external.path(), &external_before),
+            ] {
+                let after = fs::metadata(path)?;
+                assert_eq!(
+                    (after.uid(), after.gid(), after.mode()),
+                    (before.uid(), before.gid(), before.mode())
+                );
+            }
+            let recording = process.recorded().unwrap();
+            let lock = locks.join("cleanup.lock");
+            assert!(!recording.steps().iter().any(|step| {
+                matches!(step.program.as_str(), "/usr/sbin/chown" | "/bin/chmod")
+                    && step
+                        .args
+                        .last()
+                        .is_some_and(|argument| argument == path_text(&lock).unwrap())
+            }));
+        }
+        Ok(())
+    }
 
     #[test]
     fn periodic_agent_commands_are_accepted_by_the_host_cli() -> Result<()> {

@@ -207,6 +207,25 @@ impl Process {
         self.run_command(&mut command, label)
     }
 
+    pub(crate) fn control_output(
+        &self,
+        command: &mut Command,
+        label: &str,
+        deadline: Instant,
+    ) -> Result<Option<Output>> {
+        if self.record(Step::of(command, label, &self.root)) {
+            return Ok(None);
+        }
+        let timeout = deadline
+            .saturating_duration_since(Instant::now())
+            .min(consts::CONTROL_TIMEOUT);
+        if timeout.is_zero() {
+            bail!("maintenance operation exceeded its deadline");
+        }
+        let output = crate::child::output(command, None, timeout);
+        output.with_context(|| format!("running {label}")).map(Some)
+    }
+
     pub(crate) fn run_command(&self, command: &mut Command, label: &str) -> Result<()> {
         if self.record(Step::of(command, label, &self.root)) {
             return Ok(());

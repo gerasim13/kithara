@@ -9,7 +9,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use kithara_devtools::Ctx;
+use kithara_devtools::{Ctx, lease, lock::FileLock};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
@@ -134,6 +134,7 @@ pub(crate) struct CiEnvironment {
     /// still charges its bytes; the claim only says they cannot be taken back.
     _target: Target,
     vars: BTreeMap<OsString, OsString>,
+    _ownership: Vec<FileLock>,
 }
 
 impl CiEnvironment {
@@ -151,11 +152,23 @@ impl CiEnvironment {
             .or_else(|| env::var_os("USERPROFILE"))
             .map(PathBuf::from)
             .context("HOME or USERPROFILE must be set")?;
-        let shared_root = prepare_shared_root(config, cache_group, &home)?;
+        let shared_root = select_shared_root(config, cache_group, &home)?;
 
         let trust = CacheTrust::from_environment()?;
         let platform = format!("{}-{}", env::consts::OS, env::consts::ARCH);
-        let cache_root = shared_root.join(trust.as_str()).join(&platform);
+        let namespace = shared_root.join(trust.as_str());
+        let cache_root = namespace.join(&platform);
+        let fixture_cache = namespace.join("fixtures");
+        let scratch = scratch_root();
+        let temp = scratch.join(trust.as_str());
+        let ownership = claim_namespaces(&[
+            (&shared_root, &namespace),
+            (&shared_root, &cache_root),
+            (&shared_root, &fixture_cache),
+            (&scratch, &temp),
+        ])?;
+        fs::create_dir_all(&shared_root)
+            .with_context(|| format!("creating CI cache root {}", shared_root.display()))?;
         // Entered before anything is reclaimed, including by this job itself:
         // its lease keeps every reclaim away from the directory it builds in.
         let target = Target::enter(&project_root, lane, &process_var)?;
@@ -169,11 +182,9 @@ impl CiEnvironment {
 
         let sccache = SccachePaths::for_job(cfg!(windows), &cache_root, config, cache_group);
         let gradle_home = cache_root.join("gradle");
-        let fixture_cache = shared_root.join(trust.as_str()).join("fixtures");
         let leases = [cache_lease(&cache_root)?, cache_lease(&fixture_cache)?];
         let npm_cache = cache_root.join("npm");
         let swiftpm_cache = cache_root.join("swiftpm");
-        let temp = scratch_root().join(trust.as_str());
 
         for directory in [
             &cache_root,
@@ -300,6 +311,7 @@ impl CiEnvironment {
             kache,
             _target: target,
             vars,
+            _ownership: ownership,
         })
     }
 
@@ -366,7 +378,7 @@ fn shared_root(config: &CiConfig, cache_group: CacheGroup) -> PathBuf {
     }
 }
 
-fn prepare_shared_root(
+fn select_shared_root(
     config: &CiConfig,
     cache_group: CacheGroup,
     home: &FsPath,
@@ -379,9 +391,41 @@ fn prepare_shared_root(
     } else {
         home.join(".cache/kithara-ci")
     };
-    fs::create_dir_all(&root)
-        .with_context(|| format!("creating CI cache root {}", root.display()))?;
     Ok(root)
+}
+
+/// The nonswept owner of namespace locks shared by jobs and host reclamation.
+pub(crate) fn namespace_lock_root(tree: &FsPath) -> Result<PathBuf> {
+    Ok(tree
+        .parent()
+        .context("cache tree must have a parent")?
+        .join(".kithara-job-leases"))
+}
+
+/// A resource key includes the tree name so sibling cache trees never share ownership.
+pub(crate) fn namespace_key(tree: &FsPath, path: &FsPath) -> Result<PathBuf> {
+    let relative = path
+        .strip_prefix(tree)
+        .context("namespace must be inside its cache tree")?;
+    if relative.as_os_str().is_empty()
+        || !relative
+            .components()
+            .all(|part| matches!(part, std::path::Component::Normal(_)))
+    {
+        bail!("namespace must be a normal relative path below its cache tree");
+    }
+    Ok(FsPath::new(tree.file_name().context("cache tree must have a name")?).join(relative))
+}
+
+fn claim_namespaces(paths: &[(&FsPath, &FsPath)]) -> Result<Vec<FileLock>> {
+    let mut ownership = Vec::new();
+    for &(tree, path) in paths {
+        ownership.push(lease::claim(
+            &namespace_lock_root(tree)?,
+            &namespace_key(tree, path)?,
+        )?);
+    }
+    Ok(ownership)
 }
 
 fn is_ci() -> bool {
@@ -997,10 +1041,14 @@ mod tests {
         fs::create_dir_all(&checkout).unwrap();
         fs::write(checkout.join("Cargo.toml"), "[package]\n").unwrap();
         let build_root = checkout.with_file_name(".kithara.target");
-        let unit = build_root.join(id).join("debug");
+        fs::create_dir_all(&build_root).unwrap();
+        let id = format!("{id}-0");
+        let slot = fs::File::create(build_cache::lock_beside(&build_root.join(&id))).unwrap();
+        let _slot = FileLock::try_exclusive(slot).unwrap();
+        let unit = build_root.join(&id).join("debug");
         fs::create_dir_all(&unit).unwrap();
         fs::write(unit.join("artifact"), vec![0_u8; 400_000]).unwrap();
-        std::os::unix::fs::symlink(id, build_root.join(consts::BUILD_ALIAS)).unwrap();
+        std::os::unix::fs::symlink(&id, build_root.join(consts::BUILD_ALIAS)).unwrap();
         build_root.join(id)
     }
 
@@ -1026,6 +1074,7 @@ mod tests {
     /// merges, and main's lane slots under the cache root fill the volume the
     /// job asks room on. The gate reclaims them like the builds beside the
     /// checkouts.
+    #[cfg(not(target_os = "macos"))]
     #[test]
     fn the_gate_reclaims_the_slots_the_previous_layout_keeps() {
         let root = tempfile::tempdir().unwrap();
@@ -1138,5 +1187,58 @@ mod tests {
         let reclaimed_from = reclaim(root.path());
 
         assert_eq!(reclaimed_from, 0);
+    }
+    #[test]
+    fn namespace_guards_protect_ancestors_before_creation() {
+        let root = tempfile::tempdir().unwrap();
+        let tree = root.path().join("cache");
+        let namespace = tree.join("review");
+        let locks = namespace_lock_root(&tree).unwrap();
+        let key = namespace_key(&tree, &namespace).unwrap();
+        let guard = lease::claim(&locks, &key).unwrap();
+        assert!(!tree.exists());
+        assert!(lease::exclude(&locks, &key).unwrap().is_none());
+        assert!(
+            lease::exclude(
+                &locks,
+                &namespace_key(&tree, &tree.join("trusted")).unwrap()
+            )
+            .unwrap()
+            .is_some()
+        );
+        assert!(namespace_key(&tree, &tree.join("../outside")).is_err());
+        assert!(namespace_key(&tree, &root.path().join("outside")).is_err());
+        drop(guard);
+        assert!(lease::exclude(&locks, &key).unwrap().is_some());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn unknown_historical_owners_survive_while_native_peers_reclaim() {
+        let root = tempfile::tempdir().unwrap();
+        let native = build_beside_a_checkout(root.path(), "lint");
+        let historical = root
+            .path()
+            .join("cache")
+            .join(consts::PREVIOUS_TARGET_SLOTS)
+            .join("unknown/cargo");
+        let bootstrap = root
+            .path()
+            .join("cache")
+            .join(consts::PREVIOUS_BOOTSTRAP)
+            .join("review/linux-aarch64");
+        for path in [&historical, &bootstrap] {
+            fs::create_dir_all(path).unwrap();
+            fs::write(path.join("sentinel"), b"uncertain").unwrap();
+            fs::File::create(path.join(lease::HEARTBEAT))
+                .unwrap()
+                .set_modified(std::time::UNIX_EPOCH)
+                .unwrap();
+        }
+        reclaim(root.path());
+        assert!(!native.exists());
+        for path in [&historical, &bootstrap] {
+            assert_eq!(fs::read(path.join("sentinel")).unwrap(), b"uncertain");
+        }
     }
 }

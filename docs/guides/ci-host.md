@@ -286,12 +286,15 @@ free space to keep. On an APFS container shared with other volumes those differ:
 read used-against-quota as free space and a volume reports `Normal` while jobs
 are already refused.
 
-The profile owns this policy: `removable_roots` names the trees cleanup takes
-whole, `active_lease_hours` how long a cache lease keeps one alive,
+The profile owns this policy: `removable_roots` names trees eligible for
+whole-tree removal, `active_lease_hours` the idle lease age for stale candidates,
 `log_limit_bytes` when a log rotates. Individual Cargo, Gradle and sccache files
 are never deleted in place; sccache keeps its own LRU limit. No `diskutil apfs`
 verb accepts `-quota` after creation, so the quota cannot be raised and cleanup
 is the whole answer.
+
+Active and uncertain owners retain their data, including across guest
+boundaries.
 
 `build_cache_size` caps one cache and cannot see whether the volume has room:
 two checkouts each under a 100 GB cap held 183 GB between them while every pass
@@ -304,33 +307,30 @@ soft floor, evicting past the cap. What its sweeps cannot show:
   root is, so deleted layers stay allocated in a sparse file this volume pays
   for; every cleanup holds Docker's build cache to `docker_build_cache_size` and
   trims the `colima_profile` instance, whatever the pressure.
-- A cache namespace that stops being written to goes invisible rather than
-  stale, leaving a retired tool's store behind; `cache_namespaces` lists the
-  live ones and cleanup takes the rest whole. A namespace with an owner belongs
-  there even when it is quiet: `cargo` holds the Linux guest's Cargo home,
-  which a job fetches into only when its lockfile changes, and `kache` holds
-  kache's host files and the store of compiles no job placed.
-  An installed profile carries the list verbatim, so adding a name reaches a
-  running host only by editing its `/etc/kithara-ci/mac-host.toml` as well.
+- `cache_namespaces` names the directories CI still writes, including the
+  Linux guest's Cargo home and kache stores. A retired name, an old timestamp
+  or a failed liveness probe does not prove that a namespace is unused.
+  Cleanup retains whole host cache namespaces, including native platform
+  stores reachable by checkout-built producers without a host-held lifetime
+  fence. An idle snapshot cannot exclude a later old-head starter. Namespace
+  eviction requires proven participation or installed lifetime ownership;
+  native `.target` budgets remain protected by their independent slot, lease
+  and Cargo locks.
 - Build-cache bytes for a lane's leased build directory still count against
   the ceiling.
-- A macOS job VM clone outlives the runner that cloned it, and age alone cannot
-  prune its bundle without taking the base bundle, which only
-  `tart create --from-ipsw` and a person can rebuild. It goes once tart reports
-  it stopped *and* untouched for a day: a boot outlasts the cleanup interval and
-  an idle booted guest writes nothing for hours, so neither alone separates idle
-  from dead. `tart clone` copies on write, so a walk overstates what deleting one
-  returns.
+- A macOS job VM clone can outlive its runner. Cleanup retains unproven clones:
+  age and a stopped-state observation from Tart do not fence a new user.
+  Base images, shared runtimes, guest disks and running guests stay protected.
 - `CiEnvironment` points every lane's `TMPDIR` under `/tmp/kithara-ci`: outside
   the checkout and both CI roots, short enough for the Unix sockets the suite
   binds, on storage the macOS guest can bind. Killed jobs leak there steadily
-  and are pruned on age alone, an `lsof` walk per candidate costing hours over
-  that backlog.
+  and are eligible only after protected ownership has been checked. Live or
+  uncertain owners retain their scratch data.
 
 Automatic cleanup preserves the shared Colima VM, its Docker data disk and the
 services running inside it. If safe cache reclamation cannot restore the free-space
-floor, cleanup reports failure and preflight refuses new jobs. Runtime deletion
-is an explicit maintenance operation, never a disk-pressure cleanup step.
+floor, cleanup reports failure and preflight refuses new jobs.
+Cleanup never deletes runtimes or their disks.
 
 Health and cleanup run through launchd, and directly as `ci host mac health` /
 `ci host mac cleanup`. A `KeepAlive` agent that dies on startup stays loaded

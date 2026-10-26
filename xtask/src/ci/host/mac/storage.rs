@@ -3,15 +3,16 @@ use std::{cell::RefCell, collections::VecDeque};
 use std::{
     cmp::Reverse,
     collections::{BTreeMap, BTreeSet},
-    fs::{self, OpenOptions},
+    fs,
     io::{self, Write},
     path::{Component, Path, PathBuf},
-    process::Output,
+    process::{Command, Output},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, bail};
-use serde::{Deserialize, Serialize};
+use kithara_devtools::{lease, lock::FileLock};
+use serde::Serialize;
 use tracing::{info, warn};
 
 use super::runners::{docker_host, docker_socket};
@@ -21,7 +22,7 @@ use crate::{
     ci::{
         build_cache,
         config::CiConfig,
-        environment::{CacheTrust, scratch_root},
+        environment::{CacheTrust, namespace_key, namespace_lock_root, scratch_root},
         process::Process,
     },
     consts,
@@ -33,11 +34,7 @@ enum Liveness {
     /// A workspace is leased and handed to job after job, so its timestamp says
     /// nothing about whether one is running in it right now.
     Ask,
-    /// A scratch entry belongs to one job and is never handed to another, so
-    /// its age is the whole answer. Asking anyway costs an `lsof` walk per
-    /// entry, and the backlog this was written for had reached sixty-eight
-    /// thousand of them: hours inside a pass that runs every five minutes,
-    /// with every other step in the ladder waiting behind it.
+    /// Scratch reclamation uses published leases instead of an `lsof` walk.
     Age,
 }
 
@@ -61,6 +58,7 @@ pub(super) struct HostStorage<'a> {
     scratch_root: PathBuf,
     config: &'a CiConfig,
     process: &'a Process,
+    deadline: Instant,
     /// What the volume reports as free, so a test states one world rather than
     /// a pressure and a free-space reading that can contradict each other.
     #[cfg(test)]
@@ -98,16 +96,6 @@ struct Volume {
     available: u64,
 }
 
-/// One entry of `tart list --format json`. Only liveness is read here; the
-/// sizes it also reports are apparent and say nothing about what the volume
-/// pays for a sparse disk image.
-#[derive(Deserialize)]
-#[serde(rename_all = "PascalCase")]
-struct TartVm {
-    name: String,
-    running: bool,
-}
-
 impl Volume {
     fn read(path: &Path) -> Result<Self> {
         let total = fs4::total_space(path)
@@ -136,6 +124,9 @@ impl<'a> HostStorage<'a> {
             scratch_root: scratch_root(),
             config,
             process,
+            deadline: Instant::now()
+                .checked_add(config.host.cleanup_deadline())
+                .context("cleanup deadline overflow")?,
             #[cfg(test)]
             available_sequence: RefCell::new(VecDeque::new()),
         })
@@ -153,6 +144,9 @@ impl<'a> HostStorage<'a> {
             build_root,
             config,
             process,
+            deadline: Instant::now()
+                .checked_add(config.host.cleanup_deadline())
+                .context("cleanup deadline overflow")?,
             available_sequence: RefCell::new(VecDeque::new()),
         })
     }
@@ -163,8 +157,8 @@ impl<'a> HostStorage<'a> {
     }
 
     pub(super) fn preflight(&self) -> Result<()> {
-        let free = self.free_bytes()?;
         let (pressure, volume) = self.worst_pressure()?;
+        let free = volume.available;
         match pressure {
             Pressure::Reject => bail!("{} is full; new jobs stop here", volume.path.display()),
             Pressure::Soft | Pressure::Aggressive => {
@@ -190,6 +184,19 @@ impl<'a> HostStorage<'a> {
         Ok(())
     }
 
+    fn control(&self, command: &mut Command, label: &str) -> Result<Option<Output>> {
+        self.process.control_output(command, label, self.deadline)
+    }
+
+    fn run_control(&self, command: &mut Command, label: &str) -> Result<()> {
+        if let Some(output) = self.control(command, label)?
+            && !output.status.success()
+        {
+            bail!("{label} failed (exit code {:?})", output.status.code());
+        }
+        Ok(())
+    }
+
     pub(super) fn cleanup(&self) -> Result<()> {
         // The worst single volume, not the sum: adding a second volume's bytes
         // to the first and comparing that against thresholds calibrated for the
@@ -204,15 +211,11 @@ impl<'a> HostStorage<'a> {
         let initial = volume.available;
         info!(free_bytes = initial, ?pressure, volume = %volume.path.display(), "cleanup started");
 
-        self.prune_host_trees("workspaces/tmp", Self::DAY)?;
         self.prune_scratch_trees(Self::DAY)?;
-        self.prune_host_trees("workspaces/builds", Self::DAY)?;
-        self.prune_host_trees("vm/overlays", Self::DAY)?;
-        self.prune_host_trees("vm/android/avd", Self::DAY)?;
-        self.prune_abandoned_job_vms(Self::DAY);
+        info!("keeping VM and legacy workspace trees without cooperative startup ownership");
         self.prune_host_files("logs", 14 * Self::DAY)?;
         self.rotate_logs()?;
-        self.prune_retired_caches(7 * Self::DAY)?;
+        self.retain_retired_caches(7 * Self::DAY)?;
 
         let build_roots = build_cache::budget_roots(
             &self.build_root.join("workspaces/gitlab"),
@@ -233,7 +236,6 @@ impl<'a> HostStorage<'a> {
                 self.prune_host_trees("cache/quarantine", Duration::ZERO)?;
                 self.prune_host_trees("cache/review", Duration::ZERO)?;
                 self.prune_host_trees("cache/trusted", 7 * Self::DAY)?;
-                self.prune_host_trees("vm/tart/cache", 7 * Self::DAY)?;
             }
             Pressure::Normal => {}
         }
@@ -264,7 +266,7 @@ impl<'a> HostStorage<'a> {
         }
         if final_pressure == Pressure::Reject {
             self.prune_host_trees("cache/trusted", Duration::ZERO)?;
-            self.prune_retired_caches(Duration::ZERO)?;
+            self.retain_retired_caches(Duration::ZERO)?;
             (final_pressure, final_volume) = self.worst_pressure()?;
         }
         let free = final_volume.available;
@@ -402,21 +404,27 @@ impl<'a> HostStorage<'a> {
     /// another filesystem is measured as well.
     fn volumes(&self) -> Result<Vec<Volume>> {
         let mut volumes = vec![Volume::read(&self.host_root)?];
-        if self.build_root != self.host_root
-            && let Ok(build_root) = self.build_root.canonicalize()
-            && !build_root.starts_with(&self.host_root)
-        {
-            volumes.push(Volume::read(&build_root)?);
+        if self.build_root != self.host_root {
+            let build_root = self
+                .build_root
+                .canonicalize()
+                .context("resolving required CI build storage")?;
+            if !build_root.starts_with(&self.host_root) {
+                volumes.push(Volume::read(&build_root)?);
+            }
         }
         let guests = self.host_root.join("vm");
-        if guests.is_dir()
-            && let Ok(guests) = guests.canonicalize()
-            && !guests.starts_with(&self.host_root)
-            && !volumes
-                .iter()
-                .any(|volume| guests.starts_with(&volume.path))
-        {
-            volumes.push(Volume::read(&guests)?);
+        if guests.is_dir() {
+            let guests = guests
+                .canonicalize()
+                .context("resolving CI guest storage")?;
+            if !guests.starts_with(&self.host_root)
+                && !volumes
+                    .iter()
+                    .any(|volume| guests.starts_with(&volume.path))
+            {
+                volumes.push(Volume::read(&guests)?);
+            }
         }
         Ok(volumes)
     }
@@ -486,9 +494,8 @@ impl<'a> HostStorage<'a> {
             .saturating_sub(volume.available)
     }
 
-    /// Cache namespaces nothing writes to any more, once they have gone quiet
-    /// for a week.
-    fn prune_retired_caches(&self, age: Duration) -> Result<()> {
+    /// Keep unlisted namespaces until their owner supplies a reclamation contract.
+    fn retain_retired_caches(&self, age: Duration) -> Result<()> {
         let directory = self.host_root.join("cache");
         if !directory.is_dir() {
             return Ok(());
@@ -511,16 +518,15 @@ impl<'a> HostStorage<'a> {
                 continue;
             }
             let path = entry.path();
-            let metadata = fs::symlink_metadata(&path)?;
+            let Ok(candidate) = self.candidate(&path) else {
+                warn!(path = %path.display(), "keeping CI candidate with unconfirmed path identity");
+                continue;
+            };
+            let metadata = candidate.metadata()?;
             if !metadata.file_type().is_dir() || !older_than(&metadata, age)? {
                 continue;
             }
-            if self.active(&path) {
-                info!(path = %path.display(), "keeping active CI path");
-                continue;
-            }
-            info!(path = %path.display(), "removing retired cache namespace");
-            self.remove_path(&path)?;
+            info!(path = %path.display(), "keeping unlisted cache namespace with unconfirmed host ownership");
         }
         Ok(())
     }
@@ -543,13 +549,14 @@ impl<'a> HostStorage<'a> {
     /// 18 August, growing by roughly 660 mebibytes a day — on the same APFS
     /// container whose free space every pressure threshold is read from.
     ///
-    /// Age is the whole signal here, unlike the workspaces beside it: a
-    /// namespace entry belongs to one job and is never handed to another, so
-    /// its timestamp is its creation, and a day is more than ten times the
-    /// longest lane. The namespaces themselves are never candidates, because
-    /// `prune_old_trees` only ever offers their children.
+    /// The namespace claim fences starting jobs; each eligible entry also
+    /// needs a released lease. Age alone cannot prove ownership ended.
     fn prune_scratch_trees(&self, age: Duration) -> Result<()> {
         for trust in CacheTrust::ALL {
+            let directory = self.scratch_root.join(trust.as_str());
+            let Some(_namespace) = Self::exclude_namespace(&self.scratch_root, &directory) else {
+                continue;
+            };
             self.prune_old_trees(&self.scratch_root, trust.as_str(), age, Liveness::Age)?;
         }
         Ok(())
@@ -571,15 +578,37 @@ impl<'a> HostStorage<'a> {
         {
             let entry = entry?;
             let path = entry.path();
-            let metadata = fs::symlink_metadata(&path)?;
+            let Ok(candidate) = self.candidate(&path) else {
+                warn!(path = %path.display(), "keeping CI candidate with unconfirmed path identity");
+                continue;
+            };
+            let metadata = candidate.metadata()?;
             if !metadata.file_type().is_dir() || !older_than(&metadata, age)? {
                 continue;
             }
+            if self.unproven_cache_namespace(&path)
+                || (liveness == Liveness::Age && !path.join(lease::FILE).is_file())
+            {
+                info!(path = %path.display(), "keeping CI data without confirmed host ownership");
+                continue;
+            }
+            let cache = self.host_root.join("cache");
+            let _namespace = if path.starts_with(&cache) {
+                let Some(guard) = Self::exclude_namespace(&cache, &path) else {
+                    continue;
+                };
+                Some(guard)
+            } else {
+                None
+            };
+            let Some(_owner) = Self::eviction(&path) else {
+                continue;
+            };
             if liveness == Liveness::Ask && self.active(&path) {
                 info!(path = %path.display(), "keeping active CI path");
                 continue;
             }
-            self.remove_path(&path)?;
+            candidate.remove()?;
         }
         Ok(())
     }
@@ -599,21 +628,21 @@ impl<'a> HostStorage<'a> {
         {
             let entry = entry?;
             let path = entry.path();
-            let metadata = fs::symlink_metadata(&path)?;
-            if metadata.file_type().is_symlink() {
-                if older_than(&metadata, age)? {
-                    self.remove_path(&path)?;
-                }
-            } else if metadata.is_dir() {
+            let Ok(candidate) = self.candidate(&path) else {
+                warn!(path = %path.display(), "keeping CI candidate with unconfirmed path identity");
+                continue;
+            };
+            let metadata = candidate.metadata()?;
+            if metadata.is_dir() {
                 self.prune_old_files_recursive(&path, age)?;
-                subdirectories.push(path);
+                subdirectories.push((path, candidate));
             } else if metadata.is_file() && older_than(&metadata, age)? {
-                self.remove_path(&path)?;
+                candidate.remove()?;
             }
         }
-        for directory in subdirectories {
+        for (directory, candidate) in subdirectories {
             if fs::read_dir(&directory)?.next().is_none() {
-                self.remove_path(&directory)?;
+                candidate.remove()?;
             }
         }
         Ok(())
@@ -628,8 +657,14 @@ impl<'a> HostStorage<'a> {
             .with_context(|| format!("reading log directory {}", directory.display()))?
         {
             let path = entry?.path();
+            let Ok(candidate) = self.candidate(&path) else {
+                warn!(path = %path.display(), "keeping CI candidate with unconfirmed path identity");
+                continue;
+            };
+            let metadata = candidate.metadata()?;
             if path.extension().and_then(|extension| extension.to_str()) != Some("log")
-                || fs::symlink_metadata(&path)?.len() <= self.config.host.log_limit_bytes
+                || !metadata.is_file()
+                || metadata.len() <= self.config.host.log_limit_bytes
             {
                 continue;
             }
@@ -638,17 +673,21 @@ impl<'a> HostStorage<'a> {
             for number in (1..=4).rev() {
                 let source = numbered(number);
                 if source.exists() {
-                    fs::rename(&source, numbered(number + 1))
-                        .with_context(|| format!("rotating log {}", source.display()))?;
+                    let mut input = self.candidate(&source)?.open_file(false)?;
+                    let destination = numbered(number + 1);
+                    let name = destination.file_name().context("rotated log name")?;
+                    let mut output = candidate.open_sibling(name)?;
+                    output.set_len(0)?;
+                    io::copy(&mut input, &mut output).context("rotating CI log")?;
                 }
             }
-            fs::copy(&path, numbered(1))
-                .with_context(|| format!("copying rotated log {}", path.display()))?;
-            OpenOptions::new()
-                .write(true)
-                .truncate(true)
-                .open(&path)
-                .with_context(|| format!("truncating rotated log {}", path.display()))?;
+            let mut input = candidate.open_file(true)?;
+            let first = numbered(1);
+            let mut output =
+                candidate.open_sibling(first.file_name().context("rotated log name")?)?;
+            output.set_len(0)?;
+            io::copy(&mut input, &mut output).context("copying rotated CI log")?;
+            input.set_len(0).context("truncating rotated CI log")?;
         }
         Ok(())
     }
@@ -659,14 +698,43 @@ impl<'a> HostStorage<'a> {
         if lease_active || legacy_active {
             return true;
         }
-        self.process
-            .command("/usr/sbin/lsof")
-            .arg("-t")
-            .arg("+D")
-            .arg(path)
-            .output()
-            .as_ref()
-            .is_ok_and(reports_open_files)
+        let mut command = self.process.command("/usr/sbin/lsof");
+        command.args(["-t", "+D"]).arg(path);
+        match self.control(&mut command, "inspect CI path users") {
+            Ok(Some(output)) => {
+                reports_open_files(&output)
+                    || !(output.status.success()
+                        || (output.status.code() == Some(1) && output.stderr.is_empty()))
+            }
+            Ok(None) => false,
+            Err(_) => {
+                warn!(path = %path.display(), "keeping CI path with unknown users");
+                true
+            }
+        }
+    }
+
+    fn exclude_namespace(tree: &Path, path: &Path) -> Option<FileLock> {
+        let exclusion = namespace_lock_root(tree).and_then(|root| {
+            let key = namespace_key(tree, path)?;
+            Ok(lease::exclude(&root, &key)?)
+        });
+        exclusion.unwrap_or_else(|_| {
+            warn!(path = %path.display(), "keeping CI namespace with unconfirmed ownership");
+            None
+        })
+    }
+
+    fn eviction(path: &Path) -> Option<lease::Eviction> {
+        lease::evict(path).unwrap_or_else(|_| {
+            warn!(path = %path.display(), "keeping CI candidate with unconfirmed ownership");
+            None
+        })
+    }
+
+    fn unproven_cache_namespace(&self, path: &Path) -> bool {
+        // Checkout-built producers may not participate in host namespace locks.
+        path.starts_with(self.host_root.join("cache"))
     }
 
     fn lease_directory_active(&self, leases: &Path) -> bool {
@@ -743,11 +811,8 @@ impl<'a> HostStorage<'a> {
         match older_than(metadata, lease) {
             Ok(false) => true,
             Ok(true) => {
-                warn!(path = %marker.display(), "removing stale CI cache lease");
-                if let Err(error) = fs::remove_file(marker) {
-                    warn!(path = %marker.display(), %error, "could not remove stale CI cache lease");
-                }
-                false
+                warn!(path = %marker.display(), "keeping expired CI marker with unconfirmed ownership");
+                true
             }
             Err(error) => {
                 warn!(path = %marker.display(), %error, "could not read CI cache lease age");
@@ -760,100 +825,24 @@ impl<'a> HostStorage<'a> {
         if !self.is_removable(path) {
             bail!("refusing to remove unsafe CI path: {}", path.display());
         }
-        let metadata = match fs::symlink_metadata(path) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-            Err(error) => {
-                return Err(error).with_context(|| format!("reading {}", path.display()));
+        if !path.try_exists()? {
+            return Ok(());
+        }
+        self.candidate(path)?.remove()?;
+        Ok(())
+    }
+
+    fn candidate(&self, path: &Path) -> Result<lease::Candidate> {
+        if !self.is_removable(path) {
+            bail!("refusing to remove unsafe CI path: {}", path.display());
+        }
+        for root in [&self.host_root, &self.build_root, &self.scratch_root] {
+            if let Ok(relative) = path.strip_prefix(root) {
+                return lease::Candidate::open(root, relative)
+                    .with_context(|| format!("inspecting owned CI path {}", path.display()));
             }
-        };
-        if metadata.is_dir() && !metadata.file_type().is_symlink() {
-            fs::remove_dir_all(path).with_context(|| format!("removing {}", path.display()))
-        } else {
-            fs::remove_file(path).with_context(|| format!("removing {}", path.display()))
         }
-    }
-
-    /// Delete the macOS job VM once no runner is serving from it.
-    ///
-    /// The macOS lane clones [`JOB_VM_NAME`](consts::JOB_VM_NAME) from the base bundle and destroys
-    /// it at both ends of every runner loop, so the clone is disposable by
-    /// construction: a runner that finds it missing makes another. When the
-    /// runner dies between those ends the clone outlives it, and nothing ever
-    /// comes back for it. `vm/tart/cache` is pruned by age; the bundle
-    /// directory beside it is not, because pruning that directory by age would
-    /// take the base bundle with it, and the base is only rebuildable by hand
-    /// with `tart create --from-ipsw`.
-    ///
-    /// Seen on the CI host 2026-08-22: a stopped clone from 12 August, ten days
-    /// after the runner that made it was last loaded, while cleanup reported
-    /// `Normal` and freed nothing every five minutes.
-    ///
-    /// What that clone returned is the measure to trust, and it was almost
-    /// nothing: `tart clone` copies on write, so a clone shares its blocks with
-    /// the base until it diverges, and that one had never been booted. A
-    /// directory walk counted its 38 gibibytes twice over — once in each bundle
-    /// — because both files hold the same blocks. So this reclaims what the
-    /// dead runner wrote, not what the bundle appears to weigh: nothing for a
-    /// clone that never ran, and the whole divergence for one that served jobs
-    /// before its runner died. It is worth doing for the second case, and no
-    /// apparent size should be read as the space it will return.
-    ///
-    /// Named rather than swept, so the base bundle is never a candidate, and
-    /// taken apart through `tart` rather than the filesystem, so the tool that
-    /// owns the bundle is the one that dismantles it. Both signals are
-    /// required, because neither can tell an idle runner from a dead one on its
-    /// own: the loop leaves the clone stopped for as long as a boot takes,
-    /// which is longer than the interval this runs on, and a booted guest
-    /// waiting for work writes nothing to its bundle for hours.
-    fn prune_abandoned_job_vms(&self, age: Duration) {
-        let tart = self.config.host.brew_tool("tart");
-        let Ok(home) = self.config.host.tart_home() else {
-            return;
-        };
-        let bundle = home.join("vms").join(consts::JOB_VM_NAME);
-        if !tart.is_file() || !bundle.is_dir() {
-            return;
-        }
-        let Some(touched) = newest_part_mtime(&bundle) else {
-            return;
-        };
-        if !older_than_time(touched, age) || self.job_vm_is_running(&tart) {
-            return;
-        }
-        info!(vm = consts::JOB_VM_NAME, bundle = %bundle.display(), "removing abandoned macOS job VM");
-        let mut command = self.process.command(&tart);
-        command.args(["delete", consts::JOB_VM_NAME]);
-        if let Err(error) = self
-            .process
-            .run_command(&mut command, "delete abandoned CI macOS VM")
-        {
-            warn!(%error, "abandoned macOS job VM cleanup failed");
-        }
-    }
-
-    /// Whether `tart` reports the job VM as running.
-    ///
-    /// A question that cannot be answered answers `true`: an unreadable listing
-    /// must not become permission to delete a guest that may be serving jobs.
-    fn job_vm_is_running(&self, tart: &Path) -> bool {
-        let Ok(output) = self
-            .process
-            .command(tart)
-            .args(["list", "--format", "json"])
-            .output()
-        else {
-            return true;
-        };
-        if !output.status.success() {
-            return true;
-        }
-        let Ok(listed) = serde_json::from_slice::<Vec<TartVm>>(&output.stdout) else {
-            return true;
-        };
-        listed
-            .iter()
-            .any(|vm| vm.name == consts::JOB_VM_NAME && vm.running)
+        bail!("CI path has no owned root")
     }
 
     /// Hold the guest's build cache to `budget` bytes, least recently used
@@ -874,10 +863,7 @@ impl<'a> HostStorage<'a> {
             )
             .args(["builder", "prune", "--force", "--max-used-space"])
             .arg(budget.to_string());
-        if let Err(error) = self
-            .process
-            .run_command(&mut command, "Docker build cache cleanup")
-        {
+        if let Err(error) = self.run_control(&mut command, "Docker build cache cleanup") {
             warn!(%error, "Docker cache cleanup failed");
         }
     }
@@ -905,9 +891,7 @@ impl<'a> HostStorage<'a> {
             "fstrim",
             "-a",
         ]);
-        if let Err(error) = self
-            .process
-            .run_command(&mut command, "return the Linux guest's freed blocks")
+        if let Err(error) = self.run_control(&mut command, "return the Linux guest's freed blocks")
         {
             warn!(%error, "could not trim the Linux guest's disk");
         }
@@ -948,14 +932,15 @@ impl<'a> HostStorage<'a> {
         let started = Instant::now();
         let mut command = self.process.command("du");
         command.args(["-k", "-d", "2"]).args(&roots);
-        let output = crate::child::output(&mut command, None, consts::CONTROL_TIMEOUT);
+        let output = self.control(&mut command, label);
         info!(
             step = label,
             seconds = started.elapsed().as_secs_f64(),
             "done"
         );
         let output = match output {
-            Ok(output) => output,
+            Ok(Some(output)) => output,
+            Ok(None) => return Vec::new(),
             Err(error) => {
                 warn!(%error, "could not measure the CI trees");
                 return Vec::new();
@@ -1100,27 +1085,11 @@ fn older_than_time(modified: SystemTime, age: Duration) -> bool {
         > age
 }
 
-/// When the parts of a VM bundle were last written, newest first.
-///
-/// The bundle's own directory only changes when `tart` adds or removes a part,
-/// which happens when it clones and never again, so its timestamp reads as old
-/// throughout a run that writes gigabytes to the disk image inside it. The
-/// newest part is what says when the guest last did anything. A directory with
-/// no parts is not a bundle, and answers `None` rather than "infinitely old".
-fn newest_part_mtime(bundle: &Path) -> Option<SystemTime> {
-    fs::read_dir(bundle)
-        .ok()?
-        .filter_map(|entry| entry.ok()?.metadata().ok()?.modified().ok())
-        .max()
-}
-
 fn writable_probe(directory: &Path) -> Result<()> {
-    let path = directory.join(format!(".kithara-write-probe-{}", std::process::id()));
-    let result = fs::write(&path, b"probe")
-        .with_context(|| format!("CI directory is not writable: {}", directory.display()));
-    let cleanup =
-        fs::remove_file(&path).with_context(|| format!("removing write probe {}", path.display()));
-    result.and(cleanup)
+    let mut file = tempfile::tempfile_in(directory)
+        .with_context(|| format!("CI directory is not writable: {}", directory.display()))?;
+    file.write_all(b"probe")
+        .with_context(|| format!("CI directory is not writable: {}", directory.display()))
 }
 
 fn unix_time() -> Result<u64> {
@@ -1133,7 +1102,9 @@ fn unix_time() -> Result<u64> {
 /// `lsof -t` can report owners and still exit with a search error. Those PIDs
 /// keep the directory live regardless of the exit status.
 fn reports_open_files(output: &Output) -> bool {
-    !output.stdout.is_empty()
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .any(|pid| pid.parse::<u32>().ok() != Some(std::process::id()))
 }
 
 #[cfg(test)]
@@ -1155,10 +1126,13 @@ mod tests {
     #[cfg(unix)]
     fn a_build_beside_a_checkout(build_root: &Path) -> PathBuf {
         let root = build_root.join("workspaces/gitlab/runner/0/disrupt/kithara.target");
-        let build = root.join("lint");
+        fs::create_dir_all(&root).unwrap();
+        let build = root.join("lint-0");
+        let slot = fs::File::create(build_cache::lock_beside(&build)).unwrap();
+        let _slot = FileLock::try_exclusive(slot).unwrap();
         fs::create_dir_all(build.join("debug")).unwrap();
         fs::write(build.join("debug/artifact.bin"), vec![0_u8; 200]).unwrap();
-        std::os::unix::fs::symlink("lint", root.join(consts::BUILD_ALIAS)).unwrap();
+        std::os::unix::fs::symlink("lint-0", root.join(consts::BUILD_ALIAS)).unwrap();
         build
     }
 
@@ -1173,6 +1147,100 @@ mod tests {
         config.host.aggressive_cleanup_bytes = 270;
         config.host.soft_cleanup_bytes = 240;
         config
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scratch_ownership_outlives_the_expiry_age() {
+        let directory = tempfile::tempdir().unwrap();
+        let cfg = config(directory.path());
+        let process = Process::recording(directory.path(), Recording::default());
+        let storage = HostStorage::for_test(&cfg, &process).unwrap();
+        let scratch = storage.scratch_root.join("review/job-29");
+        let _owner = lease::hold(&scratch).unwrap();
+        fs::write(scratch.join("report"), b"uncollected job report").unwrap();
+
+        storage.prune_scratch_trees(Duration::ZERO).unwrap();
+
+        assert_eq!(
+            fs::read(scratch.join("report")).unwrap(),
+            b"uncollected job report"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_retains_unowned_vm_and_legacy_workspace_trees() {
+        let directory = tempfile::tempdir().unwrap();
+        let trees = [
+            "vm/overlays",
+            "vm/android/avd",
+            "vm/tart/cache",
+            "workspaces/tmp",
+            "workspaces/builds",
+        ];
+        for tree in trees {
+            let path = directory.path().join(tree).join("old-entry");
+            fs::create_dir_all(&path).unwrap();
+            fs::write(path.join("sentinel"), b"unconfirmed owner").unwrap();
+            fs::File::open(&path)
+                .unwrap()
+                .set_times(FileTimes::new().set_modified(SystemTime::now() - 30 * HostStorage::DAY))
+                .unwrap();
+            assert!(!path.join(lease::FILE).exists());
+        }
+        let cfg = config(directory.path());
+        let process = Process::recording(directory.path(), Recording::default());
+        let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
+        storage.set_available_sequence([0, consts::FREE_AGGRESSIVE, consts::FREE_NORMAL]);
+
+        storage.cleanup().unwrap();
+
+        for tree in trees {
+            assert_eq!(
+                fs::read(directory.path().join(tree).join("old-entry/sentinel")).unwrap(),
+                b"unconfirmed owner",
+                "{tree}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_intermediate_symlink_cannot_authorize_external_removal() {
+        let directory = tempfile::tempdir().unwrap();
+        let external = tempfile::tempdir().unwrap();
+        let cfg = config(directory.path());
+        fs::create_dir_all(directory.path().join("cache")).unwrap();
+        fs::create_dir_all(external.path().join("unused")).unwrap();
+        fs::write(external.path().join("unused/sentinel"), b"external data").unwrap();
+        std::os::unix::fs::symlink(external.path(), directory.path().join("cache/review")).unwrap();
+        let process = Process::recording(directory.path(), Recording::default());
+        let storage = HostStorage::for_test(&cfg, &process).unwrap();
+
+        let _ = storage.prune_host_trees("cache/review", Duration::ZERO);
+
+        assert_eq!(
+            fs::read(external.path().join("unused/sentinel")).unwrap(),
+            b"external data"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_preexisting_probe_symlink_cannot_overwrite_external_data() {
+        let directory = tempfile::tempdir().unwrap();
+        let external = tempfile::NamedTempFile::new().unwrap();
+        fs::write(external.path(), b"credentials").unwrap();
+        let probe = directory
+            .path()
+            .join(format!(".kithara-write-probe-{}", std::process::id()));
+        std::os::unix::fs::symlink(external.path(), &probe).unwrap();
+
+        writable_probe(directory.path()).unwrap();
+
+        assert_eq!(fs::read(external.path()).unwrap(), b"credentials");
+        assert!(probe.is_symlink());
     }
 
     #[test]
@@ -1418,7 +1486,7 @@ mod tests {
     }
 
     #[test]
-    fn a_namespace_nothing_writes_to_is_pruned_and_the_live_ones_are_not() {
+    fn retired_namespaces_without_host_ownership_are_retained() {
         let directory = tempfile::tempdir().unwrap();
         let cache = directory.path().join("cache");
         for name in [
@@ -1427,21 +1495,42 @@ mod tests {
             "gitlab-runner",
             "reapi",
             "reapi-sccache",
+            "linux-aarch64",
+            "windows-aarch64",
+            "fixtures",
+            "verdict",
         ] {
             fs::create_dir_all(cache.join(name)).unwrap();
         }
+        let nested_guest = cache.join("reapi/linux-aarch64/guest-data");
+        fs::create_dir_all(nested_guest.parent().unwrap()).unwrap();
+        fs::write(&nested_guest, b"guest data").unwrap();
+        let journal = cache.join("verdict/journal.json");
+        let baseline = b"recorded default-branch baseline";
+        fs::write(&journal, baseline).unwrap();
         let cfg = config(directory.path());
-        let process = Process::new(directory.path(), BTreeMap::new());
-        let storage = HostStorage::for_test(&cfg, &process).unwrap();
+        let process = Process::recording(directory.path(), Recording::default());
+        let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
 
-        storage.prune_retired_caches(Duration::ZERO).unwrap();
+        storage.retain_retired_caches(Duration::ZERO).unwrap();
+        storage.set_available_sequence([0; 5]);
+        assert!(storage.cleanup().is_err());
 
         for name in ["trusted", "review", "gitlab-runner"] {
             assert!(cache.join(name).is_dir(), "{name} is still written to");
         }
-        for name in ["reapi", "reapi-sccache"] {
-            assert!(!cache.join(name).exists(), "{name} is retired");
+        for name in [
+            "reapi",
+            "reapi-sccache",
+            "linux-aarch64",
+            "windows-aarch64",
+            "fixtures",
+            "verdict",
+        ] {
+            assert!(cache.join(name).is_dir(), "{name} has no proven host owner");
         }
+        assert_eq!(fs::read(nested_guest).unwrap(), b"guest data");
+        assert_eq!(fs::read(journal).unwrap(), baseline);
     }
 
     /// A host deployed from a branch serves `production/main` until the branch
@@ -1460,7 +1549,7 @@ mod tests {
         let process = Process::new(directory.path(), BTreeMap::new());
         let storage = HostStorage::for_test(&cfg, &process).unwrap();
 
-        storage.prune_retired_caches(Duration::ZERO).unwrap();
+        storage.retain_retired_caches(Duration::ZERO).unwrap();
 
         for name in &namespaces {
             assert!(cache.join(name).is_dir(), "main still writes to {name}");
@@ -1482,13 +1571,13 @@ mod tests {
         let process = Process::new(directory.path(), BTreeMap::new());
         let storage = HostStorage::for_test(&cfg, &process).unwrap();
 
-        storage.prune_retired_caches(Duration::ZERO).unwrap();
+        storage.retain_retired_caches(Duration::ZERO).unwrap();
 
         assert!(registry.is_dir());
     }
 
     #[test]
-    fn a_retired_namespace_survives_until_it_has_gone_quiet() {
+    fn a_recent_retired_namespace_is_retained() {
         let directory = tempfile::tempdir().unwrap();
         let cache = directory.path().join("cache");
         fs::create_dir_all(cache.join("reapi")).unwrap();
@@ -1496,11 +1585,12 @@ mod tests {
         let process = Process::new(directory.path(), BTreeMap::new());
         let storage = HostStorage::for_test(&cfg, &process).unwrap();
 
-        storage.prune_retired_caches(HostStorage::DAY).unwrap();
+        storage.retain_retired_caches(HostStorage::DAY).unwrap();
 
         assert!(cache.join("reapi").is_dir());
     }
 
+    #[cfg(unix)]
     #[test]
     fn cleanup_never_leaves_the_ci_root() {
         let directory = tempfile::tempdir().unwrap();
@@ -1519,6 +1609,7 @@ mod tests {
         assert!(storage.remove_path(&outside).is_err());
     }
 
+    #[cfg(unix)]
     #[test]
     fn cleanup_allows_only_workspace_descendants_on_the_checkout_root() {
         let directory = tempfile::tempdir().unwrap();
@@ -1547,6 +1638,7 @@ mod tests {
     fn scratch_entry(root: &Path, namespace: &str, age: Duration) -> PathBuf {
         let entry = root.join("scratch").join(namespace).join(".tmpJ8kQ2v");
         fs::create_dir_all(entry.join("fixture")).unwrap();
+        drop(lease::hold(&entry).unwrap());
         fs::File::open(&entry)
             .unwrap()
             .set_times(FileTimes::new().set_modified(SystemTime::now() - age))
@@ -1561,6 +1653,7 @@ mod tests {
     /// given and a namespace left out of the sweep leaks exactly as this one
     /// did. Driven through `cleanup`, because a step nothing calls frees
     /// nothing.
+    #[cfg(unix)]
     #[test]
     fn scratch_no_job_is_using_is_pruned() {
         let directory = tempfile::tempdir().unwrap();
@@ -1672,7 +1765,7 @@ mod tests {
     }
 
     #[test]
-    fn aggressive_cleanup_keeps_any_fresh_job_lease_and_removes_stale_peers() {
+    fn aggressive_cleanup_retains_expired_markers_with_unknown_ownership() {
         let directory = tempfile::tempdir().unwrap();
         let namespace = directory.path().join("cache/review/macos-aarch64");
         let leases = namespace.join(".kithara-ci-leases");
@@ -1703,7 +1796,7 @@ mod tests {
 
         assert!(namespace.is_dir());
         assert!(fresh.is_file());
-        assert!(!stale.exists());
+        assert!(stale.is_file());
     }
 
     #[test]
@@ -1764,7 +1857,7 @@ mod tests {
     /// an idle one is reclaimed and a slot main has taken, by locking the file
     /// beside it, is not.
     #[test]
-    fn a_volume_under_the_floor_reclaims_the_builds_the_previous_layout_keeps() {
+    fn historical_build_reclamation_requires_host_visible_ownership() {
         let directory = tempfile::tempdir().unwrap();
         let mut cfg = config(directory.path());
         cfg.host.brew_root = directory.path().join("brew");
@@ -1797,11 +1890,19 @@ mod tests {
 
         storage.cleanup().unwrap();
 
-        assert!(!idle.join("cargo/debug").exists(), "an idle slot is kept");
-        assert!(
-            !bootstrap.join("debug").exists(),
-            "an idle bootstrap is kept"
-        );
+        for artifact in [
+            idle.join("cargo/debug/artifact.bin"),
+            bootstrap.join("debug/artifact.bin"),
+        ] {
+            if cfg!(target_os = "macos") {
+                assert_eq!(fs::read(artifact).unwrap(), vec![0_u8; 200]);
+            } else {
+                assert!(
+                    !artifact.exists(),
+                    "confirmed local idle build must be reclaimed"
+                );
+            }
+        }
         assert!(
             taken.join("cargo/debug/artifact.bin").is_file(),
             "the pass evicted a slot main has taken"
@@ -2023,24 +2124,53 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
-    fn review_compiler_cache_is_pruned_when_pressure_stays_aggressive() {
+    fn unclaimed_namespaces_survive_while_a_native_target_reclaims() {
+        use std::os::unix::fs::MetadataExt as _;
+
         let directory = tempfile::tempdir().unwrap();
-        let review = directory.path().join("cache/review/macos-aarch64");
-        fs::create_dir_all(review.join("sccache")).unwrap();
+        let namespaces = [
+            "cache/quarantine/macos-aarch64",
+            "cache/review/macos-aarch64",
+            "cache/trusted/macos-aarch64",
+            "cache/review/unregistered",
+        ]
+        .map(|relative| {
+            let path = directory.path().join(relative);
+            fs::create_dir_all(path.join("sccache")).unwrap();
+            fs::write(path.join("sccache/sentinel"), b"old producer cache").unwrap();
+            fs::File::open(&path)
+                .unwrap()
+                .set_times(FileTimes::new().set_modified(SystemTime::now() - 30 * HostStorage::DAY))
+                .unwrap();
+            assert!(!path.join(".kithara-ci-leases").exists());
+            assert!(!path.join(lease::FILE).exists());
+            let inode = fs::metadata(&path).unwrap().ino();
+            (path, inode)
+        });
         let mut cfg = config(directory.path());
         cfg.host.brew_root = directory.path().join("brew");
-        let process = Process::new(directory.path(), BTreeMap::new());
+        cfg.host.build_root = Some(directory.path().join("builds"));
+        let build = a_build_beside_a_checkout(cfg.host.build_root());
+        let process = Process::recording(directory.path(), Recording::default());
         let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
-        storage.set_available_sequence([
-            consts::FREE_AGGRESSIVE,
-            consts::FREE_AGGRESSIVE,
-            consts::FREE_NORMAL,
-        ]);
+        storage.set_available_sequence([0, 0, 0, consts::FREE_NORMAL]);
 
         storage.cleanup().unwrap();
 
-        assert!(!review.exists());
+        assert!(!build.join("debug").exists());
+        for (path, inode) in namespaces {
+            assert_eq!(fs::metadata(&path).unwrap().ino(), inode);
+            assert_eq!(
+                fs::read(path.join("sccache/sentinel")).unwrap(),
+                b"old producer cache"
+            );
+            let leases = path.join(".kithara-ci-leases");
+            fs::create_dir(&leases).unwrap();
+            fs::write(leases.join("job-old"), std::process::id().to_string()).unwrap();
+            assert_eq!(fs::metadata(&path).unwrap().ino(), inode);
+        }
     }
 
     /// A `tart` that records what it was asked for.
@@ -2102,32 +2232,35 @@ mod tests {
             .unwrap();
     }
 
-    /// The clone the CI host held on 2026-08-22: left behind on 12 August by a
-    /// runner that has not been loaded since, on a volume reporting `Normal`
-    /// and freeing nothing every five minutes. What it returns is the
-    /// divergence the dead runner wrote, not the size a directory walk reads
-    /// off a copy-on-write clone. Driven through `cleanup` rather than the
-    /// step alone, because a step nothing calls frees nothing.
     #[test]
-    fn an_abandoned_job_vm_is_deleted() {
+    fn critical_cleanup_retains_unowned_job_vm_and_base_images() {
         let directory = tempfile::tempdir().unwrap();
         let mut cfg = config(directory.path());
         let asked = fake_tart(&mut cfg, directory.path());
         tart_vms(&mut cfg, directory.path(), Some(10 * HostStorage::DAY));
+        let clone = cfg
+            .host
+            .tart_home()
+            .unwrap()
+            .join("vms")
+            .join(consts::JOB_VM_NAME)
+            .join("disk.img");
+        let before = fs::read(&clone).unwrap();
         let process = Process::new(directory.path(), tart_vars(&asked, false));
         let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
-        storage.set_available_sequence([
-            consts::FREE_NORMAL,
-            consts::FREE_NORMAL,
-            consts::FREE_NORMAL,
-        ]);
+        storage.set_available_sequence([0; 5]);
 
-        storage.cleanup().unwrap();
+        assert!(storage.cleanup().is_err());
 
         assert_eq!(
             asked_beyond_listing(&asked),
-            ["delete kithara-ci-job"],
-            "an abandoned clone must be handed back to tart"
+            Vec::<String>::new(),
+            "a stopped listing and age cannot fence guest startup"
+        );
+        assert_eq!(fs::read(clone).unwrap(), before);
+        assert_eq!(
+            fs::read(cfg.host.macos_vm_bundle.join("disk.img")).unwrap(),
+            b"base"
         );
     }
 
@@ -2143,7 +2276,7 @@ mod tests {
         let process = Process::new(directory.path(), tart_vars(&asked, false));
         let storage = HostStorage::for_test(&cfg, &process).unwrap();
 
-        storage.prune_abandoned_job_vms(HostStorage::DAY);
+        storage.cleanup().unwrap();
 
         assert!(
             !asked.exists(),
@@ -2164,7 +2297,7 @@ mod tests {
         let process = Process::new(directory.path(), tart_vars(&asked, true));
         let storage = HostStorage::for_test(&cfg, &process).unwrap();
 
-        storage.prune_abandoned_job_vms(HostStorage::DAY);
+        storage.cleanup().unwrap();
 
         assert!(
             asked_beyond_listing(&asked).is_empty(),
@@ -2185,7 +2318,7 @@ mod tests {
         let process = Process::new(directory.path(), tart_vars(&asked, false));
         let storage = HostStorage::for_test(&cfg, &process).unwrap();
 
-        storage.prune_abandoned_job_vms(HostStorage::DAY);
+        storage.cleanup().unwrap();
 
         assert!(
             !asked.exists(),

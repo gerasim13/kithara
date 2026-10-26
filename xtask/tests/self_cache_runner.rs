@@ -3,7 +3,7 @@
 use std::{
     env, fs,
     io::{self, BufRead, BufReader, ErrorKind, Read, Write},
-    os::unix::fs::PermissionsExt,
+    os::unix::{fs::PermissionsExt, process::CommandExt as _},
     path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
     sync::{Arc, Barrier, mpsc},
@@ -12,7 +12,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow};
-use kithara_devtools::lock::FileLock;
+use kithara_devtools::{lease, lock::FileLock};
 use nix::{
     errno::Errno,
     sys::signal::{Signal, kill},
@@ -690,6 +690,88 @@ fn ci_public_just_runner_holds_the_xtask_build_an_eviction_moved_away() -> Resul
     );
     fs::write(&release, [])?;
     assert!(child.wait()?.success());
+    Ok(())
+}
+
+#[test]
+fn cold_refresh_holds_the_target_before_the_first_cargo_build() -> Result<()> {
+    struct PendingRefresh {
+        child: Option<Child>,
+        release: PathBuf,
+    }
+    impl Drop for PendingRefresh {
+        fn drop(&mut self) {
+            let _ = fs::write(&self.release, []);
+            if let Some(child) = &mut self.child {
+                if child.try_wait().is_ok_and(|status| status.is_none()) {
+                    let _ =
+                        nix::sys::signal::killpg(Pid::from_raw(child.id() as i32), Signal::SIGKILL);
+                }
+                let _ = child.wait();
+            }
+        }
+    }
+    let fixture = Fixture::new()?;
+    let target = fixture._temp.path().join("builds/xtask");
+    let ready = fixture._temp.path().join("cargo-ready");
+    let release = fixture._temp.path().join("cargo-release");
+    write_executable(
+        &fixture.fake_bin.join("cargo"),
+        r#"#!/bin/sh
+set -eu
+printf 'target=%s\nargs=%s\n' "$CARGO_TARGET_DIR" "$*" > "$SELF_CACHE_CARGO_READY"
+while [ ! -e "$SELF_CACHE_CARGO_RELEASE" ]; do sleep 0.01; done
+"#,
+    )?;
+    let mut command = fixture.just_command(&fixture.root, &["_xtask-refresh"])?;
+    let child = command
+        .env("KITHARA_XTASK_TARGET", &target)
+        .env("SELF_CACHE_CARGO_READY", &ready)
+        .env("SELF_CACHE_CARGO_RELEASE", &release)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()?;
+    let mut pending = PendingRefresh {
+        child: Some(child),
+        release,
+    };
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let child = pending.child.as_mut().context("cold refresh child")?;
+    while !ready.is_file() {
+        if child.try_wait()?.is_some() || Instant::now() >= deadline {
+            return Err(anyhow!("cold refresh did not enter fake Cargo"));
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    let fenced = lease::evict(&target).map(|guard| guard.is_none());
+    fs::write(&pending.release, [])?;
+    while pending
+        .child
+        .as_mut()
+        .context("cold refresh child")?
+        .try_wait()?
+        .is_none()
+    {
+        if Instant::now() >= deadline {
+            return Err(anyhow!(
+                "cold refresh did not stop after Cargo was released"
+            ));
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    let output = pending
+        .child
+        .take()
+        .context("cold refresh child")?
+        .wait_with_output()?;
+    assert_success(&output);
+    assert!(fenced?, "cold Cargo started without ownership");
+    let observed = fs::read_to_string(ready)?;
+    assert!(observed.contains(&format!("target={}\n", target.display())));
+    assert!(observed.contains("-- self-cache bootstrap --force"));
+    assert!(lease::evict(&target)?.is_some());
     Ok(())
 }
 

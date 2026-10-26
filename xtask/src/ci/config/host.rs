@@ -16,7 +16,7 @@ use crate::consts;
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CiHost {
-    /// How long a cache lease keeps its tree alive before cleanup breaks it.
+    /// Idle lease age at which cleanup may consider a cache tree stale.
     #[serde(default = "default_active_lease_hours")]
     pub(crate) active_lease_hours: u64,
     pub(crate) admin_user: String,
@@ -34,12 +34,8 @@ pub(crate) struct CiHost {
     /// profiles predate it, and refusing to load would kill the cleanup.
     #[serde(default = "default_build_cache_size")]
     pub(crate) build_cache_size: String,
-    /// The cache namespaces this repository still writes to.
-    ///
-    /// Cleanup prunes by name, so a namespace that stops being written to
-    /// becomes invisible rather than stale, and nothing ever comes back for it.
-    /// Six gigabytes of `cargo-reapi` stores sat here after that tool came off
-    /// the CI path. Anything not named here is pruned on its own age.
+    /// Cache namespaces still written by CI; membership alone does not prove
+    /// that a namespace is idle or safe to remove.
     #[serde(default = "default_cache_namespaces")]
     pub(crate) cache_namespaces: Vec<String>,
     pub(crate) cache_root_macos: PathBuf,
@@ -196,6 +192,13 @@ impl CiHost {
         }
         if self.cleanup_deadline_seconds == 0 {
             bail!("CI host profile cleanup_deadline_seconds must be positive");
+        }
+        if self
+            .removable_roots
+            .iter()
+            .any(|root| root.eq_ignore_ascii_case("locks"))
+        {
+            bail!("CI host profile removable_roots must exclude the maintenance locks directory");
         }
         self.build_cache_budget_bytes()?;
         self.docker_build_cache_budget_bytes()?;
@@ -428,15 +431,7 @@ fn default_removable_roots() -> Vec<String> {
         .to_vec()
 }
 
-/// Cleanup takes whole any cache directory this list does not name, so a
-/// namespace that has an owner belongs here even when nothing writes to it for
-/// a week. The container's Cargo home is one: the runner names it on the cache
-/// share, and its registry would otherwise be fetched again after every quiet
-/// week.
-///
-/// The code-owned name is spelled once, in
-/// [`CARGO_HOME_DIR`](consts::CARGO_HOME_DIR), so a profile that never
-/// overrides this key cannot spell it a second way.
+/// Cache directories whose CI ownership must be retained through maintenance.
 fn default_cache_namespaces() -> Vec<String> {
     [
         consts::CARGO_HOME_DIR,
@@ -608,6 +603,16 @@ mod tests {
         host.cleanup_deadline_seconds = 0;
 
         assert!(host.validate().is_err());
+    }
+
+    #[test]
+    fn ci_host_keeps_cleanup_locks_outside_removable_roots() {
+        for root in ["locks", "LOCKS"] {
+            let mut host = super::super::fixture().host;
+            host.removable_roots.push(root.to_owned());
+
+            assert!(host.validate().is_err(), "{root}");
+        }
     }
 
     /// Installed profiles predate the wait. Loading them without one has to

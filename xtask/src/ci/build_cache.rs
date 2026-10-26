@@ -1,9 +1,10 @@
+#[cfg(any(not(target_os = "macos"), test))]
+use std::fs::OpenOptions;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 use std::{
     ffi::{OsStr, OsString},
-    fs::{self, OpenOptions},
-    io,
+    fs, io,
     path::{Path, PathBuf},
     process,
     time::SystemTime,
@@ -18,9 +19,13 @@ use super::build_dir::{Claim, claim_beside_alias};
 use crate::consts;
 
 /// One build directory in a build root: a lane's, a stress run's, xtask's own.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug)]
 struct CacheEntry {
     path: PathBuf,
+    #[cfg(target_os = "macos")]
+    slot: Option<fs::Metadata>,
+    #[cfg(unix)]
+    candidate: lease::Candidate,
     size_bytes: u64,
     /// When a job last used the entry's lease. A directory no job ever leased
     /// is left from a layout no lane builds in any more, and dates from the
@@ -30,8 +35,8 @@ struct CacheEntry {
 
 struct CacheContents {
     entries: Vec<CacheEntry>,
-    /// Entries a live job holds. They are charged against the ceiling and
-    /// never evicted.
+    /// Entries protected by a holder or retained for unproven first-use ownership.
+    /// They remain charged against the ceiling.
     held: Vec<CacheEntry>,
 }
 
@@ -91,14 +96,21 @@ fn collect(target_dirs: &[PathBuf]) -> Result<(Vec<CacheEntry>, u64)> {
     let mut candidates = Vec::new();
     let mut held_bytes = 0_u64;
     for target_dir in &target_dirs {
-        let contents = candidate_entries(target_dir)?;
+        let contents = match candidate_entries(target_dir) {
+            Ok(contents) => contents,
+            Err(error) if cfg!(unix) => {
+                warn!(path = %target_dir.display(), "{error:#}; retaining the unproven build root");
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         let held = total_bytes(&contents.held);
         held_bytes = held_bytes.saturating_add(held);
         if held > 0 {
             info!(
                 path = %target_dir.display(),
-                held_bytes = held,
-                "keeping the build directories live jobs hold"
+                retained_bytes = held,
+                "keeping protected build directories"
             );
         }
         candidates.extend(contents.entries);
@@ -132,7 +144,10 @@ fn evict_to_budget(candidates: Vec<CacheEntry>, held_bytes: u64, budget_bytes: u
     }
     info!(
         bytes_before,
-        bytes_freed, held_bytes, budget_bytes, "build cache budget enforced"
+        bytes_freed,
+        retained_bytes = held_bytes,
+        budget_bytes,
+        "build cache budget enforced"
     );
 }
 
@@ -143,6 +158,10 @@ fn evict_to_budget(candidates: Vec<CacheEntry>, held_bytes: u64, budget_bytes: u
 /// anything in it is removed, so a job that enters it meanwhile finds its path
 /// free and builds in a new directory instead of one being emptied under it.
 fn evict(entry: &CacheEntry) -> Result<u64> {
+    #[cfg(target_os = "macos")]
+    if is_bootstrap(&entry.path) || !is_slot(&entry.path) || !slot_matches(entry) {
+        return Ok(0);
+    }
     let _slot = match try_hold(&lock_beside(&entry.path))? {
         Hold::Busy => {
             info!(
@@ -151,9 +170,14 @@ fn evict(entry: &CacheEntry) -> Result<u64> {
             );
             return Ok(0);
         }
+        Hold::Absent if cfg!(target_os = "macos") => return Ok(0),
         Hold::Absent => None,
         Hold::Taken(lock) => Some(lock),
     };
+    #[cfg(target_os = "macos")]
+    if !slot_matches(entry) {
+        return Ok(0);
+    }
     let _eviction = match lease::evict(&entry.path) {
         Ok(Some(eviction)) => eviction,
         Ok(None) => {
@@ -184,17 +208,57 @@ fn evict(entry: &CacheEntry) -> Result<u64> {
         );
         return Ok(0);
     }
-    let aside = aside(&entry.path)?;
-    fs::rename(&entry.path, &aside).with_context(|| {
-        format!(
-            "moving build directory {} aside to {}",
-            entry.path.display(),
-            aside.display()
-        )
-    })?;
+    #[cfg(unix)]
+    if !entry.candidate.remove()? {
+        return Ok(0);
+    }
+    #[cfg(not(unix))]
+    {
+        let aside = aside(&entry.path)?;
+        fs::rename(&entry.path, &aside).with_context(|| {
+            format!(
+                "moving build directory {} aside to {}",
+                entry.path.display(),
+                aside.display()
+            )
+        })?;
+        remove_aside(&aside)?;
+    }
     info!(path = %entry.path.display(), bytes = entry.size_bytes, "evicting build cache");
-    remove_aside(&aside)?;
     Ok(entry.size_bytes)
+}
+
+#[cfg(target_os = "macos")]
+fn is_bootstrap(path: &Path) -> bool {
+    path.ancestors()
+        .any(|ancestor| ancestor.file_name() == Some(OsStr::new(consts::XTASK_BUILD)))
+}
+
+#[cfg(target_os = "macos")]
+fn is_slot(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(OsStr::to_str) else {
+        return false;
+    };
+    let Some((lane, index)) = name.rsplit_once('-') else {
+        return false;
+    };
+    !lane.is_empty()
+        && !lane.starts_with('.')
+        && index
+            .parse::<usize>()
+            .is_ok_and(|value| value.to_string() == index)
+}
+
+#[cfg(target_os = "macos")]
+fn slot_matches(entry: &CacheEntry) -> bool {
+    entry.slot.as_ref().is_some_and(|expected| {
+        fs::symlink_metadata(lock_beside(&entry.path)).is_ok_and(|current| {
+            current.is_file()
+                && current.nlink() == 1
+                && current.dev() == expected.dev()
+                && current.ino() == expected.ino()
+        })
+    })
 }
 
 /// The `.cargo-lock` of every profile in `entry`, held so Cargo cannot start
@@ -241,9 +305,29 @@ pub(crate) fn aside(entry: &Path) -> Result<PathBuf> {
     Ok(root.join(aside))
 }
 
+/// Reclaims interrupted removals under the same stable and legacy lease fencing.
+#[cfg(unix)]
+fn remove_leftover(aside: &Path) -> Result<()> {
+    let root = aside.parent().context("eviction needs a parent")?;
+    let name = aside.file_name().context("eviction needs a name")?;
+    let candidate = lease::Candidate::open(root, Path::new(name))?;
+    let Some(_eviction) = lease::evict(aside)? else {
+        return Ok(());
+    };
+    if taken_below(aside)? {
+        return Ok(());
+    }
+    let Some(_cargo) = hold_cargo_locks(aside)? else {
+        return Ok(());
+    };
+    candidate.remove()?;
+    Ok(())
+}
+
 /// Removes a directory an eviction moved aside, its lease last: a pass that
 /// finds the lease finds the eviction holding it, and one that finds no lease
 /// finds only the empty directory left to remove.
+#[cfg(not(unix))]
 fn remove_aside(aside: &Path) -> Result<()> {
     let listing =
         fs::read_dir(aside).with_context(|| format!("reading build cache {}", aside.display()))?;
@@ -270,6 +354,7 @@ fn remove_aside(aside: &Path) -> Result<()> {
 
 /// Removes what an eviction that died midway moved aside, unless the eviction
 /// is still running and holds its lease.
+#[cfg(not(unix))]
 fn remove_leftover(aside: &Path) -> Result<()> {
     let lease_file = aside.join(lease::FILE);
     let file = match OpenOptions::new().read(true).write(true).open(&lease_file) {
@@ -354,8 +439,24 @@ fn candidate_entries(target_dir: &Path) -> Result<CacheContents> {
         if is_hidden(&path) {
             continue;
         }
+        #[cfg(unix)]
+        let candidate = match lease::Candidate::open(target_dir, Path::new(&entry.file_name())) {
+            Ok(candidate) => candidate,
+            Err(error) => {
+                warn!(path = %path.display(), "{error}; retaining the unproven build entry");
+                continue;
+            }
+        };
         let mut used = SystemTime::UNIX_EPOCH;
+        #[cfg(target_os = "macos")]
+        let slot = fs::symlink_metadata(lock_beside(&path))
+            .ok()
+            .filter(|metadata| metadata.is_file() && metadata.nlink() == 1);
         let mut held = lock_is_held(&lock_beside(&path));
+        #[cfg(target_os = "macos")]
+        {
+            held = held || is_bootstrap(&path) || !is_slot(&path) || slot.is_none();
+        }
         for dir in levels(&path, consts::LEASE_DEPTH)? {
             for mark in [lease::FILE, lease::HEARTBEAT] {
                 let mark = dir.join(mark);
@@ -380,6 +481,10 @@ fn candidate_entries(target_dir: &Path) -> Result<CacheContents> {
             size_bytes: directory_bytes(&path)?,
             used,
             path,
+            #[cfg(target_os = "macos")]
+            slot,
+            #[cfg(unix)]
+            candidate,
         };
         if held {
             contents.held.push(entry);
@@ -468,13 +573,39 @@ enum Hold {
 
 /// Takes the lock file at `path` when it exists and no job holds it.
 fn try_hold(path: &Path) -> Result<Hold> {
+    #[cfg(target_os = "macos")]
+    let inspected = match lease::Candidate::open(
+        path.parent().context("build lock needs a parent")?,
+        Path::new(path.file_name().context("build lock needs a name")?),
+    ) {
+        Ok(inspected) => inspected,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Hold::Absent),
+        Err(error) => return Err(error).with_context(|| format!("inspecting {}", path.display())),
+    };
+    #[cfg(target_os = "macos")]
+    let file = inspected.open_file(true)?;
+    #[cfg(not(target_os = "macos"))]
     let file = match OpenOptions::new().read(true).write(true).open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Hold::Absent),
         Err(error) => return Err(error).with_context(|| format!("opening {}", path.display())),
     };
     match FileLock::try_exclusive(file) {
-        Ok(lock) => Ok(Hold::Taken(lock)),
+        Ok(lock) => {
+            #[cfg(target_os = "macos")]
+            {
+                let expected = inspected.metadata()?;
+                let current = fs::symlink_metadata(path)?;
+                if !current.is_file()
+                    || current.nlink() != 1
+                    || current.dev() != expected.dev()
+                    || current.ino() != expected.ino()
+                {
+                    bail!("build lock changed identity: {}", path.display());
+                }
+            }
+            Ok(Hold::Taken(lock))
+        }
         Err(TryLockError::WouldBlock) => Ok(Hold::Busy),
         Err(TryLockError::Error(error)) => {
             Err(error).with_context(|| format!("locking {}", path.display()))
@@ -561,8 +692,26 @@ pub(crate) fn hold_target(
         .map(PathBuf::from)
         .filter(|target| target.file_name() != Some(OsStr::new(consts::BUILD_ALIAS)))
         .map(|target| {
-            let lease =
-                lease::hold(&target).with_context(|| format!("lease {}", target.display()))?;
+            let scope = var("KITHARA_CI_CACHE_ROOT").map(PathBuf::from);
+            let alias = target.ancestors().find(|path| {
+                path.file_name() == Some(OsStr::new(consts::BUILD_ALIAS)) && path.is_symlink()
+            });
+            let lease = if let Some(alias) = alias {
+                let slot = fs::canonicalize(alias)?;
+                let root = slot.parent().context("managed build slot needs a root")?;
+                let key = Path::new(
+                    slot.file_name()
+                        .context("managed build slot needs a name")?,
+                )
+                .join(target.strip_prefix(alias)?);
+                lease::hold_in(root, &key)
+            } else {
+                match scope.as_deref().filter(|root| target.starts_with(root)) {
+                    Some(root) => lease::hold_in(root, target.strip_prefix(root)?),
+                    None => lease::hold(&target),
+                }
+            }
+            .with_context(|| format!("lease {}", target.display()))?;
             Ok(HeldTarget {
                 _sources: claim_beside_alias(checkout, &target, var)?,
                 _lease: lease,
@@ -636,6 +785,10 @@ pub(crate) fn budget_roots(workspaces: &Path, cache: &Path) -> Result<Vec<PathBu
 /// deployed from this branch serves it: its lane slots, where it keeps them
 /// there, and one directory per trust it bootstraps xtask for.
 pub(crate) fn previous_build_roots(cache: &Path) -> Result<Vec<PathBuf>> {
+    if cfg!(target_os = "macos") {
+        info!(path = %cache.display(), "retaining historical build roots without proven host-visible ownership");
+        return Ok(Vec::new());
+    }
     let slots = cache.join(consts::PREVIOUS_TARGET_SLOTS);
     let mut roots: Vec<PathBuf> = slots.is_dir().then_some(slots).into_iter().collect();
     let bootstrap = cache.join(consts::PREVIOUS_BOOTSTRAP);
@@ -674,7 +827,17 @@ mod tests {
     use crate::ci::build_dir::fixture::git_checkout;
 
     fn entry(path: &str, size_bytes: u64, age: u64) -> CacheEntry {
+        #[cfg(unix)]
+        let candidate = {
+            let root = tempfile::tempdir().unwrap();
+            fs::create_dir(root.path().join(path)).unwrap();
+            lease::Candidate::open(root.path(), Path::new(path)).unwrap()
+        };
         CacheEntry {
+            #[cfg(target_os = "macos")]
+            slot: None,
+            #[cfg(unix)]
+            candidate,
             path: PathBuf::from(path),
             size_bytes,
             used: UNIX_EPOCH + Duration::from_secs(age),
@@ -688,7 +851,21 @@ mod tests {
     /// A build directory with `bytes` of artifacts in it, named `id` in
     /// `root`.
     fn build_dir(root: &Path, id: &str, bytes: usize) -> PathBuf {
+        #[cfg(target_os = "macos")]
+        let id = if id == consts::XTASK_BUILD
+            || id
+                .rsplit_once('-')
+                .is_some_and(|(_, index)| index.parse::<usize>().is_ok())
+        {
+            id.to_owned()
+        } else {
+            format!("{id}-0")
+        };
         let dir = root.join(id);
+        #[cfg(target_os = "macos")]
+        fs::create_dir_all(root).unwrap();
+        #[cfg(target_os = "macos")]
+        let _claim = locked(&lock_beside(&dir));
         let profile = dir.join("debug");
         fs::create_dir_all(&profile).unwrap();
         fs::write(profile.join("artifact"), vec![0_u8; bytes]).unwrap();
@@ -709,7 +886,7 @@ mod tests {
     fn a_lease_held_in_an_entry_keeps_that_entry_and_not_its_siblings() {
         let root = tempfile::tempdir().unwrap();
         let build = root.path().join("lint");
-        let idle = root.path().join("usdt");
+        let idle = build_dir(root.path(), "usdt", 0);
         fs::create_dir_all(&idle).unwrap();
         let lease = lease::hold(&build).expect("claim the directory the lane builds into");
         std::os::unix::fs::symlink("lint", root.path().join(consts::BUILD_ALIAS)).unwrap();
@@ -790,7 +967,13 @@ mod tests {
         let recent = build_dir(root.path(), "a-recent", 4096);
         let stale = build_dir(root.path(), "b-stale", 4096);
         for (slot, age) in [(&recent, 20), (&stale, 10)] {
-            drop(lease::hold(&slot.join("cargo")).unwrap());
+            drop(
+                lease::hold_in(
+                    root.path(),
+                    &slot.strip_prefix(root.path()).unwrap().join("cargo"),
+                )
+                .unwrap(),
+            );
             File::options()
                 .write(true)
                 .open(slot.join("cargo").join(lease::FILE))
@@ -810,7 +993,11 @@ mod tests {
     fn a_lease_held_one_level_down_keeps_its_entry() {
         let root = tempfile::tempdir().unwrap();
         let slot = build_dir(root.path(), "review-lane-lint-0", 4096);
-        let _lease = lease::hold(&slot.join("cargo")).unwrap();
+        let _lease = lease::hold_in(
+            root.path(),
+            &slot.strip_prefix(root.path()).unwrap().join("cargo"),
+        )
+        .unwrap();
 
         enforce_budget(&[root.path().to_path_buf()], 0).unwrap();
 
@@ -823,7 +1010,7 @@ mod tests {
     #[test]
     fn an_unheld_lease_leaves_its_entry_evictable() {
         let root = tempfile::tempdir().unwrap();
-        let build = root.path().join("lint");
+        let build = build_dir(root.path(), "lint", 0);
         drop(lease::hold(&build).expect("claim and release"));
 
         let contents = candidate_entries(root.path()).unwrap();
@@ -839,8 +1026,8 @@ mod tests {
     #[test]
     fn using_an_old_cache_refreshes_its_eviction_order() {
         let root = tempfile::tempdir().unwrap();
-        let used = root.path().join("old-but-used");
-        let idle = root.path().join("newer-but-idle");
+        let used = build_dir(root.path(), "old-but-used", 0);
+        let idle = build_dir(root.path(), "newer-but-idle", 0);
         fs::create_dir_all(&idle).unwrap();
         drop(lease::hold(&idle).unwrap());
         drop(lease::hold(&used).unwrap());
@@ -919,8 +1106,8 @@ mod tests {
     #[test]
     fn an_entry_no_job_ever_leased_goes_before_any_leased_one() {
         let root = tempfile::tempdir().unwrap();
-        let leased = root.path().join("lint");
-        let legacy = root.path().join("debug");
+        let leased = build_dir(root.path(), "lint", 0);
+        let legacy = build_dir(root.path(), "debug", 0);
         drop(lease::hold(&leased).unwrap());
         File::options()
             .write(true)
@@ -970,11 +1157,11 @@ mod tests {
         );
     }
 
-    /// A job that died in its virtual machine stops beating.
+    /// A stale heartbeat does not retain an independently fenced native slot.
     #[test]
     fn a_stale_heartbeat_leaves_its_entry_evictable() {
         let root = tempfile::tempdir().unwrap();
-        let lane = root.path().join("lint");
+        let lane = build_dir(root.path(), "lint", 0);
         fs::create_dir_all(&lane).unwrap();
         File::create(lane.join(lease::HEARTBEAT))
             .unwrap()
@@ -1138,7 +1325,14 @@ mod tests {
 
         assert!(evict(&scanned[0]).unwrap() > 0);
 
-        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
+        assert!(fs::read_dir(root.path()).unwrap().all(|entry| {
+            let entry = entry.unwrap();
+            entry.path() == lock_beside(&scanned[0].path)
+                || entry
+                    .file_name()
+                    .as_encoded_bytes()
+                    .ends_with(lease::FILE.as_bytes())
+        }));
     }
 
     /// An eviction moves an entry aside before it deletes it. One that died
@@ -1338,5 +1532,176 @@ mod tests {
             .expect("reading an entry that is there")
             .expect("an entry that is there is measured");
         assert!(present.file_type().is_dir());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn replacement_after_scan_is_not_evicted() {
+        let root = tempfile::tempdir().unwrap();
+        let lane = build_dir(root.path(), "lint", 1);
+        let scanned = candidate_entries(root.path()).unwrap().entries;
+        fs::rename(&lane, root.path().join("old")).unwrap();
+        fs::create_dir_all(lane.join("debug")).unwrap();
+        fs::write(lane.join("debug/artifact"), b"replacement").unwrap();
+        assert_eq!(evict(&scanned[0]).unwrap(), 0);
+        assert_eq!(
+            fs::read(lane.join("debug/artifact")).unwrap(),
+            b"replacement"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unsafe_root_does_not_prevent_reclaiming_a_safe_peer() {
+        let root = tempfile::tempdir().unwrap();
+        let external = tempfile::tempdir().unwrap();
+        let sentinel = build_dir(external.path(), "keep", 1);
+        let unsafe_root = root.path().join("redirected");
+        std::os::unix::fs::symlink(external.path(), &unsafe_root).unwrap();
+        let safe = root.path().join("native");
+        let idle = build_dir(&safe, "lint", 1);
+        enforce_budget(&[unsafe_root, safe], 0).unwrap();
+        assert!(sentinel.join("debug/artifact").exists());
+        assert!(!idle.exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_reclaims_idle_and_interrupted_entries_but_keeps_live_data() {
+        let root = tempfile::tempdir().unwrap();
+        let live = build_dir(root.path(), "live", 1);
+        let idle = build_dir(root.path(), "idle", 1);
+        let interrupted = build_dir(root.path(), ".evicting-interrupted", 1);
+        fs::write(interrupted.join(lease::FILE), []).unwrap();
+        let held = lease::hold(&live).unwrap();
+        enforce_budget(&[root.path().to_path_buf()], 0).unwrap();
+        assert!(live.join("debug/artifact").exists());
+        assert!(!idle.exists());
+        assert!(!interrupted.exists());
+        drop(held);
+        enforce_budget(&[root.path().to_path_buf()], 0).unwrap();
+        assert!(!live.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_managed_alias_descendant_claims_its_physical_slot_ancestor() {
+        let root = tempfile::tempdir().unwrap();
+        let slot = build_dir(root.path(), "lint-0", 1);
+        let alias = root.path().join(consts::BUILD_ALIAS);
+        std::os::unix::fs::symlink(&slot, &alias).unwrap();
+        let target = alias.join("flash-off");
+        let checkout = git_checkout(&[]);
+        let held = hold_target(checkout.path(), &|name| {
+            (name == "CARGO_TARGET_DIR").then(|| target.clone().into_os_string())
+        })
+        .unwrap();
+        assert!(slot.join("flash-off").join(lease::FILE).is_file());
+        assert!(lease::evict(&slot).unwrap().is_none());
+        drop(held);
+        assert!(lease::evict(&slot).unwrap().is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mismatched_interrupted_recovery_stays_in_place_across_sweeps() {
+        let root = tempfile::tempdir().unwrap();
+        let aside = root.path().join(".evicting-interrupted");
+        fs::create_dir_all(aside.join("data")).unwrap();
+        fs::write(aside.join("data/sentinel"), b"replacement").unwrap();
+        fs::write(aside.join(lease::FILE), b"eviction=0:0\n").unwrap();
+        drop(lease::evict(&aside).unwrap().unwrap());
+        let identity = fs::metadata(&aside).unwrap();
+        let entries = fs::read_dir(root.path()).unwrap().count();
+        for _ in 0..3 {
+            remove_leftover(&aside).unwrap();
+            let retained = fs::metadata(&aside).unwrap();
+            assert_eq!(
+                (retained.dev(), retained.ino()),
+                (identity.dev(), identity.ino())
+            );
+            assert_eq!(fs::read_dir(root.path()).unwrap().count(), entries);
+            assert_eq!(
+                fs::read(aside.join("data/sentinel")).unwrap(),
+                b"replacement"
+            );
+        }
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn old_unfenced_bootstraps_stay_protected_and_charged() {
+        for released_lease in [false, true] {
+            for critical in [false, true] {
+                let root = tempfile::tempdir().unwrap();
+                let native = build_dir(root.path(), "lint-0", 65_536);
+                let bootstrap = root.path().join(consts::XTASK_BUILD);
+                let custom = root.path().join("custom-bootstrap");
+                for path in [&bootstrap, &custom] {
+                    fs::create_dir_all(path.join("nested")).unwrap();
+                    fs::write(path.join("nested/sentinel"), vec![7_u8; 65_536]).unwrap();
+                }
+                drop(locked(&lock_beside(&custom)));
+                if released_lease {
+                    drop(locked(&lock_beside(&bootstrap)));
+                    drop(lease::hold(&bootstrap).unwrap());
+                    drop(lease::hold(&custom).unwrap());
+                }
+                let charged =
+                    directory_bytes(&bootstrap).unwrap() + directory_bytes(&custom).unwrap();
+                if critical {
+                    reclaim_at_least(&[root.path().to_path_buf()], u64::MAX).unwrap();
+                } else {
+                    enforce_budget(&[root.path().to_path_buf()], 0).unwrap();
+                }
+                assert!(
+                    !native.exists(),
+                    "the independently fenced peer was retained"
+                );
+                for path in [&bootstrap, &custom] {
+                    assert_eq!(
+                        fs::read(path.join("nested/sentinel")).unwrap(),
+                        vec![7_u8; 65_536]
+                    );
+                }
+                let (eligible, retained) = collect(&[root.path().to_path_buf()]).unwrap();
+                assert!(eligible.is_empty());
+                assert_eq!(
+                    retained, charged,
+                    "protected bootstrap bytes disappeared from accounting"
+                );
+                let contents = candidate_entries(root.path()).unwrap();
+                assert_eq!(contents.held.len(), 2);
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_changed_or_unsafe_slot_lock_cannot_authorize_mac_eviction() {
+        for kind in ["missing", "symlink", "hardlink", "replaced"] {
+            let root = tempfile::tempdir().unwrap();
+            let external = tempfile::tempdir().unwrap();
+            let sentinel = external.path().join("sentinel");
+            fs::write(&sentinel, b"external").unwrap();
+            let retained = build_dir(root.path(), "lint-0", 4096);
+            let peer = build_dir(root.path(), "lint-1", 4096);
+            let scanned = candidate_entries(root.path()).unwrap().entries;
+            let lock = lock_beside(&retained);
+            fs::rename(&lock, root.path().join("original.lock")).unwrap();
+            match kind {
+                "missing" => {}
+                "symlink" => std::os::unix::fs::symlink(&sentinel, &lock).unwrap(),
+                "hardlink" => fs::hard_link(&sentinel, &lock).unwrap(),
+                "replaced" => fs::write(&lock, []).unwrap(),
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                evict(scanned.iter().find(|entry| entry.path == retained).unwrap()).unwrap(),
+                0
+            );
+            assert!(evict(scanned.iter().find(|entry| entry.path == peer).unwrap()).unwrap() > 0);
+            assert!(retained.join("debug/artifact").is_file());
+            assert!(!peer.exists());
+            assert_eq!(fs::read(&sentinel).unwrap(), b"external");
+        }
     }
 }
