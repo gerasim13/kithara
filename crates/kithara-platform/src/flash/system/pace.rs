@@ -119,7 +119,10 @@ mod tests {
 
     use super::*;
     use crate::{
-        flash::{Duration, system::credit},
+        flash::{
+            Duration,
+            system::{credit, entry::ParkRole},
+        },
         sync::Arc,
     };
 
@@ -199,6 +202,135 @@ mod tests {
         let mut core = flash.core.lock();
         core.sched.real_io = 1;
         core.sched.pace_anchor = Some((RealInstant::now() - Duration::from_secs(1), base));
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn backstops_preserve_an_already_paid_deadline() {
+        for (poll, changed) in [(false, false), (true, false), (true, true)] {
+            for register_other in [false, true] {
+                let flash = FlashInner::new_arc();
+                let base = flash.clock.now_nanos();
+                let hold = flash.test_hold();
+                let role = if poll {
+                    ParkRole::Poll(flash.clock.posts())
+                } else {
+                    ParkRole::Backstop
+                };
+                if changed {
+                    flash.clock.post();
+                }
+                let (paid, advance) =
+                    flash.register_sleep_async(ms(500), std::task::Waker::noop().clone());
+                advance.fire();
+                pace_due(&flash, base);
+                let anchor = flash.core.lock().sched.pace_anchor;
+                let mut registered_anchor = anchor;
+
+                if register_other {
+                    let (key_tx, key_rx) = mpsc::channel();
+                    let other = {
+                        let flash = Arc::clone(&flash);
+                        thread::spawn(move || {
+                            bracketed_on(&flash, || {
+                                let key = credit::current_thread_key();
+                                key_tx.send(key).expect("send waiter key");
+                                flash.park_timed_unparkable(Duration::from_millis(1), key, role);
+                            });
+                        })
+                    };
+                    let key = key_rx.recv().expect("receive waiter key");
+                    wait_for_timed_count(&flash, 2);
+                    registered_anchor = flash.core.lock().sched.pace_anchor;
+                    flash.unpark(key);
+                    other.join().expect("backstop waiter joins");
+                }
+
+                let remaining_waiters = flash.timed_count();
+                let remaining_credit = flash.active_count();
+                drop(hold);
+                assert_eq!(registered_anchor, anchor);
+                assert_eq!(remaining_waiters, 1);
+                assert_eq!(remaining_credit, 1);
+                assert!(
+                    paid.granted(),
+                    "{role:?}, registered backstop: {register_other}"
+                );
+                assert_eq!(flash.advance_log(), vec![base + ms(500)]);
+                drop(paid);
+                assert_eq!(flash.active_count(), 0);
+                assert_eq!(flash.timed_count(), 0);
+            }
+        }
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_fresh_deadline_does_not_inherit_a_pending_timers_old_time() {
+        let flash = FlashInner::new_arc();
+        let base = flash.clock.now_nanos();
+        let hold = flash.test_hold();
+        let waker = std::task::Waker::noop().clone();
+        let (paid, advance) = flash.register_sleep_async(ms(500), waker.clone());
+        advance.fire();
+        let anchor = Some((RealInstant::now() - Duration::from_secs(37), base));
+        {
+            let mut core = flash.core.lock();
+            core.sched.real_io = 1;
+            core.sched.pace_anchor = anchor;
+        }
+
+        let (fresh, advance) = flash.register_sleep_async(ms(30_000), waker);
+        advance.fire();
+        let fresh_anchor = flash.core.lock().sched.pace_anchor;
+        drop(hold);
+        drop(paid);
+        let granted = fresh.granted();
+        drop(fresh);
+
+        assert_ne!(fresh_anchor, anchor);
+        assert!(
+            !granted,
+            "a fresh deadline inherited time before its registration"
+        );
+        assert_eq!(flash.active_count(), 0);
+        assert_eq!(flash.timed_count(), 0);
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn an_unparkable_deadline_bounds_time_banked_before_registration() {
+        let flash = FlashInner::new_arc();
+        let base = flash.clock.now_nanos();
+        let hold = flash.test_hold();
+        let (paid, advance) = flash.register_sleep_async(ms(500), std::task::Waker::noop().clone());
+        advance.fire();
+        let anchor = Some((RealInstant::now() - Duration::from_secs(37), base));
+        {
+            let mut core = flash.core.lock();
+            core.sched.real_io = 1;
+            core.sched.pace_anchor = anchor;
+        }
+
+        let (key_tx, key_rx) = mpsc::channel();
+        let waiter = {
+            let flash = Arc::clone(&flash);
+            thread::spawn(move || {
+                bracketed_on(&flash, || {
+                    let key = credit::current_thread_key();
+                    key_tx.send(key).expect("send waiter key");
+                    flash.park_timed_unparkable(Duration::from_secs(30), key, ParkRole::Deadline);
+                });
+            })
+        };
+        let key = key_rx.recv().expect("receive waiter key");
+        wait_for_timed_count(&flash, 2);
+        let fresh_anchor = flash.core.lock().sched.pace_anchor;
+        flash.unpark(key);
+        waiter.join().expect("deadline waiter joins");
+        drop(hold);
+        drop(paid);
+
+        assert_ne!(fresh_anchor, anchor);
+        assert_eq!(flash.active_count(), 0);
+        assert_eq!(flash.timed_count(), 0);
     }
 
     #[kithara::test(native, flash(false))]

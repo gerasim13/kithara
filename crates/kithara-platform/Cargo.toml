@@ -67,7 +67,7 @@ web-sys = { workspace = true }
 windows-sys = { workspace = true, features = ["Win32_System_Threading"] }
 
 [dev-dependencies]
-kithara-platform = { path = ".", default-features = false }
+kithara-platform = { path = ".", default-features = false, features = ["tokio-rt-multi-thread"] }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang", "subscriber"] }
 
 assert_no_alloc = { workspace = true }

@@ -220,6 +220,7 @@ async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case]
         .await
         .expect("create Audio<Stream<Hls>> pipeline");
 
+    let audio = kithara_integration_tests::mock::with_blocking_reads(audio);
     let _ = blocking_audio(audio, move |audio| {
         check_chunk_integrity(audio, segment_duration);
     })
