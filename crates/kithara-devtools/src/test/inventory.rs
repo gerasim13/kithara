@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::Path,
-    process::Stdio,
+    process::{Command, Stdio},
 };
 
 use anyhow::{Context, Result, bail};
@@ -20,22 +20,34 @@ pub(super) fn admit_expected(
     let expected = read_expected(expected_path)?;
     let args = inventory_args(caller)?;
     let mut command = lane.command(NextestAction::List, &args)?;
+    let selected = list(&mut command, root, &lane.lane)?;
+    compare_expected(&expected, &selected, expected_path)
+}
+
+pub(super) fn list(command: &mut Command, root: &Path, lane: &str) -> Result<BTreeSet<TestId>> {
     let output = command
         .current_dir(root)
         .stderr(Stdio::inherit())
         .output()
-        .with_context(|| format!("list exact selection for test lane `{}`", lane.lane))?;
+        .with_context(|| format!("list exact selection for test lane `{lane}`"))?;
     if !output.status.success() {
         return Err(ChildFailure::inherited(
-            format!("test lane `{}` inventory", lane.lane),
+            format!("test lane `{lane}` inventory"),
             output.status.code(),
         ));
     }
     let json = String::from_utf8(output.stdout).context("nextest inventory is not UTF-8")?;
-    let selected = selected_inventory(decode_inventory(&json)?)?;
+    selected_inventory(decode_inventory(&json)?)
+}
+
+pub(super) fn compare_expected(
+    expected: &BTreeSet<TestId>,
+    selected: &BTreeSet<TestId>,
+    expected_path: &Path,
+) -> Result<()> {
     if expected != selected {
-        let missing = expected.difference(&selected).collect::<Vec<_>>();
-        let unexpected = selected.difference(&expected).collect::<Vec<_>>();
+        let missing = expected.difference(selected).collect::<Vec<_>>();
+        let unexpected = selected.difference(expected).collect::<Vec<_>>();
         let rows = |tests: &[&TestId]| {
             tests
                 .iter()
@@ -57,7 +69,7 @@ pub(super) fn admit_expected(
     Ok(())
 }
 
-fn read_expected(path: &Path) -> Result<BTreeSet<TestId>> {
+pub(super) fn read_expected(path: &Path) -> Result<BTreeSet<TestId>> {
     let text = fs::read_to_string(path)
         .with_context(|| format!("read --expected-tests identities at {}", path.display()))?;
     let mut expected = BTreeSet::new();
@@ -87,38 +99,6 @@ fn read_expected(path: &Path) -> Result<BTreeSet<TestId>> {
 }
 
 pub(super) fn inventory_args(caller: &[String]) -> Result<Vec<String>> {
-    const FLAGS: &[&str] = &[
-        "--no-run",
-        "--fail-fast",
-        "--ff",
-        "--no-fail-fast",
-        "--nff",
-        "--no-capture",
-        "--no-output-indent",
-        "--hide-progress-bar",
-        "--no-input-handler",
-    ];
-    const VALUES: &[&str] = &[
-        "-j",
-        "--test-threads",
-        "--jobs",
-        "--retries",
-        "--flaky-result",
-        "--max-fail",
-        "--debugger",
-        "--tracer",
-        "--no-tests",
-        "--stress-count",
-        "--stress-duration",
-        "--failure-output",
-        "--success-output",
-        "--status-level",
-        "--final-status-level",
-        "--show-progress",
-        "--max-progress-running",
-        "--message-format",
-        "--message-format-version",
-    ];
     const SHARED_VALUES: &[&str] = &[
         "-p",
         "--package",
@@ -209,16 +189,17 @@ pub(super) fn inventory_args(caller: &[String]) -> Result<Vec<String>> {
                         .clone(),
                 );
             }
-        } else if VALUES.contains(&flag) {
+        } else if consts::NEXTEST_RUN_VALUE_OPTIONS.contains(&flag) {
             if !attached {
                 caller
                     .next()
                     .with_context(|| format!("`{arg}` needs a value"))?;
             }
-        } else if !FLAGS.contains(&flag)
+        } else if !consts::NEXTEST_RUN_FLAGS.contains(&flag)
             && !arg.strip_prefix("-j").is_some_and(|value| {
+                let digits = value.strip_prefix(&['-', '+'][..]).unwrap_or(value);
                 value == "num-cpus"
-                    || (!value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()))
+                    || (!digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()))
             })
         {
             args.push(arg.clone());

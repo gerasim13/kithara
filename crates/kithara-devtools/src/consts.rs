@@ -562,6 +562,112 @@ Call to blocking function `pthread_mutex_lock` in real-time context!
 ";
 
 pub(crate) const PERCENT_SCALE: usize = 100;
+pub(crate) const NEXTEST_BUILD_VALUE_OPTIONS: &[&str] = &[
+    "-p",
+    "--package",
+    "--exclude",
+    "--bin",
+    "--example",
+    "--test",
+    "--bench",
+    "-F",
+    "--features",
+    "--build-jobs",
+    "--cargo-profile",
+    "--target",
+    "--target-dir",
+    "--manifest-path",
+    "--cargo-message-format",
+    "-Z",
+];
+pub(crate) const NEXTEST_BUILD_FLAGS: &[&str] = &[
+    "--workspace",
+    "--all",
+    "--lib",
+    "--bins",
+    "--examples",
+    "--tests",
+    "--benches",
+    "--all-targets",
+    "--all-features",
+    "--no-default-features",
+    "-r",
+    "--release",
+    "--timings",
+    "--frozen",
+    "--locked",
+    "--offline",
+    "--cargo-quiet",
+    "--cargo-verbose",
+    "--ignore-rust-version",
+    "--future-incompat-report",
+];
+pub(crate) const NEXTEST_SHARED_VALUE_OPTIONS: &[&str] = &[
+    "-P",
+    "--profile",
+    "--config",
+    "--config-file",
+    "--user-config-file",
+    "--tool-config-file",
+    "--color",
+];
+pub(crate) const NEXTEST_SHARED_FLAGS: &[&str] =
+    &["-v", "--verbose", "--no-pager", "--override-version-check"];
+pub(crate) const NEXTEST_SELECTION_VALUE_OPTIONS: &[&str] = &[
+    "-E",
+    "--filterset",
+    "--filter-expr",
+    "--partition",
+    "--platform-filter",
+    "--run-ignored",
+];
+pub(crate) const NEXTEST_SELECTION_FLAGS: &[&str] = &["--ignore-default-filter"];
+pub(crate) const NEXTEST_REUSE_OPTIONS: &[&str] = &[
+    "--archive-file",
+    "--archive-format",
+    "--extract-to",
+    "--extract-overwrite",
+    "--persist-extract-tempdir",
+    "--cargo-metadata",
+    "--binaries-metadata",
+    "--workspace-remap",
+    "--target-dir-remap",
+    "--build-dir-remap",
+];
+
+pub(crate) const NEXTEST_RUN_FLAGS: &[&str] = &[
+    "--no-run",
+    "--fail-fast",
+    "--ff",
+    "--no-fail-fast",
+    "--nff",
+    "--no-capture",
+    "--no-output-indent",
+    "--hide-progress-bar",
+    "--no-input-handler",
+];
+pub(crate) const NEXTEST_RUN_VALUE_OPTIONS: &[&str] = &[
+    "-j",
+    "--test-threads",
+    "--jobs",
+    "--retries",
+    "--flaky-result",
+    "--max-fail",
+    "--debugger",
+    "--tracer",
+    "--no-tests",
+    "--stress-count",
+    "--stress-duration",
+    "--failure-output",
+    "--success-output",
+    "--status-level",
+    "--final-status-level",
+    "--show-progress",
+    "--max-progress-running",
+    "--message-format",
+    "--message-format-version",
+];
+
 pub(crate) const MAX_INVENTORY_CASES: usize = 100_000;
 pub(crate) const MAX_INVENTORY_BYTES: u64 = 64 * 1_024 * 1_024;
 pub(crate) const MAX_JUNIT_BYTES: u64 = 512 * 1_024 * 1_024;

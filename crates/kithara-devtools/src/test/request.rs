@@ -131,6 +131,7 @@ impl TestRequest {
                 _ => request.passthrough.push(arg.clone()),
             }
         }
+        super::prepared_args::reject_reuse(&request.passthrough)?;
         if request.expected_tests.is_some() {
             request.validate_expected_selection()?;
         }

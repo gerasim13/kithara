@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
+    path::Path,
     process::Command,
 };
 
@@ -8,10 +9,12 @@ use cargo_metadata::MetadataCommand;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    NextestAction,
+    NextestAction, prepared_args,
     selection::{LaneToggles, lane_features, validate_config},
 };
-use crate::common::project::{TestCargoOptions, TestCommandConfig, TestRunner};
+use crate::common::project::{
+    TestCargoOptions, TestCargoRunner, TestCommandConfig, TestNextestRunner, TestRunner,
+};
 
 /// What a caller asks of one lane: the lane, its backend and its toggles.
 pub(crate) struct LaneChoice<'a> {
@@ -33,6 +36,30 @@ pub(crate) struct ResolvedLane {
     pub(crate) cargo: TestCargoOptions,
     pub(crate) runner: TestRunner,
     pub(crate) features: Vec<String>,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum NextestOperation<'a> {
+    Build(NextestAction),
+    Archive(&'a Path),
+    Prepared {
+        action: NextestAction,
+        archive: &'a Path,
+        workspace: &'a Path,
+        extract_to: Option<&'a Path>,
+    },
+}
+
+impl NextestOperation<'_> {
+    fn verb(&self) -> &'static str {
+        match self {
+            Self::Archive(_) => "archive",
+            Self::Build(action) | Self::Prepared { action, .. } => match action {
+                NextestAction::Run => "run",
+                NextestAction::List => "list",
+            },
+        }
+    }
 }
 
 /// Resolves `choice` against the lane configuration.
@@ -61,11 +88,23 @@ impl ResolvedLane {
     /// nextest unions repeated `-E`. A caller package selection replaces a
     /// workspace selection, so `-p` narrows any workspace lane.
     pub(crate) fn command(&self, action: NextestAction, caller: &[String]) -> Result<Command> {
+        prepared_args::reject_reuse(caller)?;
+        self.operation(NextestOperation::Build(action), caller)
+    }
+
+    pub(super) fn operation(
+        &self,
+        operation: NextestOperation<'_>,
+        caller: &[String],
+    ) -> Result<Command> {
         let mut command = Command::new(match &self.runner {
             TestRunner::Nextest(_) => "cargo-nextest",
             TestRunner::Cargo(_) => "cargo",
         });
-        if matches!(&self.runner, TestRunner::Nextest(_)) && !self.env.contains_key("CARGO") {
+        if matches!(&self.runner, TestRunner::Nextest(_))
+            && !matches!(operation, NextestOperation::Prepared { .. })
+            && !self.env.contains_key("CARGO")
+        {
             command.env(
                 "CARGO",
                 which::which(MetadataCommand::new().cargo_command().get_program())
@@ -75,51 +114,94 @@ impl ResolvedLane {
         command.envs(&self.env);
         match &self.runner {
             TestRunner::Nextest(nextest) => {
-                command.arg("nextest").arg(match action {
-                    NextestAction::Run => "run",
-                    NextestAction::List => "list",
-                });
-                command.args(self.cargo_args("--cargo-profile", selects_packages(caller)));
-                if let (NextestAction::Run, Some(threads)) = (action, nextest.test_threads) {
-                    command.arg("--test-threads").arg(threads.to_string());
-                }
-                if nextest.ignore_default_filter {
-                    command.arg("--ignore-default-filter");
-                }
-                let mut caller = caller.to_vec();
-                if let Some(filter) = &nextest.filter {
-                    let (rest, filters) = split_filters(&caller)?;
-                    command.arg("-E").arg(intersect(filter, &filters));
-                    caller = rest;
-                }
-                command.args(caller);
+                self.nextest_command(&mut command, nextest, operation, caller)?;
             }
             TestRunner::Cargo(cargo) => {
-                if action == NextestAction::List {
-                    bail!(
-                        "test lane `{}` runs `cargo test`, which has no inventory to list",
-                        self.lane
-                    );
-                }
-                let (cargo_caller, binary_caller) = split_at_separator(caller);
-                command.arg("test");
-                command.args(self.cargo_args("--profile", selects_packages(cargo_caller)));
-                if self.cargo.profile.is_some() {
-                    command.args(without_profile(cargo_caller));
-                } else {
-                    command.args(cargo_caller);
-                }
-                if !cargo.name_filters.is_empty() || cargo.no_capture || !binary_caller.is_empty() {
-                    command.arg("--");
-                    command.args(&cargo.name_filters);
-                    if cargo.no_capture {
-                        command.arg("--nocapture");
-                    }
-                    command.args(binary_caller);
-                }
+                self.cargo_command(&mut command, cargo, operation, caller)?;
             }
         }
         Ok(command)
+    }
+
+    fn nextest_command(
+        &self,
+        command: &mut Command,
+        nextest: &TestNextestRunner,
+        operation: NextestOperation<'_>,
+        caller: &[String],
+    ) -> Result<()> {
+        command.args(["nextest", operation.verb()]);
+        let (action, caller) = match operation {
+            NextestOperation::Archive(path) => {
+                let (build, _) = prepared_args::split(caller)?;
+                command.args(self.cargo_args("--cargo-profile", selects_packages(&build)));
+                command.args(build).arg("--archive-file").arg(path);
+                return Ok(());
+            }
+            NextestOperation::Build(action) => {
+                command.args(self.cargo_args("--cargo-profile", selects_packages(caller)));
+                (action, caller.to_vec())
+            }
+            NextestOperation::Prepared {
+                action,
+                archive,
+                workspace,
+                extract_to,
+            } => {
+                command.arg("--archive-file").arg(archive);
+                command.arg("--workspace-remap").arg(workspace);
+                if let Some(path) = extract_to {
+                    command.arg("--extract-to").arg(path);
+                }
+                (action, prepared_args::split(caller)?.1)
+            }
+        };
+        if let (NextestAction::Run, Some(threads)) = (action, nextest.test_threads) {
+            command.arg("--test-threads").arg(threads.to_string());
+        }
+        if nextest.ignore_default_filter {
+            command.arg("--ignore-default-filter");
+        }
+        let mut caller = caller;
+        if let Some(filter) = &nextest.filter {
+            let (rest, filters) = split_filters(&caller)?;
+            command.arg("-E").arg(intersect(filter, &filters));
+            caller = rest;
+        }
+        command.args(caller);
+        Ok(())
+    }
+
+    fn cargo_command(
+        &self,
+        command: &mut Command,
+        cargo: &TestCargoRunner,
+        operation: NextestOperation<'_>,
+        caller: &[String],
+    ) -> Result<()> {
+        if !matches!(operation, NextestOperation::Build(NextestAction::Run)) {
+            bail!(
+                "test lane `{}` runs `cargo test`, which has no inventory to list",
+                self.lane
+            );
+        }
+        let (cargo_caller, binary_caller) = split_at_separator(caller);
+        command.arg("test");
+        command.args(self.cargo_args("--profile", selects_packages(cargo_caller)));
+        if self.cargo.profile.is_some() {
+            command.args(without_profile(cargo_caller));
+        } else {
+            command.args(cargo_caller);
+        }
+        if !cargo.name_filters.is_empty() || cargo.no_capture || !binary_caller.is_empty() {
+            command.arg("--");
+            command.args(&cargo.name_filters);
+            if cargo.no_capture {
+                command.arg("--nocapture");
+            }
+            command.args(binary_caller);
+        }
+        Ok(())
     }
 
     /// The lane with its own build, running only the tests of `packages`.

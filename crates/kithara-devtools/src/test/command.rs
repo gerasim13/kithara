@@ -78,7 +78,7 @@ pub fn selects_any_lane(
 }
 
 /// The lanes a request runs.
-enum Plan<'a> {
+pub(super) enum Plan<'a> {
     /// The runs the branch touched, possibly none.
     Touched(Vec<Touched>),
     /// One lane, whole.
@@ -86,7 +86,21 @@ enum Plan<'a> {
 }
 
 impl Plan<'_> {
-    fn write_selection(&self, path: &Path) -> Result<()> {
+    pub(super) fn resolved(
+        &self,
+        test: &TestCommandConfig,
+        request: &TestRequest,
+    ) -> Result<Vec<ResolvedLane>> {
+        match self {
+            Self::Lane(name) => Ok(vec![requested_lane(test, name, request)?]),
+            Self::Touched(selected) => selected
+                .iter()
+                .map(|run| touched_lane(test, run, request))
+                .collect(),
+        }
+    }
+
+    pub(super) fn write_selection(&self, path: &Path) -> Result<()> {
         let lanes: Vec<&str> = match self {
             Self::Touched(selected) => selected.iter().map(Touched::lane).collect(),
             Self::Lane(lane) => vec![lane],
@@ -99,7 +113,7 @@ impl Plan<'_> {
     }
 }
 
-fn plan<'a>(
+pub(super) fn plan<'a>(
     test: &'a TestCommandConfig,
     root: &Path,
     request: &'a TestRequest,
@@ -191,7 +205,7 @@ pub(super) fn lane_command(
 }
 
 /// The lane as `request` asks for it, narrowed to the request's filterset.
-fn requested_lane(
+pub(super) fn requested_lane(
     test: &TestCommandConfig,
     lane_name: &str,
     request: &TestRequest,
@@ -210,10 +224,23 @@ pub(super) fn touched_command(
     request: &TestRequest,
 ) -> Result<Command> {
     match run {
-        Touched::Whole(lane_name) => lane_command(test, lane_name, request),
-        Touched::Narrowed { lane, packages } => requested_lane(test, lane, request)?
-            .narrowed(packages)?
-            .command(NextestAction::Run, &request.passthrough),
+        Touched::Whole(lane) => lane_command(test, lane, request),
+        Touched::Narrowed { .. } => {
+            touched_lane(test, run, request)?.command(NextestAction::Run, &request.passthrough)
+        }
+    }
+}
+
+pub(super) fn touched_lane(
+    test: &TestCommandConfig,
+    run: &Touched,
+    request: &TestRequest,
+) -> Result<ResolvedLane> {
+    match run {
+        Touched::Whole(lane_name) => requested_lane(test, lane_name, request),
+        Touched::Narrowed { lane, packages } => {
+            requested_lane(test, lane, request)?.narrowed(packages)
+        }
     }
 }
 

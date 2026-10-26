@@ -13,7 +13,7 @@ use super::request::TestRequest;
 use crate::{common::project::TestCommandConfig, test::tests::synthetic_project};
 
 #[cfg(unix)]
-fn fixture(
+pub(super) fn fixture(
     selected: &[(&str, &str)],
     expected: &[u8],
 ) -> (TempDir, TestCommandConfig, TestRequest) {
@@ -52,14 +52,55 @@ fn fixture(
         &nextest,
         r#"#!/bin/sh
 printf '%s\n' "$2" >> "$TEST_CHILDREN"
+if [ -n "${TEST_REQUIRED_PROFILE:-}" ]; then
+  profile=default
+  profile_value=0
+  for value in "$@"; do
+    if [ "$profile_value" = 1 ]; then
+      profile="$value"
+      profile_value=0
+      continue
+    fi
+    case "$value" in
+      --profile|-P) profile_value=1 ;;
+      --profile=*) profile="${value#--profile=}" ;;
+      -P=*) profile="${value#-P=}" ;;
+      -P?*) profile="${value#-P}" ;;
+    esac
+  done
+  [ "$profile" = "$TEST_REQUIRED_PROFILE" ] || exit 92
+  /usr/bin/grep -Fq "[profile.$profile.archive]" "$TEST_PROFILE_CONFIG" || exit 90
+  /usr/bin/grep -Fq "path = '${TEST_PROFILE_INPUT##*/}'" "$TEST_PROFILE_CONFIG" || exit 90
+  if [ "$2" != archive ]; then
+    /usr/bin/cmp -s "$TEST_ARCHIVE" "$TEST_PROFILE_INPUT" || exit 91
+  fi
+fi
+if [ "${TEST_PREPARED:-0}" = 1 ] && [ "$2" != archive ]; then
+  [ "${TEST_RUNTIME_READY:-0}" = 1 ] || exit 93
+  archive=0
+  workspace=0
+  for value in "$@"; do
+    case "$value" in
+      --archive-file) archive=1 ;;
+      --workspace-remap) workspace=1 ;;
+      --workspace|--features|--cargo-profile|--build-jobs|--target-dir|--no-run|-p) exit 97 ;;
+    esac
+  done
+  [ "$archive:$workspace" = 1:1 ] || exit 96
+  IFS= read -r contents < "$TEST_ARCHIVE"
+  [ "$contents" = archive ] || exit 95
+fi
 case "$2" in
+  archive)
+    /bin/cp "$TEST_PROFILE_INPUT" "$TEST_ARCHIVE"
+    ;;
   list)
     for value in "$@"; do
       [ "$value" = -- ] && break
       case "$value" in
         --no-tests|--no-tests=*|--test-threads|--test-threads=*|--retries|--retries=*) exit 98 ;;
         --failure-output|--failure-output=*|--success-output|--success-output=*) exit 98 ;;
-        --no-fail-fast|-j|-j[0-9]*) exit 98 ;;
+        --no-fail-fast|-j*|--jobs|--jobs=*) exit 98 ;;
       esac
     done
     /bin/cat "$TEST_INVENTORY"
@@ -97,7 +138,7 @@ esac
 }
 
 #[cfg(unix)]
-fn children(temp: &TempDir) -> String {
+pub(super) fn children(temp: &TempDir) -> String {
     fs::read_to_string(temp.path().join("children")).unwrap_or_default()
 }
 
@@ -242,6 +283,14 @@ fn expected_selection_admits_runner_options_in_separate_and_attached_forms() {
             "--failure-output=immediate",
         ],
         vec!["-j2", "--no-fail-fast", "--success-output", "never"],
+        vec!["-j-1"],
+        vec!["-j=-1"],
+        vec!["-j", "-1"],
+        vec!["-j+1"],
+        vec!["-jnum-cpus"],
+        vec!["--jobs=-1"],
+        vec!["--jobs", "-1"],
+        vec!["--test-threads=-1"],
     ] {
         let (temp, test, mut request) = fixture(&[("demo::tests", "one")], b"demo::tests\tone\n");
         request
