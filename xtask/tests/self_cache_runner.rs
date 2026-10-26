@@ -1243,6 +1243,27 @@ fn a_local_refresh_builds_where_the_local_bootstrap_does() -> Result<()> {
 }
 
 #[test]
+fn standalone_bootstrap_lock_initialization_is_concurrent() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let binary = fixture.root.join("bootstrap-lease-tests");
+    let compiled = Command::new("rustc")
+        .args(["--edition=2024", "--test"])
+        .arg(fixture.root.join("xtask/bootstrap_lease.rs"))
+        .arg("-o")
+        .arg(&binary)
+        .output()?;
+    assert_success(&compiled);
+    let output = Command::new(&binary)
+        .args([
+            "--exact",
+            "tests::simultaneous_first_opens_preserve_one_lock_identity",
+        ])
+        .output()?;
+    assert_success(&output);
+    Ok(())
+}
+
+#[test]
 fn concurrent_cold_bootstraps_publish_one_generation() -> Result<()> {
     let fixture = Arc::new(Fixture::new()?);
     let barrier = Arc::new(Barrier::new(9));

@@ -2,7 +2,7 @@ use std::{
     env,
     fs::{self, File, OpenOptions},
     io,
-    os::unix::fs::MetadataExt,
+    os::unix::fs::{MetadataExt, OpenOptionsExt as _},
     path::{Path, PathBuf},
     process::{self, Command, ExitStatus},
     thread,
@@ -51,6 +51,28 @@ impl Drop for Heartbeat {
     }
 }
 
+fn context(error: io::Error, operation: &str, path: &Path) -> io::Error {
+    io::Error::new(error.kind(), format!("{operation} {}: {error}", path.display()))
+}
+
+fn open_lock(path: &Path) -> io::Result<File> {
+    #[cfg(target_os = "macos")]
+    const NOFOLLOW: i32 = 0x100;
+    #[cfg(not(target_os = "macos"))]
+    const NOFOLLOW: i32 = 0x20000;
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).custom_flags(NOFOLLOW);
+    let file = match options.create_new(true).open(path) {
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => options.create_new(false).open(path),
+        result => result,
+    }.map_err(|error| context(error, "opening lease or heartbeat", path))?;
+    let metadata = file.metadata().map_err(|error| context(error, "inspecting lease or heartbeat", path))?;
+    if !metadata.is_file() || metadata.nlink() != 1 {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{} must be a singly linked regular file", path.display())));
+    }
+    Ok(file)
+}
+
 /// Takes the lease's shared lock. Only the host's cache cleanup takes it
 /// exclusively, so a wait names it; this helper has no logger, and stderr is
 /// the job log.
@@ -92,16 +114,11 @@ fn hold_shared(file: &fs::File, lease: &Path) -> io::Result<()> {
 /// taken instead.
 fn take(directory: &Path, lease: &Path) -> io::Result<File> {
     loop {
-        fs::create_dir_all(directory)?;
-        let file = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(lease)?;
+        fs::create_dir_all(directory).map_err(|error| context(error, "creating leased build directory", directory))?;
+        let file = open_lock(lease)?;
         hold_shared(&file, lease)?;
         if still_at(&file, lease)? {
-            file.set_modified(SystemTime::now())?;
+            file.set_modified(SystemTime::now()).map_err(|error| context(error, "recording lease use", lease))?;
             return Ok(file);
         }
     }
@@ -161,5 +178,38 @@ fn run() -> io::Result<ExitStatus> {
             refresh_at = Instant::now() + consts::HEARTBEAT_INTERVAL;
         }
         thread::sleep(consts::POLL_INTERVAL);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn simultaneous_first_opens_preserve_one_lock_identity() {
+        use std::sync::{Arc, Barrier};
+        let root = env::temp_dir().join(format!("kithara-bootstrap-first-open-{}", process::id()));
+        fs::create_dir(&root).unwrap();
+        let path = root.join("lock");
+        let barrier = Arc::new(Barrier::new(2));
+        let workers = (0..2).map(|_| {
+            let path = path.clone();
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                barrier.wait();
+                open_lock(&path)
+            })
+        }).collect::<Vec<_>>();
+        let results = workers.into_iter().map(|worker| worker.join().unwrap()).collect::<Vec<_>>();
+        let files = results.into_iter().map(Result::unwrap).collect::<Vec<_>>();
+        assert_eq!(files[0].metadata().unwrap().ino(), files[1].metadata().unwrap().ino());
+        files[0].try_lock().unwrap();
+        assert!(matches!(files[1].try_lock(), Err(fs::TryLockError::WouldBlock)));
+        files[0].unlock().unwrap();
+        fs::write(&path, b"retained").unwrap();
+        drop(open_lock(&path).unwrap());
+        assert_eq!(fs::read(&path).unwrap(), b"retained");
+        drop(files);
+        fs::remove_dir_all(root).unwrap();
     }
 }

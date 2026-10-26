@@ -1,6 +1,7 @@
 use std::{
     fs::File,
     io::{self, Read as _, Seek as _, SeekFrom, Write as _},
+    path::Path,
     thread,
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
@@ -8,7 +9,51 @@ use std::{
 use fs4::{FileExt, TryLockError};
 use tracing::{info, warn};
 
+#[cfg(unix)]
+use super::filesystem;
 use crate::consts;
+
+/// Opens or creates one regular file through a captured directory descriptor.
+///
+/// # Errors
+/// Non-normal names, symlinks, hardlinks, nonregular files, or filesystem errors.
+#[cfg(unix)]
+pub fn open_at(directory: &File, name: &std::ffi::OsStr) -> io::Result<File> {
+    let mut parts = Path::new(name).components();
+    if !matches!(parts.next(), Some(std::path::Component::Normal(_))) || parts.next().is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "file must have one normal name",
+        ));
+    }
+    filesystem::create_or_open_at(directory, name)
+}
+
+/// Opens or creates a regular lock file without truncating its contents.
+/// On Unix, every path component must be free of symlinks and the file must
+/// have exactly one link.
+///
+/// # Errors
+/// Unsafe entries, missing parent directories, or filesystem errors.
+pub fn open(path: &Path) -> io::Result<File> {
+    #[cfg(unix)]
+    let file = filesystem::open_lock(path)?;
+    #[cfg(not(unix))]
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path)?;
+    #[cfg(not(unix))]
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "lock must be a regular file",
+        ));
+    }
+    Ok(file)
+}
 
 /// What a caller about to wait on a lock says about the wait.
 #[derive(Clone, Copy, Debug)]
@@ -242,8 +287,13 @@ mod tests {
     };
     #[cfg(unix)]
     use std::{
+        io::{Read as _, Write as _},
+        os::unix::fs::MetadataExt as _,
         process::Command,
-        sync::atomic::{AtomicBool, Ordering},
+        sync::{
+            Barrier,
+            atomic::{AtomicBool, Ordering},
+        },
     };
 
     use fs4::TryLockError;
@@ -342,6 +392,59 @@ mod tests {
                 .map(drop)
             })
         })
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn concurrent_first_opens_share_one_lock_and_preserve_contents() {
+        let directory = TempDir::new().expect("temporary directory");
+        let path = directory
+            .path()
+            .canonicalize()
+            .expect("physical lock parent")
+            .join("lock");
+        assert!(!path.exists());
+        let parent = File::open(directory.path()).expect("open lock parent");
+        assert_eq!(
+            super::open_at(&parent, std::ffi::OsStr::new("../outside"))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        let start = Barrier::new(2);
+        let opened = thread::scope(|scope| {
+            let first = scope.spawn(|| {
+                start.wait();
+                super::open(&path)
+            });
+            let second = scope.spawn(|| {
+                start.wait();
+                super::open(&path)
+            });
+            [first.join(), second.join()]
+        });
+        let [mut first, second] =
+            opened.map(|result| result.expect("join opener").expect("open lock file"));
+        let first_identity = first.metadata().expect("first identity");
+        let second_identity = second.metadata().expect("second identity");
+        assert_eq!(
+            (first_identity.dev(), first_identity.ino()),
+            (second_identity.dev(), second_identity.ino())
+        );
+        first.write_all(b"preserved").expect("write lock contents");
+        let mut reopened = super::open(&path).expect("reopen lock file");
+        let mut contents = String::new();
+        reopened
+            .read_to_string(&mut contents)
+            .expect("read lock contents");
+        assert_eq!(contents, "preserved");
+        let held = FileLock::try_exclusive(first).expect("take lock");
+        assert!(matches!(
+            FileLock::try_exclusive(second),
+            Err(TryLockError::WouldBlock)
+        ));
+        drop(held);
+        FileLock::try_exclusive(reopened).expect("take released lock");
     }
 
     #[test]

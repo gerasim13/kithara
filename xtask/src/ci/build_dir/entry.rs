@@ -1,7 +1,6 @@
 use std::{
     ffi::OsStr,
-    fs::{self, File},
-    io,
+    fs, io,
     path::{Component, Path, PathBuf},
     process,
     time::Duration,
@@ -11,7 +10,7 @@ use anyhow::{Context, Result, bail, ensure};
 use fs4::TryLockError;
 use kithara_devtools::{
     lease::{self, Lease},
-    lock::FileLock,
+    lock::{self, FileLock},
 };
 use tracing::{info, warn};
 
@@ -115,16 +114,14 @@ fn validate(lane: &str) -> Result<()> {
 fn take(slots: &Path, lane: &str) -> Result<(PathBuf, FileLock)> {
     fs::create_dir_all(slots)
         .with_context(|| format!("creating lane slots in {}", slots.display()))?;
+    let physical_slots = slots
+        .canonicalize()
+        .with_context(|| format!("resolving lane slots in {}", slots.display()))?;
     for index in 0..usize::MAX {
         let slot = slots.join(format!("{lane}-{index}"));
-        let lock = build_cache::lock_beside(&slot);
-        let file = File::options()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(&lock)
-            .with_context(|| format!("opening lane slot lock {}", lock.display()))?;
+        let path = build_cache::lock_beside(&physical_slots.join(format!("{lane}-{index}")));
+        let file = lock::open(&path)
+            .with_context(|| format!("opening lane slot lock {}", path.display()))?;
         match FileLock::try_exclusive(file) {
             Ok(held) => {
                 info!("building in lane slot {}", slot.display());
@@ -190,6 +187,8 @@ mod tests {
     use std::{
         fs,
         path::{Path, PathBuf},
+        sync::{Arc, Barrier},
+        thread,
     };
 
     use kithara_devtools::lease;
@@ -227,6 +226,41 @@ mod tests {
         assert_eq!(build.path(), &root.path().join("lint-0"));
         assert_eq!(fs::read_link(alias(root.path())).unwrap(), *build.path());
         assert!(build.path().join(lease::FILE).is_file());
+    }
+
+    #[test]
+    fn simultaneous_first_claims_take_independent_reusable_slots() {
+        let root = tempfile::tempdir().unwrap();
+        let barrier = Arc::new(Barrier::new(2));
+        let workers = (0..2)
+            .map(|_| {
+                let slots = root.path().to_path_buf();
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    super::take(&slots, "lint")
+                })
+            })
+            .collect::<Vec<_>>();
+        let results = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect::<Vec<_>>();
+        let claims = results.into_iter().map(Result::unwrap).collect::<Vec<_>>();
+        let mut paths = claims
+            .iter()
+            .map(|(path, _)| path.clone())
+            .collect::<Vec<_>>();
+        paths.sort();
+        assert_eq!(
+            paths,
+            [root.path().join("lint-0"), root.path().join("lint-1")]
+        );
+        drop(claims);
+        assert_eq!(
+            super::take(root.path(), "lint").unwrap().0,
+            root.path().join("lint-0")
+        );
     }
 
     /// Slot entry removes earlier reports so only this job's can be uploaded,

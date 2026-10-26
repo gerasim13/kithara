@@ -1,5 +1,5 @@
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io,
     path::{self, Path, PathBuf},
     sync::mpsc::{self, RecvTimeoutError, Sender},
@@ -10,7 +10,133 @@ use std::{
 use same_file::Handle;
 use tracing::warn;
 
-use crate::{consts, lock::FileLock};
+#[cfg(unix)]
+pub use super::filesystem::Candidate;
+use crate::{
+    consts,
+    lock::{self, FileLock},
+};
+
+/// A confined removal is unavailable on platforms without descriptor-relative operations.
+#[cfg(not(unix))]
+#[derive(Debug)]
+pub struct Candidate;
+
+#[cfg(not(unix))]
+impl Candidate {
+    /// Opens an owned-root candidate without following links.
+    ///
+    /// # Errors
+    /// Always refuses when confined removal is unsupported.
+    pub fn open(_root: &Path, _relative: &Path) -> io::Result<Self> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "confined removal requires Unix",
+        ))
+    }
+
+    /// Metadata of the captured original entry.
+    ///
+    /// # Errors
+    /// Unsupported on this platform.
+    pub fn metadata(&self) -> io::Result<fs::Metadata> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "confined metadata requires Unix",
+        ))
+    }
+
+    /// Opens a captured file without following links.
+    ///
+    /// # Errors
+    /// Unsupported on this platform.
+    pub fn open_file(&self, _write: bool) -> io::Result<File> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "confined file access requires Unix",
+        ))
+    }
+
+    /// Opens a sibling through the captured parent.
+    ///
+    /// # Errors
+    /// Unsupported on this platform.
+    pub fn open_sibling(&self, _name: &std::ffi::OsStr) -> io::Result<File> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "confined file access requires Unix",
+        ))
+    }
+
+    /// Removes the captured candidate, retaining a replacement.
+    ///
+    /// # Errors
+    /// Always refuses when confined removal is unsupported.
+    pub fn remove(&self) -> io::Result<bool> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "confined removal requires Unix",
+        ))
+    }
+}
+
+/// Claims one relative resource key under a stable, nonswept lock root.
+/// Acquire ancestor keys too when their removal would remove this resource.
+///
+/// # Errors
+/// Invalid keys, unsafe lock files, or a reclaim outlasting the claim bound.
+pub fn claim(root: &Path, key: &Path) -> io::Result<FileLock> {
+    let path = claim_path(root, key)?;
+    FileLock::shared_until(
+        open(&path)?,
+        "resource ownership",
+        Instant::now() + consts::LEASE_WAIT,
+    )
+}
+
+fn claim_path(root: &Path, key: &Path) -> io::Result<PathBuf> {
+    if key.as_os_str().is_empty()
+        || !key
+            .components()
+            .all(|part| matches!(part, path::Component::Normal(_)))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "ownership key must be a normal relative path",
+        ));
+    }
+    fs::create_dir_all(root)?;
+    let key: PathBuf = key.components().collect();
+    Ok(root.join(hex::encode(key.as_os_str().as_encoded_bytes())))
+}
+
+fn physical(directory: &Path) -> io::Result<PathBuf> {
+    let absolute = path::absolute(directory)?;
+    let mut existing = absolute.as_path();
+    let mut missing = Vec::new();
+    loop {
+        match fs::canonicalize(existing) {
+            Ok(mut resolved) => {
+                for name in missing.into_iter().rev() {
+                    resolved.push(name);
+                }
+                return Ok(resolved);
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                missing.push(
+                    existing
+                        .file_name()
+                        .ok_or_else(|| io::Error::other("build path has no existing ancestor"))?
+                        .to_owned(),
+                );
+                existing = existing
+                    .parent()
+                    .ok_or_else(|| io::Error::other("build path needs a parent"))?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
 
 /// Lease filename protecting a build directory during compilation and execution.
 pub const FILE: &str = ".kithara-job-lease";
@@ -56,6 +182,8 @@ pub fn hold(directory: &Path) -> io::Result<Lease> {
 }
 
 fn hold_within(directory: &Path, bound: Duration) -> io::Result<Lease> {
+    let directory = physical(directory)?;
+    let directory = directory.as_path();
     let deadline = Instant::now() + bound;
     loop {
         fs::create_dir_all(directory)?;
@@ -128,12 +256,12 @@ fn still_at(file: &File, path: &Path) -> io::Result<bool> {
 }
 
 fn open(path: &Path) -> io::Result<File> {
-    OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(path)
+    lock::open(path).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("opening lease file {}: {error}", path.display()),
+        )
+    })
 }
 
 impl Heartbeat {
@@ -352,5 +480,121 @@ mod tests {
         let fenced = fence(losing, &path).unwrap();
 
         assert!(fenced.is_none(), "a lock on the moved lease fences nothing");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn confined_removal_retains_replaced_candidates_and_parents() {
+        let root = TempDir::new().unwrap();
+        let original = root.path().join("parent/entry");
+        fs::create_dir_all(&original).unwrap();
+        fs::write(original.join("sentinel"), b"original").unwrap();
+        let candidate =
+            super::Candidate::open(root.path(), std::path::Path::new("parent/entry")).unwrap();
+        fs::rename(&original, root.path().join("old")).unwrap();
+        fs::create_dir(&original).unwrap();
+        fs::write(original.join("sentinel"), b"replacement").unwrap();
+        assert!(!candidate.remove().unwrap());
+        assert_eq!(fs::read(original.join("sentinel")).unwrap(), b"replacement");
+        let candidate =
+            super::Candidate::open(root.path(), std::path::Path::new("parent/entry")).unwrap();
+        fs::rename(root.path().join("parent"), root.path().join("moved")).unwrap();
+        fs::create_dir_all(&original).unwrap();
+        assert!(!candidate.remove().unwrap());
+        assert!(original.is_dir());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn confined_removal_never_follows_root_or_intermediate_or_child_links() {
+        use std::os::unix::fs::symlink;
+        let root = TempDir::new().unwrap();
+        let external = TempDir::new().unwrap();
+        fs::write(external.path().join("sentinel"), b"keep").unwrap();
+        symlink(external.path(), root.path().join("link")).unwrap();
+        assert!(
+            super::Candidate::open(root.path(), std::path::Path::new("link/sentinel")).is_err()
+        );
+        assert!(
+            super::Candidate::open(&root.path().join("link"), std::path::Path::new("sentinel"))
+                .is_err()
+        );
+        fs::create_dir(root.path().join("entry")).unwrap();
+        symlink(external.path(), root.path().join("entry/link")).unwrap();
+        let candidate = super::Candidate::open(root.path(), std::path::Path::new("entry")).unwrap();
+        assert!(candidate.remove().unwrap());
+        assert_eq!(fs::read(external.path().join("sentinel")).unwrap(), b"keep");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_access_and_metadata_stay_with_the_inspected_parent() {
+        let root = TempDir::new().unwrap();
+        fs::create_dir(root.path().join("logs")).unwrap();
+        fs::write(root.path().join("logs/current"), b"original").unwrap();
+        let candidate =
+            super::Candidate::open(root.path(), std::path::Path::new("logs/current")).unwrap();
+        fs::rename(root.path().join("logs"), root.path().join("old")).unwrap();
+        fs::create_dir(root.path().join("logs")).unwrap();
+        fs::write(root.path().join("logs/current"), b"replacement").unwrap();
+        assert_eq!(candidate.metadata().unwrap().len(), 8);
+        candidate.open_file(true).unwrap().set_len(0).unwrap();
+        candidate
+            .open_sibling(std::ffi::OsStr::new("current.1"))
+            .unwrap()
+            .set_len(4)
+            .unwrap();
+        assert_eq!(
+            fs::read(root.path().join("logs/current")).unwrap(),
+            b"replacement"
+        );
+        assert!(root.path().join("old/current.1").exists());
+        assert!(!root.path().join("logs/current.1").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writable_handles_refuse_hardlinks_and_unlink_preserves_the_external_file() {
+        for operation in ["lease", "file", "sibling", "unlink"] {
+            let root = TempDir::new().unwrap();
+            let external = TempDir::new().unwrap();
+            let sentinel = external.path().join("sentinel");
+            fs::write(&sentinel, b"external").unwrap();
+            let key = std::path::Path::new("cache/review");
+            let link = if operation == "lease" {
+                super::claim_path(root.path(), key).unwrap()
+            } else {
+                root.path().join("linked")
+            };
+            fs::hard_link(&sentinel, &link).unwrap();
+            match operation {
+                "lease" => assert!(super::claim(root.path(), key).is_err()),
+                "file" => {
+                    let candidate =
+                        super::Candidate::open(root.path(), std::path::Path::new("linked"))
+                            .unwrap();
+                    assert!(candidate.open_file(true).is_err());
+                }
+                "sibling" => {
+                    fs::write(root.path().join("current"), b"log").unwrap();
+                    let candidate =
+                        super::Candidate::open(root.path(), std::path::Path::new("current"))
+                            .unwrap();
+                    assert!(
+                        candidate
+                            .open_sibling(std::ffi::OsStr::new("linked"))
+                            .is_err()
+                    );
+                }
+                "unlink" => assert!(
+                    super::Candidate::open(root.path(), std::path::Path::new("linked"))
+                        .unwrap()
+                        .remove()
+                        .unwrap()
+                ),
+                _ => unreachable!(),
+            }
+            assert_eq!(fs::read(&sentinel).unwrap(), b"external", "{operation}");
+        }
     }
 }

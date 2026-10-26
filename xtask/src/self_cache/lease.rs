@@ -7,7 +7,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use fs4::TryLockError;
-use kithara_devtools::lock::{FileLock, Wait};
+use kithara_devtools::lock::{self, FileLock, Wait};
 use tracing::warn;
 
 use super::layout;
@@ -200,13 +200,11 @@ fn open_refresh(root: &Path) -> Result<(File, PathBuf)> {
     let cache = layout::cache_dir(root)?;
     fs::create_dir_all(&cache)
         .with_context(|| format!("create self-cache directory {}", cache.display()))?;
-    let path = cache.join(consts::REFRESH_LOCK);
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&path)
+    let path = cache
+        .canonicalize()
+        .with_context(|| format!("resolve self-cache directory {}", cache.display()))?
+        .join(consts::REFRESH_LOCK);
+    let file = lock::open(&path)
         .with_context(|| format!("open self-cache refresh lock {}", path.display()))?;
     Ok((file, path))
 }

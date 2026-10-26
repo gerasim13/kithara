@@ -5108,6 +5108,7 @@ dependencies = [
  "hex",
  "kithara-config",
  "kithara-devtools-trace-format",
+ "nix",
  "proc-macro2",
  "quote",
  "rayon",
