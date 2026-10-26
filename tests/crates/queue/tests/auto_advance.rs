@@ -1110,14 +1110,15 @@ async fn a_crossfade_at_double_speed_starts_its_duration_before_the_outgoing_end
         .insert_control(Queue::new(queue_config(&harness, CROSSFADE_SECS)))
         .await;
 
-    let a = assets::constant_wav_quiet_1_5s();
-    let id_a = append_loaded(&harness, &queue, &a).await;
-    let b = assets::constant_wav_loud_1_5s();
-    let _ = append_loaded(&harness, &queue, &b).await;
     harness
         .run(&queue, |q| q.set_default_rate(SPEED))
         .await
         .expect("a finite rate is accepted");
+
+    let a = assets::constant_wav_quiet_1_5s();
+    let id_a = append_loaded(&harness, &queue, &a).await;
+    let b = assets::constant_wav_loud_1_5s();
+    let _ = append_loaded(&harness, &queue, &b).await;
     harness
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await

@@ -1,6 +1,10 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 set working-directory := "../.."
 
+# Check test utilities outside workspace feature unification.
+test-utils:
+    just _xtask test-utils
+
 # Run workspace tests via the xtask/nextest harness. Use `just test run ...`
 
 # when passing lane selectors, package filters, or nextest expressions.
