@@ -2185,6 +2185,10 @@ async fn runtime_manual_switch_works_when_all_segments_cached(
     );
 
     assert!(
+        !transition.saw_eof,
+        "Manual(1) after all-cached prefetch must produce incoming PCM before EOF"
+    );
+    assert!(
         manual_applied,
         "Manual(1) after all-cached prefetch must fire a new ManualOverride \
          VariantApplied; saw {transitions:?}, transition={transition:?}"
@@ -2478,6 +2482,10 @@ async fn runtime_manual_switch_works_after_cache_and_seek(#[future(awt)] manual_
         "MSW-3: all-cached + seek + Manual click result"
     );
 
+    assert!(
+        !transition.saw_eof,
+        "Manual(1) after cached seek must produce incoming PCM before EOF"
+    );
     assert!(
         manual_applied,
         "Manual(1) after all-cached prefetch + seek must fire VariantApplied \
