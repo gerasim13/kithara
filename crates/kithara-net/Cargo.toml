@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license = "Apache-2.0"
+license-file = "../../LICENSE-APACHE"
 repository.workspace = true
 description = "Streaming HTTP for audio: retry, timeout, byte ranges."
 keywords = ["http", "networking", "streaming", "audio", "download"]
