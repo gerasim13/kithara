@@ -21,6 +21,13 @@ pub fn div(samples: &mut [f32], divisor: f32) -> usize {
     backend::div(samples, divisor)
 }
 
+/// `samples[i] *= gain`, correctly rounded as IEEE multiplication; returns
+/// `samples.len()`. Preserves signed zero and non-finite propagation without
+/// sanitization; `NaN` payloads are unspecified.
+pub fn scale_in_place(samples: &mut [f32], gain: f32) -> usize {
+    backend::scale_in_place(samples, gain)
+}
+
 /// `samples[i] = samples[i]·scale + offset`, within 1 ulp of the exact
 /// value; returns `samples.len()`.
 pub fn affine(samples: &mut [f32], scale: f32, offset: f32) -> usize {

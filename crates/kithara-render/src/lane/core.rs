@@ -773,6 +773,85 @@ mod tests {
     }
 
     #[kithara::test]
+    fn jump_stamping_matches_scalar_pcm_and_cursor_for_interleaved_channels() {
+        for channels in [1, 2, 6] {
+            let spec = AudioSpec::new(channels, NonZeroU32::new(48_000).expect("rate"));
+            let channels = usize::from(spec.channels);
+            for frames in [0, 1, 513, (1 << 24) + 9] {
+                for up in [false, true] {
+                    for length in [0, 1, 257, 513] {
+                        let (_sender, inbox) = channel(ChannelConfig::builder().build());
+                        let mut lane =
+                            Lane::new(inbox, NonZeroUsize::MIN, crate::consts::DEFAULT_DECLICK);
+                        let start = 17_u64;
+                        let at = start + if frames > 1 << 24 { 1 << 24 } else { 0 };
+                        lane.state.cursor.frame = at;
+                        lane.state.jump = Some(if up {
+                            Jump::Up {
+                                to: None,
+                                start,
+                                frames,
+                            }
+                        } else {
+                            Jump::Down {
+                                to: Duration::ZERO,
+                                start,
+                                frames,
+                                gain: 0.75,
+                            }
+                        });
+                        let samples: Vec<_> = [0.25_f32, -0.0, -0.75]
+                            .into_iter()
+                            .cycle()
+                            .take(length * channels)
+                            .collect();
+                        let mut expected = samples.clone();
+                        for (offset, frame) in expected.chunks_exact_mut(channels).enumerate() {
+                            let position =
+                                at.saturating_add(u64::try_from(offset).expect("offset"));
+                            let progress =
+                                position.saturating_sub(start).to_f32().expect("position")
+                                    / frames.max(1).to_f32().expect("frames");
+                            let gain = if up {
+                                progress.min(1.0)
+                            } else {
+                                0.75 * (1.0 - progress.min(1.0))
+                            };
+                            for sample in frame {
+                                *sample *= gain;
+                            }
+                        }
+                        let mut chunk = crate::worker::packet_tests::chunk(
+                            spec,
+                            SegmentId::FIRST,
+                            at,
+                            0,
+                            &samples,
+                        );
+                        lane.stamp(&mut chunk);
+                        assert_eq!(
+                            chunk
+                                .samples
+                                .iter()
+                                .map(|x| x.to_bits())
+                                .collect::<Vec<_>>(),
+                            expected.iter().map(|x| x.to_bits()).collect::<Vec<_>>()
+                        );
+                        let end = at + u64::try_from(length).expect("length");
+                        assert_eq!(lane.cursor().frame, end);
+                        assert_eq!(chunk.meta.lane_frame, at);
+                        assert_eq!(
+                            lane.state.jump.is_none(),
+                            up && end.saturating_sub(start)
+                                >= u64::try_from(frames).expect("frames")
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[kithara::test]
     fn frames_since_orders_segments_before_offsets() {
         let start = LaneFrame {
             segment: SegmentId::FIRST.next(),

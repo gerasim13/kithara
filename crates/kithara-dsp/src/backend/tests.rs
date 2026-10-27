@@ -36,6 +36,44 @@ const SPECIALS: [f32; 9] = [
     f32::from_bits(SIGNALING_NAN),
 ];
 
+#[kithara::test]
+fn scalar_gain_matches_ieee_multiplication_at_every_level() {
+    let fallback = |samples: &mut [f32], gain: f32| dispatch!(Level::fallback(), simd => simd::scale_in_place_kernel(simd, samples, gain));
+    for scale in [
+        crate::scale_in_place as fn(&mut [f32], f32) -> usize,
+        fallback,
+    ] {
+        for gain in [0.7, -1.5].into_iter().chain(SPECIALS) {
+            for size in SIZES {
+                for offset in OFFSETS {
+                    let input = padded_signal(size.saturating_add(offset), sine_440());
+                    let mut output = input.clone();
+                    let region = output.split_at_mut(offset).1;
+                    let count = scale(region.split_at_mut(size).0, gain);
+                    assert_prefix(
+                        &format!("gain {gain}, size {size}, offset {offset}"),
+                        count,
+                        region,
+                        size,
+                        |slot, got| {
+                            input
+                                .get(offset.saturating_add(slot))
+                                .is_some_and(|x| same(got, x * gain))
+                        },
+                    );
+                    assert!(
+                        output
+                            .iter()
+                            .zip(&input)
+                            .take(offset)
+                            .all(|(got, want)| got.to_bits() == want.to_bits())
+                    );
+                }
+            }
+        }
+    }
+}
+
 type DeinterleavePair = fn(&[f32], &mut [f32], &mut [f32]) -> usize;
 type DownmixPair = fn(&[f32], &mut [f32]) -> usize;
 type InterleavePair = fn(&[f32], &[f32], &mut [f32]) -> usize;

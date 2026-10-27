@@ -34,6 +34,9 @@ fn vector(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("div", size), &size, |b, _| {
             b.iter(|| kithara_dsp::div(black_box(&mut output), -1.0));
         });
+        group.bench_with_input(BenchmarkId::new("scale_in_place", size), &size, |b, _| {
+            b.iter(|| kithara_dsp::scale_in_place(black_box(&mut output), -1.0));
+        });
         group.bench_with_input(BenchmarkId::new("affine", size), &size, |b, _| {
             b.iter(|| kithara_dsp::affine(black_box(&mut output), 0.5, 0.25));
         });

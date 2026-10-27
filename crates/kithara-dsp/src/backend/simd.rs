@@ -1,4 +1,4 @@
-use std::ops::{Add, Div};
+use std::ops::{Add, Div, Mul};
 
 use fearless_simd::{Level, dispatch, prelude::*};
 
@@ -35,6 +35,16 @@ pub(crate) fn div(samples: &mut [f32], divisor: f32) -> usize {
 pub(super) fn div_kernel<S: Simd>(simd: S, samples: &mut [f32], divisor: f32) -> usize {
     let divisor = S::f32s::splat(simd, divisor);
     update(simd, samples, [], |x, []| x.div(divisor))
+}
+
+pub(crate) fn scale_in_place(samples: &mut [f32], gain: f32) -> usize {
+    dispatch!(Level::new(), simd => scale_in_place_kernel(simd, samples, gain))
+}
+
+#[inline(always)]
+pub(super) fn scale_in_place_kernel<S: Simd>(simd: S, samples: &mut [f32], gain: f32) -> usize {
+    let gain = S::f32s::splat(simd, gain);
+    update(simd, samples, [], |x, []| x.mul(gain))
 }
 
 /// `output[i] = start + i·step`, rounded once while `i` stays below 2²⁴;

@@ -155,3 +155,7 @@ impl AudioNodeProcessor for MasterProcessor {
         ProcessStatus::OutputsModified
     }
 }
+
+#[cfg(test)]
+#[path = "master_tests.rs"]
+mod tests;

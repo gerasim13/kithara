@@ -188,6 +188,7 @@ fn elementwise_kernels_and_fade_gains_never_allocate() {
     assert_no_alloc(|| {
         assert_eq!(kithara_dsp::ramp(&mut positions, 0.0, 1.0), FRAMES);
         assert_eq!(kithara_dsp::div(&mut positions, 1_023.0), FRAMES);
+        assert_eq!(kithara_dsp::scale_in_place(&mut acc, -0.75), FRAMES);
         assert_eq!(kithara_dsp::affine(&mut acc, 0.5, 0.25), FRAMES);
         assert_eq!(kithara_dsp::sub(&mut acc, &input), FRAMES);
         assert_eq!(kithara_dsp::scale_add(&input, 0.5, &mut acc), FRAMES);
