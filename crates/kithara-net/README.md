@@ -8,7 +8,7 @@
 
 [![crates.io](https://img.shields.io/crates/v/kithara-net.svg)](https://crates.io/crates/kithara-net)
 [![docs.rs](https://docs.rs/kithara-net/badge.svg)](https://docs.rs/kithara-net)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/zvuk/kithara/blob/main/LICENSE-MIT)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE-APACHE)
 
 </div>
 
@@ -75,5 +75,7 @@ The inactivity timeout bounds response headers and each body-chunk wait separate
 ## Integration
 
 Used by `kithara-file` and `kithara-hls` for all HTTP operations.
+
+The native Safari18 and Chrome137 profiles and their TLS certificate codecs derive from Apache-2.0 licensed wreq-util 3.0.0-rc.14. See [NOTICE](./NOTICE) for attribution and modifications.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-net) for detailed contracts, invariants, and internals.

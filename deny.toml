@@ -74,8 +74,6 @@ unknown-registry = "deny"
 unknown-git = "warn"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = [
-  # The current wreq-util RC API with the patched zstd dependency.
-  "https://github.com/gerasim13/wreq-util",
   # WebSocket TLS uses the maintained webpki-roots release.
   "https://github.com/gerasim13/tokio-tungstenite",
   # Askama config parsing replaces the unmaintained basic-toml dependency.
