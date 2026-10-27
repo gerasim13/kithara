@@ -3,6 +3,10 @@ use num_traits::ToPrimitive;
 
 use super::renderer::residency::SourceResidency;
 
+#[cfg(test)]
+#[path = "tests/source_sample.rs"]
+mod frame_tests;
+
 pub(super) fn source_frame(
     resident: &SourceResidency,
     position: (u128, std::num::NonZeroU128),
@@ -52,19 +56,17 @@ fn interpolate_source_frame(
 ) -> Result<(), ElasticError> {
     let channels = output.len();
     let current = sample_offset(0)?;
-    if fraction == 0.0 {
-        output.copy_from_slice(&resident.samples[current..current + channels]);
-        return Ok(());
-    }
-    let next = sample_offset(1)?;
-    for (channel, sample) in output.iter_mut().enumerate() {
-        let current = f64::from(resident.samples[current + channel]);
-        let next = f64::from(resident.samples[next + channel]);
-        *sample = (next - current)
-            .mul_add(fraction, current)
-            .to_f32()
-            .ok_or(ElasticError::SampleCountOverflow)?;
-    }
+    let next = if fraction == 0.0 {
+        current
+    } else {
+        sample_offset(1)?
+    };
+    kithara_dsp::interp::interpolate_frame(
+        &resident.samples[current..current + channels],
+        &resident.samples[next..next + channels],
+        fraction,
+        output,
+    );
     Ok(())
 }
 
@@ -78,9 +80,14 @@ fn downsample_source_frame(
     let radius = i64::try_from(crate::consts::SOURCE_RADIUS)
         .map_err(|_| ElasticError::SampleCountOverflow)?;
     let cutoff = speed.recip();
-    let mut taps = [(0, 0.0); 2 * crate::consts::SOURCE_RADIUS + 1];
+    let mut offsets = [0; 2 * crate::consts::SOURCE_RADIUS + 1];
+    let mut tap_weights = [0.0; 2 * crate::consts::SOURCE_RADIUS + 1];
     let mut weights = 0.0;
-    for (tap, offset) in taps.iter_mut().zip(-radius..=radius) {
+    for ((sample, tap_weight), offset) in offsets
+        .iter_mut()
+        .zip(&mut tap_weights)
+        .zip(-radius..=radius)
+    {
         let distance = offset.to_f64().ok_or(ElasticError::SampleCountOverflow)? - fraction;
         let weight = kithara_dsp::interp::sinc_hann_weight(
             distance,
@@ -89,17 +96,25 @@ fn downsample_source_frame(
                 .to_f64()
                 .ok_or(ElasticError::SampleCountOverflow)?,
         );
-        *tap = (sample_offset(offset)?, weight);
+        *sample = sample_offset(offset)?;
+        *tap_weight = weight;
         weights += weight;
     }
-    for (channel, sample) in output.iter_mut().enumerate() {
-        let mut total = 0.0;
-        for &(offset, weight) in &taps {
-            total += f64::from(resident.samples[offset + channel]) * weight;
+    let mut totals = [0.0; 8];
+    for (group, output) in output.chunks_mut(totals.len()).enumerate() {
+        kithara_dsp::interp::weighted_frames(
+            &resident.samples[group * totals.len()..],
+            &offsets,
+            &tap_weights,
+            output.len(),
+            &mut totals,
+        )
+        .map_err(|_| ElasticError::SampleCountOverflow)?;
+        for (sample, total) in output.iter_mut().zip(totals) {
+            *sample = (total / weights)
+                .to_f32()
+                .ok_or(ElasticError::SampleCountOverflow)?;
         }
-        *sample = (total / weights)
-            .to_f32()
-            .ok_or(ElasticError::SampleCountOverflow)?;
     }
     Ok(())
 }
