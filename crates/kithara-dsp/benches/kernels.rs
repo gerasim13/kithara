@@ -342,7 +342,7 @@ fn interp(c: &mut Criterion) {
 
 fn source_frames(c: &mut Criterion) {
     let mut group = c.benchmark_group("source_frames");
-    for channels in [1_usize, 2, 4, 6] {
+    for channels in [1_usize, 2, 4, 6, 9] {
         let samples = vec![0.25; channels * 33];
         let offsets = std::array::from_fn::<_, 33, _>(|tap| tap * channels);
         let weights = [0.125; 33];

@@ -511,7 +511,12 @@ fn bench_stretch_process(c: &mut Criterion) {
     group.finish();
 }
 
-fn sampler_fixture(speed: f32, pcm: &[f32]) -> (WarpRenderer<TestPools>, Option<AudioChunk>) {
+fn sampler_fixture(
+    speed: f32,
+    pcm: &[f32],
+    output_frames: usize,
+    terminal: bool,
+) -> (WarpRenderer<TestPools>, Option<AudioChunk>) {
     let pools = pools();
     let spec = AudioSpec::new(
         2,
@@ -521,23 +526,29 @@ fn sampler_fixture(speed: f32, pcm: &[f32]) -> (WarpRenderer<TestPools>, Option<
         .backend(StretchKind::Signalsmith)
         .keylock(false)
         .speed(speed)
-        .render_quantum_frames(NonZeroUsize::new(127).expect("output quantum"))
+        .render_quantum_frames(NonZeroUsize::new(output_frames).expect("output quantum"))
         .build();
     let mut renderer = Warp::new((), &config).renderer(spec, pools.clone());
     renderer
         .prepare_engine_latency(spec)
         .expect("prepared renderer");
-    let frames = renderer
+    let mut frames = renderer
         .prepare_source_window(
             AudioChunkInfo {
                 spec,
                 ..AudioChunkInfo::default()
             },
             pcm.len() / 2,
-            127,
+            output_frames,
         )
         .expect("mapped sampler input")
         .get();
+    if terminal {
+        frames = renderer
+            .prepare_terminal_quantum(17)
+            .expect("bounded terminal source")
+            .get();
+    }
     let mut samples = pools
         .get_with_len::<f32>(frames * 2)
         .expect("prepared input");
@@ -546,6 +557,7 @@ fn sampler_fixture(speed: f32, pcm: &[f32]) -> (WarpRenderer<TestPools>, Option<
         AudioChunkInfo {
             spec,
             frames: u32::try_from(frames).expect("input frames"),
+            end_of_track: terminal,
             ..AudioChunkInfo::default()
         },
         samples,
@@ -558,30 +570,42 @@ fn bench_source_window(c: &mut Criterion) {
     let mut group = c.benchmark_group("audit_source_window");
     group.sample_size(20);
     group.measurement_time(Duration::from_secs(4));
-    group.throughput(frame_throughput(127));
     for (label, speed) in [("fractional", 0.75), ("downsampled", 1.5)] {
-        let (mut renderer, mut chunk) = sampler_fixture(speed, &pcm);
-        let output = renderer
-            .render_quantum(chunk.take().expect("input"))
-            .continue_value()
-            .expect("rendered input")
-            .expect("sampler output");
-        assert_eq!(output.frames(), 127);
-        let span = output.meta.source_span.expect("exact sampler mapping");
-        let (numerator, denominator) = span.source_ratio_at(1).expect("fractional frame");
-        assert_ne!(numerator % denominator.get(), 0);
-        assert!(output.samples.iter().any(|value| *value != 0.0));
-        group.bench_function(label, |b| {
-            b.iter_batched_ref(
-                || sampler_fixture(speed, &pcm),
-                |(renderer, chunk)| {
-                    black_box(
-                        renderer.render_quantum(black_box(chunk.take().expect("prepared input"))),
-                    )
-                },
-                BatchSize::PerIteration,
-            );
-        });
+        for (shape, frames, terminal) in [
+            ("short", 7, false),
+            ("chunk", 127, false),
+            ("tail", 127, true),
+        ] {
+            let expected_frames = if terminal {
+                (17.0_f32 / speed).ceil().to_usize().expect("tail frames")
+            } else {
+                frames
+            };
+            group.throughput(frame_throughput(expected_frames));
+            let (mut renderer, mut chunk) = sampler_fixture(speed, &pcm, frames, terminal);
+            let output = renderer
+                .render_quantum(chunk.take().expect("input"))
+                .continue_value()
+                .expect("rendered input")
+                .expect("sampler output");
+            assert_eq!(output.frames(), expected_frames);
+            let span = output.meta.source_span.expect("exact sampler mapping");
+            let (numerator, denominator) = span.source_ratio_at(1).expect("fractional frame");
+            assert_ne!(numerator % denominator.get(), 0);
+            assert!(output.samples.iter().any(|value| *value != 0.0));
+            group.bench_function(BenchmarkId::new(label, shape), |b| {
+                b.iter_batched_ref(
+                    || sampler_fixture(speed, &pcm, frames, terminal),
+                    |(renderer, chunk)| {
+                        black_box(
+                            renderer
+                                .render_quantum(black_box(chunk.take().expect("prepared input"))),
+                        )
+                    },
+                    BatchSize::PerIteration,
+                );
+            });
+        }
     }
     group.finish();
 }
