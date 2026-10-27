@@ -517,14 +517,23 @@ fn bench_limiter_detector(c: &mut Criterion) {
     group.sample_size(20);
     group.warm_up_time(Duration::from_secs(1));
     group.measurement_time(Duration::from_secs(3));
-    for frames in [128, 256, 257, 600] {
+    for (frames, tail) in [
+        (1, 0),
+        (7, 0),
+        (128, 0),
+        (255, 0),
+        (256, 0),
+        (257, 0),
+        (257, 7),
+        (600, 0),
+    ] {
         for (label, amplitude) in [("quiet", 0.125), ("overloaded", 2.0)] {
             let input: [Vec<f32>; 2] = std::array::from_fn(|channel| {
                 [1.0, -0.5, 0.75, -1.0, 0.25, -0.75, 0.5]
                     .into_iter()
                     .cycle()
                     .skip(channel)
-                    .take(frames)
+                    .take(frames + channel * tail)
                     .map(|sample| sample * amplitude)
                     .collect()
             });
@@ -536,11 +545,16 @@ fn bench_limiter_detector(c: &mut Criterion) {
             .expect("stereo detector");
             let [mut left, mut right] = input.clone();
             limiter.process_planar(&mut [&mut left, &mut right]);
-            let reduced = left
-                .iter()
-                .chain(&right)
-                .zip(input.iter().flatten())
-                .any(|(output, input)| output.abs() < input.abs());
+            let reduced = [&left, &right]
+                .into_iter()
+                .zip(&input)
+                .any(|(output, input)| {
+                    output
+                        .iter()
+                        .zip(input)
+                        .take(frames)
+                        .any(|(output, input)| output.abs() < input.abs())
+                });
             assert_eq!(
                 reduced,
                 label == "overloaded",
@@ -550,7 +564,12 @@ fn bench_limiter_detector(c: &mut Criterion) {
             group.throughput(Throughput::Elements(
                 u64::try_from(frames * 2).expect("bench count"),
             ));
-            group.bench_function(BenchmarkId::new(label, frames), |b| {
+            let shape = if tail == 0 {
+                frames.to_string()
+            } else {
+                format!("{frames}+{tail}")
+            };
+            group.bench_function(BenchmarkId::new(label, shape), |b| {
                 b.iter_batched_ref(
                     || (limiter.clone(), input.clone()),
                     |(limiter, [left, right])| {
