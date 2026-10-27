@@ -123,7 +123,7 @@ impl SizeSignal {
     /// though the probe predicate and the gate sit under different locks
     /// (mirrors `kithara-storage` `wait_range_inner`). A genuine wedge (no
     /// signal at all) trips the hang watchdog rather than parking forever.
-    #[kithara::hang_watchdog]
+    #[kithara::hang_watchdog(ctx = String)]
     pub(crate) fn wait_range_blocking(
         &self,
         cancel: &CancelToken,
@@ -139,7 +139,13 @@ impl SizeSignal {
             cancel.cancel_token().on_cancel(move || ready.signal())
         });
         loop {
-            hang_tick!();
+            hang_tick!(format!(
+                "gate={}, session_cancelled={}, reader_cancelled={:?}, reader_pending={:?}",
+                self.current(),
+                cancel.is_cancelled(),
+                reader_cancel.map(kithara_stream::ReaderControl::is_cancelled),
+                reader_cancel.and_then(kithara_stream::ReaderControl::pending_reason),
+            ));
             if cancel.is_cancelled()
                 || reader_cancel.is_some_and(kithara_stream::ReaderControl::is_cancelled)
             {
