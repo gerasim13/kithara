@@ -746,9 +746,26 @@ mod unix {
 
         #[test]
         fn inherited_proof_never_unlocks_its_supervisor_and_direct_proof_stays_held() {
+            // Open proof descriptors after exec so other libtest forks cannot inherit them.
+            if std::env::var_os("KITHARA_PROOF_LIFETIME_FIXTURE").is_none() {
+                assert!(
+                    Command::new(std::env::current_exe().unwrap())
+                        .args([
+                            "--exact",
+                            "ci::host::mac::admission::unix::tests::inherited_proof_never_unlocks_its_supervisor_and_direct_proof_stays_held",
+                            "--nocapture",
+                        ])
+                        .env("KITHARA_PROOF_LIFETIME_FIXTURE", "1")
+                        .status()
+                        .unwrap()
+                        .success()
+                );
+                return;
+            }
             let root = root();
             let file = lock_file(root.path()).unwrap();
             let proof = file.try_clone().unwrap();
+            let spare = proof.try_clone().unwrap();
             let supervisor = FileLock::try_exclusive(file).unwrap();
             drop(validate_proof(root.path(), proof).unwrap());
             assert!(matches!(
@@ -756,12 +773,24 @@ mod unix {
                 Err(TryLockError::WouldBlock)
             ));
             drop(supervisor);
+            assert!(FileLock::try_exclusive(lock_file(root.path()).unwrap()).is_ok());
+            drop(spare);
 
             let proof = validate_proof(root.path(), lock_file(root.path()).unwrap()).unwrap();
             assert!(matches!(
                 FileLock::try_exclusive(lock_file(root.path()).unwrap()),
                 Err(TryLockError::WouldBlock)
             ));
+            let duplicate = proof.try_clone().unwrap();
+            drop(proof);
+            assert!(matches!(
+                FileLock::try_exclusive(lock_file(root.path()).unwrap()),
+                Err(TryLockError::WouldBlock)
+            ));
+            drop(duplicate);
+            assert!(FileLock::try_exclusive(lock_file(root.path()).unwrap()).is_ok());
+
+            let proof = validate_proof(root.path(), lock_file(root.path()).unwrap()).unwrap();
             drop(proof);
             assert!(FileLock::try_exclusive(lock_file(root.path()).unwrap()).is_ok());
         }

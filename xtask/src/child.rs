@@ -469,6 +469,22 @@ mod tests {
 
     #[test]
     fn pass_command_stop_and_pipe_drain_share_the_total_budget() {
+        // waitpid(-1) must not observe another libtest thread's child.
+        if std::env::var_os("KITHARA_PASS_BUDGET_FIXTURE").is_none() {
+            assert!(
+                Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "child::tests::pass_command_stop_and_pipe_drain_share_the_total_budget",
+                        "--nocapture",
+                    ])
+                    .env("KITHARA_PASS_BUDGET_FIXTURE", "1")
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            return;
+        }
         let started = Instant::now();
         let error = member_output(
             Command::new("sleep").arg("30"),
