@@ -48,7 +48,7 @@ fn boost_low_band<S>(config: &EqConfig<S>, sample_rate: u32, channels: u16) {
 
 <tr><td><code>IsolatorEq</code></td><td>DJ isolator built on crossover filters</td></tr>
 
-<tr><td><code>PeakLimiter</code></td><td>Look-ahead peak limiter holding a ceiling</td></tr>
+<tr><td><code>PeakLimiter</code></td><td>Zero-lookahead linked peak limiter holding a ceiling</td></tr>
 
 <tr><td><code>GainDb</code></td><td>Band gain in dB, clamped to a fixed range</td></tr>
 
@@ -74,7 +74,8 @@ fn boost_low_band<S>(config: &EqConfig<S>, sample_rate: u32, channels: u16) {
 
 `kithara-play` builds a per-track effect chain and the band layouts its deck
 takes; `kithara-render` runs a `StereoEq` on every deck; `kithara-host` puts
-`LimiterNode` on the session bus. Reusable DSP building
-blocks stay private under `src/dsp/` until they become `kithara-dsp`.
+`LimiterNode` on the session bus. The limiter's reconstruction, input history,
+interval peaks and release recursion belong to `kithara-dsp`; effects owns its
+tap design, ceiling, channel linking and per-frame sanitization policy.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-effects) for detailed contracts, invariants, and internals.

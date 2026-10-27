@@ -4,8 +4,12 @@ use core::{
 };
 
 use bon::bon;
-use fearless_simd::{Level, Simd, dispatch};
 use kithara_config::Config;
+use kithara_dsp::{
+    envelope::{AttackRelease, PeakHold},
+    filter::Fir,
+    multiply_in_place,
+};
 use kithara_signal::sanitize_sample;
 use num_traits::ToPrimitive;
 
@@ -75,24 +79,14 @@ impl Default for LimiterConfig {
 #[config_owner(config)]
 #[non_exhaustive]
 pub struct PeakLimiter {
-    level: Level,
-    /// The last `DETECTOR_HALF_WIDTH` input samples of every channel, oldest first, so a
-    /// detector window reaching before the block still reads the signal as it entered the
-    /// limiter rather than as it left.
-    history: [[f32; Self::DETECTOR_HALF_WIDTH + 1]; Self::DETECTOR_CHANNELS],
-    /// The peak the previous frame already reconstructed for the interval it shares with
-    /// this one. Both frames read the same untouched input there, so the sum is identical
-    /// and computing it twice buys nothing.
-    shared_peak: [f32; Self::DETECTOR_CHANNELS],
-    /// Polyphase windowed-sinc taps for the inter-sample phases, phase-major.
-    taps: [f32; (Self::DETECTOR_PHASES - 1) * Self::DETECTOR_TAPS],
-    /// Whether [`Self::shared_peak`] describes the interval behind the next frame. It does
-    /// not at the start of a block, where that interval was last judged against a held
-    /// tail rather than the samples that actually followed.
-    shared_valid: bool,
+    detector: Fir<
+        { Self::DETECTOR_TAPS },
+        { Self::DETECTOR_PHASES - 1 },
+        { Self::DETECTOR_CHANNELS },
+        { Self::DETECTOR_HALF_WIDTH + 1 },
+    >,
     config: LimiterConfig,
-    envelope: f32,
-    release_coeff: f32,
+    envelope: AttackRelease,
     channels: usize,
 }
 
@@ -135,46 +129,22 @@ impl PeakLimiter {
         let samples = release_ms / consts::MS_PER_SEC * sample_rate.get().to_f32().unwrap_or(1.0);
         let release_coeff = (-1.0 / samples).exp();
 
-        let mut taps = [0.0_f32; (Self::DETECTOR_PHASES - 1) * Self::DETECTOR_TAPS];
-        for (index, coefficient) in taps.iter_mut().enumerate() {
-            let phase = index / Self::DETECTOR_TAPS + 1;
-            let tap = index % Self::DETECTOR_TAPS;
-            let offset =
-                phase.to_f32().unwrap_or(0.0) / Self::DETECTOR_PHASES.to_f32().unwrap_or(1.0);
-            let position =
-                tap.to_f32().unwrap_or(0.0) - Self::DETECTOR_HALF_WIDTH.to_f32().unwrap_or(0.0);
-            *coefficient = Self::detector_tap(offset - position);
-        }
+        let taps = std::array::from_fn(|phase: usize| {
+            std::array::from_fn(|tap: usize| {
+                let offset = (phase + 1).to_f32().unwrap_or(0.0)
+                    / Self::DETECTOR_PHASES.to_f32().unwrap_or(1.0);
+                let position =
+                    tap.to_f32().unwrap_or(0.0) - Self::DETECTOR_HALF_WIDTH.to_f32().unwrap_or(0.0);
+                Self::detector_tap(offset - position)
+            })
+        });
 
         Ok(Self {
-            level: Level::new(),
             config,
-            release_coeff,
-            taps,
-            envelope: 1.0,
+            detector: Fir::new(taps),
+            envelope: AttackRelease::new(release_coeff),
             channels: channels.get(),
-            history: [[0.0; Self::DETECTOR_HALF_WIDTH + 1]; Self::DETECTOR_CHANNELS],
-            shared_peak: [0.0; Self::DETECTOR_CHANNELS],
-            shared_valid: false,
         })
-    }
-
-    /// Peak of both reconstructed intervals touching `frame`. The one behind it is bounded
-    /// by this gain as much as by the previous frame's, and only the smaller of the two
-    /// keeps its crest under the ceiling. Within a block the previous frame already
-    /// reconstructed that interval from the same untouched input, so it is reused.
-    #[inline(always)]
-    fn advance_detector(&mut self, block: &[f32], channel: usize, frame: usize) -> f32 {
-        let ahead = self.inter_sample_peak(block, channel, frame, frame as isize);
-        let behind = if self.shared_valid {
-            self.shared_peak.get(channel).copied().unwrap_or(0.0)
-        } else {
-            self.inter_sample_peak(block, channel, frame, frame as isize - 1)
-        };
-        if let Some(shared) = self.shared_peak.get_mut(channel) {
-            *shared = ahead;
-        }
-        ahead.max(behind)
     }
 
     /// Hann-windowed sinc evaluated `distance` input samples away from a tap.
@@ -188,140 +158,57 @@ impl PeakLimiter {
         argument.sin() / argument * window
     }
 
-    /// Largest magnitude the reconstruction reaches between `base` and the sample after it
-    /// on one channel; `base` indexes `block` and may name the frame before `frame`.
-    /// Everything before `frame` comes from the input history, because the block already
-    /// carries the gain applied to those frames and feeding that back would make the
-    /// detector chase itself; samples past the block end hold the last one, because the
-    /// stream continues into the next block and reading silence there would modulate the
-    /// gain at every block boundary.
-    #[inline(always)]
-    fn inter_sample_peak(&self, block: &[f32], channel: usize, frame: usize, base: isize) -> f32 {
-        let Some(history) = self.history.get(channel) else {
-            return 0.0;
-        };
-        let mut peak = 0.0_f32;
-        for branch in self.taps.as_chunks::<{ Self::DETECTOR_TAPS }>().0 {
-            let mut sum = 0.0_f32;
-            for (tap, coefficient) in branch.iter().enumerate() {
-                let position = base + tap as isize - Self::DETECTOR_HALF_WIDTH as isize;
-                let sample = if position < frame as isize {
-                    let age = frame as isize - position;
-                    usize::try_from(Self::DETECTOR_HALF_WIDTH as isize + 1 - age)
-                        .ok()
-                        .and_then(|slot| history.get(slot).copied())
-                        .unwrap_or(0.0)
-                } else {
-                    usize::try_from(position)
-                        .ok()
-                        .and_then(|index| block.get(index).or_else(|| block.last()).copied())
-                        .unwrap_or(0.0)
-                };
-                sum = coefficient.mul_add(sample, sum);
-            }
-            peak = peak.max(sum.abs());
-        }
-        peak
-    }
-
-    /// The ordered positive FMA sum bounds every signed reconstruction of this block.
-    #[inline(always)]
-    fn reconstruction_can_limit(&self, channels: &[&mut [f32]]) -> bool {
-        let maximum = channels
-            .iter()
-            .flat_map(|channel| channel.iter())
-            .chain(self.history.iter().take(self.channels).flatten())
-            .fold(0.0_f32, |maximum, &sample| {
-                maximum.max(if sample.is_finite() {
-                    sample.abs()
-                } else {
-                    f32::INFINITY
-                })
-            });
-        maximum > self.ceiling()
-            || self
-                .taps
-                .as_chunks::<{ Self::DETECTOR_TAPS }>()
-                .0
-                .iter()
-                .any(|branch| {
-                    branch.iter().fold(0.0_f32, |sum, coefficient| {
-                        coefficient.abs().mul_add(maximum, sum)
-                    }) > self.ceiling()
-                })
-    }
-
-    /// Apply the limiter in place to a planar block, linking channels by frame peak. Each sample is
-    /// guarded before the peak is taken, so the envelope only ever sees a finite peak. Allocates
-    /// nothing, locks nothing, performs no I/O.
+    /// Apply linked gains to the common channel prefix without allocating.
+    /// Sanitized current samples and untouched future samples remain separate
+    /// until reconstruction has recorded the pre-gain history.
     pub fn process_planar(&mut self, channels: &mut [&mut [f32]]) {
-        dispatch!(self.level, simd => self.process_planar_with_simd(simd, channels));
-    }
-
-    #[inline(always)]
-    fn process_planar_with_simd<S: Simd>(&mut self, _simd: S, channels: &mut [&mut [f32]]) {
+        const CHUNK: usize = 256;
         debug_assert_eq!(channels.len(), self.channels);
         debug_assert!(self.channels <= Self::DETECTOR_CHANNELS);
-
-        let frames = channels.iter().map(|c| c.len()).min().unwrap_or(0);
-        self.shared_valid = false;
-        let reconstruct = frames > 0 && self.reconstruction_can_limit(channels);
-
-        for frame in 0..frames {
-            let mut peak = 0.0_f32;
+        let frames = channels
+            .iter()
+            .map(|channel| channel.len())
+            .min()
+            .unwrap_or(0);
+        self.detector.begin_block(channels, self.ceiling());
+        for start in (0..frames).step_by(CHUNK) {
+            let end = frames.min(start + CHUNK);
+            let count = end - start;
+            let mut linked = [0.0; CHUNK];
             for (index, channel) in channels.iter_mut().enumerate() {
-                let sample = sanitize_sample(channel[frame]);
-                channel[frame] = sample;
-                peak = peak.max(sample.abs());
-                if reconstruct {
-                    peak = peak.max(self.advance_detector(channel, index, frame));
+                let mut current = [0.0; CHUNK];
+                for (sample, &raw) in current.iter_mut().zip(&channel[start..end]) {
+                    *sample = sanitize_sample(raw);
                 }
+                let mut peaks = [0.0; CHUNK];
+                self.detector.process(
+                    index,
+                    &channel[start..],
+                    &current[..count],
+                    &mut peaks[..count],
+                );
+                PeakHold::link(&peaks[..count], &mut linked[..count]);
+                channel[start..end].copy_from_slice(&current[..count]);
             }
-            for (index, channel) in channels.iter().enumerate() {
-                self.push_history(index, channel[frame]);
+            let gains = &mut linked[..count];
+            for peak in gains.iter_mut() {
+                *peak = if *peak > self.ceiling() {
+                    self.ceiling() / *peak
+                } else {
+                    1.0
+                };
             }
-
-            self.shared_valid = true;
-
-            let gain = self.step(peak);
+            self.envelope.process(gains);
             for channel in channels.iter_mut() {
-                channel[frame] *= gain;
+                multiply_in_place(&mut channel[start..end], gains);
             }
         }
     }
 
-    /// Record one input sample as the newest detector history for its channel.
-    fn push_history(&mut self, channel: usize, sample: f32) {
-        if let Some(history) = self.history.get_mut(channel) {
-            history.copy_within(1.., 0);
-            if let Some(newest) = history.last_mut() {
-                *newest = sample;
-            }
-        }
-    }
-
-    /// Reset the gain envelope to unity and forget the detector history.
+    /// Reset the gain envelope to unity and forget detector history.
     pub fn reset(&mut self) {
-        self.envelope = 1.0;
-        self.history = [[0.0; Self::DETECTOR_HALF_WIDTH + 1]; Self::DETECTOR_CHANNELS];
-        self.shared_peak = [0.0; Self::DETECTOR_CHANNELS];
-        self.shared_valid = false;
-    }
-
-    /// Releases before clamping: the reverse order lets the recovered gain overshoot the ceiling
-    /// for one frame.
-    #[inline]
-    fn step(&mut self, peak: f32) -> f32 {
-        let required = if peak > self.ceiling() {
-            self.ceiling() / peak
-        } else {
-            1.0
-        };
-        self.envelope = (1.0 - self.envelope).mul_add(-self.release_coeff, 1.0);
-        if required < self.envelope {
-            self.envelope = required;
-        }
-        self.envelope
+        self.envelope.reset();
+        self.detector.reset();
     }
 }
 
@@ -335,7 +222,7 @@ mod tests {
     };
     use kithara_test_utils::kithara;
 
-    use super::*;
+    use super::{super::scalar, *};
 
     fn limiter(sample_rate: u32, release_ms: f32) -> PeakLimiter {
         PeakLimiter::new(
@@ -355,44 +242,34 @@ mod tests {
         limiter.process_planar(&mut chans);
     }
 
-    fn reconstruct_every_frame(limiter: &mut PeakLimiter, channels: &mut [&mut [f32]]) {
-        let frames = channels
-            .iter()
-            .map(|channel| channel.len())
-            .min()
-            .unwrap_or(0);
-        limiter.shared_valid = false;
-        for frame in 0..frames {
-            let mut peak = 0.0_f32;
-            for (index, channel) in channels.iter_mut().enumerate() {
-                let sample = sanitize_sample(channel[frame]);
-                channel[frame] = sample;
-                peak = peak.max(sample.abs());
-                peak = peak.max(limiter.advance_detector(channel, index, frame));
-            }
-            for (index, channel) in channels.iter().enumerate() {
-                limiter.push_history(index, channel[frame]);
-            }
-            limiter.shared_valid = true;
-            let gain = limiter.step(peak);
-            for channel in channels.iter_mut() {
-                channel[frame] *= gain;
-            }
-        }
-    }
-
     #[kithara::test(native, flash(false))]
     fn bounded_blocks_preserve_pcm_and_following_attack_and_release() {
-        let values = [0.0_f32, -0.0, 0.02, -0.03, 0.1, -0.2, 0.4, -0.1];
+        let values = [
+            0.0_f32,
+            -0.0,
+            0.02,
+            -0.03,
+            0.1,
+            -0.2,
+            0.4,
+            -0.1,
+            0.98,
+            0.98_f32.next_up(),
+        ];
         for channel_count in [1, 2, 8] {
-            for frames in [0, 1, 7, 17, 127] {
+            for frames in [0, 1, 7, 17, 127, 255, 256, 257, 600] {
                 let mut actual = PeakLimiter::new(
                     NonZeroU32::new(48_000).unwrap(),
                     NonZeroUsize::new(channel_count).unwrap(),
                     LimiterConfig::default(),
                 )
                 .unwrap();
-                let mut reference = actual.clone();
+                let mut reference = scalar::ScalarLimiter::new(
+                    NonZeroU32::new(48_000).unwrap(),
+                    NonZeroUsize::new(actual.channels).unwrap(),
+                    actual.config,
+                )
+                .unwrap();
                 for (stage, scale) in [0.25, 8.0, 0.25, 1.0, 0.01, 0.99, 2.0, 0.1]
                     .into_iter()
                     .enumerate()
@@ -417,8 +294,7 @@ mod tests {
                             .map(Vec::as_mut_slice)
                             .collect::<Vec<_>>(),
                     );
-                    reconstruct_every_frame(
-                        &mut reference,
+                    reference.process_planar(
                         &mut expected
                             .iter_mut()
                             .map(Vec::as_mut_slice)
@@ -426,15 +302,6 @@ mod tests {
                     );
                     for (actual, expected) in
                         channels.iter().flatten().zip(expected.iter().flatten())
-                    {
-                        assert_eq!(actual.to_bits(), expected.to_bits());
-                    }
-                    assert_eq!(actual.envelope.to_bits(), reference.envelope.to_bits());
-                    for (actual, expected) in actual
-                        .history
-                        .iter()
-                        .flatten()
-                        .zip(reference.history.iter().flatten())
                     {
                         assert_eq!(actual.to_bits(), expected.to_bits());
                     }
@@ -447,16 +314,18 @@ mod tests {
     fn an_unprocessed_channel_tail_still_controls_the_detector() {
         for tail in [2.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
             let mut actual = limiter(48_000, 50.0);
-            let mut reference = actual.clone();
+            let mut reference = scalar::ScalarLimiter::new(
+                NonZeroU32::new(48_000).unwrap(),
+                NonZeroUsize::new(actual.channels).unwrap(),
+                actual.config,
+            )
+            .unwrap();
             let mut left = [0.1];
             let mut right = [0.1, tail];
             let mut expected_left = left;
             let mut expected_right = right;
             run(&mut actual, &mut left, &mut right);
-            reconstruct_every_frame(
-                &mut reference,
-                &mut [&mut expected_left, &mut expected_right],
-            );
+            reference.process_planar(&mut [&mut expected_left, &mut expected_right]);
             for (actual, expected) in left
                 .iter()
                 .chain(&right)
@@ -464,15 +333,26 @@ mod tests {
             {
                 assert_eq!(actual.to_bits(), expected.to_bits());
             }
-            assert_eq!(actual.envelope.to_bits(), reference.envelope.to_bits());
-            for (actual, expected) in actual
-                .history
-                .iter()
-                .flatten()
-                .zip(reference.history.iter().flatten())
-            {
-                assert_eq!(actual.to_bits(), expected.to_bits());
-            }
+        }
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn reset_restores_the_scalar_lifecycle() {
+        let mut actual = limiter(48_000, 50.0);
+        let mut reference = scalar::ScalarLimiter::new(
+            NonZeroU32::new(48_000).unwrap(),
+            NonZeroUsize::new(2).unwrap(),
+            actual.config,
+        )
+        .unwrap();
+        for drive in [2.0, 0.1] {
+            let mut input = [[drive; 257]; 2];
+            let mut expected = input;
+            actual.process_planar(&mut input.each_mut().map(|channel| &mut channel[..]));
+            reference.process_planar(&mut expected.each_mut().map(|channel| &mut channel[..]));
+            assert_eq!(input, expected);
+            actual.reset();
+            reference.reset();
         }
     }
 

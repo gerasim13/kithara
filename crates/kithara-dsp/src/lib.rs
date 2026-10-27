@@ -16,6 +16,8 @@
 
 mod backend;
 mod consts;
+/// Ordered target-gain recursion and stateless interval peak linking.
+pub mod envelope;
 /// Fade curves: one lexicon for firewheel's `MixDSP` and every crossfade gain.
 pub mod fade;
 /// Biquad cascades over channel planes and the designs that feed them.
