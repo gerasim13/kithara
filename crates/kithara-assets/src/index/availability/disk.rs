@@ -436,7 +436,7 @@ mod tests {
         let opened = OpenOptions::new().write(true).open(&canonical).unwrap();
 
         resource.reactivate().unwrap();
-        let replacement = vec![0xAB; final_len];
+        let replacement = vec![0xab; final_len];
         resource.write_at(0, &replacement).unwrap();
         resource.commit(Some(final_len as u64)).unwrap();
         assert_eq!(fs::read(&canonical).unwrap(), replacement);
@@ -467,7 +467,7 @@ mod tests {
         let previous = fs::read(&manifest).unwrap();
 
         resource.reactivate().unwrap();
-        resource.write_at(0, &vec![0xAB; final_len]).unwrap();
+        resource.write_at(0, &vec![0xab; final_len]).unwrap();
         resource.commit(Some(final_len as u64)).unwrap();
         assert_eq!(fs::metadata(&canonical).unwrap().len(), final_len as u64);
 
