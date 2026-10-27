@@ -393,6 +393,7 @@ block2 = "0.6.2"
 
 # storage (range maps + mmap)
 bon = "3.10"
+brotli = "8.0.4"
 bungee-sys = "0.1.1"
 bytes = "1.12.1"
 cargo_metadata = "0.23"
@@ -426,6 +427,7 @@ filetime = "0.2.29"
 firewheel = { version = "0.14.0", default-features = false, features = ["scheduled_events", "std", "tracing"] }
 firewheel-core = { version = "0.14.0", default-features = false, features = ["std", "serde"] }
 firewheel-web-audio = { version = "0.6.0", default-features = false }
+flate2 = "1.1.10"
 fs4 = "1.1.0"
 futures = "0.3.34"
 
@@ -597,7 +599,6 @@ windows-sys = "0.61"
 # already builds this exact version, so it costs no extra compilation.
 winit = "0.30"
 wreq = "=6.0.0-rc.31"
-wreq-util = "=3.0.0-rc.14"
 
 # Optimise CPU-heavy audio dependencies in debug builds so the audio
 # worker thread can keep up with real-time playback.  Without this,
