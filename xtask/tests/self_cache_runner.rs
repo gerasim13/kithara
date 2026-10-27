@@ -3,7 +3,7 @@
 use std::{
     env, fs,
     io::{self, BufRead, BufReader, ErrorKind, Read, Write},
-    os::unix::{fs::PermissionsExt, process::CommandExt as _},
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
     sync::{Arc, Barrier, mpsc},
@@ -12,7 +12,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow};
-use kithara_devtools::{lease, lock::FileLock};
+use kithara_devtools::lock::FileLock;
 use nix::{
     errno::Errno,
     sys::signal::{Signal, kill},
@@ -723,6 +723,10 @@ fn public_bootstrap_routes_need_no_unmounted_parent_claims() -> Result<()> {
 #[cfg(target_os = "macos")]
 #[test]
 fn cold_refresh_holds_the_target_before_the_first_cargo_build() -> Result<()> {
+    use std::os::unix::process::CommandExt as _;
+
+    use kithara_devtools::lease;
+
     struct PendingRefresh {
         child: Option<Child>,
         release: PathBuf,

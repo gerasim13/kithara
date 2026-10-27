@@ -1,5 +1,13 @@
 use std::num::{NonZeroU128, NonZeroUsize};
 
+#[cfg(not(target_os = "android"))]
+use kithara::{
+    abr::AbrMode,
+    audio::AudioDecoderConfig,
+    decode::DecoderBackend,
+    download::{Downloader, DownloaderConfig, DownloaderEvent, RequestMethod},
+    events::{Envelope, EventBus},
+};
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome},
@@ -225,6 +233,309 @@ async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case]
         check_chunk_integrity(audio, segment_duration);
     })
     .await;
+}
+
+#[cfg(not(target_os = "android"))]
+#[kithara::test(
+    tokio,
+    native,
+    timeout(Duration::from_secs(10)),
+    hang_timeout_secs(1),
+    tracing(
+        "kithara_audio=debug,kithara_decode=debug,kithara_hls=trace,kithara_stream=debug,kithara_download=trace,flash::hang=debug,hls_heavy=info,kithara_audio_probe=trace"
+    )
+)]
+async fn gated_late_outgoing_debt(
+    hls_header_fifty: Vec<u8>,
+    hls_pcm_fifty: Vec<u8>,
+    hls_pcm_fifty_descending: Vec<u8>,
+) {
+    #[derive(Clone)]
+    struct ReleaseFarGates(Vec<kithara_integration_tests::SegmentGateHandle>);
+    impl Drop for ReleaseFarGates {
+        fn drop(&mut self) {
+            for gate in &self.0 {
+                gate.release();
+            }
+        }
+    }
+
+    let trace = kithara_integration_tests::usdt_trace::scope();
+    let helper = TestServerHelper::new().await;
+    let init = Arc::new(hls_header_fifty);
+    let server = helper
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .variant_count(2)
+                .segments_per_variant(consts::SEGMENT_COUNT)
+                .segment_size(consts::D.segment_size)
+                .segment_duration_secs(consts::D.segment_duration_secs())
+                .custom_data_per_variant(vec![
+                    Arc::new(hls_pcm_fifty),
+                    Arc::new(hls_pcm_fifty_descending),
+                ])
+                .init_data_per_variant(vec![Arc::clone(&init), init])
+                .variant_bandwidths(vec![5_000_000, 1_000_000])
+                .delay_rules(vec![DelayRule {
+                    variant: Some(0),
+                    segment_eq: Some(3),
+                    delay_ms: 500,
+                    ..Default::default()
+                }]),
+        )
+        .await
+        .expect("create gated HLS fixture");
+    let setup_gate = helper.register_segment_gate(server.token(), 0, 1);
+    let outgoing_gate = helper.register_segment_gate(server.token(), 0, 3);
+    let incoming_gate = helper.register_init_gate(server.token(), 1);
+    let far_gates = ReleaseFarGates(
+        (5..=9)
+            .map(|segment| helper.register_segment_gate(server.token(), 0, segment))
+            .collect(),
+    );
+    let bus = EventBus::new(16_384);
+    let mut events = bus.subscribe::<DownloaderEvent>();
+    let pools = pools();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::builder(pools.clone())
+            .cancel(cancel_token())
+            .build(),
+    );
+    let store = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Memory)
+        .cache_capacity(NonZeroUsize::new(110).expect("nonzero"))
+        .build();
+    let downloader = Downloader::new({
+        let config =
+            DownloaderConfig::for_client(kithara_integration_tests::hls_fixture::create_test_net())
+                .max_concurrent(far_gates.0.len() + 3);
+        #[cfg(not(target_arch = "wasm32"))]
+        let config = config.runtime(kithara::platform::tokio::runtime::Handle::current());
+        config.build()
+    });
+    let hls = HlsConfig::for_url(server.master_url())
+        .downloader(downloader)
+        .store(store)
+        .pools(pools)
+        .events(bus)
+        .cancel(cancel_token())
+        .initial_abr_mode(AbrMode::manual(0))
+        .build();
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls)
+        .media_info(
+            MediaInfo::builder()
+                .maybe_codec(Some(AudioCodec::Pcm))
+                .maybe_container(Some(ContainerFormat::Wav))
+                .build(),
+        )
+        .decoder(
+            AudioDecoderConfig::builder()
+                .backend(DecoderBackend::Symphonia)
+                .build(),
+        )
+        .build();
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("load gated HLS");
+    let abr = audio.abr_handle().expect("HLS ABR handle");
+    let outgoing_url = server.segment_url(0, 3);
+    let incoming_url = server.segment_url(1, 2);
+    let far_urls: Vec<_> = (5..=9)
+        .map(|segment| server.segment_url(0, segment))
+        .collect();
+    let (far_ready, far_ready_rx) = kithara::platform::sync::mpsc::channel();
+    let (far_retired, far_retired_rx) = kithara::platform::sync::mpsc::channel();
+    let teardown_setup = setup_gate.clone();
+    let teardown_outgoing = outgoing_gate.clone();
+    let release_outgoing = outgoing_gate.clone();
+    let release_incoming = incoming_gate.clone();
+    let release_far = far_gates.clone();
+    let controller = std::thread::Builder::new().name("late-debt-controller".into()).spawn(move || {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let started = WallInstant::now();
+            let mut outgoing = Vec::new();
+            let mut incoming = Vec::new();
+            let mut cancelled = Vec::new();
+            let mut completed = Vec::new();
+            let mut far = [None; 5];
+            let mut far_ready = Some(far_ready);
+            let mut far_retired = Some(far_retired);
+            let mut debt = false;
+            let mut demand_watermark = None;
+            let mut cancellation_seq = None;
+            let mut observed_cuts = Vec::new();
+            loop {
+                assert!(started.elapsed() < Duration::from_secs(1), "gated controller missing boundary: outgoing={outgoing:?}, far={far:?}, cancelled={cancelled:?}, incoming={incoming:?}, completed={completed:?}, debt={debt}, cuts={observed_cuts:?}");
+                {
+                    let mut observe_event = |event: Envelope<DownloaderEvent>| {
+                        info!(?event, "gated lifecycle receipt");
+                        match event.event {
+                            DownloaderEvent::RequestEnqueued {request_id, url, method: RequestMethod::Get, ..} if url == outgoing_url => {
+                                if !outgoing.is_empty() {
+                                    assert!(cancellation_seq.is_some_and(|seq| seq < event.meta.seq), "successor follows the original cancellation");
+                                    assert_ne!(Some(&request_id), outgoing.first());
+                                }
+                                outgoing.push(request_id);
+                            },
+                            DownloaderEvent::RequestEnqueued {request_id, url, method: RequestMethod::Get, ..} if url == incoming_url => incoming.push(request_id),
+                            DownloaderEvent::RequestEnqueued {request_id, url, method: RequestMethod::Get, ..} => {
+                                if let Some(index) = far_urls.iter().position(|far_url| *far_url == url) {
+                                    far[index].get_or_insert(request_id);
+                                }
+                            },
+                            DownloaderEvent::RequestCancelled {request_id, ..} => {
+                                if outgoing.first() == Some(&request_id) {
+                                    assert!(!kithara_integration_tests::usdt_trace::events_of("segment_has_demand").iter().any(|event| event.field("variant") == Some(0) && event.field("seg") == Some(3)), "setup must keep the old segment-3 claim as lookahead until cancellation");
+                                    cancellation_seq = Some(event.meta.seq);
+                                    demand_watermark = Some(kithara_integration_tests::usdt_trace::events_of("segment_has_demand").len());
+                                    setup_gate.release();
+                                }
+                                cancelled.push(request_id);
+                            },
+                            DownloaderEvent::RequestCompleted {request_id, bytes_transferred, ..} if bytes_transferred > 0 => completed.push(request_id),
+                            _ => {}
+                        }
+                    };
+                    while let Ok(event) = events.try_recv() {
+                        observe_event(event);
+                    }
+                }
+                if far.iter().all(Option::is_some) && let Some(ready) = far_ready.take() {
+                    info!(?far, "old far lookahead enqueued before manual switch");
+                    ready.send(far).expect("consumer awaiting far lookahead");
+                }
+                let far_cancelled = far.iter().all(|id| id.is_some_and(|id| cancelled.contains(&id)));
+                if far_cancelled && let Some(retired) = far_retired.take() {
+                    info!(?far, ?cancelled, "old far lookahead cancellation receipts");
+                    retired.send(()).expect("consumer awaiting far retirement");
+                }
+                if let Some(watermark) = demand_watermark {
+                    debt |= kithara_integration_tests::usdt_trace::events_of("segment_has_demand").iter().skip(watermark).any(|event| event.field("variant") == Some(0) && event.field("seg") == Some(3));
+                }
+                if debt {
+                    release_incoming.release();
+                }
+                let pcm = kithara_integration_tests::usdt_trace::events_of("promotion_waits_outgoing_pcm");
+                observed_cuts = pcm.iter().filter_map(|event| event.field("cut")).collect();
+                observed_cuts.sort_unstable();
+                observed_cuts.dedup();
+                let incoming_covers = pcm.iter().find(|event| event.field("cut") == Some(146_304));
+                if far_cancelled && debt && incoming_covers.is_some() && outgoing.len() >= 2 && incoming.iter().any(|id| completed.contains(id)) {
+                    info!(witness = ?incoming_covers, ?cancellation_seq, "release outgoing after incoming PCM covers the missing join");
+                    release_outgoing.release();
+                    return (outgoing, cancelled, incoming, completed, events);
+                }
+                thread::sleep(Duration::from_micros(100));
+            }
+        }));
+        setup_gate.release();
+        release_incoming.release();
+        release_outgoing.release();
+        drop(release_far);
+        result
+    }).expect("start release controller");
+    let audio = kithara_integration_tests::mock::with_blocking_reads(audio);
+    let (_audio, playback) = blocking_audio(audio, move |audio| {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut switched = false;
+            let mut incoming_frames = 0;
+            while let Some(chunk) =
+                next_chunk_with_timeout(audio, Duration::from_secs(1), "gated late debt")
+            {
+                assert!(chunk.frames() > 0);
+                assert!(chunk.samples.iter().all(|sample| sample.is_finite()));
+                if !switched {
+                    let start = WallInstant::now();
+                    while outgoing_gate.requested() == 0 {
+                        assert!(
+                            start.elapsed() < Duration::from_secs(1),
+                            "old lookahead must arrive"
+                        );
+                        thread::yield_now();
+                    }
+                    assert!(
+                        outgoing_gate.requested() > 0,
+                        "old lookahead must reach the native gate before switching"
+                    );
+                    let far = far_ready_rx
+                        .recv_timeout(
+                            kithara::platform::time::Instant::now() + Duration::from_secs(1),
+                        )
+                        .expect("old far lookahead must enqueue before switching");
+                    info!(
+                        ?far,
+                        frontier = chunk.meta.frame_offset,
+                        "gated manual switch"
+                    );
+                    abr.set_mode(AbrMode::manual(1)).expect("manual V1");
+                    switched = true;
+                }
+                if detect_chunk_direction(&chunk) == Direction::Descending {
+                    incoming_frames += chunk.frames();
+                    if incoming_frames >= 2_304 {
+                        far_retired_rx
+                            .recv_timeout(
+                                kithara::platform::time::Instant::now() + Duration::from_secs(1),
+                            )
+                            .expect("old far lookahead must cancel before healthy completion");
+                        break;
+                    }
+                }
+            }
+            assert!(switched);
+            assert!(
+                incoming_frames >= 2_304,
+                "finite incoming PCM must advance before EOF"
+            );
+            incoming_frames
+        }))
+    })
+    .await;
+    incoming_gate.release();
+    teardown_setup.release();
+    teardown_outgoing.release();
+    drop(far_gates);
+    let receipts = kithara::platform::tokio::task::spawn_blocking(move || controller.join())
+        .await
+        .expect("join controller task")
+        .expect("join release controller");
+    let playback = playback.unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+    let (outgoing, cancelled, incoming, completed, mut events) =
+        receipts.unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+    let successor = outgoing[1];
+    let bytes = kithara::platform::time::timeout(Duration::from_secs(1), async {
+        loop {
+            let event = events.recv().await.expect("successor completion event");
+            if let DownloaderEvent::RequestCompleted {
+                request_id,
+                bytes_transferred,
+                ..
+            } = event.event
+                && request_id == successor
+            {
+                assert!(bytes_transferred > 0);
+                break bytes_transferred;
+            }
+        }
+    })
+    .await
+    .expect("completed outgoing successor after PCM progress");
+    info!(
+        ?playback,
+        ?outgoing,
+        ?cancelled,
+        ?incoming,
+        ?completed,
+        bytes,
+        "gated late debt completed"
+    );
+    assert!(
+        trace
+            .events_of("segment_has_demand")
+            .iter()
+            .any(|event| event.field("variant") == Some(0) && event.field("seg") == Some(3))
+    );
+    drop(trace);
 }
 
 #[kithara::test(tokio, native, timeout(Duration::from_secs(5)))]

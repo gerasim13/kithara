@@ -572,6 +572,14 @@ pub(super) fn promotion_readiness(
     if active.is_finished() {
         PromotionReadiness::NeedIncoming
     } else {
+        kithara::probe_event!(
+            promotion_waits_outgoing_pcm,
+            cut = outgoing_first,
+            join_frames = frames,
+            outgoing_first = active.staged_span().map_or(0, |span| span.0),
+            outgoing_end = active.staged_span().map_or(0, |span| span.1),
+            incoming_end = generation.staged_span().map_or(0, |span| span.1),
+        );
         PromotionReadiness::AwaitingOutgoingPcm {
             first: outgoing_first,
         }
