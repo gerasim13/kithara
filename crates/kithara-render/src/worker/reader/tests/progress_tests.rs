@@ -168,3 +168,259 @@ async fn a_live_producer_serves_consumed_packets_without_underruns(#[case] block
     fixture.receiver = Some(receiver);
     dispatcher.shutdown();
 }
+
+#[cfg(unix)]
+mod pcm_input_wait {
+    use std::{
+        io::{ErrorKind, Read, Write},
+        os::unix::net::UnixStream,
+        panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
+        sync::mpsc,
+    };
+
+    use kithara_platform::{
+        sync::{Arc, ThreadGate, WaitGate},
+        time::{Duration, WallInstant},
+        tokio::sync::oneshot,
+    };
+    use kithara_signal::SegmentId;
+    use kithara_test_utils::kithara;
+    use ringbuf::traits::Producer;
+
+    use super::super::packet_fixture;
+    use crate::{
+        mock::pcm_fixture::chunk,
+        worker::{
+            PcmPacket,
+            reader::{PcmProducer, mock},
+        },
+    };
+
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+    fn parse_input(
+        input: &mut UnixStream,
+        ready: &ThreadGate,
+        producer: &mut PcmProducer,
+        packet: PcmPacket,
+    ) {
+        {
+            let _real_io = kithara_platform::flash::real_io();
+            let mut byte = [0];
+            loop {
+                hang_tick!();
+                let since = ready.current();
+                match input.read(&mut byte) {
+                    Ok(count) => {
+                        assert_eq!(count, 1, "input EOF is not PCM progress");
+                        assert_eq!(byte, [1]);
+                        break;
+                    }
+                    Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                        hang_park!(|remaining: Duration| {
+                            ready.wait_timeout(since, remaining.min(Duration::from_millis(25)));
+                        });
+                    }
+                    Err(error) => panic!("input read failed: {error}"),
+                }
+            }
+        }
+        producer
+            .forward
+            .try_push(packet)
+            .expect("known PCM fits the empty ring");
+        producer.signal();
+        hang_reset!();
+    }
+
+    async fn input_wait(mock_wait: bool, deliver: bool) {
+        let (mut input, mut peer) = UnixStream::pair().expect("input socket pair");
+        input.set_nonblocking(true).expect("nonblocking parser");
+        let ready = Arc::new(ThreadGate::default());
+        let peer_ready = Arc::clone(&ready);
+        let (start, started) = mpsc::channel();
+        let (peer_finished, peer_completion) = oneshot::channel();
+        let peer = std::thread::spawn(move || {
+            started.recv().expect("consumer started");
+            if deliver {
+                kithara_platform::thread::sleep(Duration::from_millis(500));
+                peer.write_all(&[1]).expect("external input byte");
+                peer_ready.signal();
+            }
+            let _ = peer_finished.send(peer);
+        });
+        let packet = chunk(SegmentId::FIRST, &[0.25; 8]);
+        let (mut receiver, mut producer) = packet_fixture(true, packet.spec());
+        assert!(receiver.peek().is_none());
+        let (parser_finished, parser_completion) = oneshot::channel();
+        let parser = kithara_platform::thread::spawn_named("pcm-input-parser", move || {
+            let parsed = catch_unwind(AssertUnwindSafe(|| {
+                parse_input(
+                    &mut input,
+                    &ready,
+                    &mut producer,
+                    PcmPacket::Chunk(Box::new(packet)),
+                );
+            }));
+            // Keep both owners alive even when the parser watchdog fires first.
+            let _ = parser_finished.send((producer, input, parsed));
+        });
+        let outcome = kithara_platform::tokio::task::spawn_sync(move || {
+            let began = WallInstant::now();
+            start.send(()).expect("start external peer");
+            if mock_wait {
+                mock::wait_for_packet(&receiver);
+            } else {
+                receiver.wait_for_packet();
+            }
+            let PcmPacket::Chunk(packet) = receiver.pop().expect("PCM, not producer closure")
+            else {
+                panic!("expected PCM, not a failure packet");
+            };
+            assert_eq!(packet.frames(), 8);
+            assert_eq!(&packet.samples[..], &[0.25; 8]);
+            assert!(!packet.meta.end_of_track);
+            assert!(began.elapsed() < Duration::from_secs(1));
+        })
+        .await;
+        let parsed = parser_completion.await;
+        parser.join().unwrap_or_else(|panic| resume_unwind(panic));
+        let (producer, input, parsed) = parsed.expect("parser completion");
+        let completed_peer = peer_completion.await;
+        peer.join().unwrap_or_else(|panic| resume_unwind(panic));
+        let peer = completed_peer.expect("peer completion");
+        outcome.unwrap_or_else(|error| resume_unwind(error.into_panic()));
+        parsed.unwrap_or_else(|panic| resume_unwind(panic));
+        drop((producer, input, peer));
+    }
+
+    #[kithara::test(native, tokio, hang_timeout_secs(1))]
+    #[case::production(false)]
+    #[case::mock(true)]
+    async fn accounted_input_reaches_pcm_wait(#[case] mock_wait: bool) {
+        input_wait(mock_wait, true).await;
+    }
+
+    #[kithara::test(native, tokio, hang_timeout_secs(1))]
+    #[case::production(false)]
+    #[case::mock(true)]
+    #[should_panic(expected = "::wait_for_packet` no progress for 1s")]
+    async fn accounted_input_without_bytes_hits_pcm_watchdog(#[case] mock_wait: bool) {
+        input_wait(mock_wait, false).await;
+    }
+}
+
+#[cfg(feature = "flash")]
+mod pcm_clock_contract {
+    use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+
+    use kithara_platform::{
+        sync::mpsc,
+        time::{Duration, Instant, WallInstant},
+        tokio::sync::oneshot,
+    };
+    use kithara_signal::SegmentId;
+    use kithara_test_utils::kithara;
+    use ringbuf::traits::{Observer, Producer};
+
+    use super::super::packet_fixture;
+    use crate::{
+        mock::pcm_fixture::chunk,
+        worker::{
+            PcmPacket,
+            reader::{PcmReceiver, mock},
+        },
+    };
+
+    enum WaitPath {
+        Production,
+        Mock,
+        ActiveMock,
+    }
+
+    #[kithara::flash(true)]
+    fn engine_now() -> Instant {
+        Instant::now()
+    }
+
+    #[kithara::flash(true)]
+    fn active_mock_wait(receiver: &PcmReceiver) {
+        mock::wait_for_packet(receiver);
+    }
+
+    async fn modeled_wait(path: WaitPath, delay: Duration) -> (Duration, Duration) {
+        let packet = chunk(SegmentId::FIRST, &[0.25; 8]);
+        let (mut receiver, mut producer) = packet_fixture(true, packet.spec());
+        let (start, started) = mpsc::channel();
+        let (finished, completion) = oneshot::channel();
+        let writer = kithara_platform::thread::spawn_named("pcm-clock-writer", move || {
+            started.recv().expect("consumer started");
+            kithara_platform::thread::sleep(delay);
+            producer
+                .forward
+                .try_push(PcmPacket::Chunk(Box::new(packet)))
+                .expect("known PCM fits the empty ring");
+            producer.signal();
+            let _ = finished.send(producer);
+        });
+        // The root poll and reserved pool credit hold time until the consumer parks.
+        let outcome = kithara_platform::tokio::task::spawn_sync(move || {
+            let began = engine_now();
+            let wall_began = WallInstant::now();
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                assert!(kithara_platform::flash::ambient_snapshot());
+                assert!(receiver.peek().is_none());
+                assert!(receiver.forward.write_is_held());
+                start.send(()).expect("start modeled producer");
+                match path {
+                    WaitPath::Production => receiver.wait_for_packet(),
+                    WaitPath::Mock => mock::wait_for_packet(&receiver),
+                    WaitPath::ActiveMock => active_mock_wait(&receiver),
+                }
+                let elapsed = engine_now().duration_since(began);
+                let wall_elapsed = wall_began.elapsed();
+                let PcmPacket::Chunk(packet) = receiver.pop().expect("PCM, not producer closure")
+                else {
+                    panic!("expected PCM, not a failure packet");
+                };
+                assert_eq!(packet.spec().channels, 1);
+                assert_eq!(packet.frames(), 8);
+                assert!(!packet.samples.is_empty());
+                assert!(packet.samples.iter().all(|sample| sample.is_finite()));
+                assert_eq!(&packet.samples[..], &[0.25; 8]);
+                assert!(!packet.meta.end_of_track);
+                assert!(elapsed >= delay, "modeled PCM arrived after {elapsed:?}");
+                assert!(wall_elapsed < Duration::from_secs(1));
+                (elapsed, wall_elapsed)
+            }));
+            // Preserve the receiver when its watchdog fires before the writer.
+            (receiver, result)
+        })
+        .await;
+        let completed = completion.await;
+        writer.join().unwrap_or_else(|panic| resume_unwind(panic));
+        let producer = completed.expect("modeled producer completion");
+        let (receiver, result) = outcome.unwrap_or_else(|error| resume_unwind(error.into_panic()));
+        drop((receiver, producer));
+        result.unwrap_or_else(|panic| resume_unwind(panic))
+    }
+
+    #[kithara::test(native, tokio, hang_timeout_secs(1))]
+    #[case::production(WaitPath::Production)]
+    #[case::mock(WaitPath::Mock)]
+    #[case::active_mock(WaitPath::ActiveMock)]
+    async fn modeled_pcm_within_budget_reaches_wait(#[case] path: WaitPath) {
+        modeled_wait(path, Duration::from_millis(500)).await;
+    }
+
+    #[kithara::test(native, tokio, hang_timeout_secs(1))]
+    #[case::production(WaitPath::Production)]
+    #[case::mock(WaitPath::Mock)]
+    #[case::active_mock(WaitPath::ActiveMock)]
+    #[should_panic(expected = "::wait_for_packet` no progress for 1s")]
+    async fn modeled_pcm_after_budget_hits_watchdog(#[case] path: WaitPath) {
+        let (elapsed, wall_elapsed) = modeled_wait(path, Duration::from_secs(2)).await;
+        panic!(
+            "PCM wait accepted nonterminal PCM after {elapsed:?} virtual time / {wall_elapsed:?} wall"
+        );
+    }
+}
