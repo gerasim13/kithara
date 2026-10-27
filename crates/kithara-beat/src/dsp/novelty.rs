@@ -109,6 +109,8 @@ fn wrap(angle: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    use std::{fs, path::Path};
+
     use kithara_test_fixtures::unit_fixtures::{click_silence_4s, clicks_120_4s};
     use kithara_test_utils::kithara;
     use num_traits::cast::ToPrimitive;
@@ -171,5 +173,77 @@ mod tests {
             curve.iter().all(|&v| v == 0.0),
             "silence has no spectral change"
         );
+    }
+
+    fn complete_curve_bits<S: HasPool<f32>>(novelty: &Novelty<S>, pcm: &[f32]) -> Vec<u32> {
+        let curve = novelty
+            .curve(pcm)
+            .expect("the complete curve fits the region");
+        assert!(curve.iter().all(|value| value.is_finite()));
+        curve.iter().map(|value| value.to_bits()).collect()
+    }
+
+    #[kithara::test(native)]
+    fn complete_curves_are_independent_of_previous_audio(
+        clicks_120_4s: Vec<f32>,
+        click_silence_4s: Vec<f32>,
+    ) {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/track_excerpt_mono_22050.f32le");
+        let bytes = fs::read(&path)
+            .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+        let (words, remainder) = bytes.as_chunks::<4>();
+        assert!(
+            remainder.is_empty(),
+            "the fixture contains complete samples"
+        );
+        let frames = 22_050 * 30;
+        assert!(
+            words.len() >= frames,
+            "the full benchmark excerpt is present"
+        );
+        let track: Vec<f32> = words[..frames]
+            .iter()
+            .map(|word| f32::from_le_bytes(*word))
+            .collect();
+        assert_eq!(clicks_120_4s.len(), 22_050 * 4);
+        assert_eq!(click_silence_4s.len(), 22_050 * 4);
+
+        let novelty = Novelty::new(pools()).expect("the novelty FFT length is supported");
+        for (name, pcm, other, expected_len) in [
+            (
+                "track_30s",
+                track.as_slice(),
+                clicks_120_4s.as_slice(),
+                2_581,
+            ),
+            (
+                "clicks_120_4s",
+                clicks_120_4s.as_slice(),
+                click_silence_4s.as_slice(),
+                343,
+            ),
+            (
+                "silence_4s",
+                click_silence_4s.as_slice(),
+                track.as_slice(),
+                343,
+            ),
+        ] {
+            let first = complete_curve_bits(&novelty, pcm);
+            // Drop pooled curves before the next call so their storage can be reused.
+            let _ = complete_curve_bits(&novelty, other);
+            let reused = complete_curve_bits(&novelty, pcm);
+            let fresh = complete_curve_bits(
+                &Novelty::new(pools()).expect("a fresh novelty transform builds"),
+                pcm,
+            );
+            assert_eq!(first.len(), expected_len, "{name}: complete curve length");
+            assert_eq!(
+                first, reused,
+                "{name}: another input changed the full curve"
+            );
+            assert_eq!(first, fresh, "{name}: fresh and reused curves differ");
+        }
     }
 }
