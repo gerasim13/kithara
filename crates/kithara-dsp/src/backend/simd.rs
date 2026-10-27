@@ -1,6 +1,10 @@
-use std::ops::{Add, Div};
+use std::{
+    num::NonZeroUsize,
+    ops::{Add, Div, Mul, Sub},
+};
 
 use fearless_simd::{Level, dispatch, prelude::*};
+use num_traits::AsPrimitive;
 
 /// Replaces `NaN`, ±infinity, subnormals and −0.0 with `+0.0` in place; every
 /// other value keeps its bits.
@@ -233,4 +237,49 @@ pub(super) fn zip_map<S: Simd, F: Fn(S::f32s, S::f32s) -> S::f32s>(
         *slot = *value;
     }
     len
+}
+
+pub(crate) fn crossfade_linear(
+    outgoing: &[f32],
+    samples: &mut [f32],
+    channels: NonZeroUsize,
+    first: usize,
+    frames: usize,
+) -> usize {
+    dispatch!(Level::new(), simd => crossfade_linear_kernel(simd, outgoing, samples, channels, first, frames))
+}
+
+#[inline(always)]
+pub(super) fn crossfade_linear_kernel<S: Simd>(
+    simd: S,
+    outgoing: &[f32],
+    samples: &mut [f32],
+    channels: NonZeroUsize,
+    first: usize,
+    frames: usize,
+) -> usize {
+    let count = outgoing.len().min(samples.len()) / channels;
+    let len = count.saturating_mul(channels.get());
+    let denominator = S::f32s::splat(simd, frames.as_());
+    let one = S::f32s::splat(simd, 1.0);
+    let mut offset = 0_usize;
+    if let Some(samples) = samples.get_mut(..len) {
+        update(simd, samples, [outgoing], |incoming, [outgoing]| {
+            let mut positions = S::f32s::splat(simd, 0.0);
+            for (lane, position) in positions.as_mut_slice().iter_mut().enumerate() {
+                // Widen before addition: even the sum of two usize values fits u128.
+                let first: u128 = first.as_();
+                let frame: u128 = (offset.saturating_add(lane) / channels).as_();
+                *position = first.saturating_add(frame).as_();
+            }
+            offset = offset.saturating_add(S::f32s::LEN);
+            let gain = positions.div(denominator);
+            let blended = outgoing.mul_add_precise(one.sub(gain), incoming.mul(gain));
+            outgoing
+                .bitcast::<S::u32s>()
+                .simd_eq(incoming.bitcast::<S::u32s>())
+                .select(incoming, blended)
+        });
+    }
+    count
 }

@@ -340,8 +340,35 @@ fn interp(c: &mut Criterion) {
     group.finish();
 }
 
+fn crossfade(c: &mut Criterion) {
+    let mut group = c.benchmark_group("crossfade_linear");
+    group.sample_size(20);
+    for frames in consts::SIZES {
+        for channels in [NonZeroUsize::MIN, consts::TWO, consts::SIX] {
+            let old = vec![0.314_159; frames * channels.get()];
+            let mut output = vec![-0.271_828; old.len()];
+            group.throughput(Throughput::Elements(
+                u64::try_from(frames).expect("frame count"),
+            ));
+            group.bench_function(BenchmarkId::new(format!("{channels}ch"), frames), |b| {
+                b.iter(|| {
+                    kithara_dsp::crossfade_linear(
+                        black_box(&old),
+                        black_box(&mut output),
+                        channels,
+                        1,
+                        frames,
+                    )
+                });
+            });
+        }
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
+    crossfade,
     kernels,
     vector,
     downmix,
