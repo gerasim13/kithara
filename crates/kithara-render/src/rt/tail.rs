@@ -112,8 +112,8 @@ mod tests {
     fn tail_refill_adds_only_written_frames_after_compaction() {
         let pools = crate::test_pools::pools();
         let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("rate"));
-        for available in [0, 1, 3, 7] {
-            for requested in [0, 1, 5, 7] {
+        for available in [0, 1, 3, 7, 257, 513] {
+            for requested in [0, 1, 5, 7, 256, 513] {
                 let mut ring = PacketRing::new(spec, Duration::from_secs(1), 2);
                 if available > 0 {
                     ring.push(PcmPacket::Chunk(Box::new(chunk(
@@ -138,9 +138,14 @@ mod tests {
                     duration: 0.0,
                     ..Default::default()
                 }));
-                let mut tail = SlotTail::new(&pools, FrameCount::new(8)).expect("tail");
-                tail.left
-                    .copy_from_slice(&[0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0]);
+                let mut tail = SlotTail::new(&pools, FrameCount::new(514)).expect("tail");
+                for (left, value) in tail.left.iter_mut().zip(
+                    [0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0]
+                        .into_iter()
+                        .cycle(),
+                ) {
+                    *left = value;
+                }
                 for (right, left) in tail.right.iter_mut().zip(tail.left.iter()) {
                     *right = -*left;
                 }

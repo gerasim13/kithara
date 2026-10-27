@@ -66,18 +66,26 @@ impl TrackGate {
         let [left, right, ..] = bufs else {
             return;
         };
-        for (l, r) in left[range.clone()].iter_mut().zip(right[range].iter_mut()) {
-            let progress = if self.frames <= 1 {
-                1.0
-            } else {
-                self.frame.min(self.frames - 1).to_f32().unwrap_or(f32::MAX)
-                    / (self.frames - 1).to_f32().unwrap_or(f32::MAX)
-            };
-            let gain = (self.target - self.from).mul_add(progress, self.from);
-            self.level = gain;
-            self.frame = self.frame.saturating_add(1);
-            *l *= gain;
-            *r *= gain;
+        let (left, right) = (&mut left[range.clone()], &mut right[range]);
+        let mut gains = [0.0; crate::consts::FADE_CHUNK];
+        for (left, right) in left
+            .chunks_mut(crate::consts::FADE_CHUNK)
+            .zip(right.chunks_mut(crate::consts::FADE_CHUNK))
+        {
+            let gains = &mut gains[..left.len()];
+            for gain in gains.iter_mut() {
+                let progress = if self.frames <= 1 {
+                    1.0
+                } else {
+                    self.frame.min(self.frames - 1).to_f32().unwrap_or(f32::MAX)
+                        / (self.frames - 1).to_f32().unwrap_or(f32::MAX)
+                };
+                *gain = (self.target - self.from).mul_add(progress, self.from);
+                self.level = *gain;
+                self.frame = self.frame.saturating_add(1);
+            }
+            kithara_dsp::multiply_in_place(left, gains);
+            kithara_dsp::multiply_in_place(right, gains);
         }
     }
 }

@@ -104,10 +104,18 @@ impl RenderPass {
             kithara_dsp::scale_in_place(&mut right[..frames], gain);
             return;
         }
-        for (l, r) in left.iter_mut().zip(right.iter_mut()) {
-            let gain = self.gain.next_smoothed();
-            *l *= gain;
-            *r *= gain;
+        let frames = left.len().min(right.len());
+        let mut gains = [0.0; crate::consts::FADE_CHUNK];
+        for (left, right) in left[..frames]
+            .chunks_mut(crate::consts::FADE_CHUNK)
+            .zip(right[..frames].chunks_mut(crate::consts::FADE_CHUNK))
+        {
+            let gains = &mut gains[..left.len()];
+            for gain in gains.iter_mut() {
+                *gain = self.gain.next_smoothed();
+            }
+            kithara_dsp::multiply_in_place(left, gains);
+            kithara_dsp::multiply_in_place(right, gains);
         }
         self.gain.settle();
     }
