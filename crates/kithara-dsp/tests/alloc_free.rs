@@ -193,6 +193,7 @@ fn elementwise_kernels_and_fade_gains_never_allocate() {
         assert_eq!(kithara_dsp::scale_add(&input, 0.5, &mut acc), FRAMES);
         assert_eq!(kithara_dsp::mul_add(&input, &input, &mut acc), FRAMES);
         assert_eq!(kithara_dsp::add(&input, &mut acc), FRAMES);
+        assert_eq!(kithara_dsp::multiply_in_place(&mut acc, &input), FRAMES);
         for curve in [
             FadeCurve::EqualPower3dB,
             FadeCurve::EqualPower6dB,
