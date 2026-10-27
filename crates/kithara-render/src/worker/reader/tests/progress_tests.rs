@@ -11,6 +11,33 @@ use crate::{
     worker::{PcmPacket, reader::PcmProducer, scheduler::StreamWake},
 };
 
+async fn join_thread<F>(join: F)
+where
+    F: FnOnce() -> std::thread::Result<()> + Send + 'static,
+{
+    kithara_platform::tokio::task::spawn_sync(join)
+        .await
+        .unwrap_or_else(|error| std::panic::resume_unwind(error.into_panic()))
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+}
+
+#[kithara::test(native, tokio)]
+async fn pcm_thread_completion_does_not_require_thread_exit_in_async_poll() {
+    let (completed, completion) = kithara_platform::tokio::sync::oneshot::channel();
+    let (release, released) = std::sync::mpsc::channel();
+    let thread = kithara_platform::thread::spawn_named("pcm-exit-order", move || {
+        completed.send(()).expect("publish completion before exit");
+        released.recv().expect("release thread exit");
+    });
+    completion.await.expect("thread published completion");
+    assert!(!thread.is_finished(), "completion precedes thread exit");
+    kithara_platform::tokio::join!(
+        biased;
+        join_thread(move || thread.join()),
+        async { release.send(()).expect("allow thread exit after join yields") },
+    );
+}
+
 struct ProducerTask {
     producer: PcmProducer,
     started: bool,
@@ -283,10 +310,10 @@ mod pcm_input_wait {
         })
         .await;
         let parsed = parser_completion.await;
-        parser.join().unwrap_or_else(|panic| resume_unwind(panic));
+        super::join_thread(move || parser.join()).await;
         let (producer, input, parsed) = parsed.expect("parser completion");
         let completed_peer = peer_completion.await;
-        peer.join().unwrap_or_else(|panic| resume_unwind(panic));
+        super::join_thread(move || peer.join()).await;
         let peer = completed_peer.expect("peer completion");
         outcome.unwrap_or_else(|error| resume_unwind(error.into_panic()));
         parsed.unwrap_or_else(|panic| resume_unwind(panic));
@@ -397,7 +424,7 @@ mod pcm_clock_contract {
         })
         .await;
         let completed = completion.await;
-        writer.join().unwrap_or_else(|panic| resume_unwind(panic));
+        super::join_thread(move || writer.join()).await;
         let producer = completed.expect("modeled producer completion");
         let (receiver, result) = outcome.unwrap_or_else(|error| resume_unwind(error.into_panic()));
         drop((receiver, producer));
