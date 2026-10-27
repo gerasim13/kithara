@@ -276,6 +276,7 @@ pub(in crate::worker) fn packet_fixture(
 }
 
 /// Waits for fixture PCM or producer closure under the test liveness policy.
+#[kithara::flash(true)]
 #[kithara::hang_watchdog(ctx = String)]
 pub fn wait_for_packet(receiver: &PcmReceiver) {
     let Some(ready) = &receiver.ready else {
