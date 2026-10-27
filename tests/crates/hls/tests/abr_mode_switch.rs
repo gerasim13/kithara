@@ -8,7 +8,8 @@ use kithara::{
     abr::{AbrEvent, AbrReason},
     assets::{AssetStore, StorageBackend},
     audio::{
-        AudioConfig, AudioControl, AudioEvent, AudioRead, AudioSession, DecoderEvent, ReadOutcome,
+        AudioConfig, AudioControl, AudioEvent, AudioRead, AudioReadError, AudioSession,
+        ChunkOutcome, DecoderEvent, ReadOutcome,
     },
     decode::DecoderBackend,
     download::{DownloaderEvent, RequestId, RequestMethod},
@@ -21,6 +22,7 @@ use kithara::{
         tokio::task::{spawn, spawn_blocking},
     },
     play::{PlayWorker, PlayWorkerConfig},
+    signal::{AudioChunk, AudioChunkInfo, AudioSpec},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType},
 };
 #[cfg(not(target_arch = "wasm32"))]
@@ -712,18 +714,16 @@ where
 #[derive(Clone, Copy, Debug)]
 struct BlockingReadStep {
     samples: u64,
+    variant: Option<usize>,
+    duration: Duration,
     saw_eof: bool,
 }
 
 #[kithara::flash(io)]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-async fn read_one_chunk_blocking<S>(
-    mut audio: LaneAudio<Stream<S>, TestPools>,
-    label: &str,
-) -> (LaneAudio<Stream<S>, TestPools>, BlockingReadStep)
+async fn read_one_chunk_blocking<A>(mut audio: A, label: &str) -> (A, BlockingReadStep)
 where
-    S: StreamType + 'static,
-    LaneAudio<Stream<S>, TestPools>: Send + 'static,
+    A: AudioRead + Send + 'static,
 {
     let read_label = label.to_owned();
     let join_label = read_label.clone();
@@ -745,33 +745,37 @@ where
 
 #[kithara::flash(io)]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-fn read_one_chunk<S: StreamType>(
-    audio: &mut LaneAudio<Stream<S>, TestPools>,
-    read_label: &str,
-) -> BlockingReadStep {
-    let mut buf = vec![0f32; 4096];
+fn read_one_chunk<A: AudioRead>(audio: &mut A, read_label: &str) -> BlockingReadStep {
     loop {
         hang_tick!();
-        match audio.read(&mut buf) {
-            Ok(ReadOutcome::Pending { .. }) => {
+        match audio.next_chunk() {
+            Ok(ChunkOutcome::Pending { .. }) => {
                 hang_park!(|remaining: Duration| pace(remaining.min(Duration::from_micros(500))));
             }
-            Ok(ReadOutcome::Frames { count, .. }) => {
+            Ok(ChunkOutcome::Chunk(chunk)) => {
                 hang_reset!();
-                let n = count.get();
-                for &sample in &buf[..n] {
+                assert!(!chunk.samples.is_empty(), "{read_label}: empty PCM chunk");
+                for &sample in chunk.samples.iter() {
                     hang_tick!();
                     assert!(sample.is_finite(), "{read_label}: non-finite sample");
                 }
                 return BlockingReadStep {
-                    samples: n as u64,
+                    samples: chunk.samples.len() as u64,
+                    variant: chunk.meta.variant_index,
+                    duration: chunk
+                        .meta
+                        .spec
+                        .duration_for(u64::from(chunk.meta.frames))
+                        .expect("decoded PCM duration"),
                     saw_eof: false,
                 };
             }
-            Ok(ReadOutcome::Eof { .. }) => {
+            Ok(ChunkOutcome::Eof { .. }) => {
                 hang_reset!();
                 return BlockingReadStep {
                     samples: 0,
+                    variant: None,
+                    duration: Duration::ZERO,
                     saw_eof: true,
                 };
             }
@@ -782,38 +786,250 @@ fn read_one_chunk<S: StreamType>(
 
 #[kithara::flash(io)]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-async fn read_until_manual_applied<S>(
-    mut audio: LaneAudio<Stream<S>, TestPools>,
+async fn read_until_manual_applied<A, P>(
+    mut audio: A,
     collector: &EventCollector,
     applied_before: usize,
     target: usize,
     label: &str,
-) -> (LaneAudio<Stream<S>, TestPools>, PhaseReadStats)
+    pace_step: P,
+) -> (A, PhaseReadStats)
 where
-    S: StreamType + 'static,
-    LaneAudio<Stream<S>, TestPools>: Send + 'static,
+    A: AudioRead + Send + 'static,
+    P: Fn(Duration) + Clone + Send + 'static,
 {
     let mut stats = PhaseReadStats {
         samples: 0,
         pending: 0,
         saw_eof: false,
     };
-    while !collector.applied_transitions()[applied_before..]
-        .contains(&(target, AbrReason::ManualOverride))
-    {
+    let mut target_samples = 0u64;
+    let mut pcm_duration = Duration::ZERO;
+    let started = Instant::now();
+    loop {
+        let applied_before_read = collector.applied_transitions()[applied_before..]
+            .contains(&(target, AbrReason::ManualOverride));
+        if target_samples > 0 && applied_before_read {
+            break;
+        }
         hang_tick!();
         let (next, step) = read_one_chunk_blocking(audio, label).await;
         audio = next;
+        let applied_after_read = collector.applied_transitions()[applied_before..]
+            .contains(&(target, AbrReason::ManualOverride));
+        if (!applied_before_read && applied_after_read)
+            || (step.variant == Some(target) && target_samples == 0)
+            || step.saw_eof
+        {
+            info!(
+                applied_before_read,
+                applied_after_read,
+                samples = step.samples,
+                variant = ?step.variant,
+                saw_eof = step.saw_eof,
+                dropped = collector.dropped_events(),
+                "manual switch read boundary"
+            );
+        }
         stats.samples = stats.samples.saturating_add(step.samples);
-        if step.samples > 0 {
-            hang_reset!();
+        pcm_duration = pcm_duration.saturating_add(step.duration);
+        if step.variant == Some(target) {
+            target_samples = target_samples.saturating_add(step.samples);
         }
         if step.saw_eof {
             stats.saw_eof = true;
             break;
         }
+        if step.samples > 0 {
+            hang_reset!();
+            // Give incoming preparation the same playback clock as the consumer.
+            let pace_step = pace_step.clone();
+            spawn_blocking(move || pace_step(step.duration))
+                .await
+                .unwrap_or_else(|err| panic!("{label}: playback pacing failed: {err}"));
+            hang_reset!();
+        }
     }
+    let applied = collector.applied_transitions()[applied_before..]
+        .contains(&(target, AbrReason::ManualOverride));
+    let dropped = collector.dropped_events();
+    info!(target, target_samples, applied, dropped, ?pcm_duration,
+        clock_elapsed = ?started.elapsed(), ?stats, "manual switch observation");
+    assert_eq!(dropped, 0, "{label}: manual switch observation lost events");
     (audio, stats)
+}
+
+struct ScriptedManualReader<F> {
+    bus: EventBus,
+    samples: Vec<f32>,
+    next: F,
+    spec: AudioSpec,
+    pools: kithara_test_utils::bufpool::Pools,
+}
+
+impl<F: FnMut() -> (Option<usize>, bool)> ScriptedManualReader<F> {
+    fn step(&mut self) -> Option<usize> {
+        let (variant, applied) = (self.next)();
+        if applied {
+            self.bus.publish(AbrEvent::VariantApplied {
+                from: kithara::abr::VariantIndex::new(0),
+                to: kithara::abr::VariantIndex::new(1),
+                reason: AbrReason::ManualOverride,
+            });
+        }
+        variant
+    }
+}
+
+impl<F: FnMut() -> (Option<usize>, bool)> AudioRead for ScriptedManualReader<F> {
+    fn next_chunk(&mut self) -> Result<ChunkOutcome, AudioReadError> {
+        let Some(variant) = self.step() else {
+            return Ok(ChunkOutcome::Eof {
+                position: self.position(),
+            });
+        };
+        Ok(ChunkOutcome::Chunk(Box::new(AudioChunk::new(
+            AudioChunkInfo {
+                spec: self.spec,
+                frames: u32::try_from(self.samples.len() / usize::from(self.spec.channels))
+                    .expect("scripted frame count"),
+                variant_index: Some(variant),
+                ..Default::default()
+            },
+            kithara_test_utils::bufpool::sample_buffer(&self.pools, &self.samples),
+        ))))
+    }
+
+    fn position(&self) -> Duration {
+        Duration::ZERO
+    }
+
+    fn read(&mut self, output: &mut [f32]) -> Result<ReadOutcome, AudioReadError> {
+        if self.step().is_none() {
+            return Ok(ReadOutcome::Eof {
+                position: self.position(),
+            });
+        }
+        let count = output.len().min(self.samples.len());
+        output[..count].copy_from_slice(&self.samples[..count]);
+        Ok(ReadOutcome::Frames {
+            count: NonZeroUsize::new(count).expect("scripted PCM"),
+            position: self
+                .spec
+                .duration_for((count / usize::from(self.spec.channels)) as u64)
+                .expect("PCM duration"),
+            source_span: None,
+        })
+    }
+
+    fn read_planar<'a>(
+        &mut self,
+        _output: &'a mut [&'a mut [f32]],
+    ) -> Result<ReadOutcome, AudioReadError> {
+        panic!("manual switch driver reads interleaved PCM or chunks");
+    }
+
+    fn spec(&self) -> AudioSpec {
+        self.spec
+    }
+}
+
+fn scripted_manual_reader<F>(bus: &EventBus, samples: Vec<f32>, next: F) -> ScriptedManualReader<F>
+where
+    F: FnMut() -> (Option<usize>, bool) + Send + 'static,
+{
+    ScriptedManualReader {
+        bus: bus.clone(),
+        samples,
+        next,
+        spec: AudioSpec::new(2, std::num::NonZeroU32::new(44_100).expect("test rate")),
+        pools: pools(),
+    }
+}
+
+#[kithara::test(native, tokio, tracing("hls_stress=info"))]
+async fn manual_switch_wait_consumes_at_playback_rate(hls_saw_6: (Vec<u8>, Vec<u8>)) {
+    let samples: Vec<_> = hls_saw_6.1[..8192]
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&bytes| f32::from(i16::from_le_bytes(bytes)) / 32768.0)
+        .collect();
+    let duration = AudioSpec::new(2, std::num::NonZeroU32::new(44_100).expect("test rate"))
+        .duration_for(2048)
+        .expect("PCM duration");
+    let bus = EventBus::new(16);
+    let collector = EventCollector::new(&bus);
+    let clock = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let read_clock = Arc::clone(&clock);
+    let mut reads = 0;
+    let reader = scripted_manual_reader(&bus, samples, move || {
+        reads += 1;
+        if reads == 1 {
+            return (Some(0), false);
+        }
+        if reads == 2 && Duration::from_nanos(read_clock.load(Ordering::Acquire)) >= duration {
+            return (Some(1), true);
+        }
+        (None, true)
+    });
+    let (_, stats) = read_until_manual_applied(
+        reader,
+        &collector,
+        0,
+        1,
+        "paced switch",
+        move |duration: Duration| {
+            clock.fetch_add(
+                u64::try_from(duration.as_nanos()).expect("scripted playback clock"),
+                Ordering::Release,
+            );
+        },
+    )
+    .await;
+    assert!(
+        !stats.saw_eof,
+        "the consumer exhausted V0 before incoming preparation could run: {stats:?}"
+    );
+    assert_eq!(
+        collector.applied_transitions(),
+        vec![(1, AbrReason::ManualOverride)]
+    );
+    assert_eq!(collector.dropped_events(), 0);
+}
+
+#[kithara::test(native, tokio, tracing("hls_stress=info"))]
+#[case::incoming_pcm_and_receipt(Some(1), true, false)]
+#[case::receipt_at_eof(None, true, true)]
+#[case::outgoing_pcm_and_receipt(Some(0), true, true)]
+#[case::incoming_pcm_without_receipt(Some(1), false, true)]
+async fn manual_switch_wait_requires_incoming_pcm_and_receipt(
+    hls_saw_6: (Vec<u8>, Vec<u8>),
+    #[case] variant: Option<usize>,
+    #[case] applied: bool,
+    #[case] expect_eof: bool,
+) {
+    let samples: Vec<_> = hls_saw_6.1[..8192]
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&bytes| f32::from(i16::from_le_bytes(bytes)) / 32768.0)
+        .collect();
+    let bus = EventBus::new(16);
+    let collector = EventCollector::new(&bus);
+    let mut first = true;
+    let reader = scripted_manual_reader(&bus, samples, move || {
+        if std::mem::take(&mut first) {
+            (variant, applied)
+        } else {
+            (None, false)
+        }
+    });
+    let (_, stats) =
+        read_until_manual_applied(reader, &collector, 0, 1, "scripted switch", pace).await;
+    assert_eq!(stats.saw_eof, expect_eof, "{stats:?}");
+    assert_eq!(collector.applied_transitions().len(), usize::from(applied));
+    assert_eq!(collector.dropped_events(), 0);
 }
 
 /// Wait until every v0 media segment has been network-fetched (the all-cached
@@ -938,6 +1154,7 @@ async fn vod_manual_switch_affects_future_segments(
         applied_before,
         1,
         "manual switch transition",
+        pace,
     )
     .await;
     assert!(!transition.saw_eof, "manual switch must apply before EOF");
@@ -1385,7 +1602,7 @@ async fn multi_track_shared_abr_with_cache(#[future(awt)] shared_tracks: (Create
     serial,
     timeout(Duration::from_secs(30)),
     hang_timeout_secs(5),
-    tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
+    tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug,hls_stress=info")
 )]
 #[case::platform_default(DecoderBackend::default())]
 #[cfg_attr(
@@ -1465,6 +1682,7 @@ async fn abr_switch_must_not_redownload_covered_segments(
         applied_before,
         1,
         "covered-prefix switch",
+        pace,
     )
     .await;
     assert!(!transition.saw_eof, "switch must apply before EOF");
@@ -1477,6 +1695,13 @@ async fn abr_switch_must_not_redownload_covered_segments(
         .finish_read(blocking_audio(audio, read_to_eof).await, &bus)
         .await;
     let total = transition.samples + tail_samples;
+    info!(
+        ?backend,
+        ?transition,
+        tail_samples,
+        total,
+        "covered-prefix handover PCM"
+    );
     assert!(total > 0, "expected audio after the switch command");
 
     let segments = collector.segments();
@@ -1790,6 +2015,7 @@ async fn runtime_cross_codec_manual_switch_no_hang(#[future(awt)] retained_mixed
         applied_before,
         3,
         "cross-codec manual transition",
+        pace,
     )
     .await;
 
@@ -1945,6 +2171,7 @@ async fn runtime_manual_switch_works_when_all_segments_cached(
         applied_before,
         1,
         "all-cached manual transition",
+        pace,
     )
     .await;
 
@@ -2075,6 +2302,7 @@ async fn runtime_manual_switch_survives_outgoing_eof(#[future(awt)] manual_six: 
         applied_before,
         1,
         "eof-race manual transition",
+        pace,
     )
     .await;
 
@@ -2236,6 +2464,7 @@ async fn runtime_manual_switch_works_after_cache_and_seek(#[future(awt)] manual_
         applied_before,
         1,
         "cache-and-seek manual transition",
+        pace,
     )
     .await;
 
