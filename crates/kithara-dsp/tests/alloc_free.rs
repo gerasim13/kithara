@@ -108,6 +108,19 @@ fn biquad_never_allocates_after_construction() {
 }
 
 #[kithara::test(native)]
+fn crossover_never_allocates_after_construction() {
+    let mut filter = kithara_dsp::filter::Crossover::new(&[250.0, 2_500.0], 48_000.0);
+    let input = [0.25; FRAMES];
+    let mut bands = vec![vec![0.0; FRAMES]; 3];
+    assert_no_alloc(|| {
+        assert_eq!(filter.split(&input, &mut bands), FRAMES);
+        filter.reset();
+        filter.update_sample_rate(44_100.0);
+        assert_eq!(filter.split(&input, &mut bands), FRAMES);
+    });
+}
+
+#[kithara::test(native)]
 fn interpolation_never_allocates() {
     let window = vec![0.25_f32; FRAMES + 4];
     let positions: Vec<f32> = std::iter::successors(Some(1.5_f32), |position| Some(position + 1.0))
