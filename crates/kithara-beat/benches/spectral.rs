@@ -32,8 +32,14 @@ fn spectral_beats(c: &mut Criterion) {
     let detector = SpectralBeats::new(pools(), Tempo::default()).expect("the detector builds");
     let mut group = c.benchmark_group("spectral_beats");
     group.sample_size(20);
+    for samples in [1024, 1537] {
+        let short = pcm.get(..samples).expect("the excerpt holds short frames");
+        group.bench_function(format!("analyze/{samples}_samples"), |b| {
+            b.iter(|| black_box(detector.analyze(black_box(short)).expect("analysis fits")));
+        });
+    }
     group.bench_function("analyze/30s", |b| {
-        b.iter(|| black_box(detector.analyze(black_box(&pcm))));
+        b.iter(|| black_box(detector.analyze(black_box(&pcm)).expect("analysis fits")));
     });
     group.finish();
 }

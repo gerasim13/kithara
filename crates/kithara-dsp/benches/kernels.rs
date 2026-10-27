@@ -214,16 +214,16 @@ fn bins(c: &mut Criterion) {
 fn prediction(c: &mut Criterion) {
     let mut group = c.benchmark_group("prediction_difference");
     group.sample_size(20);
-    for size in [64, 513, 1024] {
+    for size in [1, 3, 17, 64, 513, 1024] {
         let re = tone(size);
         let im: Vec<f32> = re.iter().rev().copied().collect();
         let mut observed = vec![0.0; size];
         let mut angle = vec![0.0; size];
         magnitude(&re, &im, &mut observed);
         phase(&re, &im, &mut angle);
-        let mut magnitude = vec![0.0; size];
-        let mut phase = vec![0.0; size];
-        let mut step = vec![0.0; size];
+        let mut magnitude = vec![0.0; size + 1];
+        let mut phase = vec![0.0; size + 1];
+        let mut step = vec![0.0; size + 1];
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _| {
             b.iter(|| {
                 prediction_difference(
