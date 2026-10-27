@@ -31,7 +31,7 @@ fn spectral_beats(c: &mut Criterion) {
     let pcm = excerpt();
     let detector = SpectralBeats::new(pools(), Tempo::default()).expect("the detector builds");
     let mut group = c.benchmark_group("spectral_beats");
-    group.sample_size(10);
+    group.sample_size(20);
     group.bench_function("analyze/30s", |b| {
         b.iter(|| black_box(detector.analyze(black_box(&pcm))));
     });
