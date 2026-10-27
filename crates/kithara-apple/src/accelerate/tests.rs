@@ -6,8 +6,8 @@ use kithara_test_utils::kithara;
 use super::{
     BiquadError, DftError, MultichannelBiquad, OutOfWindow, RealDft, add_f32, affine_f32,
     correlate_f32, deinterleave_pair_f32, downmix_pair_f32, interleave_pair_f32,
-    linear_interpolate_f32, max_magnitude_f32, multiply_f32, quadratic_interpolate_f32,
-    scale_add_f32, sub_f32, sum_squares_f32,
+    linear_interpolate_f32, max_magnitude_f32, multiply_f32, multiply_in_place_f32,
+    quadratic_interpolate_f32, scale_add_f32, sub_f32, sum_squares_f32,
 };
 
 const SPECIALS: [f32; 8] = [
@@ -263,6 +263,17 @@ fn multiply_writes_the_product_of_the_common_prefix() {
     );
     assert_eq!(bits(output), bits([3.0, -1.0, -1.0, UNWRITTEN]));
     assert_eq!(multiply_f32(&[], &[1.0], &mut output), 0);
+}
+
+#[kithara::test]
+fn in_place_multiply_uses_the_short_side_count() {
+    let mut values = [1.5, -2.0, 4.0, UNWRITTEN];
+    assert_eq!(multiply_in_place_f32(&mut values, &[2.0, 0.5]), 2);
+    assert_eq!(values, [3.0, -1.0, 4.0, UNWRITTEN]);
+    assert_eq!(multiply_in_place_f32(&mut values[..1], &[2.0, 3.0]), 1);
+    assert_eq!(values, [6.0, -1.0, 4.0, UNWRITTEN]);
+    assert_eq!(multiply_in_place_f32(&mut values, &[]), 0);
+    assert_eq!(values, [6.0, -1.0, 4.0, UNWRITTEN]);
 }
 
 #[kithara::test(native)]
