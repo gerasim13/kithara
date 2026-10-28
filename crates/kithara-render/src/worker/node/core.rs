@@ -284,18 +284,18 @@ where
         }
     }
 
-    /// Half a packet while a full ring holds a packet behind the consumer's next
-    /// one. The consumer frees a slot without waking the worker and can read
-    /// faster than real time, so the recheck never outgrows the packet it
-    /// refills; a one-packet ring has no lead to spare and keeps the
-    /// configured poll.
+    /// Half a packet for every ring depth. The consumer frees a slot without
+    /// waking the worker and can read faster than real time, so the recheck
+    /// never outgrows the packet it refills; a one-packet ring leaves the
+    /// worker a single packet of lead once the consumer takes its packet, and
+    /// a configured poll near the packet length would spend all of it.
     fn backpressure_recheck(&self) -> Option<Duration> {
         let packet = self
             .last_output
             .spec
             .duration_for(u64::from(self.last_output.frames))
             .ok()?;
-        (self.port.forward.capacity().get() > 1 && !packet.is_zero()).then(|| packet / 2)
+        (!packet.is_zero()).then(|| packet / 2)
     }
 
     #[kithara::hang_watchdog]
@@ -423,15 +423,11 @@ mod tests {
         ))));
     }
 
-    /// A full ring is rechecked within half of the lead it holds beyond the
-    /// consumer's next packet, and a one-packet ring keeps the configured poll.
+    /// A full ring is rechecked within half a packet whatever its depth: a
+    /// one-packet ring holds the least lead of all, not a lead to spare.
     #[kithara::test(tokio)]
     async fn a_full_ring_is_rechecked_within_half_a_packet() {
-        for (capacity, expected) in [
-            (1, None),
-            (3, Some(Duration::from_millis(5))),
-            (8, Some(Duration::from_millis(5))),
-        ] {
+        for capacity in [1, 3, 8] {
             let mut fixture = NodeFixture::new(capacity).await;
             assert_eq!(
                 fixture.node.backpressure_recheck(),
@@ -450,7 +446,7 @@ mod tests {
 
             assert_eq!(
                 fixture.node.backpressure_recheck(),
-                expected,
+                Some(Duration::from_millis(5)),
                 "{capacity} slots of 480 frames at 48 kHz hold 10 ms each"
             );
         }
