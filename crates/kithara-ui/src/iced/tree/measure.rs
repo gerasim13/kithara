@@ -423,15 +423,16 @@ impl IcedWidget<Published, Theme, Renderer> for Flex<'_> {
     ) {
         operation.container(None, layout.bounds());
         operation.traverse(&mut |operation| {
-            self.children
+            let children = self
+                .children
                 .iter_mut()
                 .zip(&mut tree.children)
-                .zip(layout.children())
-                .for_each(|((child, state), layout)| {
-                    child
-                        .as_widget_mut()
-                        .operate(state, layout, renderer, operation);
-                });
+                .zip(layout.children());
+            for ((child, state), layout) in children {
+                child
+                    .as_widget_mut()
+                    .operate(state, layout, renderer, operation);
+            }
         });
     }
 

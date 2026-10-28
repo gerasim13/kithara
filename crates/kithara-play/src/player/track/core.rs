@@ -18,8 +18,11 @@ use super::{
         outbox::Outbox,
         settings::{PlayerConfig, TrackSettings, TrackSettingsChange},
     },
-    geometry::*,
-    state::*,
+    geometry::{check_curve, curve_speed, session_at},
+    state::{
+        Adoption, Attaching, LaneOperation, Loading, PlannedChange, PlaybackOperation, Position,
+        ProjectedEnd, SpeedAnswer, TrackStatus,
+    },
 };
 use crate::PlayError;
 

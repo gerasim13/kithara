@@ -1,4 +1,6 @@
-use super::*;
+use std::num::NonZeroU32;
+
+use firewheel::cpal::CpalConfig;
 
 pub(super) fn cpal_config(sample_rate: u32, output_block_frames: Option<NonZeroU32>) -> CpalConfig {
     let mut config = CpalConfig::default();

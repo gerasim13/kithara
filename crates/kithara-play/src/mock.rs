@@ -1,4 +1,9 @@
-use std::{future::Future, num::NonZeroU32, task::Poll};
+use std::{
+    future::Future,
+    io::{BufWriter, Error, ErrorKind, Write},
+    num::NonZeroU32,
+    task::Poll,
+};
 
 use firewheel::{
     clock::InstantSamples,
@@ -14,22 +19,25 @@ use futures::future::poll_fn;
 use kithara_assets::{AssetStore, StorageBackend};
 use kithara_audio::AudioObserverSlot;
 use kithara_command::{
-    Batch, ChannelConfig, Inbox, OpenError, Outcome, Receipt, ScopeId, ScopedConfig, ScopedInbox,
-    ScopedReceipt, ScopedSender, Sender, When, channel, scoped_channel,
+    Batch, ChannelConfig, Inbox, OpenError, Outcome, Port, Receipt, ScopeId, ScopedConfig,
+    ScopedInbox, ScopedReceipt, ScopedSender, Sender, When, channel, scoped_channel,
 };
+use kithara_events::TryRecvError;
 use kithara_platform::{
     time::{Duration, timeout},
     tokio::task::yield_now,
 };
 use kithara_render::{
-    Dispatched, DispatcherCommand, DispatcherProtocol, LoadRefusal, LoadRequest, Loaded, Open,
-    bridge::{DeckEnds, DeckEvents, DeckPart, DeckProtocol, Slot, scope_channels},
+    Dispatched, DispatcherCommand, DispatcherProtocol, LaneTask, LoadRefusal, LoadRequest, Loaded,
+    Open,
+    bridge::{DeckEnds, DeckEvents, DeckPart, DeckProtocol, Fade, Slot, SlotState, scope_channels},
     mock::{MockDeck, TestSessionInbox},
     rt::{DeckMixer, DeckMixerConfig, StreamShape, install_render_context, publish_render_context},
 };
-use kithara_signal::{FrameCount, OutputContext, SessionEpoch, SessionFrame};
+use kithara_signal::{AudioSpec, FrameCount, OutputContext, SegmentId, SessionEpoch, SessionFrame};
 use kithara_test_utils::kithara;
 use kithara_warp::RenderContext;
+use kithara_worker::Task;
 use num_traits::ToPrimitive;
 
 use crate::{
@@ -66,10 +74,8 @@ where
 pub fn write_pcm_wav(
     path: &std::path::Path,
     samples: &[f32],
-    spec: kithara_signal::AudioSpec,
+    spec: AudioSpec,
 ) -> std::io::Result<()> {
-    use std::io::{BufWriter, Write};
-
     let _io = kithara_platform::flash::real_io();
     hang_tick!("write_pcm_wav: writing fixture PCM".to_owned());
     let (data_bytes, riff_size, block_align, byte_rate) = wav_sizes(samples, spec)?;
@@ -87,24 +93,16 @@ pub fn write_pcm_wav(
     for (index, chunk) in samples.chunks(bytes.len() / 4).enumerate() {
         hang_tick!(format!("write_pcm_wav: {path:?}, chunk {index}"));
         let encoded = &mut bytes[..chunk.len() * 4];
-        encoded
-            .as_chunks_mut::<4>()
-            .0
-            .iter_mut()
-            .zip(chunk)
-            .for_each(|(target, sample)| target.copy_from_slice(&sample.to_le_bytes()));
+        for (target, sample) in encoded.as_chunks_mut::<4>().0.iter_mut().zip(chunk) {
+            target.copy_from_slice(&sample.to_le_bytes());
+        }
         file.write_all(encoded)?;
         hang_reset!();
     }
     file.flush()
 }
 
-fn wav_sizes(
-    samples: &[f32],
-    spec: kithara_signal::AudioSpec,
-) -> std::io::Result<(u32, u32, u16, u32)> {
-    use std::io::{Error, ErrorKind};
-
+fn wav_sizes(samples: &[f32], spec: AudioSpec) -> std::io::Result<(u32, u32, u16, u32)> {
     let invalid = || {
         Error::new(
             ErrorKind::InvalidInput,
@@ -130,8 +128,8 @@ fn wav_sizes(
 }
 
 fn write_wav_header(
-    file: &mut impl std::io::Write,
-    spec: kithara_signal::AudioSpec,
+    file: &mut impl Write,
+    spec: AudioSpec,
     data_bytes: u32,
     riff_size: u32,
     block_align: u16,
@@ -178,8 +176,6 @@ pub async fn assert_prepared_render_off_bus<S>(
 where
     S: kithara_bufpool::HasPool<u8> + kithara_bufpool::HasPool<f32> + Send + Sync + 'static,
 {
-    use kithara_signal::AudioSpec;
-
     let rate = NonZeroU32::new(output.sample_rate.output()).ok_or(PlayError::Closed)?;
     write_pcm_wav(path, &[0.5; 8_192], AudioSpec::new(2, rate))
         .map_err(|error| PlayError::Internal(error.to_string()))?;
@@ -227,14 +223,6 @@ pub async fn assert_requested_render_off_bus<S>(
 where
     S: kithara_bufpool::HasPool<u8> + kithara_bufpool::HasPool<f32> + Send + Sync + 'static,
 {
-    use kithara_events::TryRecvError;
-    use kithara_render::{
-        LaneTask,
-        bridge::{Fade, Slot, SlotState},
-    };
-    use kithara_signal::SegmentId;
-    use kithara_worker::Task;
-
     #[derive(Debug, kithara_events::EventSet)]
     enum RenderEvents {
         Audio(kithara_audio::AudioEvent),
@@ -347,7 +335,7 @@ where
 #[kithara::hang_watchdog]
 pub async fn preload_lane<Lane>(lane: &mut Lane) -> Result<(), PlayError>
 where
-    Lane: kithara_render::LaneTask,
+    Lane: LaneTask,
 {
     let _real_io = kithara_platform::flash::real_io();
     lane.warm_up();
@@ -530,8 +518,6 @@ impl MixerRig {
         at: When<SessionFrame>,
         part: DeckPart,
     ) -> Result<kithara_command::Seq, PlayError> {
-        use kithara_command::Port;
-
         self.ring
             .scope(self.scope)
             .ok_or(PlayError::Closed)?

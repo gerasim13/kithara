@@ -1,4 +1,26 @@
-use super::*;
+use std::{num::NonZeroU32, task::Waker};
+
+use firewheel::{FirewheelContext, cpal::CpalStream};
+use kithara_bufpool::HasPool;
+use kithara_command::{Live, mailbox};
+use kithara_platform::{
+    maybe_send::MaybeSend,
+    sync::{Arc, Mutex, mpsc},
+    thread::spawn_named,
+};
+use tracing::debug;
+
+use super::{
+    super::{
+        decks::DeckInbox,
+        queue::HostProtocol,
+        state::{HostRoot, RootView, SessionBufferConfig, SessionState, SessionStream},
+    },
+    SessionClient,
+    backend::cpal_config,
+    engine::{SessionWake, engine_thread},
+};
+use crate::{HostCore, HostOwner, HostSettings, consts, rt::SessionOutput};
 
 pub(crate) fn spawn<S, O>(
     root: HostRoot,

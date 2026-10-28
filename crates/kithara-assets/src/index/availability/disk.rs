@@ -69,9 +69,9 @@ impl AvailabilityIndex {
 
             for (path, res_record) in asset_record.resources.iter() {
                 let mut avail = Availability::default();
-                res_record.ranges.iter().for_each(|r| {
+                for r in res_record.ranges.iter() {
                     avail.insert(r.0.to_native()..r.1.to_native());
-                });
+                }
 
                 let final_len: Option<u64> = res_record.final_len.as_ref().map(|l| l.to_native());
 

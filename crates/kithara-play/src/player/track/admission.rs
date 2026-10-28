@@ -18,8 +18,8 @@ use super::{
         settings::{TrackSettings, TrackSettingsChange},
     },
     core::PlayerImpl,
-    geometry::*,
-    state::*,
+    geometry::{curve_area, curve_speed, session_at},
+    state::{EndPlan, LaneOperation, PlannedChange, Position, ProjectedEnd, TrackStatus},
 };
 use crate::{Bound, PlayError, Player};
 

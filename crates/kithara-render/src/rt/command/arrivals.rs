@@ -3,7 +3,7 @@ use kithara_signal::SessionFrame;
 
 use super::{
     super::{processor::Deck, track::PlayerTrack},
-    state::*,
+    state::{Armed, EndAction, shifted_slot},
 };
 use crate::bridge::{DeckPart, DeckProtocol, DeckRefusal, Slot};
 

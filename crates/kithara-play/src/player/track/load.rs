@@ -10,7 +10,7 @@ use tracing::warn;
 use super::{
     super::outbox::{Outbox, Settled, rejection},
     core::PlayerImpl,
-    state::*,
+    state::{Attaching, Loading, Position, TrackStatus},
 };
 use crate::{OpenedTrack, PlayError, ResourceLoad};
 
