@@ -365,6 +365,7 @@ where
                 align: spec.align,
                 lit: lit.map(|(_, lit)| TextFaces { idle, lit }),
                 text: Box::new(TextContext::from(self.skin.text_resources.as_ref())),
+                room: f32::INFINITY,
             }),
             declared,
             Vec::new(),

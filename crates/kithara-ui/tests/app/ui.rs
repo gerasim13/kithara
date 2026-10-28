@@ -27,7 +27,7 @@ use kithara_ui::{
         custom::CustomKinds,
         document::{Clock, Ctx},
     },
-    shaping::FontPolicy,
+    shaping::{FontPolicy, TextContext},
     source::{Fill, LoadedBytes, LoadedSource, MemResolver, SourceResolver, UiConfig},
     view,
 };
@@ -1835,6 +1835,146 @@ fn a_wheel_over_a_writing_row_steps_the_value_it_names() {
         ui.app().steps,
         [1.0],
         "a detent on the row that names what it writes must reach the application as one step"
+    );
+}
+
+/// What a paragraph the column below sets says: more than its 120 wide box
+/// holds on one line.
+const PARAGRAPH: &str = "a paragraph longer than the narrow column it stands in";
+
+/// A paragraph that wraps takes the height of every line it wraps to, and
+/// what follows it stands below its last line rather than over it.
+#[kithara::test]
+fn a_wrapping_paragraph_takes_the_height_of_its_lines() {
+    let endpoints = menu_endpoints();
+    let resolver = one_control(&format!(
+        r#"Column(id: "column", size: (w: Fixed(120.0), h: Fill), gap: 0.0, pad: 0.0, children: [
+            Text(id: "paragraph", size: (w: Fill, h: Shrink), style: Body, label: "{PARAGRAPH}"),
+            Spacer(id: "after", size: Some((w: Fixed(10.0), h: Fixed(10.0)))),
+        ])"#
+    ));
+    let ui = Ui::new(
+        Menu::default(),
+        Config::builder()
+            .endpoints(&endpoints)
+            .resolver(&resolver)
+            .text(builtin::text_doc())
+            .build(),
+        (300, 200),
+        1.0,
+    )
+    .unwrap_or_else(|error| panic!("the paragraph column must mount: {error}"));
+    let mut text = TextContext::new().unwrap_or_else(|error| panic!("{error}"));
+    let lines = text.shape(PARAGRAPH, skin().text.body, Some(120.0));
+    let rect = |path: &str| {
+        ui.rect_of(path)
+            .unwrap_or_else(|| panic!("{path} must be laid out"))
+    };
+    let (paragraph, after) = (rect("demo/paragraph"), rect("demo/after"));
+
+    assert!(
+        lines.height() > text.shape(PARAGRAPH, skin().text.body, None).height(),
+        "the paragraph must not fit the column on one line"
+    );
+    assert_eq!(
+        (paragraph.h, after.y),
+        (lines.height().round(), lines.height().round()),
+        "a wrapped paragraph must take the height of its lines, and push what follows below them"
+    );
+}
+
+/// A paragraph the application rewords on its next tick.
+struct Reworded {
+    words: &'static str,
+    next: &'static str,
+}
+
+impl Reads for Reworded {
+    fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+        (endpoint == "fixture.words").then_some(ReadValue::Text(self.words))
+    }
+}
+
+impl App for Reworded {
+    fn document(&self) -> &str {
+        "one.klayout.ron"
+    }
+
+    fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
+        with(self)
+    }
+
+    fn skin(&self) -> &Skin {
+        skin()
+    }
+
+    fn tick(&mut self) {
+        self.words = self.next;
+    }
+
+    fn update(&mut self, _event: UiEvent) {}
+}
+
+/// Words read live that set to a line exactly as wide as the last, but wrap
+/// to more lines in the column, push what follows down once they are shown.
+#[kithara::test]
+fn a_reworded_paragraph_that_wraps_to_more_lines_moves_what_follows() {
+    const FEWER: &str = "AAA AA AAA AA";
+    const MORE: &str = "AAA AAA AA AA";
+    let mut text = TextContext::new().unwrap_or_else(|error| panic!("{error}"));
+    let role = skin().text.body;
+    let room = text.shape("AAA AA", role, None).width().ceil() + 1.0;
+    let (fewer, more) = (
+        text.shape(FEWER, role, Some(room)),
+        text.shape(MORE, role, Some(room)),
+    );
+    let endpoints = Registry::model("fixture.words", ValueKind::Text);
+    let resolver = one_control(&format!(
+        r#"Column(id: "column", size: (w: Fixed({room:.1}), h: Fill), gap: 0.0, pad: 0.0, children: [
+            Text(id: "paragraph", size: (w: Fill, h: Shrink), style: Body, read: Model(id: "fixture.words")),
+            Spacer(id: "after", size: Some((w: Fixed(10.0), h: Fixed(10.0)))),
+        ])"#
+    ));
+    let mut ui = Ui::new(
+        Reworded {
+            words: FEWER,
+            next: MORE,
+        },
+        Config::builder()
+            .endpoints(&endpoints)
+            .resolver(&resolver)
+            .text(builtin::text_doc())
+            .build(),
+        (300, 200),
+        1.0,
+    )
+    .unwrap_or_else(|error| panic!("the reworded column must mount: {error}"));
+    let after = |ui: &Ui<'_, Reworded>| {
+        ui.rect_of("demo/after")
+            .unwrap_or_else(|| panic!("what follows the paragraph must be laid out"))
+            .y
+    };
+    let before = after(&ui);
+
+    ui.frame(Duration::from_millis(16));
+
+    let mut line = |words: &str| {
+        let run = text.shape(words, role, None);
+        (run.width(), run.height())
+    };
+    assert_eq!(
+        line(FEWER),
+        line(MORE),
+        "both wordings must set to one line of the same size"
+    );
+    assert!(
+        more.height() > fewer.height(),
+        "the second wording must wrap to more lines"
+    );
+    assert_eq!(
+        (before, after(&ui)),
+        (fewer.height().round(), more.height().round()),
+        "a paragraph reworded to more lines must push what follows below them"
     );
 }
 
