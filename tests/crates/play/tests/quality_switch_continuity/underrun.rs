@@ -1,4 +1,7 @@
-use std::ops::{Range, RangeInclusive};
+use std::{
+    ops::{Range, RangeInclusive},
+    thread::ThreadId,
+};
 
 use cochlea_features::{Audio as ProbeAudio, SegmentOpts, count_silent_segments};
 use kithara::{
@@ -9,9 +12,10 @@ use kithara::{
 };
 use kithara_integration_tests::{CreatedHls, TestServerHelper, fixture_protocol::DelayRule};
 use kithara_render::bridge::DeckSnapshot;
+use kithara_test_utils::test::usdt::{ProbeEvent, Scope};
 
 use super::*;
-use crate::bufpool_ext::pools;
+use crate::bufpool_ext::{TestPools, pools};
 
 const OUTPUT_RING_CHUNKS: usize = 1;
 const TARGET_SEGMENT_DELAY_MS: u64 = 250;
@@ -30,6 +34,55 @@ struct Render {
     capture_frame: i64,
     samples: Vec<f32>,
     blocks: Vec<CaptureBlock>,
+    /// Packets the player's dispatcher thread admitted.
+    admissions: Vec<ProbeEvent>,
+    /// Passes the player's dispatcher thread ran.
+    passes: Vec<ProbeEvent>,
+}
+
+/// A play worker and the dispatcher thread every lane it owns runs on.
+struct FeedWorker {
+    worker: PlayWorker<TestPools>,
+    thread: ThreadId,
+}
+
+/// Starts a play worker and reads its dispatcher thread from the audio-feed
+/// `thread_class` claim that thread makes first. Workers start one at a time,
+/// so the one new claim is this worker's.
+async fn feed_worker(scope: &Scope) -> FeedWorker {
+    let claimed = audio_feed_claims(scope).len();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
+    scope
+        .wait_for(|events| {
+            events
+                .iter()
+                .filter(|event| is_audio_feed_claim(event))
+                .count()
+                > claimed
+        })
+        .await;
+    let claims = audio_feed_claims(scope);
+    assert_eq!(
+        claims.len(),
+        claimed + 1,
+        "exactly one audio-feed dispatcher must start with the worker: {claims:?}",
+    );
+    FeedWorker {
+        worker,
+        thread: claims[claimed].thread,
+    }
+}
+
+fn audio_feed_claims(scope: &Scope) -> Vec<ProbeEvent> {
+    scope
+        .events_of("thread_class")
+        .into_iter()
+        .filter(is_audio_feed_claim)
+        .collect()
+}
+
+fn is_audio_feed_claim(event: &ProbeEvent) -> bool {
+    event.probe == "thread_class" && event.field("audio_feed") == Some(1)
 }
 
 #[derive(Debug)]
@@ -41,7 +94,9 @@ struct CaptureBlock {
     after: DeckSnapshot,
     item_events: Vec<ItemEvent>,
     event_error: Option<String>,
-    refill_probes: Vec<kithara_test_utils::test::usdt::ProbeEvent>,
+    /// Real time the block's render began.
+    started: WallInstant,
+    refill_probes: Vec<ProbeEvent>,
     /// The end of the last packet each segment admitted, read before `after`.
     admitted: Vec<(u64, u64)>,
 }
@@ -93,6 +148,99 @@ impl CaptureBlock {
 }
 
 impl Render {
+    fn new(
+        capture_frame: i64,
+        samples: Vec<f32>,
+        blocks: Vec<CaptureBlock>,
+        scope: &Scope,
+        producer: ThreadId,
+        label: &str,
+    ) -> Self {
+        let on_producer = |probe| {
+            scope
+                .events_of(probe)
+                .into_iter()
+                .filter(|event| event.thread == producer)
+                .collect::<Vec<_>>()
+        };
+        let admissions = on_producer("chunk_admitted");
+        let first_block = blocks.first().map(|block| block.started);
+        assert!(
+            admissions
+                .iter()
+                .any(|event| first_block.is_some_and(|started| started <= event.wall_time)),
+            "{label} must admit its capture packets on its own dispatcher thread {producer:?}",
+        );
+        Self {
+            capture_frame,
+            samples,
+            blocks,
+            admissions,
+            passes: on_producer("scheduler_pass"),
+        }
+    }
+
+    /// The capture frames a short block left silent while the producer held
+    /// the packet the block missed: its dispatcher had admitted the packet
+    /// before it and then passed backpressured, holding the next one rendered,
+    /// all before the block began. Only the OS not running that thread kept
+    /// the packet back, so the gap says nothing about the player.
+    fn scheduling_gap(&self, block: &CaptureBlock) -> Option<Range<usize>> {
+        let frames = u64::try_from(block.capture.len()).ok()?;
+        let (segment, lane_frame, served) = block
+            .before
+            .slots
+            .iter()
+            .zip(&block.after.slots)
+            .find_map(|(before, after)| {
+                let (before, after) = before.mark.zip(after.mark)?;
+                let served = after.lane.frame.checked_sub(before.lane.frame)?;
+                (before.lane.segment == after.lane.segment && served < frames).then_some((
+                    after.lane.segment.get(),
+                    after.lane.frame,
+                    served,
+                ))
+            })?;
+        let admitted = self.admissions.iter().rev().find(|event| {
+            event.wall_time < block.started
+                && event.field("segment") == Some(segment)
+                && event
+                    .field("lane_frame")
+                    .zip(event.field("frames"))
+                    .is_some_and(|(start, frames)| start + frames == lane_frame)
+        })?;
+        let ready = self.passes.iter().any(|pass| {
+            admitted.wall_time < pass.wall_time
+                && pass.wall_time < block.started
+                && pass.field("backpressured").is_some_and(|tasks| tasks > 0)
+        });
+        if !ready {
+            return None;
+        }
+        Some(block.capture.start + usize::try_from(served).ok()?..block.capture.end)
+    }
+
+    fn scheduling_gaps(&self) -> impl Iterator<Item = Range<usize>> + '_ {
+        self.blocks
+            .iter()
+            .filter_map(|block| self.scheduling_gap(block))
+    }
+
+    /// The capture with every scheduling gap cut out: a starved producer
+    /// delays the stream without dropping any of it, so what remains is what
+    /// the player itself rendered.
+    fn continuous_samples(&self) -> Vec<f32> {
+        let channels = usize::from(CHANNELS);
+        let mut samples = Vec::with_capacity(self.samples.len());
+        let mut next = 0;
+        for gap in self.scheduling_gaps() {
+            samples.extend_from_slice(&self.samples[next * channels..gap.start * channels]);
+            next = gap.end;
+        }
+        samples.extend_from_slice(&self.samples[next * channels..]);
+        samples
+    }
+
     fn capture_window(&self) -> RangeInclusive<u128> {
         let mut times = self.blocks.iter().map(|block| {
             block
@@ -162,8 +310,9 @@ impl Render {
             Some(start..end)
         });
         format!(
-            "capture_source_frame={} longest_silence={longest:?} output_silence={output_silence:?} nearby=[{}] underrun_blocks_first_8=[{}]",
+            "capture_source_frame={} longest_silence={longest:?} output_silence={output_silence:?} scheduling_gaps={:?} nearby=[{}] underrun_blocks_first_8=[{}]",
             self.capture_frame,
+            self.scheduling_gaps().collect::<Vec<_>>(),
             nearby.join("\n"),
             underruns.join("\n"),
         )
@@ -197,6 +346,7 @@ fn cold_target_fixture(target: usize) -> HlsFixtureBuilder {
 #[kithara::flash(true)]
 #[kithara_test_utils::kithara::hang_watchdog]
 async fn prepare_tiny_ring_player(
+    worker: PlayWorker<TestPools>,
     master_url: &url::Url,
     initial_variant: usize,
     backend: DecoderBackend,
@@ -215,7 +365,6 @@ async fn prepare_tiny_ring_player(
                 .expect("fixture resources"),
         )
         .build();
-    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let downloader = TestServerHelper::new().await.modeled_downloader();
     let config =
         kithara::play::ResourceConfig::for_src(kithara::play::ResourceSrc::Url(master_url.clone()))
@@ -347,6 +496,7 @@ async fn capture_tiny_ring(
             .ok()
             .map(|duration| duration.as_micros());
         let snapshot_before = prepared.player.deck_snapshot();
+        let started = WallInstant::now();
         let block = render_paced(&prepared.player, &mut prepared.pacer, frames).await;
         let admitted_count = kithara_test_utils::test::usdt::count("chunk_admitted");
         let snapshot_after = prepared.player.deck_snapshot();
@@ -408,6 +558,7 @@ async fn capture_tiny_ring(
                 after: snapshot_after,
                 item_events: observed_events,
                 event_error,
+                started,
                 refill_probes,
                 admitted: Vec::new(),
             },
@@ -438,10 +589,7 @@ async fn capture_tiny_ring(
 }
 
 /// The end of the last packet each segment admitted so far.
-fn extend_admitted_ends(
-    ends: &mut Vec<(u64, u64)>,
-    admissions: &[kithara_test_utils::test::usdt::ProbeEvent],
-) {
+fn extend_admitted_ends(ends: &mut Vec<(u64, u64)>, admissions: &[ProbeEvent]) {
     for event in admissions {
         let (Some(segment), Some(start), Some(frames)) = (
             event.field("segment"),
@@ -457,7 +605,12 @@ fn extend_admitted_ends(
     }
 }
 
-async fn capture_tiny_ring_control(mut prepared: PreparedPlayer, transition: Transition) -> Render {
+async fn capture_tiny_ring_control(
+    mut prepared: PreparedPlayer,
+    scope: &Scope,
+    producer: ThreadId,
+    transition: Transition,
+) -> Render {
     let label = format!("{}-tiny-ring-control", transition.label);
     let (samples, decoder_events, blocks) = capture_tiny_ring(&mut prepared).await;
     assert_eq!(
@@ -469,16 +622,24 @@ async fn capture_tiny_ring_control(mut prepared: PreparedPlayer, transition: Tra
         decoder_events.is_empty(),
         "{label} must not recreate its decoder: {decoder_events:?}",
     );
-    let result = Render {
-        capture_frame: prepared.capture_frame,
+    let result = Render::new(
+        prepared.capture_frame,
         samples,
         blocks,
-    };
+        scope,
+        producer,
+        &label,
+    );
     prepared.close().await;
     result
 }
 
-async fn capture_tiny_ring_switch(mut prepared: PreparedPlayer, transition: Transition) -> Render {
+async fn capture_tiny_ring_switch(
+    mut prepared: PreparedPlayer,
+    scope: &Scope,
+    producer: ThreadId,
+    transition: Transition,
+) -> Render {
     let label = format!("{}-tiny-ring-switch", transition.label);
     prepared
         .abr
@@ -513,11 +674,14 @@ async fn capture_tiny_ring_switch(mut prepared: PreparedPlayer, transition: Tran
         Some(expected_variant),
         "{label} target variant"
     );
-    let result = Render {
-        capture_frame: prepared.capture_frame,
+    let result = Render::new(
+        prepared.capture_frame,
         samples,
         blocks,
-    };
+        scope,
+        producer,
+        &label,
+    );
     prepared.close().await;
     result
 }
@@ -587,18 +751,22 @@ async fn target_rebuild_keeps_player_output_continuous(
     #[case] label: &str,
     #[case] source: (TestServerHelper, CreatedHls),
 ) {
-    let _refill_scope = kithara_test_utils::test::usdt::scope();
+    let refill_scope = kithara_test_utils::test::usdt::scope();
     let (_server, created) = source;
     let master_url = created.master_url();
 
+    let control_worker = feed_worker(&refill_scope).await;
+    let switched_worker = feed_worker(&refill_scope).await;
     let (control, switched) = join!(
         prepare_tiny_ring_player(
+            control_worker.worker,
             &master_url,
             AAC_TO_FLAC.from,
             backend,
             "target-rebuild-control"
         ),
         prepare_tiny_ring_player(
+            switched_worker.worker,
             &master_url,
             AAC_TO_FLAC.from,
             backend,
@@ -606,23 +774,26 @@ async fn target_rebuild_keeps_player_output_continuous(
         ),
     );
     let (control, switched) = join!(
-        capture_tiny_ring_control(control, AAC_TO_FLAC),
-        capture_tiny_ring_switch(switched, AAC_TO_FLAC),
+        capture_tiny_ring_control(control, &refill_scope, control_worker.thread, AAC_TO_FLAC),
+        capture_tiny_ring_switch(switched, &refill_scope, switched_worker.thread, AAC_TO_FLAC),
     );
+    drop(refill_scope);
     assert_eq!(
         switched.capture_frame, control.capture_frame,
         "switch and no-switch control must start at the same source frame",
     );
-    let control_silence = longest_silent_run(&control.samples);
-    let switched_silence = longest_silent_run(&switched.samples);
+    let control_samples = control.continuous_samples();
+    let switched_samples = switched.continuous_samples();
+    let control_silence = longest_silent_run(&control_samples);
+    let switched_silence = longest_silent_run(&switched_samples);
     assert!(
         switched_silence <= control_silence.saturating_add(MAX_EXTRA_SILENT_FRAMES),
         "{label} inserted an audible silent gap: switched={switched_silence} frames, control={control_silence} frames, target_delay_ms={delay_ms}; switched: {}; control: {}",
         switched.silence_diagnostic(),
         control.silence_diagnostic(),
     );
-    let control_buckets = cochlea_silent_buckets(&control.samples);
-    let switched_buckets = cochlea_silent_buckets(&switched.samples);
+    let control_buckets = cochlea_silent_buckets(&control_samples);
+    let switched_buckets = cochlea_silent_buckets(&switched_samples);
     assert!(
         switched_buckets <= control_buckets,
         "Cochlea found switch-only silent buckets during {label}: switched={switched_buckets}, control={control_buckets}, target_delay_ms={delay_ms}",
@@ -650,7 +821,7 @@ async fn cold_target_variant_switch_keeps_playback_uninterrupted(
     #[case] backend: DecoderBackend,
     #[future(awt)] cold_sources: Vec<(TestServerHelper, CreatedHls)>,
 ) {
-    let _refill_scope = kithara_test_utils::test::usdt::scope();
+    let refill_scope = kithara_test_utils::test::usdt::scope();
     let sources: Vec<(Transition, url::Url)> = TRANSITIONS
         .into_iter()
         .zip(&cold_sources)
@@ -658,17 +829,38 @@ async fn cold_target_variant_switch_keeps_playback_uninterrupted(
         .collect();
     let mut failures = Vec::new();
     for [(first, first_url), (second, second_url)] in sources.as_chunks::<2>().0 {
+        let workers = [
+            feed_worker(&refill_scope).await,
+            feed_worker(&refill_scope).await,
+            feed_worker(&refill_scope).await,
+            feed_worker(&refill_scope).await,
+        ];
+        let threads = workers.each_ref().map(|worker| worker.thread);
+        let [first_control, second_control, first_switch, second_switch] =
+            workers.map(|worker| worker.worker);
         let (first_control, second_control, first_switch, second_switch) = join!(
-            prepare_tiny_ring_player(first_url, first.from, backend, first.label),
-            prepare_tiny_ring_player(second_url, second.from, backend, second.label),
-            prepare_tiny_ring_player(first_url, first.from, backend, first.label),
-            prepare_tiny_ring_player(second_url, second.from, backend, second.label),
+            prepare_tiny_ring_player(first_control, first_url, first.from, backend, first.label),
+            prepare_tiny_ring_player(
+                second_control,
+                second_url,
+                second.from,
+                backend,
+                second.label
+            ),
+            prepare_tiny_ring_player(first_switch, first_url, first.from, backend, first.label),
+            prepare_tiny_ring_player(
+                second_switch,
+                second_url,
+                second.from,
+                backend,
+                second.label
+            ),
         );
         let (first_control, second_control, first_switched, second_switched) = join!(
-            capture_tiny_ring_control(first_control, *first),
-            capture_tiny_ring_control(second_control, *second),
-            capture_tiny_ring_switch(first_switch, *first),
-            capture_tiny_ring_switch(second_switch, *second),
+            capture_tiny_ring_control(first_control, &refill_scope, threads[0], *first),
+            capture_tiny_ring_control(second_control, &refill_scope, threads[1], *second),
+            capture_tiny_ring_switch(first_switch, &refill_scope, threads[2], *first),
+            capture_tiny_ring_switch(second_switch, &refill_scope, threads[3], *second),
         );
         for (transition, control, switched) in [
             (first, first_control, first_switched),
@@ -677,6 +869,7 @@ async fn cold_target_variant_switch_keeps_playback_uninterrupted(
             failures.extend(cold_switch_failures(*transition, &control, &switched));
         }
     }
+    drop(refill_scope);
     assert!(
         failures.is_empty(),
         "switching to a cold target variant interrupted playback (delay_ms={COLD_TARGET_SEGMENT_DELAY_MS}): {}",
@@ -706,18 +899,22 @@ async fn aac_lane_packets_carry_the_render_quantum(
     #[case] backend: DecoderBackend,
     #[future(awt)] aac_source: (TestServerHelper, CreatedHls),
 ) {
-    let _probe_scope = kithara_test_utils::test::usdt::scope();
+    let probe_scope = kithara_test_utils::test::usdt::scope();
     let (_server, created) = &aac_source;
+    let worker = feed_worker(&probe_scope).await;
     let prepared = prepare_tiny_ring_player(
+        worker.worker,
         &created.master_url(),
         AAC_TO_FLAC.from,
         backend,
         "aac-packet-control",
     )
     .await;
-    let control = capture_tiny_ring_control(prepared, AAC_TO_FLAC).await;
+    let control =
+        capture_tiny_ring_control(prepared, &probe_scope, worker.thread, AAC_TO_FLAC).await;
 
-    let packets: Vec<(u64, u64, u64)> = kithara_test_utils::test::usdt::events_of("chunk_admitted")
+    let packets: Vec<(u64, u64, u64)> = probe_scope
+        .events_of("chunk_admitted")
         .iter()
         .filter_map(|event| {
             Some((
@@ -728,6 +925,7 @@ async fn aac_lane_packets_carry_the_render_quantum(
         })
         .filter(|&(_, _, frames)| frames > 0)
         .collect();
+    drop(probe_scope);
     assert!(
         packets.len() > OBSERVATION_FRAMES / BLOCK_FRAMES,
         "the deck admitted too few packets to judge: {packets:?}"
@@ -793,8 +991,10 @@ fn cold_switch_failures(
         transition.label,
     );
     let mut failures = Vec::new();
-    let control_silence = longest_silent_run(&control.samples);
-    let switched_silence = longest_silent_run(&switched.samples);
+    let control_samples = control.continuous_samples();
+    let switched_samples = switched.continuous_samples();
+    let control_silence = longest_silent_run(&control_samples);
+    let switched_silence = longest_silent_run(&switched_samples);
     if switched_silence > control_silence.saturating_add(MAX_EXTRA_SILENT_FRAMES) {
         failures.push(format!(
             "{} inserted an audible silent gap: switched={switched_silence} frames, control={control_silence} frames; switched {}; control {}",
@@ -803,8 +1003,8 @@ fn cold_switch_failures(
             control.silence_diagnostic(),
         ));
     }
-    let control_buckets = cochlea_silent_buckets(&control.samples);
-    let switched_buckets = cochlea_silent_buckets(&switched.samples);
+    let control_buckets = cochlea_silent_buckets(&control_samples);
+    let switched_buckets = cochlea_silent_buckets(&switched_samples);
     if switched_buckets > control_buckets {
         failures.push(format!(
             "{} produced switch-only silent buckets: switched={switched_buckets}, control={control_buckets}; switched {}; control {}",
