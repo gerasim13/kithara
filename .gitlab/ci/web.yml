@@ -8,7 +8,7 @@
   timeout: 60 minutes
   needs:
     - job: linux:image
-      artifacts: true
+      optional: true
 
 # Built in the Linux container, but what it answers for is the wasm target, so
 # it belongs to the web request and not to the Linux one. It keeps the verify
@@ -24,7 +24,7 @@ web:wasm:
   timeout: 60 minutes
   needs:
     - job: linux:image
-      artifacts: true
+      optional: true
   script:
     - just ci run linux-wasm
 

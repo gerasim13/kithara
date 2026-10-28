@@ -31,17 +31,10 @@ those installed copies.
 
 The Linux image is built from the pins alone: `RUST_VERSION` and
 `RUST_BASE_DIGEST` select the base, every tool version arrives as a build
-argument. GitHub fleet provisioning retains its floating runner tags. On the
-Mac, `linux:image` prepares and smoke-tests the pinned toolchain image, then
-publishes its local `kithara-ci@sha256:...` repository digest in a dotenv report.
-Every Linux consumer requires that producer and selects its digest before
-container creation, with `pull_policy = never` and the same repository allowlist.
-The Docker runner has no default image: missing producer identity cannot fall
-back to a tag another branch moved. This requires Docker's local repository
-digest support; a config ID is not substituted for a missing manifest digest.
-`KITHARA_CI_LINUX_IMAGE` is reserved for this producer; project, group and pipeline
-variables must not override it. Verify the deployed provider's dotenv resolution
-and absence of higher-precedence overrides during rollout.
+argument. The runners name the floating tag — `kithara-ci:linux-latest` and
+its siblings — never the pin, so a pin bump cannot strand a lane on an image
+nobody built: the pin says what to build, the floating tag says what to run,
+and whatever builds an image moves the tag onto it.
 
 Declared lanes select the checkout's nextest pin in child `PATH` from a
 versioned cache scoped to trust and host platform. A cache miss installs it as
@@ -55,8 +48,8 @@ reading everything from the commit it runs on. The macOS host reinstalls its
 services, rewrites its runner configuration, makes sure the pinned Linux image
 is present and reloads its agents; a Linux host builds the images its profile
 asks for, creates every cache mount its runners use and hands it to the job
-user, and installs its units. Repeated provisioning reuses installed images
-and verifies their selected identities.
+user, and installs its units. Every step is idempotent — an image that is
+already there is only retagged — so a run costs seconds when nothing moved.
 
 Neither pipeline runs it on a push. On GitLab it is `host:provision`, reached
 only by a pipeline started on the default branch with `KITHARA_PROVISION=1`;
@@ -134,9 +127,9 @@ change, not a prerequisite for removing idle time between pipelines.
 
 Native lint, tests and verdict jobs use the shared `kithara-macos` tag so either
 native registration can take them. Each registration retains its own checkout,
-build root and compiler-cache socket. Host image preparation and framework
-packaging also use the common native pool; bindings, staging and Xcode
-DerivedData stay in each job's checkout. Simulator/server work retains
+build root and compiler-cache socket. Framework packaging also uses the common
+native pool; bindings, staging and Xcode DerivedData stay in each job's
+checkout. Simulator/server work retains
 `kithara-macos-2` through shutdown and device deletion; measured jobs still
 serialize through `kithara-suite`.
 

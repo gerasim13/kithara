@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::{Args, Subcommand};
 use tracing::{error, info};
 
@@ -61,10 +61,7 @@ enum MacCommand {
         dockerfile: PathBuf,
     },
     /// Verify the pinned Linux runner image and its required tools.
-    SmokeLinux {
-        /// Immutable repository digest returned by image preparation.
-        image: String,
-    },
+    SmokeLinux,
     /// Boot the Android emulator and verify it reaches a ready state.
     SmokeAndroid,
     /// Serve `GitLab` jobs from throwaway macOS VMs.
@@ -86,8 +83,11 @@ enum MacCommand {
 
 /// Bring this machine up to what the current commit describes.
 ///
-/// Reuse the pinned image, verify its immutable reference, regenerate runner
-/// configuration from the installed profile and reload its agents.
+/// Every step is one this host already owns and every one of them is
+/// idempotent, so a pipeline can run this as often as it likes: the image
+/// build reuses what is already there and only moves the floating tag, the
+/// runner configuration is rewritten from the same profile, and the agents are
+/// reloaded from the definitions that were just installed.
 pub(in crate::ci::host) fn provision(provision: &Provision<'_>) -> Result<()> {
     provision.as_root("mac", "install-services")?;
     let config = CiConfig::load(provision.config, provision.pins)?;
@@ -100,8 +100,8 @@ pub(in crate::ci::host) fn provision(provision: &Provision<'_>) -> Result<()> {
     let process = Process::new(&std::env::current_dir()?, vars);
     let runners = RunnerManager::new(&config, &process);
     runners.configure()?;
-    let image = runners.build_linux_image(Path::new(ImageCommand::Toolchain.dockerfile()))?;
-    runners.smoke_linux(&image)?;
+    runners.build_linux_image(Path::new(ImageCommand::Toolchain.dockerfile()))?;
+    runners.smoke_linux()?;
     runners.activate()?;
     info!(platform = "mac", "host provisioned from this commit");
     Ok(())
@@ -137,17 +137,9 @@ pub(crate) fn run(args: &MacArgs) -> Result<()> {
         MacCommand::Activate => RunnerManager::new(&config, &process).activate(),
         MacCommand::GuestPrepare => RunnerManager::new(&config, &process).prepare_guest(),
         MacCommand::BuildLinuxImage { dockerfile } => {
-            let manager = RunnerManager::new(&config, &process);
-            let image = manager.build_linux_image(dockerfile)?;
-            manager.smoke_linux(&image)?;
-            let output = root.join(consts::LINUX_IMAGE_ENV_FILE);
-            std::fs::create_dir_all(output.parent().context("image report has no directory")?)?;
-            std::fs::write(output, format!("KITHARA_CI_LINUX_IMAGE={image}\n"))?;
-            Ok(())
+            RunnerManager::new(&config, &process).build_linux_image(dockerfile)
         }
-        MacCommand::SmokeLinux { image } => {
-            RunnerManager::new(&config, &process).smoke_linux(image)
-        }
+        MacCommand::SmokeLinux => RunnerManager::new(&config, &process).smoke_linux(),
         MacCommand::SmokeAndroid => RunnerManager::new(&config, &process).smoke_android(),
         MacCommand::RunMacosRunner => RunnerManager::new(&config, &process).run_macos_runner(),
         MacCommand::RunWindowsGuest { install } => {
@@ -241,7 +233,7 @@ mod tests {
             ["activate"].as_slice(),
             ["guest-prepare"].as_slice(),
             ["build-linux-image", "docker/ci.Dockerfile"].as_slice(),
-            ["smoke-linux", "kithara-ci@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"].as_slice(),
+            ["smoke-linux"].as_slice(),
             ["smoke-android"].as_slice(),
             ["run-macos-runner"].as_slice(),
             ["preflight"].as_slice(),

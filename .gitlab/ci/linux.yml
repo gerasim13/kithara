@@ -8,7 +8,7 @@
   timeout: 60 minutes
   needs:
     - job: linux:image
-      artifacts: true
+      optional: true
 
 linux:secrets:
   extends: .linux-lane
@@ -40,7 +40,7 @@ linux:test:
   timeout: 60 minutes
   needs:
     - job: linux:image
-      artifacts: true
+      optional: true
   script:
     - just ci run linux-test-simulated-clock
   artifacts:
@@ -64,7 +64,7 @@ linux:coverage:
   timeout: 90 minutes
   needs:
     - job: linux:image
-      artifacts: true
+      optional: true
   script:
     - just ci run linux-coverage
   artifacts:

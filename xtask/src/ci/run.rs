@@ -1241,21 +1241,23 @@ mod tests {
     }
 
     #[test]
-    fn the_linux_pipeline_uses_its_producers_immutable_image() {
+    fn the_linux_pipeline_uses_the_runner_provisioned_image() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("xtask has a workspace root");
-        let common: serde_yaml_ng::Value = serde_yaml_ng::from_str(
-            &fs::read_to_string(root.join(".gitlab/ci/common.yml")).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            common[".linux-job"]["image"]["name"].as_str(),
-            Some("$KITHARA_CI_LINUX_IMAGE")
-        );
-        assert_eq!(
-            common[".linux-job"]["image"]["pull_policy"].as_str(),
-            Some("never")
+        let common = fs::read_to_string(root.join(".gitlab/ci/common.yml"))
+            .expect("the shared pipeline definition is readable");
+        let (_, after_linux) = common
+            .split_once(".linux-job:")
+            .expect("the Linux job template exists");
+        let linux_job = after_linux
+            .split_once("\n.")
+            .map_or(after_linux, |(job, _)| job);
+        assert!(
+            linux_job
+                .lines()
+                .all(|line| !line.trim().starts_with("image:")),
+            "the pipeline must not override the local image provisioned in runner config"
         );
     }
 
@@ -1370,16 +1372,23 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("xtask has a workspace root");
-        let linux: serde_yaml_ng::Value = serde_yaml_ng::from_str(
-            &fs::read_to_string(root.join(".gitlab/ci/linux.yml")).unwrap(),
-        )
-        .unwrap();
-        let expected: serde_yaml_ng::Value =
-            serde_yaml_ng::from_str("- job: linux:image\n  artifacts: true\n").unwrap();
-        for name in ["linux:test", "linux:coverage"] {
-            assert_eq!(
-                linux[name]["needs"], expected,
-                "{name} must wait only for its image, independently of linux:check"
+        let linux = fs::read_to_string(root.join(".gitlab/ci/linux.yml"))
+            .expect("the Linux pipeline definition is readable");
+        let (_, after_test) = linux
+            .split_once("linux:test:")
+            .expect("the Linux test job exists");
+        let (test_job, coverage_job) = after_test
+            .split_once("linux:coverage:")
+            .expect("the coverage job follows Linux test");
+
+        for (name, job) in [("linux:test", test_job), ("linux:coverage", coverage_job)] {
+            assert!(
+                job.contains("needs:\n    - job: linux:image\n      optional: true\n  script:"),
+                "{name} waits on a job other than the image it runs in"
+            );
+            assert!(
+                !job.contains("linux:check"),
+                "{name} disappears when linux:check fails"
             );
         }
     }

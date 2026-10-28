@@ -64,7 +64,7 @@ deep:bench:
   stage: deep
   needs:
     - job: linux:image
-      artifacts: true
+      optional: true
 
 # Advisories and licence bans are the only dependency check on the import path.
 # The bridge no longer refuses a merged pull request for moving a manifest, so

@@ -441,8 +441,9 @@ pub(crate) const HOST_PACKAGES: [&str; 10] = [
 /// mount elsewhere fixes it, so the guest moves the share here on startup.
 pub(crate) const GUEST_SHARE: &str = "/opt/kithara";
 
-pub(crate) const LINUX_IMAGE_REPOSITORY: &str = "kithara-ci";
-pub(crate) const LINUX_IMAGE_ENV_FILE: &str = ".ci-artifacts/linux-image.env";
+/// The floating tag the Linux runner runs. It always names the image the most
+/// recent pipeline pinned, so the runner configuration never changes with a pin.
+pub(crate) const LINUX_LATEST_IMAGE: &str = "kithara-ci:linux-latest";
 
 /// The throwaway VM the macOS lane clones for every job.
 pub(crate) const JOB_VM_NAME: &str = "kithara-ci-job";

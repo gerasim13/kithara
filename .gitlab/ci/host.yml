@@ -1,7 +1,28 @@
-# Consumers receive the selected repository digest before their containers
-# start; concurrent pipelines never communicate through a floating image tag.
+# Repairs the host needs on itself, reachable from the pipeline rather than
+# only over ssh.
+
+# The Linux runner runs `kithara-ci:linux-latest`, and this job is what points
+# that tag at the image the commit pins. Every Linux job waits for it.
+#
+# Before, the runner named the pinned tag itself, so a pin bump broke every
+# Linux job until someone logged in and rebuilt the image by hand; a colima
+# restart, which recreates the VM, did the same. Now the job builds the pinned
+# image only when the host lacks it and otherwise just moves the tag, which
+# takes seconds, so it runs on every pipeline and the lane repairs itself.
+#
+# `pins` come from the checkout the job already has, so the image is tagged
+# with whatever the commit pins.
+#
+# It takes the macOS shell runner, not the release one: the release runner
+# serves protected refs only, so a quarantine or merge-request pipeline — the
+# ones that most need the image — left this job pending until it was dropped.
+# The macOS runner is the same `kithara-ci` account on the same host and
+# already runs the change's code, so it grants the change nothing new.
+#
+# A provisioning run leaves it out: the roll-out builds the image itself, and
+# a tag moved underneath it fails the digest check its runner step makes.
 linux:image:
-  extends: .macos-job
+  extends: .apple-device-job
   stage: linux
   timeout: 90 minutes
   needs: []
@@ -11,11 +32,7 @@ linux:image:
     - when: on_success
   script:
     - just ci host mac build-linux-image docker/ci.Dockerfile
-  artifacts:
-    when: always
-    expire_in: 1 day
-    reports:
-      dotenv: .ci-artifacts/linux-image.env
+    - just ci host mac smoke-linux
 
 # The same roll-out on the Mac mini, opted into by starting a pipeline on the
 # default branch with `KITHARA_PROVISION` set to `1`, from "Run pipeline" or the

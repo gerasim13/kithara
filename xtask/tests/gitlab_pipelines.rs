@@ -738,13 +738,7 @@ fn macos_review_jobs_can_use_either_native_registration() {
         ["kithara-macos", "kithara-macos-1"],
         ["kithara-macos", "kithara-macos-2"],
     ];
-    for job in [
-        "apple:lint",
-        "apple:test",
-        "apple:xcframework",
-        "linux:image",
-        "verdict",
-    ] {
+    for job in ["apple:lint", "apple:test", "apple:xcframework", "verdict"] {
         let tags = config.effective_value(job, "tags").expect("job has tags");
         let tags = tags.as_sequence().expect("job tags are a sequence");
         assert!(!tags.is_empty(), "`{job}` must select the native pool");
@@ -774,37 +768,6 @@ fn each_independent_store_has_a_default_branch_source_publisher() {
             .iter()
             .any(|kind| kind.as_str() == Some("main"))
     );
-}
-
-#[test]
-fn linux_consumers_require_the_image_producers_digest() {
-    let config = GitlabConfig::load(workspace_root());
-    let image = config.effective_value(".linux-job", "image").unwrap();
-    assert_eq!(image["name"].as_str(), Some("$KITHARA_CI_LINUX_IMAGE"));
-    assert_eq!(image["pull_policy"].as_str(), Some("never"));
-    assert_eq!(
-        config.definition("linux:image")["artifacts"]["reports"]["dotenv"].as_str(),
-        Some(".ci-artifacts/linux-image.env")
-    );
-    for (job, _) in config.lane_jobs() {
-        if config.effective_value(&job, "image").as_ref() != Some(&image) {
-            continue;
-        }
-        let needs = config
-            .effective_value(&job, "needs")
-            .expect("Linux consumer needs image producer");
-        let provider = needs
-            .as_sequence()
-            .unwrap()
-            .iter()
-            .find(|need| need.get("job").and_then(Value::as_str) == Some("linux:image"))
-            .unwrap_or_else(|| panic!("{job} has no image producer"));
-        assert_ne!(
-            provider.get("optional").and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(provider["artifacts"].as_bool(), Some(true));
-    }
 }
 
 #[test]
