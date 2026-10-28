@@ -76,8 +76,8 @@ printf '\n' >> cargo-calls
 case "$*" in
   'fetch --locked') [ "$#" -eq 2 ] ;;
   'deny fetch db') [ "$#" -eq 3 ] ;;
-  'deny --offline check')
-    [ "$#" -eq 3 ]
+  'deny --offline check --hide-inclusion-graph')
+    [ "$#" -eq 4 ]
     cat stdout.bin
     cat stderr.bin >&2
     exit "$FAKE_CARGO_STATUS"
@@ -142,7 +142,7 @@ exit 31
 
             assert_eq!(
                 fs::read(root.join("cargo-calls"))?,
-                b"fetch\0--locked\0\ndeny\0fetch\0db\0\ndeny\0--offline\0check\0\n",
+                b"fetch\0--locked\0\ndeny\0fetch\0db\0\ndeny\0--offline\0check\0--hide-inclusion-graph\0\n",
                 "the three Cargo argument lists must run once in order"
             );
             let raw = fs::read(evidence.join("cargo-deny.log"))
