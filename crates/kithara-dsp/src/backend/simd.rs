@@ -262,17 +262,27 @@ pub(super) fn crossfade_linear_kernel<S: Simd>(
     let len = count.saturating_mul(channels.get());
     let denominator = S::f32s::splat(simd, frames.as_());
     let one = S::f32s::splat(simd, 1.0);
-    let mut offset = 0_usize;
+    let mut frame: u128 = first.as_();
+    let mut channel = channels.get();
+    let mut frame_position = 0.0_f32;
     if let Some(samples) = samples.get_mut(..len) {
         update(simd, samples, [outgoing], |incoming, [outgoing]| {
             let mut positions = S::f32s::splat(simd, 0.0);
-            for (lane, position) in positions.as_mut_slice().iter_mut().enumerate() {
-                // Widen before addition: even the sum of two usize values fits u128.
-                let first: u128 = first.as_();
-                let frame: u128 = (offset.saturating_add(lane) / channels).as_();
-                *position = first.saturating_add(frame).as_();
+            for position in positions.as_mut_slice() {
+                if channel == channels.get() {
+                    // Exact narrowing avoids wide float conversion for ordinary frame positions.
+                    frame_position = if frame <= usize::MAX.as_() {
+                        let frame: usize = frame.as_();
+                        frame.as_()
+                    } else {
+                        frame.as_()
+                    };
+                    frame = frame.saturating_add(1);
+                    channel = 0;
+                }
+                *position = frame_position;
+                channel = channel.saturating_add(1);
             }
-            offset = offset.saturating_add(S::f32s::LEN);
             let gain = positions.div(denominator);
             let blended = outgoing.mul_add_precise(one.sub(gain), incoming.mul(gain));
             outgoing
