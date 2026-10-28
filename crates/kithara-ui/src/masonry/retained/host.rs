@@ -320,24 +320,26 @@ where
     }
 
     /// The text leaf `spec` describes, carrying `content` and the flag it is
-    /// dressed by. The content is resolved by the caller, which is the only
-    /// thing that can reach the reading; the flag travels so that this host can
-    /// read it again into the tree it keeps.
+    /// dressed by, in `skin`: the one its path wears, so an override the skin
+    /// names for this text dresses it as it dresses any other control. The
+    /// content is resolved by the caller, which is the only thing that can
+    /// reach the reading; the flag travels so that this host can read it again
+    /// into the tree it keeps.
     pub(crate) fn text_leaf(
         &self,
         spec: &mount::label::text::host::Text<'_>,
         content: &str,
+        skin: &Skin,
         declared: Size<Length>,
     ) -> MasonryNode<Action> {
         let style = spec.style;
         let face = |active| {
-            let role = self
-                .skin
+            let role = skin
                 .text_role(style, spec.color, spec.active_color, active)
                 .faced(spec.font, spec.weight);
             TextFace {
                 role,
-                color: self.skin.rgba(role.color),
+                color: skin.rgba(role.color),
             }
         };
         let idle = face(false);
@@ -350,9 +352,9 @@ where
             .filter(|_| shown)
             .map_or(idle, |(_, face)| *face);
         let padding_x = match style {
-            TextStyle::VisFooter => self.skin.vis.footer_padding_x,
-            TextStyle::VisMeta => self.skin.vis.index_padding_x,
-            TextStyle::VisTitle => self.skin.vis.name_padding_x,
+            TextStyle::VisFooter => skin.vis.footer_padding_x,
+            TextStyle::VisMeta => skin.vis.index_padding_x,
+            TextStyle::VisTitle => skin.vis.name_padding_x,
             _ => 0.0,
         };
         let content = role.cased(content).into_owned();
@@ -364,7 +366,7 @@ where
                 color,
                 align: spec.align,
                 lit: lit.map(|(_, lit)| TextFaces { idle, lit }),
-                text: Box::new(TextContext::from(self.skin.text_resources.as_ref())),
+                text: Box::new(TextContext::from(skin.text_resources.as_ref())),
             }),
             declared,
             Vec::new(),

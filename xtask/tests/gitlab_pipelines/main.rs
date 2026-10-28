@@ -2,6 +2,8 @@ use std::{collections::BTreeSet, fs, path::Path};
 
 use serde_yaml_ng::{Mapping, Value};
 
+mod deps_deny;
+
 const MERGE_REQUEST_KIND: &str = "merge-request";
 /// How a job on a host that carries `just` runs a lane.
 const JUST_LANE: &str = "just ci run ";

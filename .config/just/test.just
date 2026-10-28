@@ -62,11 +62,11 @@ wasm BROWSER="chrome" SUITE="all" REAL_AUDIO_ROUTE="exclude":
         exit 2
         ;;
     esac
-    # Build both native helpers once so each wasm binary avoids a nested Cargo
-    # build that inherits the tested package's nightly build-std configuration.
+    # Build the runner and its sibling fixture server together so running WASM
+    # tests does not start another host Cargo build.
     cargo build -p kithara-integration-tests --features all --bin test_server --bin wasm_test_runner
-    native_target="$(cargo metadata --locked --no-deps --format-version=1 | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')"
-    export PATH="$native_target/debug:$PATH"
+    host_target_dir="$(cargo metadata --format-version=1 --no-deps | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')"
+    export PATH="$host_target_dir/debug:$PATH"
     export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm_test_runner
     WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
       cargo "+$toolchain" test --profile test-release \

@@ -190,7 +190,7 @@ impl NodeControl for mount::label::text::host::Text<'_> {
             })
             .or_else(|| self.label.map(|label| host.ctx.ui.resolve(label)))
             .unwrap_or_default();
-        host.text_leaf(self, content, cx.declared)
+        host.text_leaf(self, content, cx.skin, cx.declared)
     }
 }
 
