@@ -637,7 +637,7 @@ async fn target_rebuild_keeps_player_output_continuous(
     timeout(Duration::from_secs(30)),
     hang_timeout_secs(3),
     tracing(
-        "kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_play=debug,kithara_audio::pipeline::decode::transition=trace,kithara_audio::pipeline::source::variant=trace,render_refill=trace"
+        "kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_play=debug,kithara_audio::pipeline::decode::transition=trace,kithara_audio::pipeline::source::variant=trace,render_refill=trace,kithara_render::worker::scheduler=debug"
     )
 )]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
