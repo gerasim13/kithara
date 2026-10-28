@@ -1266,11 +1266,20 @@ fn crossfades() -> [(&'static str, Crossfade); 3] {
 
 #[kithara::test]
 fn crossfade_linear_preserves_identity_and_integer_frame_gains() {
+    let u32_edge = usize::try_from(u32::MAX).expect("u32 fits usize");
     for (name, crossfade) in crossfades() {
         for size in SIZES {
             for offset in OFFSETS {
                 for channels in [stride(1), stride(2), stride(6)] {
-                    for first in [0, 1, (1 << 24) - 3, (1 << 24) + 1, usize::MAX] {
+                    for first in [
+                        0,
+                        1,
+                        (1 << 24) - 3,
+                        (1 << 24) + 1,
+                        u32_edge.saturating_sub(3),
+                        u32_edge.saturating_add(1),
+                        usize::MAX,
+                    ] {
                         let frames = (1 << 24) + 137;
                         let count = size / channels;
                         let len = count.saturating_mul(channels.get());

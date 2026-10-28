@@ -271,17 +271,18 @@ pub(super) fn crossfade_linear_kernel<S: Simd>(
             for position in positions.as_mut_slice() {
                 if channel == channels.get() {
                     // Exact narrowing avoids wide float conversion for ordinary frame positions.
-                    frame_position = if frame <= usize::MAX.as_() {
-                        let frame: usize = frame.as_();
+                    frame_position = if frame <= u32::MAX.as_() {
+                        let frame: u32 = frame.as_();
                         frame.as_()
                     } else {
                         frame.as_()
                     };
-                    frame = frame.saturating_add(1);
+                    // Slice bounds keep the frame counter below u128::MAX.
+                    frame = frame.wrapping_add(1);
                     channel = 0;
                 }
                 *position = frame_position;
-                channel = channel.saturating_add(1);
+                channel = channel.wrapping_add(1);
             }
             let gain = positions.div(denominator);
             let blended = outgoing.mul_add_precise(one.sub(gain), incoming.mul(gain));
