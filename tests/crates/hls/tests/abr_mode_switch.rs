@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    future::Future,
     num::NonZeroUsize,
     sync::atomic::{AtomicUsize, Ordering},
 };
@@ -22,7 +23,7 @@ use kithara::{
         tokio::task::{spawn, spawn_blocking},
     },
     play::{PlayWorker, PlayWorkerConfig},
-    signal::{AudioChunk, AudioChunkInfo, AudioSpec},
+    signal::{AudioChunk, AudioChunkInfo, AudioSpec, SampleCount},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType},
 };
 #[cfg(not(target_arch = "wasm32"))]
@@ -759,14 +760,15 @@ fn read_one_chunk<A: AudioRead>(audio: &mut A, read_label: &str) -> BlockingRead
                     hang_tick!();
                     assert!(sample.is_finite(), "{read_label}: non-finite sample");
                 }
+                let spec = chunk.meta.spec;
+                let frames = spec
+                    .frame_count(SampleCount::new(chunk.samples.len()))
+                    .expect("frames");
+                let duration = spec.duration_for(frames.get() as u64).expect("duration");
                 return BlockingReadStep {
                     samples: chunk.samples.len() as u64,
                     variant: chunk.meta.variant_index,
-                    duration: chunk
-                        .meta
-                        .spec
-                        .duration_for(u64::from(chunk.meta.frames))
-                        .expect("decoded PCM duration"),
+                    duration,
                     saw_eof: false,
                 };
             }
@@ -784,19 +786,26 @@ fn read_one_chunk<A: AudioRead>(audio: &mut A, read_label: &str) -> BlockingRead
     }
 }
 
+async fn pace_manual_pcm(duration: Duration) {
+    let started = Instant::now();
+    kithara::platform::time::sleep(duration).await;
+    assert!(started.elapsed() >= duration, "PCM pacing");
+}
+
 #[kithara::flash(io)]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-async fn read_until_manual_applied<A, P>(
+async fn read_until_manual_applied<A, P, F>(
     mut audio: A,
     collector: &EventCollector,
     applied_before: usize,
     target: usize,
     label: &str,
-    pace_step: P,
+    pace_step: Option<P>,
 ) -> (A, PhaseReadStats)
 where
     A: AudioRead + Send + 'static,
-    P: Fn(Duration) + Clone + Send + 'static,
+    P: Fn(Duration) -> F + Clone + Send + 'static,
+    F: Future<Output = ()> + Send,
 {
     let mut stats = PhaseReadStats {
         samples: 0,
@@ -840,13 +849,12 @@ where
             stats.saw_eof = true;
             break;
         }
-        if step.samples > 0 {
+        if step.samples > 0
+            && let Some(pace_step) = pace_step.clone()
+        {
             hang_reset!();
             // Give incoming preparation the same playback clock as the consumer.
-            let pace_step = pace_step.clone();
-            spawn_blocking(move || pace_step(step.duration))
-                .await
-                .unwrap_or_else(|err| panic!("{label}: playback pacing failed: {err}"));
+            pace_step(step.duration).await;
             hang_reset!();
         }
     }
@@ -979,12 +987,13 @@ async fn manual_switch_wait_consumes_at_playback_rate(hls_saw_6: (Vec<u8>, Vec<u
         0,
         1,
         "paced switch",
-        move |duration: Duration| {
+        Some(move |duration: Duration| {
             clock.fetch_add(
                 u64::try_from(duration.as_nanos()).expect("scripted playback clock"),
                 Ordering::Release,
             );
-        },
+            std::future::ready(())
+        }),
     )
     .await;
     assert!(
@@ -1025,8 +1034,15 @@ async fn manual_switch_wait_requires_incoming_pcm_and_receipt(
             (None, false)
         }
     });
-    let (_, stats) =
-        read_until_manual_applied(reader, &collector, 0, 1, "scripted switch", pace).await;
+    let (_, stats) = read_until_manual_applied(
+        reader,
+        &collector,
+        0,
+        1,
+        "scripted switch",
+        Some(pace_manual_pcm),
+    )
+    .await;
     assert_eq!(stats.saw_eof, expect_eof, "{stats:?}");
     assert_eq!(collector.applied_transitions().len(), usize::from(applied));
     assert_eq!(collector.dropped_events(), 0);
@@ -1154,7 +1170,7 @@ async fn vod_manual_switch_affects_future_segments(
         applied_before,
         1,
         "manual switch transition",
-        pace,
+        Some(pace_manual_pcm),
     )
     .await;
     assert!(!transition.saw_eof, "manual switch must apply before EOF");
@@ -1682,7 +1698,7 @@ async fn abr_switch_must_not_redownload_covered_segments(
         applied_before,
         1,
         "covered-prefix switch",
-        pace,
+        Some(pace_manual_pcm),
     )
     .await;
     assert!(!transition.saw_eof, "switch must apply before EOF");
@@ -2015,7 +2031,7 @@ async fn runtime_cross_codec_manual_switch_no_hang(#[future(awt)] retained_mixed
         applied_before,
         3,
         "cross-codec manual transition",
-        pace,
+        Some(pace_manual_pcm),
     )
     .await;
 
@@ -2171,7 +2187,7 @@ async fn runtime_manual_switch_works_when_all_segments_cached(
         applied_before,
         1,
         "all-cached manual transition",
-        pace,
+        Some(pace_manual_pcm),
     )
     .await;
 
@@ -2306,7 +2322,7 @@ async fn runtime_manual_switch_survives_outgoing_eof(#[future(awt)] manual_six: 
         applied_before,
         1,
         "eof-race manual transition",
-        pace,
+        None::<fn(Duration) -> std::future::Ready<()>>,
     )
     .await;
 
@@ -2468,7 +2484,7 @@ async fn runtime_manual_switch_works_after_cache_and_seek(#[future(awt)] manual_
         applied_before,
         1,
         "cache-and-seek manual transition",
-        pace,
+        Some(pace_manual_pcm),
     )
     .await;
 
