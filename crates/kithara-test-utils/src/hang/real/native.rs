@@ -64,7 +64,7 @@ mod consts {
     pub(super) const NEXTEST_TEST_THREADS: &str = "NEXTEST_TEST_THREADS";
     pub(super) const NEXTEST_TOTAL_ATTEMPTS: &str = "NEXTEST_TOTAL_ATTEMPTS";
 
-    pub(super) const MAX_ENVELOPE_BYTES: usize = 4 * 1024 * 1024;
+    pub(super) const MAX_ENVELOPE_BYTES: usize = 224 * 1024 * 1024;
 
     pub(super) const MAX_NEXTEST_FIELD_BYTES: usize = 8 * 1024;
 
@@ -76,7 +76,7 @@ mod consts {
 
     pub(super) const MAX_FLASH_BYTES: usize = 256 * 1024;
 
-    pub(super) const MAX_FLIGHT_CHANNEL_BYTES: usize = 24 * 1024 * 1024;
+    pub(super) const MAX_FLIGHT_CHANNEL_BYTES: usize = 16 * 1024 * 1024;
 
     pub(super) const MAX_THREADS_BYTES: usize = 16 * 1024;
 
