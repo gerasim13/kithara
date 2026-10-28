@@ -327,17 +327,15 @@ fn crossfade_linear_u32<S: Simd>(
             channel = 0;
         }
     }
-    let step: u32 = (S::u32s::LEN / channels).as_();
-    let step = S::u32s::splat(simd, step);
-    let remainder = S::u32s::LEN % channels;
-    if remainder == 0 {
+    let step = S::u32s::splat(simd, frame.wrapping_sub(first));
+    if channel == 0 {
         crossfade_linear_positions(simd, outgoing, samples, frames, || {
             let current = positions.to_float::<S::f32s>();
             positions = positions.add(step);
             current
         });
     } else {
-        let remainder = S::u32s::splat(simd, remainder.as_());
+        let remainder = S::u32s::splat(simd, channel);
         let channels = S::u32s::splat(simd, channel_count);
         let next_step = step.add(S::u32s::splat(simd, 1));
         crossfade_linear_positions(simd, outgoing, samples, frames, || {
