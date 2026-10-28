@@ -31,7 +31,7 @@ impl ScalarLimiter {
         channels: NonZeroUsize,
         config: LimiterConfig,
     ) -> Result<Self, LimiterError> {
-        let release_ms = config.release_ms();
+        let release_ms = f32::from(config.release_ms());
         if channels.get() > Self::DETECTOR_CHANNELS {
             return Err(LimiterError::Channels {
                 channels: channels.get(),
@@ -167,8 +167,8 @@ impl ScalarLimiter {
 
     #[inline]
     fn step(&mut self, peak: f32) -> f32 {
-        let required = if peak > self.config.ceiling() {
-            self.config.ceiling() / peak
+        let required = if peak > f32::from(self.config.ceiling()) {
+            f32::from(self.config.ceiling()) / peak
         } else {
             1.0
         };

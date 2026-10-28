@@ -439,7 +439,7 @@ fn measure(tracks: usize, lane: Lane) -> Measurement {
     );
     assert!(peak > 0.0, "measured blocks must carry audio, not silence");
     assert!(
-        peak <= LimiterConfig::default().ceiling(),
+        peak <= f32::from(LimiterConfig::default().ceiling()),
         "master limiter must bound the audible mix"
     );
 

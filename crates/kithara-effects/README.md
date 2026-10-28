@@ -77,5 +77,7 @@ takes; `kithara-render` runs a `StereoEq` on every deck; `kithara-host` puts
 `LimiterNode` on the session bus. The limiter's reconstruction, input history,
 interval peaks and release recursion belong to `kithara-dsp`; effects owns its
 tap design, ceiling, channel linking and per-frame sanitization policy.
+`LimiterConfig` takes checked `Ceiling` (0.001..=1.0) and `ReleaseMs`
+(1..=5000 ms) values; their defaults are 0.98 and 50 ms.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-effects) for detailed contracts, invariants, and internals.

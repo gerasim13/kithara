@@ -13,31 +13,26 @@ use kithara_dsp::{
 use kithara_signal::sanitize_sample;
 use num_traits::ToPrimitive;
 
+use super::{Ceiling, ReleaseMs};
 use crate::consts;
 
-/// Configuration rejected by [`LimiterConfig`] or [`PeakLimiter::new`].
+/// Channel count rejected by [`PeakLimiter::new`].
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum LimiterError {
-    #[error("limiter ceiling {ceiling} is not finite in (0.0, 1.0]")]
-    Ceiling { ceiling: f32 },
-
-    #[error("limiter release {release_ms} ms is not finite and positive")]
-    Release { release_ms: f32 },
-
     #[error("limiter carries {channels} channels, more than the {limit} the detector tracks")]
     Channels { channels: usize, limit: usize },
 }
 
 /// Output ceiling and gain recovery of one [`PeakLimiter`].
-#[derive(Clone, Copy, Debug, PartialEq, Config)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Config)]
 #[config(builder(existing), owner_access, fields(value, get(copy)))]
 #[non_exhaustive]
 pub struct LimiterConfig {
-    /// Linear peak the output never exceeds, in `(0.0, 1.0]`.
-    ceiling: f32,
+    /// Linear peak the output never exceeds.
+    ceiling: Ceiling,
     /// Milliseconds the gain takes to recover toward unity.
-    release_ms: f32,
+    release_ms: ReleaseMs,
 }
 
 #[bon]
@@ -48,27 +43,12 @@ impl LimiterConfig {
         finish_fn(vis = "pub")
     )]
     fn new(
-        #[builder(default = consts::DEFAULT_CEILING)] ceiling: f32,
-        #[builder(default = consts::DEFAULT_RELEASE_MS)] release_ms: f32,
-    ) -> Result<Self, LimiterError> {
-        if !ceiling.is_finite() || ceiling <= 0.0 || ceiling > 1.0 {
-            return Err(LimiterError::Ceiling { ceiling });
-        }
-        if !release_ms.is_finite() || release_ms <= 0.0 {
-            return Err(LimiterError::Release { release_ms });
-        }
-        Ok(Self {
+        #[builder(default)] ceiling: Ceiling,
+        #[builder(default)] release_ms: ReleaseMs,
+    ) -> Self {
+        Self {
             ceiling,
             release_ms,
-        })
-    }
-}
-
-impl Default for LimiterConfig {
-    fn default() -> Self {
-        Self {
-            ceiling: consts::DEFAULT_CEILING,
-            release_ms: consts::DEFAULT_RELEASE_MS,
         }
     }
 }
@@ -118,7 +98,7 @@ impl PeakLimiter {
         channels: NonZeroUsize,
         config: LimiterConfig,
     ) -> Result<Self, LimiterError> {
-        let release_ms = config.release_ms();
+        let release_ms = f32::from(config.release_ms());
         if channels.get() > Self::DETECTOR_CHANNELS {
             return Err(LimiterError::Channels {
                 channels: channels.get(),
@@ -170,7 +150,8 @@ impl PeakLimiter {
             .map(|channel| channel.len())
             .min()
             .unwrap_or(0);
-        self.detector.begin_block(channels, self.ceiling());
+        let ceiling = f32::from(self.ceiling());
+        self.detector.begin_block(channels, ceiling);
         for start in (0..frames).step_by(CHUNK) {
             let end = frames.min(start + CHUNK);
             let count = end - start;
@@ -192,8 +173,8 @@ impl PeakLimiter {
             }
             let gains = &mut linked[..count];
             for peak in gains.iter_mut() {
-                *peak = if *peak > self.ceiling() {
-                    self.ceiling() / *peak
+                *peak = if *peak > ceiling {
+                    ceiling / *peak
                 } else {
                     1.0
                 };
@@ -229,10 +210,9 @@ mod tests {
             NonZeroU32::new(sample_rate).unwrap(),
             NonZeroUsize::new(2).unwrap(),
             LimiterConfig::builder()
-                .ceiling(consts::CEILING)
-                .release_ms(release_ms)
-                .build()
-                .unwrap(),
+                .ceiling(Ceiling::try_from(consts::CEILING).unwrap())
+                .release_ms(ReleaseMs::try_from(release_ms).unwrap())
+                .build(),
         )
         .unwrap()
     }
@@ -638,28 +618,14 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn invalid_config_is_rejected() {
-        let config = |ceiling: f32, release_ms: f32| {
-            LimiterConfig::builder()
-                .ceiling(ceiling)
-                .release_ms(release_ms)
-                .build()
-        };
-        assert!(config(0.0, 50.0).is_err());
-        assert!(config(1.5, 50.0).is_err());
-        assert!(config(f32::NAN, 50.0).is_err());
-        assert!(config(consts::CEILING, 0.0).is_err());
-        assert!(config(consts::CEILING, -5.0).is_err());
-        assert!(config(consts::CEILING, f32::INFINITY).is_err());
-    }
-
-    #[kithara::test(native, flash(false))]
     fn a_configured_ceiling_bounds_the_output(limiter_attack: Vec<f32>) {
         let ceiling = 0.5;
         let mut lim = PeakLimiter::new(
             NonZeroU32::new(44_100).unwrap(),
             NonZeroUsize::new(2).unwrap(),
-            LimiterConfig::builder().ceiling(ceiling).build().unwrap(),
+            LimiterConfig::builder()
+                .ceiling(Ceiling::try_from(ceiling).unwrap())
+                .build(),
         )
         .unwrap();
         let mut left = limiter_attack.clone();
