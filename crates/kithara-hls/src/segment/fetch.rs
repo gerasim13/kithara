@@ -443,7 +443,7 @@ where
         let variant = handle.variant();
         match writer.commit(Some(bytes_written)) {
             Ok(reader) => {
-                debug!(target: "kithara_hls::settle", bytes_written, "success");
+                debug!(target: "kithara_hls::settle", bytes_written, ?planned, variant = ?variant.as_ref().map(|v| v.variant_index_u32()), "success");
                 let actual = match reader.status() {
                     ResourceStatus::Committed { final_len: Some(n) } => n,
                     _ => bytes_written,
