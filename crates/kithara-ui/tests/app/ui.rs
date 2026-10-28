@@ -28,6 +28,7 @@ use kithara_ui::{
         document::{Clock, Ctx},
     },
     shaping::{FontPolicy, TextContext},
+    skin::parse_skin_over,
     source::{Fill, LoadedBytes, LoadedSource, MemResolver, SourceResolver, UiConfig},
     view,
 };
@@ -3458,5 +3459,101 @@ fn only_the_standing_page_is_compiled() {
         scenario.rect_of("two/body").map(|rect| rect.w),
         Some(60.0),
         "the screen kept must be the page it was compiled for"
+    );
+}
+
+/// An application that shows the one-control document in the skin it is
+/// given, and reads and writes nothing.
+struct Worn<'a>(&'a Skin);
+
+impl Reads for Worn<'_> {
+    fn get(&self, _endpoint: &str) -> Option<ReadValue<'_>> {
+        None
+    }
+}
+
+impl App for Worn<'_> {
+    fn document(&self) -> &str {
+        "one.klayout.ron"
+    }
+
+    fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
+        with(self)
+    }
+
+    fn skin(&self) -> &Skin {
+        self.0
+    }
+
+    fn update(&mut self, _event: UiEvent) {}
+}
+
+/// A text the skin names by its path wears the role the override restates,
+/// as every other control the skin names does; a text it does not name wears
+/// the skin itself.
+#[kithara::test]
+fn a_text_the_skin_names_wears_what_the_override_restates() {
+    let origin = SourceUri("fixture:text-override".to_owned());
+    let patch = r#"(
+        schema: "kithara.skin",
+        version: 1,
+        id: "fixture-text-override",
+        overrides: {"demo/named": (text_roles: (size: 30.0))},
+    )"#;
+    let document = parse_skin_over(builtin::skin_doc(), patch, &origin)
+        .unwrap_or_else(|error| panic!("the patch parses: {error}"));
+    let skin = Skin::resolve_with_font_policy(
+        document,
+        builtin::text_doc(),
+        &origin,
+        &builtin::resolver(),
+        FontPolicy::Embedded,
+    )
+    .unwrap_or_else(|error| panic!("the dressed skin must resolve: {error}"));
+    let endpoints = Registry::default();
+    // Each text starts its own whole-pixel line, so the box it is laid out
+    // in is its line snapped from a whole pixel, as the shaped line below is.
+    let resolver = one_control(
+        r#"Column(id: "column", size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+            Row(id: "named-line", size: (w: Fill, h: Fixed(60.0)), gap: 0.0, pad: 0.0, align: Start, children: [
+                Text(id: "named", size: (w: Shrink, h: Shrink), style: Body, label: "Caption"),
+            ]),
+            Row(id: "unnamed-line", size: (w: Fill, h: Fixed(60.0)), gap: 0.0, pad: 0.0, align: Start, children: [
+                Text(id: "unnamed", size: (w: Shrink, h: Shrink), style: Body, label: "Caption"),
+            ]),
+        ])"#,
+    );
+    let ui = Ui::new(
+        Worn(&skin),
+        Config::builder()
+            .endpoints(&endpoints)
+            .resolver(&resolver)
+            .text(builtin::text_doc())
+            .build(),
+        (300, 200),
+        1.0,
+    )
+    .unwrap_or_else(|error| panic!("the dressed column must mount: {error}"));
+    let mut text = TextContext::new().unwrap_or_else(|error| panic!("{error}"));
+    let mut line = |skin: &Skin| {
+        let line = text.shape("Caption", skin.text.body, None);
+        (line.width().round(), line.height().round())
+    };
+    let (named, unnamed) = (line(skin.at("demo/named")), line(&skin));
+    let rect = |path: &str| {
+        let rect = ui
+            .rect_of(path)
+            .unwrap_or_else(|| panic!("{path} must be laid out"));
+        (rect.w, rect.h)
+    };
+
+    assert!(
+        named.1 > unnamed.1,
+        "the override must set the named text larger than the skin does"
+    );
+    assert_eq!(
+        (rect("demo/named"), rect("demo/unnamed")),
+        (named, unnamed),
+        "the named text must take the size of the role its override restates"
     );
 }
