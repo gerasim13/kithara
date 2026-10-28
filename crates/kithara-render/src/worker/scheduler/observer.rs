@@ -21,10 +21,14 @@ impl From<PassReport> for PlaybackHangContext {
 
 pub(crate) struct PlaybackObserver {
     detector: HangDetector<PlaybackHangContext>,
+    pass_start: Option<std::time::Instant>,
+    pass_end: Option<std::time::Instant>,
+    last_outcome: Option<PassOutcome>,
 }
 
 impl PlaybackObserver {
     fn observe(&mut self, report: PassReport) {
+        self.last_outcome = Some(report.outcome);
         let context = PlaybackHangContext::from(report);
         if report.outcome == PassOutcome::Waiting {
             self.detector.tick_with(|| context);
@@ -48,6 +52,9 @@ impl Default for PlaybackObserver {
     fn default() -> Self {
         Self {
             detector: HangDetector::new("audio_worker_loop", default_timeout()),
+            pass_start: None,
+            pass_end: None,
+            last_outcome: None,
         }
     }
 }
@@ -55,6 +62,33 @@ impl Default for PlaybackObserver {
 impl Observer for PlaybackObserver {
     fn on_event(&mut self, event: Event) {
         match event {
+            Event::PassStart => {
+                let now = std::time::Instant::now();
+                if let Some(end) = self.pass_end
+                    && now.duration_since(end).as_micros() > 15_000
+                {
+                    tracing::debug!(
+                        thread = ?std::thread::current().id(),
+                        parked_us = now.duration_since(end).as_micros(),
+                        outcome = ?self.last_outcome,
+                        "diag: worker parked long"
+                    );
+                }
+                self.pass_start = Some(now);
+            }
+            Event::PassEnd => {
+                let now = std::time::Instant::now();
+                if let Some(start) = self.pass_start
+                    && now.duration_since(start).as_micros() > 5_000
+                {
+                    tracing::debug!(
+                        thread = ?std::thread::current().id(),
+                        pass_us = now.duration_since(start).as_micros(),
+                        "diag: worker pass long"
+                    );
+                }
+                self.pass_end = Some(now);
+            }
             Event::SlowTick { task, elapsed } => {
                 tracing::debug!(
                     track_id = task.get(),
