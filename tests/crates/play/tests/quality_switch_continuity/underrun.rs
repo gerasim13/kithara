@@ -364,7 +364,11 @@ async fn capture_tiny_ring(
                             )
                     })
                 });
-        if short && refill_snapshots == 0 {
+        static DIAG_DUMPED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        if short
+            && refill_snapshots == 0
+            && DIAG_DUMPED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 2
+        {
             kithara_test_utils::hang::record_test_hang(
                 "diag-short-block",
                 &format!("diag short block capture_start={capture_start} started_unix_micros={started_unix_micros:?}"),

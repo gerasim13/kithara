@@ -32,7 +32,7 @@ mod consts {
     /// Two lanes so volume cannot evict signal: `#[kithara::probe]` sites fire
     /// on every call and would flush rare FSM-transition DEBUG lines out of a
     /// shared ring within milliseconds.
-    pub(super) const MAX_EVENTS: usize = 256;
+    pub(super) const MAX_EVENTS: usize = 65_536;
 
     pub(super) const MAX_EVENT_BYTES: usize = 512;
 
