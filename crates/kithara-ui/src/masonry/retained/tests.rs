@@ -829,6 +829,51 @@ fn a_cell_comes_back_when_the_room_grows_to_reach_it() {
     );
 }
 
+/// A block that measures its room, holding one spacer for a narrow window and
+/// another for a window at least 200 wide.
+const ADAPTIVE_BLOCK: &str = r#"Adaptive(id: "block", measure: Width, size: (w: Fill, h: Fill),
+    base: Spacer(id: "narrow", size: Some((w: Fixed(40.0), h: Fixed(20.0)))),
+    steps: [(from: 200.0, node: Spacer(id: "wide", size: Some((w: Fixed(40.0), h: Fixed(20.0)))))])"#;
+
+/// Whether Masonry keeps each branch of [`ADAPTIVE_BLOCK`] out of the picture
+/// on a window of the given width, the narrow branch first.
+fn stashed_branches(width: u32) -> Vec<bool> {
+    let registry = fixture_registry();
+    let reads = FixtureReads;
+    let ui = fixture_ui("adaptive-block", ADAPTIVE_BLOCK, &registry);
+    let (output, built) = DocumentNodes::built(|| {
+        document::render(
+            &ui.root,
+            ctx(&ui, &reads),
+            MasonryHost::new(ctx(&ui, &reads), builtin::skin()),
+        )
+    });
+    let mut root = masonry_root(output, width, 60);
+    let nodes = built.in_tree(root.root());
+    root.redraw()
+        .unwrap_or_else(|error| panic!("the adaptive block must compose: {error}"));
+    nodes[nodes.len().saturating_sub(2)..]
+        .iter()
+        .map(|id| {
+            root.root()
+                .get_widget(*id)
+                .unwrap_or_else(|| panic!("every branch must stay registered"))
+                .ctx()
+                .is_stashed()
+        })
+        .collect()
+}
+
+/// Only the branch the room reaches stands. An empty box alone still lets the
+/// leaves of the other branches draw at the block's origin and take a hand
+/// there, and their controls share paths with the standing branch's.
+#[kithara::test]
+#[case::narrow(120, [false, true])]
+#[case::wide(240, [true, false])]
+fn a_branch_the_room_does_not_reach_is_stashed(#[case] width: u32, #[case] stashed: [bool; 2]) {
+    assert_eq!(stashed_branches(width), stashed);
+}
+
 /// The same flow as [`REVEALING_BAR`], holding the window controls in the cell
 /// that waits for a wider window.
 const REVEALING_CONTROLS: &str = r#"Row(id: "bar", measure: Width, size: (w: Fill, h: Fill),

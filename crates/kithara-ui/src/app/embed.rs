@@ -180,7 +180,7 @@ where
     /// the path the document gave the control.
     #[cfg(feature = "capture")]
     pub fn ink_of(&self, path: &str) -> Option<Rgba> {
-        self.root.ink_of(self.state.widget_id(path)?)
+        self.root.ink_of(self.visible_widget_id(path)?)
     }
 
     /// Feeds one neutral input event in. Whatever the document publishes in
@@ -298,7 +298,7 @@ where
     /// and a capture photographs it. A control a hidden block stashed takes
     /// an empty box.
     pub fn rect_of(&self, path: &str) -> Option<Rect> {
-        let id = self.state.widget_id(path)?;
+        let id = self.visible_widget_id(path)?;
         let widget = self.root.root().get_widget(id)?;
         let bounds = widget.ctx().bounding_rect();
         let corner = Rect {
@@ -315,6 +315,26 @@ where
             h: (bounds.y1 - bounds.y0).as_(),
             ..corner
         })
+    }
+
+    /// The widget a path names on screen right now.
+    ///
+    /// The branches of an adaptive block share the paths of the controls they
+    /// both hold, and only the branch the room reaches stands; the others are
+    /// stashed. A path whose every widget is stashed names the last one
+    /// mounted, as it did before.
+    fn visible_widget_id(&self, path: &str) -> Option<masonry::core::WidgetId> {
+        self.state
+            .widget_ids(path)
+            .into_iter()
+            .rev()
+            .find(|id| {
+                self.root
+                    .root()
+                    .get_widget(*id)
+                    .is_some_and(|widget| !widget.ctx().is_stashed())
+            })
+            .or_else(|| self.state.widget_id(path))
     }
 
     /// Draws the current document, in the physical pixels the caller sized it
