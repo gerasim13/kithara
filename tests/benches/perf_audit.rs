@@ -32,6 +32,148 @@ use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
 use num_traits::ToPrimitive;
 use tempfile::TempDir;
 
+mod limiter {
+    use std::{
+        hint::black_box,
+        num::{NonZeroU32, NonZeroUsize},
+    };
+
+    use criterion::{BatchSize, BenchmarkGroup, BenchmarkId, Criterion, measurement::WallTime};
+    use firewheel::{
+        StreamInfo,
+        clock::InstantSamples,
+        dsp::{buffer::ConstSequentialBuffer, declick::DeclickValues},
+        log::{RealtimeLoggerConfig, realtime_logger},
+        mask::{ConnectedMask, ConstantMask, SilenceMask},
+        node::{
+            AudioNode, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig,
+            NUM_SCRATCH_BUFFERS, NodeID, ProcBuffers, ProcExtra, ProcInfo, ProcStore, StreamStatus,
+        },
+    };
+    use kithara::{
+        effects::{LimiterConfig, PeakLimiter, node::LimiterNode},
+        platform::time::Duration,
+    };
+
+    #[derive(Clone)]
+    struct Block {
+        planes: [Vec<f32>; 2],
+        silence: SilenceMask,
+    }
+
+    fn blocks(frames: usize) -> [Block; 4] {
+        [4.0, 0.0, 0.0, 0.25].map(|value| Block {
+            planes: [vec![value; frames], vec![value * 0.5; frames]],
+            silence: if value == 0.0 {
+                SilenceMask::new_all_silent(2)
+            } else {
+                SilenceMask::default()
+            },
+        })
+    }
+
+    fn owner(group: &mut BenchmarkGroup<'_, WallTime>, frames: usize, input: &[Block; 4]) {
+        let mut limiter = PeakLimiter::new(
+            NonZeroU32::new(48_000).expect("sample rate"),
+            NonZeroUsize::new(2).expect("stereo"),
+            LimiterConfig::default(),
+        )
+        .expect("limiter config");
+        group.bench_function(BenchmarkId::new("owner", frames), |b| {
+            b.iter_batched_ref(
+                || (*input).clone(),
+                |blocks| {
+                    for block in blocks {
+                        let [left, right] = &mut block.planes;
+                        limiter.process_planar(&mut [left, right]);
+                        black_box(&block.planes);
+                    }
+                },
+                BatchSize::SmallInput,
+            );
+        });
+    }
+
+    fn info(frames: usize, rate: NonZeroU32) -> ProcInfo {
+        ProcInfo {
+            sample_rate: rate,
+            frames,
+            in_silence_mask: SilenceMask::default(),
+            out_silence_mask: SilenceMask::default(),
+            in_constant_mask: ConstantMask::default(),
+            out_constant_mask: ConstantMask::default(),
+            in_connected_mask: ConnectedMask::default(),
+            out_connected_mask: ConnectedMask::default(),
+            total_cpu_seconds_recip: 1.0,
+            process_to_playback_delay: None,
+            did_just_unbypass: false,
+            last_marker_instant: InstantSamples(0),
+            sample_rate_recip: f64::from(rate.get()).recip(),
+            clock_samples: InstantSamples(0),
+            duration_since_stream_start: Duration::ZERO,
+            stream_status: StreamStatus::empty(),
+            dropped_frames: 0,
+        }
+    }
+
+    fn callback(group: &mut BenchmarkGroup<'_, WallTime>, frames: usize, input: &[Block; 4]) {
+        let rate = NonZeroU32::new(48_000).expect("sample rate");
+        let stream = StreamInfo {
+            sample_rate: rate,
+            sample_rate_recip: f64::from(rate.get()).recip(),
+            prev_sample_rate: rate,
+            max_block_frames: NonZeroU32::new(u32::try_from(frames).expect("block frames"))
+                .expect("nonempty block"),
+            ..StreamInfo::default()
+        };
+        let node = LimiterNode::new(LimiterConfig::default());
+        let mut custom_state = None;
+        let mut processor = node
+            .construct_processor(
+                &EmptyConfig,
+                ConstructProcessorContext::new(NodeID::DANGLING, &stream, &mut custom_state),
+            )
+            .expect("limiter processor");
+        let (logger, _receiver) = realtime_logger(RealtimeLoggerConfig::default());
+        let mut extra = ProcExtra {
+            logger,
+            store: ProcStore::with_capacity(0),
+            scratch_buffers: ConstSequentialBuffer::<f32, NUM_SCRATCH_BUFFERS>::new(frames),
+            declick_values: DeclickValues::new(NonZeroU32::new(16).expect("declick frames")),
+        };
+        let mut info = info(frames, rate);
+        let mut left = vec![0.0; frames];
+        let mut right = vec![0.0; frames];
+        group.bench_function(BenchmarkId::new("callback", frames), |b| {
+            b.iter(|| {
+                for block in input {
+                    info.in_silence_mask = block.silence;
+                    black_box(processor.process(
+                        &info,
+                        ProcBuffers {
+                            inputs: &[&block.planes[0], &block.planes[1]],
+                            outputs: &mut [&mut left, &mut right],
+                        },
+                        &mut extra,
+                    ));
+                    black_box((&left, &right));
+                }
+            });
+        });
+    }
+
+    pub(super) fn bench(c: &mut Criterion) {
+        let mut group = c.benchmark_group("limiter_lifecycle");
+        group.sample_size(20);
+        for frames in [1, 7, 128, 1024] {
+            let input = blocks(frames);
+            owner(&mut group, frames, &input);
+            callback(&mut group, frames, &input);
+        }
+        group.finish();
+    }
+}
+
 mod consts {
     pub(super) const CHANNELS: usize = 2;
     pub(super) const SAMPLE_RATE: u32 = 44_100;
@@ -517,6 +659,7 @@ criterion_group!(
     bench_analysis_worker,
     bench_stretch_prepare,
     bench_stretch_backends,
-    bench_stretch_process
+    bench_stretch_process,
+    limiter::bench
 );
 criterion_main!(benches);
