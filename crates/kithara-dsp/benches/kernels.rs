@@ -371,6 +371,8 @@ fn previous_audio_crossfade(
 }
 
 fn crossfade(c: &mut Criterion) {
+    let old_sample = 0.314_159_f32;
+    let new_sample = -0.271_828_f32;
     let kernels: [(&str, Crossfade); 2] = [
         ("crossfade_linear", kithara_dsp::crossfade_linear),
         ("crossfade_previous_audio", previous_audio_crossfade),
@@ -381,17 +383,25 @@ fn crossfade(c: &mut Criterion) {
         let mut shapes = Vec::new();
         for frames in consts::SIZES {
             for channels in [NonZeroUsize::MIN, consts::TWO, consts::SIX] {
-                shapes.push((channels, frames, frames.to_string(), 0, frames));
+                shapes.push((channels, frames, frames.to_string(), 0, frames, new_sample));
             }
         }
         shapes.extend([
-            (consts::TWO, 7, "7".to_owned(), 0, 7),
-            (consts::SIX, 127, "127".to_owned(), 0, 127),
-            (consts::TWO, 127, "127-tail".to_owned(), 1, 127),
-            (consts::TWO, 4096, "4096-chunk128".to_owned(), 0, 128),
+            (consts::TWO, 7, "7".to_owned(), 0, 7, new_sample),
+            (consts::SIX, 127, "127".to_owned(), 0, 127, new_sample),
+            (consts::TWO, 127, "127-tail".to_owned(), 1, 127, new_sample),
+            (
+                consts::TWO,
+                4096,
+                "4096-chunk128".to_owned(),
+                0,
+                128,
+                new_sample,
+            ),
+            (consts::TWO, 7, "7-identity".to_owned(), 0, 7, old_sample),
         ]);
-        for (channels, frames, shape, tail, chunk) in shapes {
-            let old = vec![0.314_159; frames * channels.get() + tail];
+        for (channels, frames, shape, tail, chunk, input_sample) in shapes {
+            let old = vec![old_sample; frames * channels.get() + tail];
             let apply = |output: &mut [f32]| {
                 let mut processed = 0;
                 for (outgoing, incoming) in black_box(&old)
@@ -402,12 +412,12 @@ fn crossfade(c: &mut Criterion) {
                 }
                 processed
             };
-            let mut expected = vec![-0.271_828; old.len()];
+            let mut expected = vec![input_sample; old.len()];
             assert_eq!(
                 previous_audio_crossfade(&old, &mut expected, channels, 0, frames),
                 frames
             );
-            let mut actual = vec![-0.271_828; old.len()];
+            let mut actual = vec![input_sample; old.len()];
             assert_eq!(apply(&mut actual), frames);
             assert!(
                 actual
@@ -421,7 +431,7 @@ fn crossfade(c: &mut Criterion) {
             ));
             group.bench_function(BenchmarkId::new(format!("{channels}ch"), shape), |b| {
                 b.iter_batched_ref(
-                    || vec![-0.271_828; old.len()],
+                    || vec![input_sample; old.len()],
                     |output| black_box(apply(black_box(output))),
                     BatchSize::SmallInput,
                 );
