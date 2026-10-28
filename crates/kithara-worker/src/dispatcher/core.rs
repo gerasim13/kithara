@@ -348,7 +348,9 @@ pub(super) fn park_after_outcome(
             if let Some(recheck) = report.backpressure_recheck {
                 wait_for_backpressure(wake, budgets, &report, recheck);
             } else {
-                wake.wait_timeout(budgets.wait_timeout);
+                let diag_start = std::time::Instant::now();
+                let woken = wake.wait_timeout(budgets.wait_timeout);
+                diag_oversleep("wait", budgets.wait_timeout, diag_start, woken);
             }
         }
         PassOutcome::Idle => {
@@ -381,12 +383,30 @@ fn wait_for_backpressure(
     let mut remaining = deadline;
     loop {
         let wait = poll_interval.min(remaining);
-        if wake.wait_poll_timeout(wait) {
+        let diag_start = std::time::Instant::now();
+        let woken = wake.wait_poll_timeout(wait);
+        diag_oversleep("backpressure", wait, diag_start, woken);
+        if woken {
             return;
         }
         remaining = deadline.saturating_sub(started.elapsed());
         if remaining.is_zero() {
             return;
         }
+    }
+}
+
+fn diag_oversleep(kind: &str, wait: Duration, start: std::time::Instant, woken: bool) {
+    let elapsed = start.elapsed();
+    if elapsed > wait + Duration::from_millis(4) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_micros());
+        eprintln!(
+            "DIAG-PARK kind={kind} thread={:?} wait_us={} elapsed_us={} woken={woken} end_unix_us={now}",
+            std::thread::current().id(),
+            wait.as_micros(),
+            elapsed.as_micros()
+        );
     }
 }
