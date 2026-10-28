@@ -28,6 +28,7 @@ use kithara_ui::{
         document::{Clock, Ctx},
     },
     shaping::{FontPolicy, TextContext},
+    skin::parse_skin_over,
     source::{Fill, LoadedBytes, LoadedSource, MemResolver, SourceResolver, UiConfig},
     view,
 };
@@ -963,6 +964,68 @@ fn turning_to_another_skin_compiles_the_document_again() {
     );
 }
 
+/// The dresser turned by something outside its document — a setting, a timer,
+/// a message from the network — which reaches it on its next tick.
+struct Redressed<'a>(Dresser<'a>);
+
+impl App for Redressed<'_> {
+    fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
+        self.0.reads(with)
+    }
+
+    fn tick(&mut self) {
+        self.0.lit = true;
+    }
+
+    delegate::delegate! {
+        to self.0 {
+            fn document(&self) -> &str;
+            fn skin(&self) -> &Skin;
+            fn update(&mut self, event: UiEvent);
+        }
+    }
+}
+
+/// Nothing on the page asked for the other skin, and the host follows it all
+/// the same — once, not again on every frame after.
+#[kithara::test]
+fn a_skin_turned_outside_the_document_compiles_it_again_once() {
+    let endpoints = swap_endpoints();
+    let inner = resolver();
+    let resolver = Counted {
+        inner: &inner,
+        loads: Cell::new(0),
+    };
+    let blue = page_skin("fixture-blue", "#123456");
+    let config = Config::builder()
+        .endpoints(&endpoints)
+        .resolver(&resolver)
+        .text(builtin::text_doc())
+        .build();
+    let mut ui = Ui::new(
+        Redressed(Dresser::wearing(skin(), &blue)),
+        config,
+        (240, 120),
+        1.0,
+    )
+    .unwrap_or_else(|error| panic!("the dresser must mount: {error}"));
+    let mounted = resolver.loads.get();
+
+    ui.frame(Duration::from_millis(16));
+    let turned = resolver.loads.get();
+    ui.frame(Duration::from_millis(16));
+
+    assert!(
+        turned > mounted,
+        "a skin turned outside the document must compile it again"
+    );
+    assert_eq!(
+        resolver.loads.get(),
+        turned,
+        "a skin that stays on must not compile the document again"
+    );
+}
+
 /// A hand on a control publishes an action for every step it moves. Compiling
 /// the page again for each of them costs more than drawing it — and the page
 /// cannot have changed, because the application is still showing the same one.
@@ -1430,6 +1493,47 @@ fn a_menu_whose_anchor_stands_aside_takes_no_box() {
             "the menu hanging on the bar the room never reached took a box of its own"
         );
     });
+}
+
+/// A banner that measures its room. Both branches hold the same title, so
+/// both tag its path; the wide branch sets it after a 60-wide gutter.
+const ADAPTIVE_TITLE: &str = r#"Adaptive(id: "banner", measure: Width, size: (w: Fill, h: Fill),
+    base: Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+        Text(id: "title", size: (w: Fixed(80.0), h: Fixed(20.0)), style: MicroLabel, label: "TITLE"),
+    ]),
+    steps: [(from: 200.0, node: Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+        Spacer(id: "gutter", size: Some((w: Fixed(60.0), h: Fixed(20.0)))),
+        Text(id: "title", size: (w: Fixed(80.0), h: Fixed(20.0)), style: MicroLabel, label: "TITLE"),
+    ]))])"#;
+
+/// A path both branches of an adaptive block hold names the control of the
+/// branch the room reaches, whichever of them was mounted last.
+#[kithara::test]
+#[case::narrow(120, 0.0)]
+#[case::wide(240, 60.0)]
+fn a_path_two_branches_share_follows_the_branch_that_stands(#[case] width: u32, #[case] x: f32) {
+    let endpoints = menu_endpoints();
+    let resolver = one_control(ADAPTIVE_TITLE);
+    let ui = Ui::new(
+        Menu::default(),
+        Config::builder()
+            .endpoints(&endpoints)
+            .resolver(&resolver)
+            .text(builtin::text_doc())
+            .build(),
+        (width, 120),
+        1.0,
+    )
+    .unwrap_or_else(|error| panic!("the adaptive banner must mount: {error}"));
+    let title = ui
+        .rect_of("demo/title")
+        .unwrap_or_else(|| panic!("the standing title must be laid out"));
+
+    assert_eq!(
+        (title.x, title.w, title.h),
+        (x, 80.0, 20.0),
+        "the title path named a branch the room does not reach"
+    );
 }
 
 #[kithara::test]
@@ -3355,5 +3459,101 @@ fn only_the_standing_page_is_compiled() {
         scenario.rect_of("two/body").map(|rect| rect.w),
         Some(60.0),
         "the screen kept must be the page it was compiled for"
+    );
+}
+
+/// An application that shows the one-control document in the skin it is
+/// given, and reads and writes nothing.
+struct Worn<'a>(&'a Skin);
+
+impl Reads for Worn<'_> {
+    fn get(&self, _endpoint: &str) -> Option<ReadValue<'_>> {
+        None
+    }
+}
+
+impl App for Worn<'_> {
+    fn document(&self) -> &str {
+        "one.klayout.ron"
+    }
+
+    fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
+        with(self)
+    }
+
+    fn skin(&self) -> &Skin {
+        self.0
+    }
+
+    fn update(&mut self, _event: UiEvent) {}
+}
+
+/// A text the skin names by its path wears the role the override restates,
+/// as every other control the skin names does; a text it does not name wears
+/// the skin itself.
+#[kithara::test]
+fn a_text_the_skin_names_wears_what_the_override_restates() {
+    let origin = SourceUri("fixture:text-override".to_owned());
+    let patch = r#"(
+        schema: "kithara.skin",
+        version: 1,
+        id: "fixture-text-override",
+        overrides: {"demo/named": (text_roles: (size: 30.0))},
+    )"#;
+    let document = parse_skin_over(builtin::skin_doc(), patch, &origin)
+        .unwrap_or_else(|error| panic!("the patch parses: {error}"));
+    let skin = Skin::resolve_with_font_policy(
+        document,
+        builtin::text_doc(),
+        &origin,
+        &builtin::resolver(),
+        FontPolicy::Embedded,
+    )
+    .unwrap_or_else(|error| panic!("the dressed skin must resolve: {error}"));
+    let endpoints = Registry::default();
+    // Each text starts its own whole-pixel line, so the box it is laid out
+    // in is its line snapped from a whole pixel, as the shaped line below is.
+    let resolver = one_control(
+        r#"Column(id: "column", size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+            Row(id: "named-line", size: (w: Fill, h: Fixed(60.0)), gap: 0.0, pad: 0.0, align: Start, children: [
+                Text(id: "named", size: (w: Shrink, h: Shrink), style: Body, label: "Caption"),
+            ]),
+            Row(id: "unnamed-line", size: (w: Fill, h: Fixed(60.0)), gap: 0.0, pad: 0.0, align: Start, children: [
+                Text(id: "unnamed", size: (w: Shrink, h: Shrink), style: Body, label: "Caption"),
+            ]),
+        ])"#,
+    );
+    let ui = Ui::new(
+        Worn(&skin),
+        Config::builder()
+            .endpoints(&endpoints)
+            .resolver(&resolver)
+            .text(builtin::text_doc())
+            .build(),
+        (300, 200),
+        1.0,
+    )
+    .unwrap_or_else(|error| panic!("the dressed column must mount: {error}"));
+    let mut text = TextContext::new().unwrap_or_else(|error| panic!("{error}"));
+    let mut line = |skin: &Skin| {
+        let line = text.shape("Caption", skin.text.body, None);
+        (line.width().round(), line.height().round())
+    };
+    let (named, unnamed) = (line(skin.at("demo/named")), line(&skin));
+    let rect = |path: &str| {
+        let rect = ui
+            .rect_of(path)
+            .unwrap_or_else(|| panic!("{path} must be laid out"));
+        (rect.w, rect.h)
+    };
+
+    assert!(
+        named.1 > unnamed.1,
+        "the override must set the named text larger than the skin does"
+    );
+    assert_eq!(
+        (rect("demo/named"), rect("demo/unnamed")),
+        (named, unnamed),
+        "the named text must take the size of the role its override restates"
     );
 }

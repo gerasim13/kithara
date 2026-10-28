@@ -75,6 +75,11 @@ deps:deny:
     - if: $KITHARA_PIPELINE_KIND == "quarantine"
   script:
     - just ci run deps-deny
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/deps-deny/
 
 deps:unused:
   extends: .deps-job
