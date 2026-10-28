@@ -251,6 +251,7 @@ pub(super) fn synthetic_project() -> ProjectConfig {
         },
         audit_clippy: AuditClippyConfig::default(),
         ci_report: crate::common::project::CiReportConfig::default(),
+        clippy: crate::common::project::ClippyConfig::default(),
         health: HealthConfig::default(),
         test: TestCommandConfig {
             lanes,

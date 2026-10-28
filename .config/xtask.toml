@@ -5,7 +5,12 @@
 [project]
 name = "kithara"
 
+[clippy]
+macos_features = ["kithara-ffi/apple"]
+
 [workspace-scan]
+# Preserve this project's existing default Rust scan domain.
+default_roots = ["crates"]
 # Cargo build output can also live below an individual crate (for example the
 # multi-target FFI builds). Generated bindings are not workspace source.
 exclude = ["target/**", "**/target/**"]

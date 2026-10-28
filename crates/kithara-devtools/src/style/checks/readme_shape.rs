@@ -1,7 +1,7 @@
-use std::{fs, path::Path};
+use std::path::Path;
 
 use anyhow::{Context as _, Result};
-use toml::Value;
+use cargo_metadata::Metadata;
 
 use super::{Check, Context};
 use crate::{
@@ -32,7 +32,6 @@ impl Check for ReadmeShape {
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         let cfg = &ctx.config.thresholds.readme_shape;
-        let workspace_license = workspace_license(ctx.workspace_root)?;
         let mut violations = Vec::new();
         for path in ctx.scan.text_files(ctx.scope)?.iter() {
             let rel = relative_to(ctx.workspace_root, path)
@@ -45,7 +44,7 @@ impl Check for ReadmeShape {
                 continue;
             };
             let manifest = path.with_file_name("Cargo.toml");
-            let package = package(&manifest, &workspace_license)?;
+            let package = package(&manifest, ctx.metadata)?;
             violations.extend(scan_content(cfg, &rel, &src, &package));
         }
         violations.sort_by(|a, b| a.key.cmp(&b.key));
@@ -64,53 +63,26 @@ fn selected(cfg: &ReadmeShapeConfig, rel: &str) -> bool {
         && !matches_any_segmented(&compile_globs(&cfg.exclude_paths), path)
 }
 
-/// The license every crate inherits unless its own manifest names another.
-fn workspace_license(workspace_root: &Path) -> Result<String> {
-    let manifest = workspace_root.join("Cargo.toml");
-    let doc = manifest_document(&manifest)?;
-    let license = doc
-        .get("workspace")
-        .and_then(|workspace| workspace.get("package"))
-        .and_then(|package| package.get("license"))
-        .and_then(Value::as_str)
+fn package(manifest: &Path, metadata: &Metadata) -> Result<Package> {
+    let package = metadata
+        .workspace_packages()
+        .into_iter()
+        .find(|package| package.manifest_path.as_std_path() == manifest)
         .with_context(|| {
             format!(
-                "workspace manifest names no license: {}",
+                "selected README has no workspace package: {}",
                 manifest.display()
             )
         })?;
-    Ok(license.to_string())
-}
-
-fn manifest_document(manifest: &Path) -> Result<Value> {
-    let text = fs::read_to_string(manifest)
-        .with_context(|| format!("read crate manifest: {}", manifest.display()))?;
-    toml::from_str(&text).with_context(|| format!("parse crate manifest: {}", manifest.display()))
-}
-
-fn package(manifest: &Path, workspace_license: &str) -> Result<Package> {
-    let doc = manifest_document(manifest)?;
-    let package = doc.get("package").with_context(|| {
-        format!(
-            "crate manifest has no package table: {}",
-            manifest.display()
-        )
-    })?;
-    let name = package
-        .get("name")
-        .and_then(Value::as_str)
-        .with_context(|| format!("crate manifest has no package name: {}", manifest.display()))?;
     Ok(Package {
-        license: package
-            .get("license")
-            .and_then(Value::as_str)
-            .unwrap_or(workspace_license)
-            .to_string(),
-        name: name.to_string(),
+        license: package.license.clone().with_context(|| {
+            format!("selected package names no license: {}", manifest.display())
+        })?,
+        name: package.name.to_string(),
         published: package
-            .get("publish")
-            .and_then(Value::as_bool)
-            .unwrap_or(true),
+            .publish
+            .as_ref()
+            .is_none_or(|registries| !registries.is_empty()),
     })
 }
 

@@ -162,13 +162,18 @@ impl<'ast> Visit<'ast> for FacadeVisitor<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arch::config::FirewheelDspFacadeThreshold;
+    use crate::arch::config::ThresholdsConfig;
 
     fn lines(source: &str) -> Vec<usize> {
         let file = syn::parse_file(source).expect("fixture parses");
+        let config: ThresholdsConfig = toml::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../.config/arch/thresholds.toml"
+        )))
+        .expect("Kithara DSP facade policy");
         facade_bypass_lines(
             &file,
-            &forbidden_modules(&FirewheelDspFacadeThreshold::default().modules),
+            &forbidden_modules(&config.firewheel_dsp_facade.modules),
         )
     }
 

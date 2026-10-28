@@ -80,7 +80,7 @@ pub(crate) fn run(args: &AstGrepArgs, ctx: &Ctx) -> Result<()> {
             std::fs::canonicalize(std::env::current_dir()?)? == std::fs::canonicalize(&ctx.root)?,
             "ast-grep --fix must run from its workspace root so the dirty-tree gate protects the target",
         );
-        ensure_clean_tree(args.allow_dirty, "ast-grep")?;
+        ensure_clean_tree(&ctx.root, args.allow_dirty, "ast-grep")?;
         run_native(args, ctx)?;
     }
     run_grouped(args, ctx)
