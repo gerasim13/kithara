@@ -874,6 +874,35 @@ fn a_branch_the_room_does_not_reach_is_stashed(#[case] width: u32, #[case] stash
     assert_eq!(stashed_branches(width), stashed);
 }
 
+#[kithara::test]
+fn a_rebuilt_host_keeps_only_the_current_trees_paths() {
+    let registry = fixture_registry();
+    let reads = FixtureReads;
+    let ui = fixture_ui(
+        "adaptive-remount",
+        r#"Adaptive(id: "block", measure: Width, size: (w: Fill, h: Fill),
+            base: Spacer(id: "shared", size: Some((w: Fixed(40.0), h: Fixed(20.0)))),
+            steps: [(from: 200.0, node: Spacer(id: "shared", size: Some((w: Fixed(80.0), h: Fixed(20.0)))))])"#,
+        &registry,
+    );
+    let state = MasonryState::default();
+    for width in [120, 240, 120] {
+        let output = document::render(
+            &ui.root,
+            ctx(&ui, &reads),
+            MasonryHost::new(ctx(&ui, &reads), builtin::skin()).with_state(state.clone()),
+        );
+        let root = masonry_root(output, width, 60);
+        let ids = state.widget_ids("demo/shared");
+        assert_eq!(
+            ids.len(),
+            2,
+            "only this tree's two branches remain registered"
+        );
+        assert!(ids.iter().all(|id| root.root().get_widget(*id).is_some()));
+    }
+}
+
 /// The same flow as [`REVEALING_BAR`], holding the window controls in the cell
 /// that waits for a wider window.
 const REVEALING_CONTROLS: &str = r#"Row(id: "bar", measure: Width, size: (w: Fill, h: Fill),

@@ -55,14 +55,11 @@ use crate::{
 type Windows = BTreeMap<String, Rc<RefCell<Window>>>;
 
 /// Mounts the toolkit-neutral document fold into a retained Masonry widget tree.
-#[derive(fieldwork::Fieldwork)]
-#[fieldwork(opt_in, with)]
 pub struct MasonryHost<'a, Action = Published> {
     pub(crate) skin: &'a Skin,
     pub(crate) ctx: Ctx<'a, 'a>,
     pub(crate) map_event: Rc<dyn Fn(Published) -> HostAction>,
     custom: BTreeMap<String, Box<dyn CustomWidget<Action = HostAction>>>,
-    #[field(with)]
     state: MasonryState,
     action: std::marker::PhantomData<fn() -> Action>,
 }
@@ -77,10 +74,6 @@ pub struct MasonryState {
 }
 
 impl MasonryState {
-    pub(crate) fn clear_paths(&self) {
-        self.paths.borrow_mut().clear();
-    }
-
     fn popover(&self, path: &str, open: bool, kind: SurfaceKind) -> Rc<PopoverState> {
         let mut popovers = self.popovers.borrow_mut();
         let state = Rc::clone(
@@ -130,6 +123,16 @@ impl MasonryState {
                 .entry(path.to_owned())
                 .or_insert_with(|| Rc::new(RefCell::new(Window::new()))),
         )
+    }
+}
+
+impl<Action> MasonryHost<'_, Action> {
+    /// Reuses retained state, replacing the previous tree's path registrations.
+    #[must_use]
+    pub fn with_state(mut self, state: MasonryState) -> Self {
+        state.paths.borrow_mut().clear();
+        self.state = state;
+        self
     }
 }
 

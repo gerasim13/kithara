@@ -675,7 +675,6 @@ fn mount<Application>(
 where
     Application: App,
 {
-    state.clear_paths();
     let skin = app.skin();
     let node = app.reads(|reads| {
         let ctx = frame_ctx(ui, reads, view, skin, config, clock);
