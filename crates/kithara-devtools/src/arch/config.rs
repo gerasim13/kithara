@@ -1074,6 +1074,7 @@ mod tests {
     #[test]
     fn product_ownership_requires_explicit_subjects() {
         let thresholds = ThresholdsConfig::default();
+        assert_eq!(thresholds.field_passthrough.max_depth, 8);
         assert!(thresholds.cancel_root_sites.patterns.is_empty());
         assert!(thresholds.smoothing_primitive_sites.patterns.is_empty());
         assert!(thresholds.firewheel_dsp_facade.modules.is_empty());
@@ -1083,41 +1084,48 @@ mod tests {
     }
 
     #[test]
-    fn explicit_kithara_policy_keeps_its_previous_subjects() {
-        let thresholds: ThresholdsConfig = toml::from_str(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../.config/arch/thresholds.toml"
-        )))
-        .expect("Kithara ownership policy");
+    fn configured_ownership_subjects_override_neutral_defaults() {
+        let thresholds: ThresholdsConfig = toml::from_str(
+            r#"
+[cancel_root_sites]
+patterns = ["Shutdown::forever"]
 
-        assert_eq!(
-            thresholds.cancel_root_sites.patterns,
-            ["CancelToken::root", "CancelToken::never"]
-        );
+[smoothing_primitive_sites]
+patterns = ["MySmoother::new"]
+
+[firewheel_dsp_facade]
+modules = ["dsp::mix"]
+
+[tokio_dep_quarantine]
+quarantined = ["other-runtime"]
+
+[platform_layer_hygiene]
+enabled = true
+root = "packages/platform/src/"
+arc_owner_files = ["packages/platform/src/owner.rs"]
+"#,
+        )
+        .expect("explicit ownership subjects");
+
+        assert_eq!(thresholds.cancel_root_sites.patterns, ["Shutdown::forever"]);
         assert_eq!(
             thresholds.smoothing_primitive_sites.patterns,
-            ["SmoothingFilter", "one_pole", "OnePole", "smoothing_coeff"]
+            ["MySmoother::new"]
         );
-        assert_eq!(
-            thresholds.firewheel_dsp_facade.modules,
-            [
-                "dsp::fade",
-                "dsp::mix",
-                "dsp::filter::smoothing_filter",
-                "param::smoother"
-            ]
-        );
+        assert_eq!(thresholds.firewheel_dsp_facade.modules, ["dsp::mix"]);
         assert_eq!(
             thresholds.tokio_dep_quarantine.quarantined,
-            ["tokio", "tokio-util", "tokio-stream"]
+            ["other-runtime"]
         );
-        assert_eq!(thresholds.field_passthrough.max_depth, 8);
+        assert!(thresholds.platform_layer_hygiene.enabled);
         assert_eq!(
             thresholds.platform_layer_hygiene.root,
-            "crates/kithara-platform/src/"
+            "packages/platform/src/"
         );
-        assert_eq!(thresholds.platform_layer_hygiene.arc_owner_files.len(), 2);
-        assert!(thresholds.platform_layer_hygiene.enabled);
+        assert_eq!(
+            thresholds.platform_layer_hygiene.arc_owner_files,
+            ["packages/platform/src/owner.rs"]
+        );
     }
 
     #[test]

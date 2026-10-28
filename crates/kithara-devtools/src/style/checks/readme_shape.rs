@@ -1,6 +1,6 @@
-use std::path::Path;
+use std::{fs, path::Path};
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 use cargo_metadata::Metadata;
 
 use super::{Check, Context};
@@ -43,8 +43,7 @@ impl Check for ReadmeShape {
             let Some(src) = ctx.scan.source(path) else {
                 continue;
             };
-            let manifest = path.with_file_name("Cargo.toml");
-            let package = package(&manifest, ctx.metadata)?;
+            let package = package(path, ctx.metadata)?;
             violations.extend(scan_content(cfg, &rel, &src, &package));
         }
         violations.sort_by(|a, b| a.key.cmp(&b.key));
@@ -63,21 +62,38 @@ fn selected(cfg: &ReadmeShapeConfig, rel: &str) -> bool {
         && !matches_any_segmented(&compile_globs(&cfg.exclude_paths), path)
 }
 
-fn package(manifest: &Path, metadata: &Metadata) -> Result<Package> {
-    let package = metadata
-        .workspace_packages()
-        .into_iter()
-        .find(|package| package.manifest_path.as_std_path() == manifest)
-        .with_context(|| {
-            format!(
-                "selected README has no workspace package: {}",
-                manifest.display()
-            )
-        })?;
+fn package(readme: &Path, metadata: &Metadata) -> Result<Package> {
+    let readme = fs::canonicalize(readme)
+        .with_context(|| format!("resolve selected README: {}", readme.display()))?;
+    let mut packages = metadata.workspace_packages().into_iter().filter(|package| {
+        package
+            .manifest_path
+            .parent()
+            .zip(package.readme.as_ref())
+            .is_some_and(|(directory, declared)| {
+                fs::canonicalize(directory.join(declared)).is_ok_and(|declared| declared == readme)
+            })
+    });
+    let package = packages.next().with_context(|| {
+        format!(
+            "selected README is not declared by a workspace package: {}",
+            readme.display()
+        )
+    })?;
+    if let Some(other) = packages.next() {
+        bail!(
+            "selected README is declared by multiple workspace packages: {} ({}, {})",
+            readme.display(),
+            package.manifest_path,
+            other.manifest_path
+        );
+    }
+    let manifest = &package.manifest_path;
     Ok(Package {
-        license: package.license.clone().with_context(|| {
-            format!("selected package names no license: {}", manifest.display())
-        })?,
+        license: package
+            .license
+            .clone()
+            .with_context(|| format!("selected package names no license: {manifest}"))?,
         name: package.name.to_string(),
         published: package
             .publish
@@ -273,7 +289,100 @@ impl<'a> Document<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
+    use cargo_metadata::MetadataCommand;
+    use tempfile::{TempDir, tempdir};
+
     use super::*;
+
+    fn readme_workspace(member_readme: &str) -> (TempDir, Metadata) {
+        let workspace = tempdir().expect("workspace");
+        for (directory, name, license, publish, readme) in [
+            ("", "root-package", "MIT", false, "docs/README.md"),
+            ("packages/member", "member", "MPL-2.0", true, member_readme),
+        ] {
+            let directory = workspace.path().join(directory);
+            fs::create_dir_all(directory.join("src")).expect("source directory");
+            fs::write(directory.join("src/lib.rs"), "").expect("package source");
+            let readme_path = directory.join(readme);
+            fs::create_dir_all(readme_path.parent().expect("README directory"))
+                .expect("README directory");
+            fs::write(readme_path, "Fixture").expect("package README");
+            let mut manifest = format!(
+                "[package]\nname='{name}'\nversion='0.1.0'\nedition='2024'\nlicense='{license}'\npublish={publish}\nreadme='{readme}'\n"
+            );
+            if name == "root-package" {
+                manifest.push_str("[workspace]\nmembers=['packages/member']\n");
+            }
+            fs::write(directory.join("Cargo.toml"), manifest).expect("package manifest");
+        }
+        let metadata = MetadataCommand::new()
+            .manifest_path(workspace.path().join("Cargo.toml"))
+            .no_deps()
+            .exec()
+            .expect("workspace metadata");
+        (workspace, metadata)
+    }
+
+    #[test]
+    fn custom_readmes_use_their_declaring_packages_metadata() {
+        let (_workspace, metadata) = readme_workspace("docs/README.md");
+        let root = metadata.workspace_root.as_std_path();
+        for (path, name, license, published) in [
+            ("docs/README.md", "root-package", "MIT", false),
+            ("packages/member/docs/README.md", "member", "MPL-2.0", true),
+        ] {
+            let found = package(&root.join(path), &metadata).expect("declared README owner");
+            assert_eq!(found.name, name);
+            assert_eq!(found.license, license);
+            assert_eq!(found.published, published);
+        }
+    }
+
+    #[test]
+    fn unrelated_nested_readme_does_not_borrow_package_metadata() {
+        let (_workspace, metadata) = readme_workspace("docs/README.md");
+        let readme = metadata.workspace_root.join("docs/guide/README.md");
+        fs::create_dir_all(readme.parent().expect("guide directory")).expect("guide directory");
+        fs::write(&readme, "Guide").expect("unrelated README");
+        let error = package(readme.as_std_path(), &metadata)
+            .err()
+            .expect("unrelated README is not the package README");
+        assert!(error.to_string().contains("not declared"));
+        assert!(error.to_string().contains(readme.as_str()));
+    }
+
+    #[test]
+    fn readme_declared_outside_package_uses_its_declaring_owner() {
+        let (_workspace, metadata) = readme_workspace("../../shared/docs/../README.md");
+        let readme = metadata.workspace_root.join("shared/README.md");
+        let found = package(readme.as_std_path(), &metadata).expect("declared outside README");
+        assert_eq!(found.name, "member");
+        assert_eq!(found.license, "MPL-2.0");
+        assert!(found.published);
+    }
+
+    #[test]
+    fn readme_declared_by_multiple_packages_is_an_error() {
+        let (_workspace, metadata) = readme_workspace("../../docs/README.md");
+        let readme = metadata.workspace_root.join("docs/README.md");
+        let error = package(readme.as_std_path(), &metadata)
+            .err()
+            .expect("shared README has no single metadata owner");
+        let error = error.to_string();
+        assert!(error.contains("multiple workspace packages"));
+        assert!(error.contains(readme.as_str()));
+        assert!(error.contains(metadata.workspace_root.join("Cargo.toml").as_str()));
+        assert!(
+            error.contains(
+                metadata
+                    .workspace_root
+                    .join("packages/member/Cargo.toml")
+                    .as_str()
+            )
+        );
+    }
 
     fn config() -> ReadmeShapeConfig {
         ReadmeShapeConfig::default()

@@ -186,23 +186,14 @@ fn lockbud_toolchain() -> String {
     std::env::var("KITHARA_LOCKBUD_TOOLCHAIN").unwrap_or_else(|_| "nightly".to_owned())
 }
 
-/// Workspace member directories relative to the workspace root, minus the
-/// packages named. cargo-machete has no exclude flag: given no arguments it
-/// walks the whole tree, and the only way to keep a package out of the walk is
-/// to name every other one.
+/// Select each member by manifest so cargo-machete cannot walk excluded nested members.
 fn walkable_packages(metadata: &Metadata, excluded: &[String]) -> Vec<String> {
-    let root = metadata.workspace_root.as_std_path();
     let mut paths = Vec::new();
     for package in metadata.workspace_packages() {
         if excluded.contains(&package.name.to_string()) {
             continue;
         }
-        let Some(dir) = package.manifest_path.parent() else {
-            continue;
-        };
-        let dir = dir.as_std_path();
-        let relative = dir.strip_prefix(root).unwrap_or(dir);
-        paths.push(relative.to_string_lossy().into_owned());
+        paths.push(package.manifest_path.to_string());
     }
     paths.sort();
     paths
@@ -245,7 +236,7 @@ fn build_stages_with(resolved: &Resolved) -> Vec<Stage> {
         own_crates,
         lockbud_toolchain,
     } = resolved;
-    vec![
+    let mut stages = vec![
         Stage::new(
             "markdown-format-check",
             "cargo",
@@ -301,7 +292,9 @@ fn build_stages_with(resolved: &Resolved) -> Vec<Stage> {
         )
         .own_crates(own_crates)
         .strict(),
-    ]
+    ];
+    stages.retain(|stage| stage.name != "machete" || !machete_paths.is_empty());
+    stages
 }
 
 /// Runs one stage without the runner's own `CARGO_PKG_NAME`, which `cargo run`
@@ -571,6 +564,7 @@ mod tests {
     };
 
     use clap::Subcommand;
+    use tempfile::tempdir;
 
     use super::*;
     use crate::{CoreCommand, stages::SharedStage};
@@ -745,8 +739,11 @@ mod tests {
     }
 
     #[test]
-    fn machete_walks_the_packages_it_is_given() {
-        let paths = ["crates/kithara-abr".to_owned(), "xtask".to_owned()];
+    fn machete_receives_exact_package_manifests() {
+        let paths = [
+            "crates/kithara-abr/Cargo.toml".to_owned(),
+            "xtask/Cargo.toml".to_owned(),
+        ];
         let stages = build_stages_with(&Resolved {
             machete_paths: paths.to_vec(),
             ..Resolved::default()
@@ -755,7 +752,81 @@ mod tests {
             .iter()
             .find(|s| s.name == "machete")
             .expect("machete stage exists");
-        assert_eq!(machete.args, ["machete", "crates/kithara-abr", "xtask"]);
+        assert_eq!(
+            machete.args,
+            [
+                "machete",
+                "crates/kithara-abr/Cargo.toml",
+                "xtask/Cargo.toml"
+            ]
+        );
+    }
+
+    #[test]
+    fn root_package_is_selected_by_manifest_without_walking_excluded_members() {
+        let workspace = tempdir().expect("workspace");
+        for (directory, name) in [
+            ("", "root-package"),
+            ("packages/kept", "kept"),
+            ("packages/kept/nested", "excluded"),
+        ] {
+            let directory = workspace.path().join(directory);
+            fs::create_dir_all(directory.join("src")).expect("package directory");
+            fs::write(directory.join("src/lib.rs"), "").expect("package source");
+            let mut manifest =
+                format!("[package]\nname='{name}'\nversion='0.1.0'\nedition='2024'\n");
+            if name == "root-package" {
+                manifest
+                    .push_str("[workspace]\nmembers=['packages/kept','packages/kept/nested']\n");
+            }
+            fs::write(directory.join("Cargo.toml"), manifest).expect("package manifest");
+        }
+        let metadata = MetadataCommand::new()
+            .manifest_path(workspace.path().join("Cargo.toml"))
+            .no_deps()
+            .exec()
+            .expect("workspace metadata");
+        let excluded = ["excluded".to_owned()];
+        assert_eq!(
+            walkable_packages(&metadata, &excluded),
+            [
+                workspace
+                    .path()
+                    .join("Cargo.toml")
+                    .to_string_lossy()
+                    .into_owned(),
+                workspace
+                    .path()
+                    .join("packages/kept/Cargo.toml")
+                    .to_string_lossy()
+                    .into_owned()
+            ]
+        );
+        assert_eq!(
+            walkable_packages(
+                &metadata,
+                &["excluded".to_owned(), "root-package".to_owned()]
+            ),
+            [workspace
+                .path()
+                .join("packages/kept/Cargo.toml")
+                .to_string_lossy()
+                .into_owned()]
+        );
+        let paths = walkable_packages(
+            &metadata,
+            &[
+                "excluded".to_owned(),
+                "root-package".to_owned(),
+                "kept".to_owned(),
+            ],
+        );
+        assert!(paths.is_empty());
+        let stages = build_stages_with(&Resolved {
+            machete_paths: paths,
+            ..Resolved::default()
+        });
+        assert!(!stages.iter().any(|stage| stage.name == "machete"));
     }
 
     fn this_workspace() -> Metadata {
@@ -769,7 +840,9 @@ mod tests {
     fn a_package_left_out_is_not_walked() {
         let walked = walkable_packages(&this_workspace(), &["kithara-workspace-hack".to_owned()]);
         assert!(
-            !walked.contains(&"crates/kithara-workspace-hack".to_owned()),
+            !walked
+                .iter()
+                .any(|path| path.ends_with("crates/kithara-workspace-hack/Cargo.toml")),
             "the excluded package is still in the walk: {walked:?}"
         );
     }
@@ -778,7 +851,9 @@ mod tests {
     fn every_other_package_is_still_walked() {
         let walked = walkable_packages(&this_workspace(), &["kithara-workspace-hack".to_owned()]);
         assert!(
-            walked.contains(&"crates/kithara-abr".to_owned()),
+            walked
+                .iter()
+                .any(|path| path.ends_with("crates/kithara-abr/Cargo.toml")),
             "naming one package dropped the rest: {walked:?}"
         );
     }

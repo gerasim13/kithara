@@ -31,6 +31,7 @@ struct Member {
     name: String,
     directory: PathBuf,
     sources: Vec<PathBuf>,
+    readme: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -40,16 +41,30 @@ struct CargoScope {
 }
 
 impl CargoScope {
-    fn member_for_path(&self, path: &Path) -> Option<&Member> {
+    fn members_for_path<'a>(&'a self, path: &'a Path) -> impl Iterator<Item = &'a Member> {
         let path = if path.is_absolute() {
-            path.strip_prefix(&self.root).ok()?
+            path.strip_prefix(&self.root).ok()
         } else {
-            path.strip_prefix("./").unwrap_or(path)
+            Some(path.strip_prefix("./").unwrap_or(path))
         };
-        self.members
-            .iter()
-            .filter(|member| path.starts_with(&member.directory))
-            .max_by_key(|member| member.directory.components().count())
+        let declared = path.is_some_and(|path| {
+            self.members
+                .iter()
+                .any(|member| member.readme.as_deref() == Some(path))
+        });
+        let owner = path.and_then(|path| {
+            self.members
+                .iter()
+                .filter(|member| path.starts_with(&member.directory))
+                .max_by_key(|member| member.directory.components().count())
+        });
+        self.members.iter().filter(move |member| {
+            if declared {
+                member.readme.as_deref() == path
+            } else {
+                owner.is_some_and(|owner| member.name == owner.name)
+            }
+        })
     }
 }
 
@@ -82,8 +97,7 @@ fn classify_token(
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
 pub struct Scope {
-    /// Crate names from `--crate <name>`. Resolved against
-    /// `<workspace>/crates/<name>/`.
+    /// Crate names from `--crate <name>`, resolved against Cargo membership.
     pub(crate) crates: Vec<String>,
     /// Additional roots used by checks whose policy covers workspace source
     /// outside the historical `crates/` default.
@@ -124,10 +138,6 @@ impl Scope {
                     .iter()
                     .map(|target| {
                         let source = target.src_path.as_std_path();
-                        let source = source
-                            .parent()
-                            .filter(|parent| *parent != directory)
-                            .unwrap_or(source);
                         source.strip_prefix(root).unwrap_or(source).to_path_buf()
                     })
                     .collect::<Vec<_>>();
@@ -140,6 +150,13 @@ impl Scope {
                         .unwrap_or(directory)
                         .to_path_buf(),
                     sources,
+                    readme: package.readme.as_ref().and_then(|readme| {
+                        directory
+                            .join(readme)
+                            .canonicalize()
+                            .ok()
+                            .map(|path| path.strip_prefix(root).unwrap_or(&path).to_path_buf())
+                    }),
                 })
             })
             .collect();
@@ -157,9 +174,9 @@ impl Scope {
             return self
                 .paths
                 .iter()
-                .filter_map(|path| {
+                .flat_map(|path| {
                     cargo
-                        .member_for_path(path)
+                        .members_for_path(path)
                         .map(|member| member.name.clone())
                 })
                 .collect();
@@ -310,17 +327,26 @@ impl Scope {
         if self.is_empty() {
             return true;
         }
+        let subject = key.split(':').next().unwrap_or(key);
         self.crates.iter().any(|c| {
+            if let Some((source, _)) = key.split_once(" -> ") {
+                return source == c;
+            }
             self.cargo.as_ref().map_or_else(
-                || key.contains(c.as_str()) || key.starts_with(&format!("crates/{c}/")),
+                || subject == c || subject.starts_with(&format!("crates/{c}/")),
                 |cargo| {
-                    let subject = key.split("::").next().unwrap_or(key);
                     cargo
                         .members
                         .iter()
                         .find(|member| member.name == subject)
-                        .or_else(|| cargo.member_for_path(Path::new(subject)))
-                        .is_some_and(|member| member.name == *c)
+                        .map_or_else(
+                            || {
+                                cargo
+                                    .members_for_path(Path::new(subject))
+                                    .any(|member| member.name == *c)
+                            },
+                            |member| member.name == *c,
+                        )
                 },
             )
         }) || self.paths.iter().any(|p| {
@@ -329,7 +355,11 @@ impl Scope {
                 .unwrap_or(p)
                 .to_string_lossy()
                 .replace('\\', "/");
-            key.starts_with(&format!("{prefix}/")) || key == prefix
+            key.starts_with(&format!("{prefix}/"))
+                || key == prefix
+                || key
+                    .strip_prefix(prefix.as_str())
+                    .is_some_and(|suffix| suffix.starts_with(':'))
         })
     }
 
@@ -489,6 +519,29 @@ pub fn packages_in_scope<'a>(metadata: &'a Metadata, scope: &Scope) -> Vec<&'a P
 mod tests {
     use super::*;
     use crate::common::project::ProjectConfig;
+
+    #[test]
+    fn explicit_file_scope_keeps_item_and_line_diagnostics() {
+        let scope = Scope::new(Vec::new(), vec!["src/lib.rs".into()]);
+        for key in ["src/lib.rs", "src/lib.rs::Thing", "src/lib.rs:5:2::Thing"] {
+            assert!(scope.key_in_scope(key), "{key}");
+        }
+        for key in [
+            "src/lib_extra.rs::Thing",
+            "src/lib.rst:5",
+            "other/src/lib.rs",
+        ] {
+            assert!(!scope.key_in_scope(key), "{key}");
+        }
+    }
+
+    #[test]
+    fn dependency_edge_scope_belongs_to_its_source_package() {
+        let scope = Scope::new(vec!["engine".into()], Vec::new());
+        assert!(scope.key_in_scope("engine -> output"));
+        assert!(!scope.key_in_scope("output -> engine"));
+        assert!(!scope.key_in_scope("engine-extra -> output"));
+    }
 
     #[test]
     fn empty_scope_roots_default_to_crates_dir() {

@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use cargo_metadata::{DependencyKind, Metadata, MetadataCommand};
+use cargo_metadata::{DependencyKind, Metadata, MetadataCommand, cargo_platform::Platform};
 use clap::{Args, Subcommand};
 use toml::Value;
 
@@ -508,7 +508,8 @@ fn internal_dependencies(
                 .get("target")
                 .and_then(Value::as_table)
                 .and_then(|table| table.keys().next())
-                .cloned()
+                .map(|target| target.parse::<Platform>())
+                .transpose()?
         } else {
             None
         };
@@ -522,7 +523,7 @@ fn internal_dependencies(
                     _ => false,
                 };
                 if kind_matches
-                    && dependency.target.as_ref().map(ToString::to_string) == target
+                    && dependency.target == target
                     && dependency
                         .path
                         .as_ref()

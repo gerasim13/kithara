@@ -695,33 +695,31 @@ mod tests {
     }
 
     #[test]
-    fn explicit_kithara_derives_keep_selection_and_strict_config() {
-        let config: ThresholdsConfig = toml::from_str(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../.config/idioms/thresholds.toml"
-        )))
-        .expect("Kithara derive policy");
+    fn explicit_product_policy_keeps_selection_and_strict_fields() {
+        let config: ThresholdsConfig = toml::from_str(
+            r#"
+[derivable_event]
+enabled = true
+owner_path = "packages/events"
+
+[derivable_mirror]
+enabled = true
+
+[derivable_ranged]
+enabled = true
+severity = "warn"
+"#,
+        )
+        .expect("explicit product policy");
         assert!(config.derivable_event.enabled);
         assert_eq!(
             config.derivable_event.owner_path.as_deref(),
-            Some(Path::new("crates/kithara-events"))
+            Some(Path::new("packages/events"))
         );
-        for selected in [
-            config.derivable_built_default,
-            config.derivable_control,
-            config.derivable_control_painter,
-            config.derivable_enum_str,
-            config.derivable_into_probe_arg,
-            config.derivable_mirror,
-            config.derivable_patch,
-            config.derivable_phase,
-            config.derivable_ranged,
-            config.derivable_skin_walk,
-            config.derivable_variants,
-        ] {
-            assert!(selected.enabled);
-            assert_eq!(selected.severity, DerivableSeverity::Deny);
-        }
+        assert!(config.derivable_mirror.enabled);
+        assert_eq!(config.derivable_mirror.severity, DerivableSeverity::Deny);
+        assert!(config.derivable_ranged.enabled);
+        assert_eq!(config.derivable_ranged.severity, DerivableSeverity::Warn);
         assert!(toml::from_str::<ThresholdsConfig>("[derivable_event]\nunknown=true").is_err());
         assert!(toml::from_str::<ThresholdsConfig>("[derivable_event]\nenabled='yes'").is_err());
         assert!(toml::from_str::<ThresholdsConfig>("[derivable_mirror]\nunknown=true").is_err());

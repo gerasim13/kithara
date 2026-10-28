@@ -96,7 +96,7 @@ pub fn workspace_rs_files_scoped(workspace_root: &Path, scope: &Scope) -> Result
     let targets = scope.root_targets();
     for root in scope.roots_with_defaults(workspace_root, &excludes.default_roots) {
         if targets.contains(&root) {
-            out.extend(module_files(&root)?);
+            out.extend(module_files(&root, |path| excludes.matches(path))?);
         } else {
             collect_rs_files(&root, &mut out)?;
         }

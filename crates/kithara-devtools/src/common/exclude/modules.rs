@@ -21,14 +21,17 @@ struct ModuleFile {
     test_only: bool,
 }
 
-/// Follow declarations from a Cargo target beside its manifest without walking unrelated directories.
-pub(crate) fn module_files(target: &Path) -> Result<Vec<PathBuf>> {
+/// Follow Cargo target declarations without reading excluded or unrelated files.
+pub(crate) fn module_files(
+    target: &Path,
+    excluded: impl Fn(&Path) -> bool,
+) -> Result<Vec<PathBuf>> {
     let target =
         fs::canonicalize(target).with_context(|| format!("resolve target {}", target.display()))?;
     let mut pending = vec![(target, true)];
     let mut reached = BTreeSet::new();
     while let Some((path, root)) = pending.pop() {
-        if !reached.insert(path.clone()) {
+        if excluded(&path) || !reached.insert(path.clone()) {
             continue;
         }
         let source =

@@ -152,7 +152,13 @@ fn root_level_target_keeps_declared_modules_without_scanning_vendor() {
     write(
         temp.path(),
         "entry.rs",
-        "mod domain;\n#[path=\"shared/renamed.rs\"] mod renamed;\n",
+        "mod domain;\n#[path=\"shared/renamed.rs\"] mod renamed;\n#[cfg(any())] mod ignored;\n",
+    );
+    write(temp.path(), "ignored.rs", "invalid Rust {\n");
+    write(
+        temp.path(),
+        ".config/xtask.toml",
+        "[workspace-scan]\nexclude=['packages/renamed-directory/src/ignored.rs','ignored.rs']\n",
     );
     write(temp.path(), "domain.rs", "mod nested;\n");
     write(
@@ -191,6 +197,49 @@ fn root_level_target_keeps_declared_modules_without_scanning_vendor() {
     assert!(report.contains("shared/renamed.rs::Renamed"), "{report}");
     assert!(!report.contains("vendor/"), "{report}");
     assert!(!report.contains("orphan.rs"), "{report}");
+}
+
+#[test]
+fn cargo_target_directory_does_not_select_neighbor_packages() {
+    let temp = fixture();
+    let manifest = temp.path().join("Cargo.toml");
+    let source = fs::read_to_string(&manifest).expect("fixture manifest");
+    write(
+        temp.path(),
+        "Cargo.toml",
+        &format!("{source}\n[lib]\npath='packages/entry.rs'\n"),
+    );
+    write(
+        temp.path(),
+        "packages/entry.rs",
+        "pub struct Root<A,B,C,D,E,F>(A,B,C,D,E,F);\n",
+    );
+    write(
+        temp.path(),
+        "packages/orphan.rs",
+        "pub struct Orphan<A,B,C,D,E,F>(A,B,C,D,E,F);\n",
+    );
+    let ctx = Ctx::load_from_manifest(&manifest).expect("load consumer");
+    run(
+        &ctx,
+        &[
+            "portable",
+            "lint",
+            "arch",
+            "--check",
+            "generic_param_count",
+            "--crate",
+            "lsq-consumer",
+            "--report",
+            "report.md",
+        ],
+    )
+    .expect("selected target has only warning findings");
+    let report = fs::read_to_string(temp.path().join("report.md")).expect("consumer report");
+    assert!(report.contains("packages/entry.rs::Root"), "{report}");
+    for foreign in ["::Member", "::Orphan", "::Vendor"] {
+        assert!(!report.contains(foreign), "{report}");
+    }
 }
 
 #[test]
@@ -307,6 +356,70 @@ fn generic_deny_fails_and_valid_member_passes() {
 }
 
 #[test]
+fn scoped_denies_keep_their_existing_baseline() {
+    let temp = fixture();
+    write(
+        temp.path(),
+        "src/lib.rs",
+        "pub fn stop() { Shutdown::root(); }\n",
+    );
+    write(
+        temp.path(),
+        ".config/arch/thresholds.toml",
+        "[cancel_root_sites]\npatterns=['Shutdown::root']\n",
+    );
+    write(
+        temp.path(),
+        ".config/arch/direction.toml",
+        "[[layer]]\nname='low'\nindex=0\ncrates=['lsq-consumer']\n\
+         [[layer]]\nname='high'\nindex=1\ncrates=['lsq-engine']\n",
+    );
+    let ctx = Ctx::load_from_manifest(&temp.path().join("Cargo.toml")).expect("load consumer");
+    for (check, option, selection, key, foreign) in [
+        (
+            "direction",
+            "--crate",
+            "lsq-consumer",
+            "lsq-consumer -> lsq-engine",
+            "lsq-consumer-extra -> lsq-engine",
+        ),
+        (
+            "cancel_root_sites",
+            "--path",
+            "src/lib.rs",
+            "src/lib.rs:1",
+            "src/lib_extra.rs:1",
+        ),
+    ] {
+        write(
+            temp.path(),
+            ".config/arch/baseline.toml",
+            &format!("[{check}]\n'{key}'=1\n'{foreign}'=1\n"),
+        );
+        run(
+            &ctx,
+            &[
+                "portable",
+                "lint",
+                "arch",
+                "--check",
+                check,
+                option,
+                selection,
+                "--report",
+                "report.md",
+            ],
+        )
+        .expect("the unchanged selected deny is already baselined");
+        let report = fs::read_to_string(temp.path().join("report.md")).expect("selected report");
+        assert!(report.contains("- deny violations: 1\n"), "{report}");
+        assert!(report.contains(&format!("| DENY | `{key}` |")), "{report}");
+        assert!(report.contains("- improvements: 0\n"), "{report}");
+        assert!(!report.contains(foreign), "{report}");
+    }
+}
+
+#[test]
 fn manifest_order_uses_member_identity_including_dependency_aliases() {
     let temp = fixture();
     let manifest = temp.path().join("Cargo.toml");
@@ -344,6 +457,76 @@ fn manifest_order_uses_member_identity_including_dependency_aliases() {
 }
 
 #[test]
+fn package_scope_checks_its_readme_outside_the_package_directory() {
+    let temp = fixture();
+    let member = temp.path().join("packages/renamed-directory/Cargo.toml");
+    let source = fs::read_to_string(&member).expect("member manifest");
+    fs::write(
+        &member,
+        format!("{source}publish=false\nreadme='../../shared/docs/../README.md'\n"),
+    )
+    .expect("declared README");
+    fs::create_dir_all(temp.path().join("shared/docs")).expect("README directory");
+    let valid = "<img src='https://example.com/logo.svg'>\n\n[License](https://img.shields.io/badge/license-MIT-blue.svg)\n\n# lsq-engine\n\nEngine.\n\n## Usage\n\nUse it.\n";
+    write(
+        temp.path(),
+        "shared/README.md",
+        &valid.replace("# lsq-engine", "# wrong"),
+    );
+    write(
+        temp.path(),
+        ".config/style/thresholds.toml",
+        "[readme_shape]\ninclude_globs=['shared/README.md']\n",
+    );
+    git(temp.path(), &["init", "--quiet"]);
+    git(temp.path(), &["add", "."]);
+    let manifest = temp.path().join("Cargo.toml");
+    let ctx = Ctx::load_from_manifest(&manifest).expect("selected README context");
+    let args = [
+        "portable",
+        "lint",
+        "style",
+        "--check",
+        "readme_shape",
+        "--crate",
+        "lsq-engine",
+        "--report",
+        "readme-report.md",
+    ];
+    run(&ctx, &args).expect_err("selected package's external README must be checked");
+    let report = fs::read_to_string(temp.path().join("readme-report.md")).expect("README report");
+    assert!(
+        report.contains("| DENY | `shared/README.md:title` |"),
+        "{report}"
+    );
+    write(
+        temp.path(),
+        ".config/style/baseline.toml",
+        "[readme_shape]\n'shared/README.md:title'=1\n",
+    );
+    run(&ctx, &args).expect("selected README keeps its existing baseline");
+    write(temp.path(), ".config/style/baseline.toml", "");
+    write(temp.path(), "shared/README.md", valid);
+    run(&ctx, &args).expect("correct README passes");
+    let root = fs::read_to_string(&manifest).expect("root manifest");
+    fs::write(
+        &manifest,
+        root.replace("publish=false", "publish=false\nreadme='shared/README.md'"),
+    )
+    .expect("shared README declaration");
+    let ctx = Ctx::load_from_manifest(&manifest).expect("ambiguous README context");
+    for package in ["lsq-consumer", "lsq-engine"] {
+        let mut args = args;
+        args[6] = package;
+        let error = run(&ctx, &args).expect_err("every declaring package preserves ambiguity");
+        assert!(
+            format!("{error:#}").contains("multiple workspace packages"),
+            "{error:#}"
+        );
+    }
+}
+
+#[test]
 fn readme_license_is_resolved_only_for_selected_packages() {
     let temp = fixture();
     write(
@@ -371,6 +554,27 @@ fn readme_license_is_resolved_only_for_selected_packages() {
         config.to_str().expect("config path"),
     ];
     run(&ctx, &args).expect("selected package's declared MIT license is sufficient");
+    let manifest = temp.path().join("Cargo.toml");
+    let source = fs::read_to_string(&manifest).expect("fixture manifest");
+    fs::write(
+        &manifest,
+        source.replace("publish=false", "publish=false\nreadme='docs/README.md'"),
+    )
+    .expect("custom README manifest");
+    fs::create_dir(temp.path().join("docs")).expect("README directory");
+    fs::rename(
+        temp.path().join("README.md"),
+        temp.path().join("docs/README.md"),
+    )
+    .expect("move README");
+    git(temp.path(), &["add", "."]);
+    write(
+        temp.path(),
+        ".config/style/thresholds.toml",
+        "[readme_shape]\ninclude_globs=['docs/README.md']\n",
+    );
+    let ctx = Ctx::load_from_manifest(&manifest).expect("load declared README metadata");
+    run(&ctx, &args).expect("custom README uses its declaring package");
     write(
         temp.path(),
         ".config/style/thresholds.toml",

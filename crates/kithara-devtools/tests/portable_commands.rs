@@ -84,6 +84,9 @@ fn probe(args: &[&str], selected_config: &str, code: i32) -> Probe {
         "unrelated-consumer",
         "[health]\ngeiger_package='unrelated-consumer'\n",
     );
+    fs::create_dir(unrelated.join(".cargo")).expect("caller cargo directory");
+    fs::write(unrelated.join(".cargo/config.toml"), "broken = [\n")
+        .expect("unrelated Cargo config must not be read");
     let selected = selected.canonicalize().expect("canonical target workspace");
     let unrelated = unrelated
         .canonicalize()
@@ -183,6 +186,13 @@ fn health_keeps_metadata_outputs_and_children_in_the_selected_workspace() {
             .lines()
             .all(|line| line.starts_with(&format!("{}|", probe.selected.display())))
     );
+    assert!(
+        captured.contains(&format!(
+            "selected-cargo|machete {}",
+            probe.selected.join("Cargo.toml").display()
+        )),
+        "{captured}"
+    );
     assert!(probe.selected.join("target/health-report.md").is_file());
     assert!(probe.selected.join("target/health-logs").is_dir());
     assert_eq!(snapshot(&probe.unrelated), probe.before);
@@ -228,6 +238,131 @@ fn aggregate_lint_keeps_the_selected_configuration_error() {
     );
     assert!(error.contains("parse"), "{error}");
     assert_eq!(snapshot(&probe.unrelated), probe.before);
+}
+
+fn run(root: &Path, args: &[&str]) -> anyhow::Result<()> {
+    let parser = CoreCommand::augment_subcommands(clap::Command::new("fixture"));
+    let matches = parser.try_get_matches_from(args)?;
+    let command = CoreCommand::from_arg_matches(&matches)?;
+    let ctx = Ctx::load_from_manifest(&root.join("Cargo.toml"))?;
+    kithara_devtools::run(&command, &ctx)
+}
+
+#[test]
+fn direction_checks_the_selected_resolved_dependency_graph() {
+    let directory = tempdir().expect("dependency graph fixture");
+    let root = directory.path();
+    workspace(root, "portable-foundation", "");
+    for (path, name, dependencies) in [
+        (
+            "modules/renamed-bridge",
+            "portable-bridge",
+            "[dependencies]\nproduct={package='portable-product',path='../../packages/renamed-product'}\n",
+        ),
+        ("packages/renamed-product", "portable-product", ""),
+    ] {
+        let package = root.join(path);
+        fs::create_dir_all(package.join("src")).expect("member source directory");
+        fs::write(
+            package.join("Cargo.toml"),
+            format!("[package]\nname='{name}'\nversion='0.1.0'\nedition='2024'\n{dependencies}"),
+        )
+        .expect("member manifest");
+        fs::write(package.join("src/lib.rs"), "").expect("member source");
+    }
+    fs::create_dir(root.join(".config/arch")).expect("architecture config directory");
+    fs::write(
+        root.join(".config/arch/direction.toml"),
+        "[[layer]]\nindex=0\nname='foundation'\ncrates=['portable-foundation']\n\n\
+         [[layer]]\nindex=1\nname='product'\ncrates=['portable-product']\n",
+    )
+    .expect("direction policy");
+    let manifest = "[package]\nname='portable-foundation'\nversion='0.1.0'\nedition='2024'\n\n\
+                    [workspace]\nmembers=['modules/renamed-bridge','packages/renamed-product']\n";
+    let args = [
+        "fixture",
+        "lint",
+        "arch",
+        "--check",
+        "direction",
+        "--crate",
+        "portable-foundation",
+        "--report",
+        "direction.md",
+    ];
+    for (dependencies, forbidden) in [
+        (
+            "[dependencies]\nproduct={package='portable-product',path='packages/renamed-product'}\n",
+            true,
+        ),
+        (
+            "[dependencies]\nbridge={package='portable-bridge',path='modules/renamed-bridge'}\n",
+            true,
+        ),
+        (
+            "[dev-dependencies]\nproduct={package='portable-product',path='packages/renamed-product'}\n",
+            false,
+        ),
+        ("", false),
+    ] {
+        fs::write(
+            root.join("Cargo.toml"),
+            format!("{manifest}\n{dependencies}"),
+        )
+        .expect("selected dependency scenario");
+        let result = run(root, &args);
+        if forbidden {
+            result.expect_err("normal dependencies must not reach a higher layer");
+        } else {
+            result.expect("development-only and absent dependencies are not normal edges");
+        }
+        let report = fs::read_to_string(root.join("direction.md")).expect("direction report");
+        assert_eq!(
+            report.contains("portable-foundation -> portable-product"),
+            forbidden,
+            "{report}"
+        );
+    }
+}
+
+#[test]
+fn manifest_aliases_use_semantic_target_identity() {
+    let directory = tempdir().expect("target dependency fixture");
+    let root = directory.path();
+    workspace(root, "portable-order", "");
+    for (path, name, workspace) in [
+        ("modules/internal", "portable-engine", ""),
+        ("vendor/a-external", "a-external", "[workspace]\n"),
+    ] {
+        let package = root.join(path);
+        fs::create_dir_all(package.join("src")).expect("dependency source directory");
+        fs::write(
+            package.join("Cargo.toml"),
+            format!("[package]\nname='{name}'\nversion='0.1.0'\nedition='2024'\n{workspace}"),
+        )
+        .expect("dependency manifest");
+        fs::write(package.join("src/lib.rs"), "").expect("dependency source");
+    }
+    let manifest = "[package]\nname='portable-order'\nversion='0.1.0'\nedition='2024'\n\n\
+                    [workspace]\nmembers=['modules/internal']\nexclude=['vendor/a-external']\n";
+    let internal = "z-engine={package='portable-engine',path='modules/internal'}\n";
+    let external = "a-external={path='vendor/a-external'}\n";
+    let args = ["fixture", "manifest", "dependency-order"];
+    for target in ["cfg(unix)", "cfg( unix )", "cfg(any(unix,windows))"] {
+        let header = format!("{manifest}\n[target.'{target}'.dependencies]\n");
+        fs::write(
+            root.join("Cargo.toml"),
+            format!("{header}{internal}\n{external}"),
+        )
+        .expect("ordered target dependencies");
+        run(root, &args).expect("workspace alias precedes the external dependency");
+        fs::write(
+            root.join("Cargo.toml"),
+            format!("{header}{external}\n{internal}"),
+        )
+        .expect("misordered target dependencies");
+        run(root, &args).expect_err("target formatting must not change dependency ownership");
+    }
 }
 
 #[test]

@@ -382,7 +382,7 @@ mod tests {
                 Check, Context, fn_arg_count::FnArgCount,
                 platform_layer_hygiene::PlatformLayerHygiene,
             },
-            config::{ArchConfig, ThresholdsConfig},
+            config::ArchConfig,
         },
         common::scope::Scope,
     };
@@ -426,13 +426,27 @@ mod tests {
         );
     }
 
-    fn kithara_policy() -> PlatformLayerHygieneThreshold {
-        toml::from_str::<ThresholdsConfig>(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../.config/arch/thresholds.toml"
-        )))
-        .expect("Kithara platform policy")
-        .platform_layer_hygiene
+    fn policy() -> PlatformLayerHygieneThreshold {
+        PlatformLayerHygieneThreshold {
+            enabled: true,
+            root: "crates/kithara-platform/src/".into(),
+            arc_owner_files: vec![
+                "crates/kithara-platform/src/system/ownership.rs".into(),
+                "crates/kithara-platform/src/wasm/sync/mod.rs".into(),
+            ],
+            excluded_subtrees: ["backend/", "system/", "loom/", "wasm/"]
+                .map(str::to_owned)
+                .to_vec(),
+            impl_subtrees: [
+                "flash/sync/",
+                "flash/tokio/",
+                "flash/system/",
+                "common/cancel/",
+                "common/time.rs",
+            ]
+            .map(str::to_owned)
+            .to_vec(),
+        }
     }
 
     #[test]
@@ -474,7 +488,7 @@ mod tests {
 
     #[test]
     fn raw_arc_owner_is_exact() {
-        let cfg = kithara_policy();
+        let cfg = policy();
         assert!(owns_raw_arc(
             "crates/kithara-platform/src/system/ownership.rs",
             &cfg
@@ -509,7 +523,7 @@ mod tests {
 
     #[test]
     fn scope_excludes_backend_and_impl_subtrees() {
-        let cfg = kithara_policy();
+        let cfg = policy();
         // Backend impls and primitive sub-trees are NOT in scope.
         assert!(!in_scope(
             "crates/kithara-platform/src/system/sync/mutex.rs",
@@ -553,7 +567,7 @@ mod tests {
 
     #[test]
     fn scope_includes_cross_backend_flash_and_common() {
-        let cfg = kithara_policy();
+        let cfg = policy();
         // Consumer-facing flash control surface + shared common modules ARE
         assert!(in_scope("crates/kithara-platform/src/flash/api.rs", &cfg));
         assert!(in_scope("crates/kithara-platform/src/flash/ctx.rs", &cfg));
@@ -570,7 +584,7 @@ mod tests {
 
     #[test]
     fn impl_subtree_classification() {
-        let cfg = kithara_policy();
+        let cfg = policy();
         assert!(is_impl_subtree("flash/sync/notify.rs", &cfg));
         assert!(is_impl_subtree("flash/tokio/mpsc.rs", &cfg));
         assert!(is_impl_subtree("flash/system/pace.rs", &cfg));

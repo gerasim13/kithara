@@ -9,7 +9,9 @@ use cargo_metadata::Metadata;
 use clap::Args;
 
 use super::{
-    checks::{Check, Context, redundant_accessors::RedundantAccessors, registry},
+    checks::{
+        Check, Context, direction::Direction, redundant_accessors::RedundantAccessors, registry,
+    },
     config::ArchConfig,
 };
 use crate::{
@@ -76,6 +78,14 @@ pub(crate) fn run(args: &ArchArgs, workspace: &Ctx) -> Result<()> {
     let workspace_root = workspace.root.clone();
     let config_dir = workspace_root.join(&args.config_dir);
     let config = ArchConfig::load(&config_dir)?;
+    let resolved = if !config.direction.layers.is_empty()
+        && (args.check.is_empty() || args.check.iter().any(|id| id == Direction.id()))
+    {
+        Some(workspace.resolved_metadata()?)
+    } else {
+        None
+    };
+    let metadata = resolved.as_ref().unwrap_or(metadata);
     let scope = Scope::new(args.crates.clone(), args.paths.clone()).with_metadata(metadata);
 
     let ctx = Context::new(&config, metadata, &workspace_root, &scope);

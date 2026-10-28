@@ -290,7 +290,7 @@ mod tests {
                 Check, Context, cancel_root_sites::CancelRootSites,
                 smoothing_primitive_sites::SmoothingPrimitiveSites,
             },
-            config::{ArchConfig, ThresholdsConfig},
+            config::ArchConfig,
         },
         common::scope::Scope,
     };
@@ -397,20 +397,6 @@ mod tests {
         ));
         assert!(is_test_or_bench_path("crates/kithara-hls/src/tests/foo.rs"));
         assert!(!is_test_or_bench_path("crates/kithara-app/src/main.rs"));
-    }
-
-    #[test]
-    fn explicit_kithara_patterns_are_the_ones_the_check_shipped_with() {
-        let thresholds: ThresholdsConfig = toml::from_str(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../.config/arch/thresholds.toml"
-        )))
-        .expect("Kithara cancellation policy");
-
-        assert_eq!(
-            thresholds.cancel_root_sites.patterns,
-            ["CancelToken::root", "CancelToken::never"]
-        );
     }
 
     /// A project that names a different root-minting call gets that call
