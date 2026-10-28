@@ -311,9 +311,19 @@ where
             Some(PcmPacket::Chunk(chunk)) if chunk.frames() > 0
         );
         if !ready_pcm || !playing || self.cancel.as_ref().is_some_and(CancelToken::is_cancelled) {
+            let diag_start = std::time::Instant::now();
             let _ = self.source.prepare_deferred();
+            let diag_us = diag_start.elapsed().as_micros();
+            if diag_us > 1_000 {
+                tracing::debug!(target: "kithara_render::worker::scheduler::diag", diag_us, ready_pcm, playing, "diag: prepare_deferred long");
+            }
         }
+        let diag_start = std::time::Instant::now();
         self.source.finish_deferred();
+        let diag_us = diag_start.elapsed().as_micros();
+        if diag_us > 1_000 {
+            tracing::debug!(target: "kithara_render::worker::scheduler::diag", diag_us, "diag: finish_deferred long");
+        }
         self.port.flush();
     }
 
