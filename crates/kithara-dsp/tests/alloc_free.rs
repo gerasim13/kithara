@@ -157,6 +157,31 @@ fn spectrum_never_allocates_after_construction() {
 
 #[cfg(feature = "spectrum")]
 #[kithara::test(native)]
+fn phase_never_allocates_for_prefixes_and_offsets() {
+    let re = [0.75_f32; FRAMES + 5];
+    let im = [-0.25_f32; FRAMES + 5];
+    let mut output = [0.0_f32; FRAMES + 5];
+    assert_no_alloc(|| {
+        for len in [0, 1, 2, 7, 255, 256, 257, 512, 513, 1025] {
+            assert_eq!(
+                phase(&re[1..len + 1], &im[2..len + 3], &mut output[3..]),
+                len
+            );
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            assert_eq!(
+                kithara_apple::accelerate::phase_f32(
+                    &re[1..len + 1],
+                    &im[2..len + 3],
+                    &mut output[3..]
+                ),
+                len
+            );
+        }
+    });
+}
+
+#[cfg(feature = "spectrum")]
+#[kithara::test(native)]
 fn autocorrelation_never_allocates_after_construction() {
     let mut acf = Autocorrelation::new(LAGS, &pools()).expect("the padding fits the region");
     let frame = vec![0.25_f32; LAGS.get()];

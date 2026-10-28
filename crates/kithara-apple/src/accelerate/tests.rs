@@ -1,12 +1,18 @@
-use std::num::NonZeroUsize;
+use std::{
+    f32::consts::{FRAC_PI_2, PI, TAU},
+    num::NonZeroUsize,
+};
 
-use kithara_test_fixtures::unit_fixtures::{accelerate_ramp, accelerate_wave};
+use kithara_test_fixtures::{
+    portable::polar_points,
+    unit_fixtures::{accelerate_ramp, accelerate_wave},
+};
 use kithara_test_utils::kithara;
 
 use super::{
     BiquadError, DftError, MultichannelBiquad, OutOfWindow, RealDft, add_f32, affine_f32,
     correlate_f32, deinterleave_pair_f32, downmix_pair_f32, interleave_pair_f32,
-    linear_interpolate_f32, max_magnitude_f32, multiply_f32, quadratic_interpolate_f32,
+    linear_interpolate_f32, max_magnitude_f32, multiply_f32, phase_f32, quadratic_interpolate_f32,
     scale_add_f32, sub_f32, sum_squares_f32,
 };
 
@@ -28,6 +34,131 @@ struct Plane<const N: usize>([f32; N]);
 
 fn bits<const N: usize>(values: [f32; N]) -> [u32; N] {
     values.map(f32::to_bits)
+}
+
+#[kithara::test(native)]
+fn phase_tracks_scalar_angles() {
+    let (re, im) = polar_points();
+    let mut output = vec![UNWRITTEN; re.len()];
+    assert_eq!(phase_f32(re, im, &mut output), re.len());
+    for ((&x, &y), actual) in re.iter().zip(im).zip(output) {
+        let expected = y.atan2(x);
+        let difference = actual - expected;
+        let error = (difference - TAU * (difference / TAU).round()).abs();
+        assert!((-PI..=PI).contains(&actual), "atan2({y}, {x}) = {actual}");
+        assert!(
+            error <= 1e-6,
+            "atan2({y}, {x}): {actual}, scalar {expected}"
+        );
+    }
+}
+
+#[kithara::test(native)]
+fn phase_argument_order_is_imaginary_then_real() {
+    let mut output = [UNWRITTEN];
+    assert_eq!(phase_f32(&[2.0], &[3.0], &mut output), 1);
+    assert!((output[0] - 3.0_f32.atan2(2.0)).abs() <= 1e-6);
+    assert!((output[0] - 2.0_f32.atan2(3.0)).abs() > 1e-6);
+}
+
+#[kithara::test(native)]
+fn phase_preserves_signed_zero_quadrants() {
+    let re = [
+        0.0, 0.0, -0.0, -0.0, 1.0, 1.0, -1.0, -1.0, 0.0, -0.0, 0.0, -0.0,
+    ];
+    let im = [
+        0.0, -0.0, 0.0, -0.0, 0.0, -0.0, 0.0, -0.0, 1.0, 1.0, -1.0, -1.0,
+    ];
+    let expected = [
+        0.0, -0.0, PI, -PI, 0.0, -0.0, PI, -PI, FRAC_PI_2, FRAC_PI_2, -FRAC_PI_2, -FRAC_PI_2,
+    ];
+    let mut output = [UNWRITTEN; 12];
+    assert_eq!(phase_f32(&re, &im, &mut output), output.len());
+    assert_eq!(bits(output), bits(expected));
+}
+
+#[kithara::test(native)]
+#[case::empty_real([0, 4, 5])]
+#[case::empty_imaginary([4, 0, 5])]
+#[case::empty_output([4, 5, 0])]
+#[case::short_real([2, 4, 5])]
+#[case::short_imaginary([4, 2, 5])]
+#[case::short_output([4, 5, 2])]
+#[case::odd([7, 7, 7])]
+fn phase_writes_only_the_common_prefix_at_independent_offsets(#[case] lengths: [usize; 3]) {
+    let re = Plane([9.0, 2.0, -3.0, -2.0, 3.0, 0.5, -0.5, 4.0, -4.0]);
+    let im = Plane([9.0, 9.0, 3.0, 2.0, -3.0, -2.0, 2.0, 2.0, -0.5]);
+    let mut output = Plane([UNWRITTEN; 12]);
+    let [r, i, o] = lengths;
+    let len = r.min(i).min(o);
+    let original_re = bits(re.0);
+    let original_im = bits(im.0);
+    assert_eq!(
+        phase_f32(&re.0[1..1 + r], &im.0[2..2 + i], &mut output.0[3..3 + o]),
+        len
+    );
+    assert_eq!(bits(re.0), original_re);
+    assert_eq!(bits(im.0), original_im);
+    for (index, &actual) in output.0.iter().enumerate() {
+        if (3..3 + len).contains(&index) {
+            let expected = im.0[index - 1].atan2(re.0[index - 2]);
+            assert!(
+                (actual - expected).abs() <= 1e-6,
+                "sample {index}: {actual}, {expected}"
+            );
+        } else {
+            assert_eq!(actual.to_bits(), UNWRITTEN.to_bits(), "sentinel {index}");
+        }
+    }
+}
+
+#[kithara::test(native)]
+fn phase_nonfinite_values_match_scalar_classification_and_angles() {
+    let values = [
+        f32::NEG_INFINITY,
+        -1.0,
+        -0.0,
+        0.0,
+        1.0,
+        f32::INFINITY,
+        f32::NAN,
+    ];
+    for x in values {
+        let re = [x; 7];
+        let mut output = [UNWRITTEN; 7];
+        assert_eq!(phase_f32(&re, &values, &mut output), output.len());
+        for (y, actual) in values.into_iter().zip(output) {
+            let expected = y.atan2(x);
+            if expected.is_nan() {
+                assert!(actual.is_nan(), "atan2({y}, {x}) = {actual}");
+            } else if expected == 0.0 {
+                assert_eq!(actual.to_bits(), expected.to_bits(), "atan2({y}, {x})");
+            } else {
+                assert!(
+                    (actual - expected).abs() <= 1e-6,
+                    "atan2({y}, {x}): {actual}, scalar {expected}"
+                );
+            }
+        }
+    }
+}
+
+#[kithara::test(native)]
+fn phase_subnormals_track_scalar_angles() {
+    let small = f32::from_bits(1);
+    let large = f32::from_bits(f32::MIN_POSITIVE.to_bits() - 1);
+    let re = [small, -small, small, -small, large, -large, 1.0, 1.0];
+    let im = [small, small, -small, -small, small, large, small, -small];
+    let mut output = [UNWRITTEN; 8];
+    assert_eq!(phase_f32(&re, &im, &mut output), output.len());
+    for ((x, y), actual) in re.into_iter().zip(im).zip(output) {
+        let expected = y.atan2(x);
+        assert!(
+            (actual - expected).abs() <= 1e-6,
+            "atan2({y}, {x}): {actual}, scalar {expected}"
+        );
+        assert_eq!(actual.is_sign_negative(), expected.is_sign_negative());
+    }
 }
 
 #[kithara::test(native, flash(false))]

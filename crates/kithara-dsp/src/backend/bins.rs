@@ -1,12 +1,15 @@
+use std::ops::Mul;
+#[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
 use std::{
     f32::consts::{FRAC_PI_2, FRAC_PI_4, PI},
-    ops::{Add, Div, Mul, Sub},
+    ops::{Add, Div, Sub},
 };
 
 use fearless_simd::{Level, dispatch, prelude::*};
 
 use super::simd::zip_map;
 
+#[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
 mod consts {
     /// Cephes `atanf` on `[0, tan(π/8)]`: `atan(t) ≈ t + t³·P(t²)`, the
     /// coefficients of `P` from the highest power down.
@@ -34,10 +37,12 @@ pub(super) fn magnitude_kernel<S: Simd>(
 }
 
 /// `arg(re + i·im)` per bin in `[−π, π]`, within `1e-6` rad of `atan2`.
+#[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
 pub(crate) fn phase(re: &[f32], im: &[f32], output: &mut [f32]) -> usize {
     dispatch!(Level::new(), simd => phase_kernel(simd, re, im, output))
 }
 
+#[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
 #[inline(always)]
 pub(super) fn phase_kernel<S: Simd>(simd: S, re: &[f32], im: &[f32], output: &mut [f32]) -> usize {
     zip_map(simd, [re, im], output, |x, y| atan2(simd, y, x))
@@ -46,6 +51,7 @@ pub(super) fn phase_kernel<S: Simd>(simd: S, re: &[f32], im: &[f32], output: &mu
 /// `atan2(y, x)` with the signs of zero `f32::atan2` gives: the ratio of
 /// the smaller magnitude to the larger is folded into `[0, tan(π/8)]`,
 /// evaluated by the polynomial and unfolded by octant and quadrant.
+#[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
 #[inline(always)]
 fn atan2<S: Simd>(simd: S, y: S::f32s, x: S::f32s) -> S::f32s {
     let zero = S::f32s::splat(simd, 0.0);
