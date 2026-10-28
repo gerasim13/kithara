@@ -179,7 +179,7 @@ jobs:
       vars.KITHARA_STRESS_ENABLED == 'true'
       && vars.KITHARA_STRESS_RUNNER_LABELS != ''
       && (inputs.only || '') == ''
-      && (github.event_name != 'schedule' || (inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || github.event.schedule == '17 3 1 * *' && 'monthly' || 'nightly')) != 'nightly')
+      && github.event.schedule != '17 1 * * *'
     uses: ./.github/workflows/stress.yml
     with:
       tier: ${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || github.event.schedule == '17 3 1 * *' && 'monthly' || 'nightly') }}
