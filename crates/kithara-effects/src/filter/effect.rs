@@ -1,60 +1,64 @@
 use std::num::NonZeroUsize;
 
+use kithara_bufpool::{HasPool, PoolError, SampleBuffer};
 use kithara_dsp::filter::{Biquad, FilterError};
 use kithara_signal::{AudioChunk, AudioSpec};
 
 use super::FilterConfig;
-use crate::AudioEffect;
+use crate::{AudioEffect, consts};
 
-struct Channel {
-    filter: Biquad,
-    quiet_frames: u8,
+/// Why a filter's numerical state or pooled scratch could not be prepared.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum PrepareError {
+    #[error(transparent)]
+    Filter(#[from] FilterError),
+    #[error(transparent)]
+    Pool(#[from] PoolError),
 }
 
-/// Prepared causal filtering in the producer's existing [`AudioEffect`] chain.
+/// Causal filtering over bounded planar blocks in the existing effect chain.
 ///
-/// Processing emits each chunk immediately and flush emits no extra samples.
-/// Two consecutive input/output frames at or below `1e-9` clear that channel's
-/// history. This tail rule is independent of caller chunk boundaries.
+/// Processing retains the DSP biquad's history and quiet-block reset policy.
+/// Every input chunk is emitted immediately; flush emits no extra samples.
 #[derive(kithara_config::ConfigOwner)]
 #[config_owner(config)]
 #[non_exhaustive]
-pub struct FilterEffect {
+pub struct FilterEffect<S> {
     spec: AudioSpec,
-    config: FilterConfig,
-    channels: Vec<Channel>,
+    config: FilterConfig<S>,
+    filter: Biquad,
+    planes: Vec<SampleBuffer>,
 }
 
-impl FilterEffect {
-    /// Prepare channel state outside audio processing.
+impl<S: HasPool<f32>> FilterEffect<S> {
+    /// Prepare filter state and pooled scratch outside audio processing.
     ///
     /// # Errors
-    /// Rejects zero channels, a cutoff at/above Nyquist, and designs rejected
-    /// by the DSP owner's finite-coefficient and pole-stability validation.
-    pub fn new(spec: AudioSpec, config: FilterConfig) -> Result<Self, FilterError> {
-        if spec.channels == 0 {
-            return Err(FilterError::Shape);
-        }
+    /// Rejects zero channels, cutoff at/above Nyquist, unstable coefficients,
+    /// backend setup failure, or a pool budget too small for the scratch.
+    pub fn new(spec: AudioSpec, config: FilterConfig<S>) -> Result<Self, PrepareError> {
+        let channels = NonZeroUsize::new(usize::from(spec.channels)).ok_or(FilterError::Shape)?;
         let coefficients = config.coefficients(f64::from(spec.sample_rate.get()))?;
-        let channels = (0..spec.channels)
+        let mut filter = Biquad::new(channels, NonZeroUsize::MIN)?;
+        filter.retune(0, coefficients)?;
+        let planes = (0..channels.get())
             .map(|_| {
-                let mut filter = Biquad::new(NonZeroUsize::MIN, NonZeroUsize::MIN)?;
-                filter.retune(0, coefficients)?;
-                Ok(Channel {
-                    filter,
-                    quiet_frames: 0,
-                })
+                config
+                    .pools()
+                    .get_with_len::<f32>(consts::FILTER_BLOCK_FRAMES)
             })
-            .collect::<Result<_, FilterError>>()?;
+            .collect::<Result<_, _>>()?;
         Ok(Self {
             spec,
             config,
-            channels,
+            filter,
+            planes,
         })
     }
 }
 
-impl AudioEffect for FilterEffect {
+impl<S: Send + Sync + 'static> AudioEffect for FilterEffect<S> {
     fn flush(&mut self) -> Option<AudioChunk> {
         None
     }
@@ -63,28 +67,28 @@ impl AudioEffect for FilterEffect {
         0
     }
 
-    /// Rejects a different format or incomplete interleaved frame without
-    /// advancing history. Accepted chunks retain all timeline metadata.
     fn process(&mut self, mut chunk: AudioChunk) -> Option<AudioChunk> {
-        let channels = self.channels.len();
+        let channels = self.planes.len();
         if chunk.spec() != self.spec || !chunk.samples.len().is_multiple_of(channels) {
             return None;
         }
-        for frame in chunk.samples.chunks_exact_mut(channels) {
-            for (sample, channel) in frame.iter_mut().zip(&mut self.channels) {
-                let input = sample.abs();
-                channel
-                    .filter
-                    .process(&mut [std::slice::from_mut(sample)], 0..1)
-                    .ok()?;
-                if input.max(sample.abs()) <= 1e-9 {
-                    channel.quiet_frames += 1;
-                    if channel.quiet_frames == 2 {
-                        channel.filter.reset();
-                        channel.quiet_frames = 0;
-                    }
-                } else {
-                    channel.quiet_frames = 0;
+        for block in chunk
+            .samples
+            .chunks_mut(consts::FILTER_BLOCK_FRAMES * channels)
+        {
+            let frames = block.len() / channels;
+            for (frame, input) in block.chunks_exact(channels).enumerate() {
+                for (plane, sample) in self.planes.iter_mut().zip(input) {
+                    plane[frame] = *sample;
+                }
+            }
+            // Preparation fixes the plane count and capacity for every bounded block.
+            self.filter
+                .process(&mut self.planes, 0..frames)
+                .expect("prepared filter planes cover the block");
+            for (frame, output) in block.chunks_exact_mut(channels).enumerate() {
+                for (sample, plane) in output.iter_mut().zip(&self.planes) {
+                    *sample = plane[frame];
                 }
             }
         }
@@ -92,9 +96,6 @@ impl AudioEffect for FilterEffect {
     }
 
     fn reset(&mut self) {
-        for channel in &mut self.channels {
-            channel.filter.reset();
-            channel.quiet_frames = 0;
-        }
+        self.filter.reset();
     }
 }

@@ -1,56 +1,59 @@
 use bon::bon;
+use kithara_bufpool::PoolRegion;
 use kithara_config::Config;
 use kithara_dsp::filter::{Coefficients, FilterError, Hertz, Type};
+
+use super::{Cutoff, Q};
+use crate::GainDb;
 
 /// The four causal conditioning responses supported by [`FilterConfig`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum FilterKind {
+pub enum Kind {
     HighPass,
     LowPass,
     LowShelf,
     HighShelf,
 }
 
-/// Parameters of one prepared second-order filter.
-#[derive(Clone, Copy, Debug, PartialEq, Config)]
-#[config(builder(existing), owner_access, fields(value, get(copy)))]
+/// Parameters and scratch resources of one prepared second-order filter.
+#[derive(Config)]
+#[derive_where::derive_where(Clone, Debug)]
+#[config(builder(existing), fields(value, get(copy)))]
 #[non_exhaustive]
-pub struct FilterConfig {
+pub struct FilterConfig<S> {
+    /// Scratch storage supplied by the owning playback region.
+    #[config(skip = "injected pool region", get(ref))]
+    pools: PoolRegion<S>,
     /// Pass response or shelf polarity.
-    kind: FilterKind,
-    /// Positive frequency in Hz, below Nyquist at preparation time.
-    cutoff_hz: f64,
-    /// Shelf gain in `[-24, 24]` dB; pass filters require zero.
-    gain_db: f64,
-    /// Finite positive RBJ quality factor.
-    q: f64,
+    kind: Kind,
+    /// Frequency in Hz, below Nyquist at preparation time.
+    cutoff_hz: Cutoff,
+    /// Shelf gain in `[-24, 6]` dB; pass filters require zero.
+    gain_db: GainDb,
+    /// Resonance within the admitted positive range.
+    q: Q,
 }
 
 #[bon]
-impl FilterConfig {
+impl<S> FilterConfig<S> {
     #[builder(
         builder_type(vis = "pub"),
         start_fn(name = builder, vis = "pub"),
         finish_fn(vis = "pub")
     )]
     fn new(
-        kind: FilterKind,
-        cutoff_hz: f64,
-        #[builder(default = std::f64::consts::FRAC_1_SQRT_2)] q: f64,
-        #[builder(default)] gain_db: f64,
+        #[builder(start_fn)] pools: PoolRegion<S>,
+        kind: Kind,
+        cutoff_hz: Cutoff,
+        #[builder(default)] q: Q,
+        #[builder(default)] gain_db: GainDb,
     ) -> Result<Self, FilterError> {
-        if !cutoff_hz.is_finite()
-            || cutoff_hz <= 0.0
-            || !q.is_finite()
-            || q <= 0.0
-            || !gain_db.is_finite()
-            || !(-24.0..=24.0).contains(&gain_db)
-            || (matches!(kind, FilterKind::HighPass | FilterKind::LowPass) && gain_db != 0.0)
-        {
+        if matches!(kind, Kind::HighPass | Kind::LowPass) && gain_db != GainDb::DEFAULT {
             return Err(FilterError::Parameters);
         }
         Ok(Self {
+            pools,
             kind,
             cutoff_hz,
             gain_db,
@@ -58,22 +61,22 @@ impl FilterConfig {
         })
     }
 
-    pub(super) fn coefficients(self, rate: f64) -> Result<Coefficients<f64>, FilterError> {
-        if self.cutoff_hz >= rate / 2.0 {
+    pub(super) fn coefficients(&self, rate: f64) -> Result<Coefficients<f64>, FilterError> {
+        if f64::from(self.cutoff_hz) >= rate / 2.0 {
             return Err(FilterError::Parameters);
         }
         let kind = match self.kind {
-            FilterKind::HighPass => Type::HighPass,
-            FilterKind::LowPass => Type::LowPass,
-            FilterKind::LowShelf => Type::LowShelf(self.gain_db),
-            FilterKind::HighShelf => Type::HighShelf(self.gain_db),
+            Kind::HighPass => Type::HighPass,
+            Kind::LowPass => Type::LowPass,
+            Kind::LowShelf => Type::LowShelf(f64::from(f32::from(self.gain_db))),
+            Kind::HighShelf => Type::HighShelf(f64::from(f32::from(self.gain_db))),
         };
         let design = || {
             Coefficients::from_params(
                 kind,
                 Hertz::from_hz(rate)?,
-                Hertz::from_hz(self.cutoff_hz)?,
-                self.q,
+                Hertz::from_hz(f64::from(self.cutoff_hz))?,
+                f64::from(self.q),
             )
         };
         design().map_err(|_| FilterError::Parameters)

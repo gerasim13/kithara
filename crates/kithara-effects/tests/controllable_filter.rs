@@ -1,10 +1,11 @@
 #![forbid(unsafe_code)]
 
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 
+use kithara_dsp::filter::{Biquad, Coefficients, Hertz, Type};
 use kithara_effects::{
-    AudioEffect, apply_effects,
-    filter::{FilterConfig, FilterEffect, FilterKind},
+    AudioEffect, GainDb, apply_effects,
+    filter::{Cutoff, FilterConfig, FilterEffect, Kind, PrepareError, Q},
 };
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_test_fixtures::{
@@ -12,7 +13,7 @@ use kithara_test_fixtures::{
     unit_fixtures::{eq_sine_40, eq_sine_1000, eq_sine_10000},
 };
 use kithara_test_utils::{
-    bufpool::{Pools, pools, sample_buffer},
+    bufpool::{Pools, TestPools, pools, pools_with_budget, sample_buffer},
     kithara,
 };
 
@@ -23,12 +24,29 @@ fn spec(channels: u16) -> AudioSpec {
     )
 }
 
-fn config(kind: FilterKind) -> FilterConfig {
-    FilterConfig::builder()
+fn config(pools: &Pools, kind: Kind) -> FilterConfig<TestPools> {
+    FilterConfig::builder(pools.clone())
         .kind(kind)
-        .cutoff_hz(1_000.0)
+        .cutoff_hz(Cutoff::checked(1_000.0).expect("admitted cutoff"))
         .build()
         .expect("valid filter")
+}
+
+fn low_pass_reference(channels: NonZeroUsize) -> Biquad {
+    let mut filter = Biquad::new(channels, NonZeroUsize::MIN).expect("reference filter");
+    filter
+        .retune(
+            0,
+            Coefficients::from_params(
+                Type::LowPass,
+                Hertz::from_hz(44_100.0).expect("reference rate"),
+                Hertz::from_hz(1_000.0).expect("reference cutoff"),
+                std::f64::consts::FRAC_1_SQRT_2,
+            )
+            .expect("reference coefficients"),
+        )
+        .expect("reference section");
+    filter
 }
 
 fn chunk(pools: &Pools, channels: u16, input: &[f32]) -> AudioChunk {
@@ -43,63 +61,39 @@ fn chunk(pools: &Pools, channels: u16, input: &[f32]) -> AudioChunk {
 
 #[kithara::test]
 fn filter_rejects_invalid_parameters_and_unstable_designs() {
-    for cutoff in [0.0, -1.0, f64::NAN, f64::INFINITY] {
-        assert!(
-            FilterConfig::builder()
-                .kind(FilterKind::HighPass)
-                .cutoff_hz(cutoff)
-                .build()
-                .is_err()
-        );
+    let pools = pools();
+    for cutoff in [0.0, -1.0, 19.0, 20_001.0, f64::NAN, f64::INFINITY] {
+        assert!(Cutoff::checked(cutoff).is_none());
     }
-    for q in [0.0, -1.0, f64::NAN, f64::INFINITY] {
-        assert!(
-            FilterConfig::builder()
-                .kind(FilterKind::LowPass)
-                .cutoff_hz(1_000.0)
-                .q(q)
-                .build()
-                .is_err()
-        );
+    for q in [0.0, -1.0, 0.09, 10.01, f64::NAN, f64::INFINITY] {
+        assert!(Q::checked(q).is_none());
     }
-    for gain in [f64::NAN, f64::INFINITY, -25.0, 25.0] {
-        assert!(
-            FilterConfig::builder()
-                .kind(FilterKind::LowShelf)
-                .cutoff_hz(1_000.0)
-                .gain_db(gain)
-                .build()
-                .is_err()
-        );
+    for gain in [f32::NAN, f32::INFINITY, -25.0, 7.0] {
+        assert!(GainDb::checked(gain).is_none());
     }
     assert!(
-        FilterConfig::builder()
-            .kind(FilterKind::HighPass)
-            .cutoff_hz(1_000.0)
-            .gain_db(3.0)
+        FilterConfig::builder(pools.clone())
+            .kind(Kind::HighPass)
+            .cutoff_hz(Cutoff::MIN)
+            .gain_db(GainDb::MAX)
             .build()
             .is_err()
     );
-    let at_nyquist = FilterConfig::builder()
-        .kind(FilterKind::LowPass)
-        .cutoff_hz(22_050.0)
+    let at_nyquist = FilterConfig::builder(pools.clone())
+        .kind(Kind::LowPass)
+        .cutoff_hz(Cutoff::MAX)
         .build()
-        .expect("positive frequency");
-    assert!(FilterEffect::new(spec(1), at_nyquist).is_err());
-    let below_f32_resolution = FilterConfig::builder()
-        .kind(FilterKind::LowPass)
-        .cutoff_hz(1e-12)
-        .build()
-        .expect("positive frequency");
-    assert!(FilterEffect::new(spec(1), below_f32_resolution).is_err());
-    assert!(FilterEffect::new(spec(0), config(FilterKind::HighPass)).is_err());
+        .expect("admitted cutoff");
+    let low_rate = AudioSpec::new(1, NonZeroU32::new(40_000).expect("nonzero rate"));
+    assert!(FilterEffect::new(low_rate, at_nyquist).is_err());
+    assert!(FilterEffect::new(spec(0), config(&pools, Kind::HighPass)).is_err());
 }
 
 #[kithara::test]
 fn filter_is_a_real_chain_consumer_and_preserves_chunk_metadata() {
     let pools = pools();
     let mut chain: Vec<Box<dyn AudioEffect>> = vec![Box::new(
-        FilterEffect::new(spec(2), config(FilterKind::HighPass)).expect("prepared filter"),
+        FilterEffect::new(spec(2), config(&pools, Kind::HighPass)).expect("prepared filter"),
     )];
     let input = [0.25, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
     let mut source = chunk(&pools, 2, &input);
@@ -126,9 +120,9 @@ fn filter_is_a_real_chain_consumer_and_preserves_chunk_metadata() {
 fn filter_keeps_history_across_odd_blocks_and_reset_clears_it() {
     let pools = pools();
     let mut whole =
-        FilterEffect::new(spec(1), config(FilterKind::LowPass)).expect("prepared filter");
+        FilterEffect::new(spec(1), config(&pools, Kind::LowPass)).expect("prepared filter");
     let mut split =
-        FilterEffect::new(spec(1), config(FilterKind::LowPass)).expect("prepared filter");
+        FilterEffect::new(spec(1), config(&pools, Kind::LowPass)).expect("prepared filter");
     let mut input = vec![0.0; 257];
     input[0] = 0.25;
     input[97] = -0.125;
@@ -159,21 +153,21 @@ fn filter_keeps_history_across_odd_blocks_and_reset_clears_it() {
 /// The mono 44.1 kHz fixtures pin Butterworth cutoff and shelf midpoint gain
 /// within 0.5 dB after discarding 4096 samples of startup history.
 #[kithara::test]
-#[case(FilterKind::HighPass, 0.0, -3.010_299_956_64)]
-#[case(FilterKind::LowPass, 0.0, -3.010_299_956_64)]
-#[case(FilterKind::LowShelf, 12.0, 6.0)]
-#[case(FilterKind::HighShelf, -12.0, -6.0)]
+#[case(Kind::HighPass, 0.0, -3.010_299_956_64)]
+#[case(Kind::LowPass, 0.0, -3.010_299_956_64)]
+#[case(Kind::LowShelf, 6.0, 3.0)]
+#[case(Kind::HighShelf, -12.0, -6.0)]
 fn filter_matches_declared_corner_response(
     eq_sine_1000: Vec<f32>,
-    #[case] kind: FilterKind,
-    #[case] gain_db: f64,
+    #[case] kind: Kind,
+    #[case] gain_db: f32,
     #[case] reference_db: f64,
 ) {
     let pools = pools();
-    let config = FilterConfig::builder()
+    let config = FilterConfig::builder(pools.clone())
         .kind(kind)
-        .cutoff_hz(1_000.0)
-        .gain_db(gain_db)
+        .cutoff_hz(Cutoff::checked(1_000.0).expect("admitted cutoff"))
+        .gain_db(GainDb::checked(gain_db).expect("admitted gain"))
         .build()
         .expect("valid response case");
     let mut filter = FilterEffect::new(spec(1), config).expect("prepared filter");
@@ -192,9 +186,9 @@ fn filter_matches_declared_corner_response(
 fn rejected_chunk_leaves_filter_history_untouched() {
     let pools = pools();
     let mut filter =
-        FilterEffect::new(spec(1), config(FilterKind::HighPass)).expect("prepared filter");
+        FilterEffect::new(spec(1), config(&pools, Kind::HighPass)).expect("prepared filter");
     let mut reference =
-        FilterEffect::new(spec(1), config(FilterKind::HighPass)).expect("reference filter");
+        FilterEffect::new(spec(1), config(&pools, Kind::HighPass)).expect("reference filter");
     for effect in [&mut filter, &mut reference] {
         let output = effect
             .process(chunk(&pools, 1, &[0.25, 0.0, 0.0]))
@@ -214,24 +208,24 @@ fn rejected_chunk_leaves_filter_history_untouched() {
 
 /// Compare settled fixture RMS against the bilinear Butterworth magnitude.
 #[kithara::test]
-#[case(FilterKind::LowPass, 40.0, eq_sine_40())]
-#[case(FilterKind::LowPass, 10_000.0, eq_sine_10000())]
-#[case(FilterKind::HighPass, 40.0, eq_sine_40())]
-#[case(FilterKind::HighPass, 10_000.0, eq_sine_10000())]
+#[case(Kind::LowPass, 40.0, eq_sine_40())]
+#[case(Kind::LowPass, 10_000.0, eq_sine_10000())]
+#[case(Kind::HighPass, 40.0, eq_sine_40())]
+#[case(Kind::HighPass, 10_000.0, eq_sine_10000())]
 fn filter_matches_pass_and_stop_reference_regions(
-    #[case] kind: FilterKind,
+    #[case] kind: Kind,
     #[case] hz: f64,
     #[case] input: Vec<f32>,
 ) {
     let pools = pools();
-    let mut filter = FilterEffect::new(spec(1), config(kind)).expect("prepared filter");
+    let mut filter = FilterEffect::new(spec(1), config(&pools, kind)).expect("prepared filter");
     let output = filter
         .process(chunk(&pools, 1, &input))
         .expect("filtered tone");
     let measured = 20.0 * f64::from(rms(&output.samples[4_096..]) / rms(&input[4_096..])).log10();
     let omega = std::f64::consts::PI / 44_100.0;
     let ratio = (omega * hz).tan() / (omega * 1_000.0).tan();
-    let numerator = if kind == FilterKind::HighPass {
+    let numerator = if kind == Kind::HighPass {
         ratio * ratio
     } else {
         1.0
@@ -244,33 +238,187 @@ fn filter_matches_pass_and_stop_reference_regions(
 }
 
 #[kithara::test]
-fn quiet_tail_reset_is_independent_of_single_frame_chunks() {
+#[case(1)]
+#[case(2)]
+#[case(7)]
+fn filter_matches_dsp_quiet_history_within_a_block(#[case] block_frames: usize) {
     let pools = pools();
-    let mut block =
-        FilterEffect::new(spec(1), config(FilterKind::LowPass)).expect("prepared filter");
-    let mut frames =
-        FilterEffect::new(spec(1), config(FilterKind::LowPass)).expect("prepared filter");
+    let mut filter =
+        FilterEffect::new(spec(1), config(&pools, Kind::LowPass)).expect("prepared filter");
+    let mut reference = low_pass_reference(NonZeroUsize::MIN);
     let input = [1e-12, -1e-12, 0.0, 0.0, 0.25, 0.0, 0.0];
-    let expected = block.process(chunk(&pools, 1, &input)).expect("block");
-    assert!(
-        expected.samples[2..4]
-            .iter()
-            .all(|sample| sample.to_bits() == 0)
-    );
-    let actual: Vec<_> = input
+    for block in input.chunks(block_frames) {
+        let mut expected = block.to_vec();
+        reference
+            .process(&mut [expected.as_mut_slice()], 0..block.len())
+            .expect("reference block");
+        let output = filter.process(chunk(&pools, 1, block)).expect("block");
+        assert_eq!(&output.samples[..], &expected);
+    }
+}
+
+/// One reset setup and one allocation isolate call length and plane offset.
+#[kithara::test]
+#[case::short_same_start(7, 0)]
+#[case::full_shift_one(256, 1)]
+#[case::full_shift_two(256, 2)]
+#[case::full_shift_three(256, 3)]
+fn biquad_impulse_prefix_is_independent_of_length_and_offset(
+    #[case] frames: usize,
+    #[case] offset: usize,
+) {
+    let mut filter = low_pass_reference(NonZeroUsize::MIN);
+    let mut plane = vec![0.0; 259];
+    plane[0] = 0.25;
+    filter
+        .process(&mut [plane.as_mut_slice()], 0..256)
+        .expect("reference block");
+    let expected: Vec<_> = plane[..7].iter().map(|sample| sample.to_bits()).collect();
+    filter.reset();
+    plane.fill(0.0);
+    plane[offset] = 0.25;
+    filter
+        .process(&mut [plane.as_mut_slice()], offset..offset + frames)
+        .expect("same allocation after reset");
+    let actual: Vec<_> = plane[offset..offset + 7]
         .iter()
-        .flat_map(|sample| {
-            frames
-                .process(chunk(&pools, 1, &[*sample]))
-                .expect("frame")
-                .samples
-                .to_vec()
-        })
+        .map(|sample| sample.to_bits())
         .collect();
-    assert_eq!(actual, &expected.samples[..]);
-    block.reset();
-    let clean = block
-        .process(chunk(&pools, 1, &input[4..]))
-        .expect("clean impulse");
-    assert_eq!(&expected.samples[4..], &clean.samples[..]);
+    assert_eq!(actual, expected);
+}
+
+/// Shelf plateaus use the 40 Hz and 10 kHz fixtures, 1 kHz cutoff and the
+/// same 4096-frame startup exclusion and 0.5 dB bound as the corner cases.
+#[kithara::test]
+#[case(Kind::LowShelf, -24.0, eq_sine_40(), -24.0)]
+#[case(Kind::LowShelf, 6.0, eq_sine_40(), 6.0)]
+#[case(Kind::LowShelf, -24.0, eq_sine_10000(), 0.0)]
+#[case(Kind::LowShelf, 6.0, eq_sine_10000(), 0.0)]
+#[case(Kind::HighShelf, -24.0, eq_sine_40(), 0.0)]
+#[case(Kind::HighShelf, 6.0, eq_sine_40(), 0.0)]
+#[case(Kind::HighShelf, -24.0, eq_sine_10000(), -24.0)]
+#[case(Kind::HighShelf, 6.0, eq_sine_10000(), 6.0)]
+fn shelf_plateaus_match_declared_gain(
+    #[case] kind: Kind,
+    #[case] gain_db: f32,
+    #[case] input: Vec<f32>,
+    #[case] reference_db: f64,
+) {
+    let pools = pools();
+    let config = FilterConfig::builder(pools.clone())
+        .kind(kind)
+        .cutoff_hz(Cutoff::checked(1_000.0).expect("admitted cutoff"))
+        .gain_db(GainDb::checked(gain_db).expect("admitted gain"))
+        .build()
+        .expect("valid shelf");
+    let mut filter = FilterEffect::new(spec(1), config).expect("prepared shelf");
+    let output = filter.process(chunk(&pools, 1, &input)).expect("tone");
+    let measured = 20.0 * f64::from(rms(&output.samples[4096..]) / rms(&input[4096..])).log10();
+    assert!(
+        (measured - reference_db).abs() <= 0.5,
+        "{kind:?}: {measured} dB"
+    );
+}
+
+#[kithara::test]
+fn parameter_range_edges_keep_normalized_pcm_finite() {
+    let pools = pools();
+    let input = [1.0, -1.0, 0.25, -0.25].repeat(1025);
+    for kind in [
+        Kind::HighPass,
+        Kind::LowPass,
+        Kind::LowShelf,
+        Kind::HighShelf,
+    ] {
+        for cutoff in [Cutoff::MIN, Cutoff::MAX] {
+            for q in [Q::MIN, Q::MAX] {
+                for gain in [GainDb::MIN, GainDb::DEFAULT, GainDb::MAX] {
+                    if matches!(kind, Kind::HighPass | Kind::LowPass) && gain != GainDb::DEFAULT {
+                        continue;
+                    }
+                    let config = FilterConfig::builder(pools.clone())
+                        .kind(kind)
+                        .cutoff_hz(cutoff)
+                        .q(q)
+                        .gain_db(gain)
+                        .build()
+                        .expect("admitted parameters");
+                    let mut filter = FilterEffect::new(spec(2), config).expect("stable design");
+                    let output = filter.process(chunk(&pools, 2, &input)).expect("output");
+                    assert!(output.samples.iter().all(|sample| sample.is_finite()));
+                }
+            }
+        }
+    }
+}
+
+#[kithara::test]
+#[case(1)]
+#[case(2)]
+#[case(6)]
+fn pooled_blocks_match_multichannel_dsp(#[case] channels: u16) {
+    let pools = pools();
+    let mut filter =
+        FilterEffect::new(spec(channels), config(&pools, Kind::LowPass)).expect("prepared filter");
+    let width = usize::from(channels);
+    let mut reference = low_pass_reference(NonZeroUsize::new(width).expect("channels"));
+    let mut planes: Vec<_> = (0..channels)
+        .map(|channel| vec![f32::from(channel + 1) / 8.0; 1027])
+        .collect();
+    let input: Vec<_> = (0..1027)
+        .flat_map(|frame| planes.iter().map(move |plane| plane[frame]))
+        .collect();
+    for start in (0..1027).step_by(256) {
+        reference
+            .process(&mut planes, start..(start + 256).min(1027))
+            .expect("reference block");
+    }
+    let output = filter
+        .process(chunk(&pools, channels, &input))
+        .expect("output");
+    for (frame, samples) in output.samples.chunks_exact(width).enumerate() {
+        for (channel, sample) in samples.iter().enumerate() {
+            assert_eq!(sample.to_bits(), planes[channel][frame].to_bits());
+        }
+    }
+}
+
+#[kithara::test]
+fn filter_preparation_reports_insufficient_scratch_budget() {
+    let pools = pools_with_budget(512);
+    assert!(matches!(
+        FilterEffect::new(spec(2), config(&pools, Kind::LowPass)),
+        Err(PrepareError::Pool(_))
+    ));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[global_allocator]
+static ALLOCATOR: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;
+
+#[kithara::test(native)]
+fn prepared_filter_process_reset_and_flush_never_allocate() {
+    let pools = pools();
+    for channels in [1, 2, 6] {
+        let mut filter = FilterEffect::new(spec(channels), config(&pools, Kind::LowPass))
+            .expect("prepared filter");
+        for frames in [0, 1, 7, 256, 1027] {
+            let source = chunk(
+                &pools,
+                channels,
+                &vec![0.25; frames * usize::from(channels)],
+            );
+            let allocated = pools.stats().allocated_bytes;
+            let output = assert_no_alloc::assert_no_alloc(|| {
+                let output = filter.process(source).expect("immediate output");
+                filter.reset();
+                assert_eq!(filter.held_source_frames(), 0);
+                assert!(filter.flush().is_none());
+                assert!(filter.flush().is_none());
+                output
+            });
+            assert_eq!(output.samples.len(), frames * usize::from(channels));
+            assert_eq!(pools.stats().allocated_bytes, allocated);
+        }
+    }
 }
