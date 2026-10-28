@@ -1494,6 +1494,47 @@ fn a_menu_whose_anchor_stands_aside_takes_no_box() {
     });
 }
 
+/// A banner that measures its room. Both branches hold the same title, so
+/// both tag its path; the wide branch sets it after a 60-wide gutter.
+const ADAPTIVE_TITLE: &str = r#"Adaptive(id: "banner", measure: Width, size: (w: Fill, h: Fill),
+    base: Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+        Text(id: "title", size: (w: Fixed(80.0), h: Fixed(20.0)), style: MicroLabel, label: "TITLE"),
+    ]),
+    steps: [(from: 200.0, node: Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+        Spacer(id: "gutter", size: Some((w: Fixed(60.0), h: Fixed(20.0)))),
+        Text(id: "title", size: (w: Fixed(80.0), h: Fixed(20.0)), style: MicroLabel, label: "TITLE"),
+    ]))])"#;
+
+/// A path both branches of an adaptive block hold names the control of the
+/// branch the room reaches, whichever of them was mounted last.
+#[kithara::test]
+#[case::narrow(120, 0.0)]
+#[case::wide(240, 60.0)]
+fn a_path_two_branches_share_follows_the_branch_that_stands(#[case] width: u32, #[case] x: f32) {
+    let endpoints = menu_endpoints();
+    let resolver = one_control(ADAPTIVE_TITLE);
+    let ui = Ui::new(
+        Menu::default(),
+        Config::builder()
+            .endpoints(&endpoints)
+            .resolver(&resolver)
+            .text(builtin::text_doc())
+            .build(),
+        (width, 120),
+        1.0,
+    )
+    .unwrap_or_else(|error| panic!("the adaptive banner must mount: {error}"));
+    let title = ui
+        .rect_of("demo/title")
+        .unwrap_or_else(|| panic!("the standing title must be laid out"));
+
+    assert_eq!(
+        (title.x, title.w, title.h),
+        (x, 80.0, 20.0),
+        "the title path named a branch the room does not reach"
+    );
+}
+
 #[kithara::test]
 fn the_menu_whose_anchor_stands_hangs_below_it() {
     with_bars(&[narrow_bar(), wide_bar()], |ui| {
