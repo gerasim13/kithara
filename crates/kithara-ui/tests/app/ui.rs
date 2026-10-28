@@ -963,6 +963,68 @@ fn turning_to_another_skin_compiles_the_document_again() {
     );
 }
 
+/// The dresser turned by something outside its document — a setting, a timer,
+/// a message from the network — which reaches it on its next tick.
+struct Redressed<'a>(Dresser<'a>);
+
+impl App for Redressed<'_> {
+    fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
+        self.0.reads(with)
+    }
+
+    fn tick(&mut self) {
+        self.0.lit = true;
+    }
+
+    delegate::delegate! {
+        to self.0 {
+            fn document(&self) -> &str;
+            fn skin(&self) -> &Skin;
+            fn update(&mut self, event: UiEvent);
+        }
+    }
+}
+
+/// Nothing on the page asked for the other skin, and the host follows it all
+/// the same — once, not again on every frame after.
+#[kithara::test]
+fn a_skin_turned_outside_the_document_compiles_it_again_once() {
+    let endpoints = swap_endpoints();
+    let inner = resolver();
+    let resolver = Counted {
+        inner: &inner,
+        loads: Cell::new(0),
+    };
+    let blue = page_skin("fixture-blue", "#123456");
+    let config = Config::builder()
+        .endpoints(&endpoints)
+        .resolver(&resolver)
+        .text(builtin::text_doc())
+        .build();
+    let mut ui = Ui::new(
+        Redressed(Dresser::wearing(skin(), &blue)),
+        config,
+        (240, 120),
+        1.0,
+    )
+    .unwrap_or_else(|error| panic!("the dresser must mount: {error}"));
+    let mounted = resolver.loads.get();
+
+    ui.frame(Duration::from_millis(16));
+    let turned = resolver.loads.get();
+    ui.frame(Duration::from_millis(16));
+
+    assert!(
+        turned > mounted,
+        "a skin turned outside the document must compile it again"
+    );
+    assert_eq!(
+        resolver.loads.get(),
+        turned,
+        "a skin that stays on must not compile the document again"
+    );
+}
+
 /// A hand on a control publishes an action for every step it moves. Compiling
 /// the page again for each of them costs more than drawing it — and the page
 /// cannot have changed, because the application is still showing the same one.
