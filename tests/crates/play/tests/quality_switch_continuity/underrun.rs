@@ -364,6 +364,12 @@ async fn capture_tiny_ring(
                             )
                     })
                 });
+        if short && refill_snapshots == 0 {
+            kithara_test_utils::hang::record_test_hang(
+                "diag-short-block",
+                &format!("diag short block capture_start={capture_start} started_unix_micros={started_unix_micros:?}"),
+            );
+        }
         let refill_probes = if short && refill_snapshots < 3 {
             refill_snapshots += 1;
             kithara_test_utils::test::usdt::events_of("feeder_refill_unavailable")
