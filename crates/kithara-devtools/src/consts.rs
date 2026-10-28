@@ -534,7 +534,7 @@ pub(crate) const ENGINE_COUNTERS: &str = "virtual_now_ns=86410020000000 active=1
 pub(crate) const STEADY: &str =
     "2026-08-16T01:23:45.700000Z INFO kithara_play::session: playback completed frames=220500";
 
-pub(crate) const MAX_ENVELOPE_BYTES: u64 = 4 * 1_024 * 1_024;
+pub(crate) const MAX_ENVELOPE_BYTES: u64 = 224 * 1_024 * 1_024;
 pub(crate) const MAX_ENVELOPE_DIRECTORY_ENTRIES: usize = 100_000;
 pub(crate) const EVIDENCE_LINE_BYTES: usize = 64 * 1_024;
 pub(crate) const PRESSURE_LINE_BYTES: usize = 1_048_576;
