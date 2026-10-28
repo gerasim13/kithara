@@ -15,7 +15,7 @@ use kithara_render::bridge::DeckSnapshot;
 use kithara_test_utils::test::usdt::{ProbeEvent, Scope};
 
 use super::*;
-use crate::bufpool_ext::{TestPools, pools};
+use crate::bufpool_ext::pools;
 
 const OUTPUT_RING_CHUNKS: usize = 1;
 const TARGET_SEGMENT_DELAY_MS: u64 = 250;
@@ -40,18 +40,28 @@ struct Render {
     passes: Vec<ProbeEvent>,
 }
 
-/// A play worker and the dispatcher thread every lane it owns runs on.
-struct FeedWorker {
-    worker: PlayWorker<TestPools>,
+/// An offline player and the render dispatcher thread that admits its lane
+/// packets.
+struct Engine {
+    player: OfflinePlayer,
     thread: ThreadId,
 }
 
-/// Starts a play worker and reads its dispatcher thread from the audio-feed
-/// `thread_class` claim that thread makes first. Workers start one at a time,
-/// so the one new claim is this worker's.
-async fn feed_worker(scope: &Scope) -> FeedWorker {
+/// Starts an offline player and reads the render dispatcher its lanes run on
+/// from the audio-feed `thread_class` claim that thread makes first. Players
+/// start one at a time, so the one new audio-feed claim is this player's.
+async fn engine(scope: &Scope) -> Engine {
     let claimed = audio_feed_claims(scope).len();
-    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
+    let player = OfflinePlayer::new(
+        HostConfig::offline(pools())
+            .settings(
+                HostSettings::builder()
+                    .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"))
+                    .build(),
+            )
+            .build(),
+    )
+    .await;
     scope
         .wait_for(|events| {
             events
@@ -65,10 +75,10 @@ async fn feed_worker(scope: &Scope) -> FeedWorker {
     assert_eq!(
         claims.len(),
         claimed + 1,
-        "exactly one audio-feed dispatcher must start with the worker: {claims:?}",
+        "exactly one audio-feed dispatcher must start with the player: {claims:?}",
     );
-    FeedWorker {
-        worker,
+    Engine {
+        player,
         thread: claims[claimed].thread,
     }
 }
@@ -346,7 +356,7 @@ fn cold_target_fixture(target: usize) -> HlsFixtureBuilder {
 #[kithara::flash(true)]
 #[kithara_test_utils::kithara::hang_watchdog]
 async fn prepare_tiny_ring_player(
-    worker: PlayWorker<TestPools>,
+    mut player: OfflinePlayer,
     master_url: &url::Url,
     initial_variant: usize,
     backend: DecoderBackend,
@@ -365,6 +375,7 @@ async fn prepare_tiny_ring_player(
                 .expect("fixture resources"),
         )
         .build();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
     let downloader = TestServerHelper::new().await.modeled_downloader();
     let config =
         kithara::play::ResourceConfig::for_src(kithara::play::ResourceSrc::Url(master_url.clone()))
@@ -383,16 +394,6 @@ async fn prepare_tiny_ring_player(
                 std::num::NonZeroUsize::new(OUTPUT_RING_CHUNKS).expect("output ring depth"),
             )
             .build();
-    let mut player = OfflinePlayer::new(
-        HostConfig::offline(pools)
-            .settings(
-                HostSettings::builder()
-                    .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"))
-                    .build(),
-            )
-            .build(),
-    )
-    .await;
     let id = player.load_config(config).await;
     player
         .render_until_current(
@@ -755,18 +756,18 @@ async fn target_rebuild_keeps_player_output_continuous(
     let (_server, created) = source;
     let master_url = created.master_url();
 
-    let control_worker = feed_worker(&refill_scope).await;
-    let switched_worker = feed_worker(&refill_scope).await;
+    let control_engine = engine(&refill_scope).await;
+    let switched_engine = engine(&refill_scope).await;
     let (control, switched) = join!(
         prepare_tiny_ring_player(
-            control_worker.worker,
+            control_engine.player,
             &master_url,
             AAC_TO_FLAC.from,
             backend,
             "target-rebuild-control"
         ),
         prepare_tiny_ring_player(
-            switched_worker.worker,
+            switched_engine.player,
             &master_url,
             AAC_TO_FLAC.from,
             backend,
@@ -774,8 +775,8 @@ async fn target_rebuild_keeps_player_output_continuous(
         ),
     );
     let (control, switched) = join!(
-        capture_tiny_ring_control(control, &refill_scope, control_worker.thread, AAC_TO_FLAC),
-        capture_tiny_ring_switch(switched, &refill_scope, switched_worker.thread, AAC_TO_FLAC),
+        capture_tiny_ring_control(control, &refill_scope, control_engine.thread, AAC_TO_FLAC),
+        capture_tiny_ring_switch(switched, &refill_scope, switched_engine.thread, AAC_TO_FLAC),
     );
     drop(refill_scope);
     assert_eq!(
@@ -829,15 +830,15 @@ async fn cold_target_variant_switch_keeps_playback_uninterrupted(
         .collect();
     let mut failures = Vec::new();
     for [(first, first_url), (second, second_url)] in sources.as_chunks::<2>().0 {
-        let workers = [
-            feed_worker(&refill_scope).await,
-            feed_worker(&refill_scope).await,
-            feed_worker(&refill_scope).await,
-            feed_worker(&refill_scope).await,
+        let engines = [
+            engine(&refill_scope).await,
+            engine(&refill_scope).await,
+            engine(&refill_scope).await,
+            engine(&refill_scope).await,
         ];
-        let threads = workers.each_ref().map(|worker| worker.thread);
+        let threads = engines.each_ref().map(|engine| engine.thread);
         let [first_control, second_control, first_switch, second_switch] =
-            workers.map(|worker| worker.worker);
+            engines.map(|engine| engine.player);
         let (first_control, second_control, first_switch, second_switch) = join!(
             prepare_tiny_ring_player(first_control, first_url, first.from, backend, first.label),
             prepare_tiny_ring_player(
@@ -901,9 +902,9 @@ async fn aac_lane_packets_carry_the_render_quantum(
 ) {
     let probe_scope = kithara_test_utils::test::usdt::scope();
     let (_server, created) = &aac_source;
-    let worker = feed_worker(&probe_scope).await;
+    let engine = engine(&probe_scope).await;
     let prepared = prepare_tiny_ring_player(
-        worker.worker,
+        engine.player,
         &created.master_url(),
         AAC_TO_FLAC.from,
         backend,
@@ -911,7 +912,7 @@ async fn aac_lane_packets_carry_the_render_quantum(
     )
     .await;
     let control =
-        capture_tiny_ring_control(prepared, &probe_scope, worker.thread, AAC_TO_FLAC).await;
+        capture_tiny_ring_control(prepared, &probe_scope, engine.thread, AAC_TO_FLAC).await;
 
     let packets: Vec<(u64, u64, u64)> = probe_scope
         .events_of("chunk_admitted")
