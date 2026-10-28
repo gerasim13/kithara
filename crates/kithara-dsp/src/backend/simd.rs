@@ -88,7 +88,7 @@ pub(super) fn multiply_in_place_kernel<S: Simd>(
     })
 }
 
-/// `target[i] = f(target[i], [inputs[0][i], …])` over the common prefix of
+/// `target[i] = f(target[i], [inputs[0][i], ...])` over the common prefix of
 /// the target and the inputs, a vector at a time; returns the prefix length.
 #[inline(always)]
 pub(super) fn update<S: Simd, I: Inputs<S>>(
