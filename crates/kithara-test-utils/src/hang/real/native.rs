@@ -76,7 +76,7 @@ mod consts {
 
     pub(super) const MAX_FLASH_BYTES: usize = 256 * 1024;
 
-    pub(super) const MAX_FLIGHT_CHANNEL_BYTES: usize = 32 * 1024;
+    pub(super) const MAX_FLIGHT_CHANNEL_BYTES: usize = 24 * 1024 * 1024;
 
     pub(super) const MAX_THREADS_BYTES: usize = 16 * 1024;
 
