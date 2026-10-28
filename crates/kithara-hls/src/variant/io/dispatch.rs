@@ -218,6 +218,15 @@ where
             } {
                 cmd.set_priority(RequestPriority::High);
             }
+            tracing::debug!(
+                target: "kithara_hls::diag",
+                variant = self.variant,
+                ?planned,
+                audible,
+                ?construction_segment_end,
+                budget,
+                "diag: fetch dispatched"
+            );
             out.push(cmd);
             remaining -= 1;
         }
