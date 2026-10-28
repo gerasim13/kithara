@@ -2,8 +2,7 @@ use kithara::{
     assets::AssetStore,
     bufpool::{OverallBudget, PoolConfig, PoolConfigPatch, PoolError, PoolRegion, pool_schema},
     host::Host,
-    play::{PlayWorker, ResourceConfig},
-    prelude::PlaybackResamplerBackend,
+    play::{PlayWorker, PlaybackResamplerBackend, ResourceConfig},
     queue::{Queue, QueueControl, TrackSource},
 };
 use serde::Deserialize;

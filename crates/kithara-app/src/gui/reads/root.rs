@@ -101,9 +101,9 @@ mod tests {
 
     use ::kithara::{
         abr::AbrMode,
+        decode::TrackMetadata,
         effects::GainDb,
         platform::{time::Duration, tokio::runtime::Handle},
-        prelude::TrackMetadata,
         ui::render::{ReadValue, Reads, TableCell, Walk},
     };
     use iced::Size;

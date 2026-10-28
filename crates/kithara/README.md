@@ -40,7 +40,7 @@ available when `hls` is enabled.
 use kithara::audio::ReadOutcome;
 use kithara::assets::AssetStore;
 use kithara::bufpool::{OverallBudget, PoolConfig, pool_schema};
-use kithara::prelude::*;
+use kithara::play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc};
 
 pool_schema! {
     AppPools {
@@ -79,8 +79,9 @@ interface whether the source is HLS, a remote file, or a local path. Build it
 from a `ResourceConfig`; `ReadOutcome` reports `Frames` / `Pending` / `Eof`.
 The optional `EventBus` (`resource.event_bus()`) is an observability
 side-channel and never sits in the audio path. For advanced control — multi-slot
-engine, crossfade, EQ — reach into `kithara::play`. The `prelude` collects the
-everyday types.
+engine, crossfade, EQ — reach into `kithara::play`.
+Each facade module re-exports its domain; import types from the module that
+owns them.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the architecture, detailed contracts, and invariants.
 

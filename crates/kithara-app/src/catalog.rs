@@ -1,5 +1,6 @@
 use kithara::{
-    prelude::{ResourceSrc, TrackMetadata},
+    decode::TrackMetadata,
+    play::ResourceSrc,
     queue::{QueueError, Transition},
 };
 use kithara_app_library::Playable;

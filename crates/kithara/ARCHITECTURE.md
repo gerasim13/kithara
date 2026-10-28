@@ -150,7 +150,6 @@ stretch backend is compiled; the flat `StretchKind` re-export and
 `kithara::warp::WarpRenderer` are gated on a native stretch backend.
 The facade re-exports the test attribute macros; their expansions resolve
 through `kithara-test-utils`, which the test crate depends on.
-The `prelude` collects the everyday types.
 
 ## Integration
 

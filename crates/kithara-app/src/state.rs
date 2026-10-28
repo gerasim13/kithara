@@ -14,8 +14,9 @@ use kithara::{
             task,
         },
     },
-    play::{BpmInfo, DjEvent, EngineEvent, MediaTime, PlayerEvent, SessionEvent},
-    prelude::EngineLoadSnapshot,
+    play::{
+        BpmInfo, DjEvent, EngineEvent, EngineLoadSnapshot, MediaTime, PlayerEvent, SessionEvent,
+    },
     queue::{QueueEvent, TrackEntry},
     stream::AudioCodec,
 };

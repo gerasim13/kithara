@@ -9,8 +9,7 @@ use kithara::{
     analysis::{AnalysisDemand, BeatAnalysisConfig, BeatArtifact},
     assets::StorageBackend,
     platform::{CancelToken, time::Duration},
-    play::{PlayWorker, PlayWorkerConfig},
-    prelude::{ResourceConfig, ResourceSrc},
+    play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
 };
 use kithara_app::{
     pools::{AppPools, AppStore, PoolsSection, build},
