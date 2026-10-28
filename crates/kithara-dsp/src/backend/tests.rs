@@ -1270,12 +1270,14 @@ fn crossfade_linear_preserves_identity_and_integer_frame_gains() {
     for (name, crossfade) in crossfades() {
         for size in SIZES {
             for offset in OFFSETS {
-                for channels in [stride(1), stride(2), stride(6)] {
+                for channels in [stride(1), stride(2), stride(3), stride(6)] {
                     for first in [
                         0,
                         1,
                         (1 << 24) - 3,
                         (1 << 24) + 1,
+                        (1 << 31) + 1,
+                        u32_edge.saturating_sub(1024),
                         u32_edge.saturating_sub(3),
                         u32_edge.saturating_add(1),
                         usize::MAX,
