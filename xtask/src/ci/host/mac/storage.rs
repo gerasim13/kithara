@@ -11,6 +11,8 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+#[cfg(unix)]
+use kithara_devtools::lock::FileLock;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
@@ -163,6 +165,9 @@ impl<'a> HostStorage<'a> {
     }
 
     pub(super) fn preflight(&self) -> Result<()> {
+        if let Err(error) = self.cleanup() {
+            warn!(%error, "pre-job cleanup failed; checking current host capacity");
+        }
         let free = self.free_bytes()?;
         let (pressure, volume) = self.worst_pressure()?;
         match pressure {
@@ -191,6 +196,17 @@ impl<'a> HostStorage<'a> {
     }
 
     pub(super) fn cleanup(&self) -> Result<()> {
+        #[cfg(unix)]
+        let _cleanup = match FileLock::try_exclusive(
+            fs::File::open(&self.host_root).context("opening the host cleanup root")?,
+        ) {
+            Ok(lock) => lock,
+            Err(fs4::TryLockError::WouldBlock) => {
+                info!("another host cleanup is running; leaving it owned by its caller");
+                return Ok(());
+            }
+            Err(fs4::TryLockError::Error(error)) => return Err(error.into()),
+        };
         // The worst single volume, not the sum: adding a second volume's bytes
         // to the first and comparing that against thresholds calibrated for the
         // first reads every machine with a guest volume as full, and the branch
@@ -1173,6 +1189,78 @@ mod tests {
         config.host.aggressive_cleanup_bytes = 270;
         config.host.soft_cleanup_bytes = 240;
         config
+    }
+
+    #[test]
+    fn preflight_reclaims_before_its_final_capacity_check() {
+        let directory = tempfile::tempdir().unwrap();
+        for name in ["cache", "logs", "toolchains", "vm", "workspaces"] {
+            fs::create_dir_all(directory.path().join(name)).unwrap();
+        }
+        let stale = scratch_entry(directory.path(), "trusted", 4 * HostStorage::DAY);
+        let live = scratch_entry(directory.path(), "review", Duration::from_secs(60));
+        let cfg = config(directory.path());
+        let process = Process::recording(directory.path(), Recording::default());
+        let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
+        storage.set_available_sequence([0, 61, 61, 61]);
+
+        storage.preflight().unwrap();
+
+        assert!(!stale.exists(), "preflight must run the existing cleanup");
+        assert!(live.exists(), "the existing retention policy still applies");
+    }
+
+    #[test]
+    fn preflight_uses_fresh_capacity_after_a_cleanup_error() {
+        let directory = tempfile::tempdir().unwrap();
+        for name in ["cache", "logs", "toolchains", "vm", "workspaces"] {
+            fs::create_dir_all(directory.path().join(name)).unwrap();
+        }
+        let cfg = config(directory.path());
+        let process = Process::recording(directory.path(), Recording::default());
+        let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
+        // Cleanup cannot restore its soft floor, but admission has its own floor.
+        storage.set_available_sequence([30, 30, 30, 30, 61]);
+        storage.preflight().unwrap();
+
+        storage.set_available_sequence([0; 6]);
+        let error = storage.preflight().unwrap_err();
+        assert!(error.to_string().contains("is full"), "{error:#}");
+
+        fs::remove_dir(directory.path().join("toolchains")).unwrap();
+        storage.set_available_sequence([61; 4]);
+        let error = storage.preflight().unwrap_err();
+        assert!(
+            error.to_string().contains("missing CI directory"),
+            "{error:#}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preflight_leaves_peer_cleanup_owned_and_reclaims_after_its_release() {
+        let directory = tempfile::tempdir().unwrap();
+        for name in ["cache", "logs", "toolchains", "vm", "workspaces"] {
+            fs::create_dir_all(directory.path().join(name)).unwrap();
+        }
+        let stale = scratch_entry(directory.path(), "trusted", 4 * HostStorage::DAY);
+        let open = || fs::File::open(directory.path()).unwrap();
+        let peer = FileLock::try_exclusive(open()).unwrap();
+        let cfg = config(directory.path());
+        let process = Process::recording(directory.path(), Recording::default());
+        let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
+        storage.set_available_sequence([61; 5]);
+
+        storage.preflight().unwrap();
+        assert!(stale.exists(), "a peer owns this cleanup pass");
+        assert!(matches!(
+            FileLock::try_exclusive(open()),
+            Err(fs4::TryLockError::WouldBlock)
+        ));
+
+        drop(peer);
+        storage.preflight().unwrap();
+        assert!(!stale.exists(), "a released lock must not suppress cleanup");
     }
 
     #[test]
