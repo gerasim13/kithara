@@ -776,7 +776,7 @@ fn each_independent_store_has_a_default_branch_source_publisher() {
 fn cache_evidence_uploads_only_the_current_job_even_when_it_fails() {
     let config = GitlabConfig::load(workspace_root());
     let default = &config.definition("default")["artifacts"];
-    let target = ".ci-artifacts/cache/gitlab-$CI_JOB_ID.json";
+    let target = ".ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json";
     for (name, _) in config.lane_jobs() {
         let artifact = config
             .effective_value(&name, "artifacts")
@@ -1325,5 +1325,22 @@ fn a_provisioning_run_on_the_default_branch_reaches_the_mac_roll_out_alone() {
             .iter()
             .all(|rule| rule.get("when").and_then(Value::as_str) == Some("never")),
         "no admitting rule answers before the refusal"
+    );
+}
+
+#[test]
+fn shared_linux_images_use_the_installed_host_tool() {
+    let config = GitlabConfig::load(workspace_root());
+    let script = config.definition("linux:image")["script"]
+        .as_sequence()
+        .expect("image maintenance commands");
+    let commands: Vec<&str> = script.iter().filter_map(Value::as_str).collect();
+    assert_eq!(
+        commands,
+        [
+            "\"$KITHARA_CI_HOST_BINARY\" ci host mac build-linux-image",
+            "\"$KITHARA_CI_HOST_BINARY\" ci host mac smoke-linux",
+        ],
+        "shared images use the deployed binary and its embedded Dockerfile"
     );
 }
