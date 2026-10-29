@@ -1,12 +1,9 @@
 use arc_swap::ArcSwap;
 use kithara_command::{Live, Outcome, Receipt, Seq, When};
-use kithara_config::ConfigOwner;
-use kithara_effects::{
-    EffectChange, EffectConfig, EffectTarget,
-    eq::{EqBandConfig, EqBandConfigChange},
-};
+use kithara_config::{ConfigOwner, LiveConfig};
+use kithara_effects::{EffectChange, EffectConfig, EffectTarget, eq::EqBandConfig};
 use kithara_platform::sync::Arc;
-use kithara_render::{LaneCommand, LaneId, LaneProtocol};
+use kithara_render::{LaneCommand, LaneFrame, LaneId, LaneProtocol};
 use kithara_signal::SessionFrame;
 
 use super::core::PlayerImpl;
@@ -27,9 +24,13 @@ impl<C: Copy> EffectConfigView<C> {
     pub fn config(&self) -> C {
         **self.0.load()
     }
+}
 
-    fn publish(&self, config: C) {
-        self.0.store(Arc::new(config));
+impl<C: LiveConfig> EffectConfigView<C> {
+    fn settle(&self, live: &mut Live<C, LaneProtocol>, receipt: &Receipt<LaneProtocol>) {
+        if live.settle(receipt).is_some() && matches!(receipt.outcome(), Outcome::Applied { .. }) {
+            self.0.store(Arc::new(*live.config()));
+        }
     }
 }
 
@@ -99,32 +100,53 @@ impl TrackEffects {
             .collect()
     }
 
-    fn band(
+    fn admit(&self, target: EffectTarget, change: EffectChange) -> Result<(), PlayError> {
+        match (self.0.get(target.effect()), target, change) {
+            (
+                Some(EffectState::Equalizer { bands, .. }),
+                EffectTarget::EqBand { band, .. },
+                EffectChange::EqBand(_),
+            ) if bands.get(band).is_some() => Ok(()),
+            _ => Err(PlayError::InvalidConfiguration {
+                reason: format!("effect target {target:?} is not installed"),
+            }),
+        }
+    }
+
+    fn track(
         &mut self,
         target: EffectTarget,
         change: EffectChange,
-    ) -> Result<(&mut Live<EqBandConfig, LaneProtocol>, EqBandConfigChange), PlayError> {
-        if let (EffectTarget::EqBand { effect, band }, EffectChange::EqBand(change)) =
-            (target, change)
-            && let Some(EffectState::Equalizer { bands, .. }) = self.0.get_mut(effect)
-            && let Some(live) = bands.get_mut(band)
-        {
-            return Ok((live, change));
+        seq: Seq,
+        when: When<LaneFrame>,
+    ) -> Result<(), PlayError> {
+        match (self.0.get_mut(target.effect()), target, change) {
+            (
+                Some(EffectState::Equalizer { bands, .. }),
+                EffectTarget::EqBand { band, .. },
+                EffectChange::EqBand(change),
+            ) => {
+                let live = bands
+                    .get_mut(band)
+                    .ok_or_else(|| PlayError::InvalidConfiguration {
+                        reason: format!("effect target {target:?} is not installed"),
+                    })?;
+                live.track(seq, when, change);
+            }
+            _ => {
+                return Err(PlayError::InvalidConfiguration {
+                    reason: format!("effect target {target:?} is not installed"),
+                });
+            }
         }
-        Err(PlayError::InvalidConfiguration {
-            reason: format!("effect target {target:?} is not installed"),
-        })
+        Ok(())
     }
 
     pub(super) fn settle(&mut self, receipt: &Receipt<LaneProtocol>) {
         for state in &mut self.0 {
             let EffectState::Equalizer { bands, views } = state;
             for (live, view) in bands.iter_mut().zip(views.iter()) {
-                if live.settle(receipt).is_some()
-                    && matches!(receipt.outcome(), Outcome::Applied { .. })
-                {
-                    view.publish(*live.config());
-                }
+                view.settle(live, receipt);
             }
         }
     }
@@ -149,11 +171,10 @@ impl<S> PlayerImpl<S> {
         {
             return Err(PlayError::NotReady);
         }
-        self.effects.band(target, change)?;
+        self.effects.admit(target, change)?;
         let when = self.lane_when(at, out)?;
         let seq = self.send_lane(LaneCommand::ConfigureEffect { target, change }, when)?;
-        let (live, change) = self.effects.band(target, change)?;
-        live.track(seq, when, change);
+        self.effects.track(target, change, seq, when)?;
         Ok(Some(seq))
     }
 }

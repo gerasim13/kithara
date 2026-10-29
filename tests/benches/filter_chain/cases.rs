@@ -53,6 +53,7 @@ pub(crate) fn bench(c: &mut Criterion) {
                 || Some(input_chunk(&pools, spec, &fixture)),
                 |input| {
                     apply_effects(&mut chain, black_box(input.take().expect("prepared PCM")))
+                        .expect("admitted format")
                         .expect("causal filter output")
                 },
                 BatchSize::LargeInput,
@@ -76,6 +77,7 @@ pub(crate) fn bench(c: &mut Criterion) {
             |inputs| {
                 inputs.each_mut().map(|input| {
                     apply_effects(&mut chain, black_box(input.take().expect("prepared PCM")))
+                        .expect("admitted format")
                         .expect("causal filter output")
                 })
             },

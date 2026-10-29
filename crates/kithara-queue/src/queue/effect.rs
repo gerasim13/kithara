@@ -1,10 +1,9 @@
 use kithara_bufpool::HasPool;
 use kithara_command::When;
-use kithara_config::Configure;
+use kithara_config::{Configure, LiveConfig};
 use kithara_events::TrackId;
 use kithara_play::{
-    EffectChange, EffectConfigView, EffectSnapshot, EffectTarget, EqBandConfig, EqBandConfigChange,
-    LaneId, PlayError,
+    EffectChange, EffectConfigView, EffectSnapshot, EffectTarget, EqBandConfig, LaneId, PlayError,
 };
 use kithara_signal::SessionFrame;
 
@@ -62,26 +61,32 @@ where
     }
 }
 
-impl<S> Configure<EqBandConfigChange> for EffectControl<S, EqBandConfig>
+impl<S, C> Configure<C::Change> for EffectControl<S, C>
 where
     S: HasPool<u8> + Send + Sync + 'static,
+    C: LiveConfig,
+    C::Change: Into<EffectChange>,
+    C::Error: std::fmt::Display,
 {
     type At = When<SessionFrame>;
-    type Config = EqBandConfig;
+    type Config = C;
     type Error = QueueError;
     type Output = ();
 
-    fn configure(&self, change: EqBandConfigChange, at: Self::At) -> Result<(), QueueError> {
+    fn configure(&self, change: C::Change, at: Self::At) -> Result<(), QueueError> {
+        let change = C::check(change).map_err(|error| PlayError::InvalidConfiguration {
+            reason: error.to_string(),
+        })?;
         self.queue.call(QueueCommand::ConfigureEffect {
             item: self.item,
             lane: self.lane,
             target: self.target,
-            change: EffectChange::EqBand(change),
+            change: change.into(),
             at,
         })
     }
 
-    fn settings(&self) -> EqBandConfig {
+    fn settings(&self) -> C {
         self.view.config()
     }
 }

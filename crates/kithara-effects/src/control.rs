@@ -13,6 +13,18 @@ pub enum EffectConfig {
     Equalizer(Vec<EqBandConfig>),
 }
 
+/// Construction failure before an effect enters audio production.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum EffectPrepareError {
+    #[error("the prepared effect does not admit this PCM format or frame geometry")]
+    Shape,
+    #[error(transparent)]
+    Pool(#[from] PoolError),
+    #[error(transparent)]
+    Filter(#[from] kithara_dsp::filter::FilterError),
+}
+
 /// One chain entry, transferred to its producer before playback.
 #[non_exhaustive]
 pub enum EffectSetup {
@@ -23,14 +35,23 @@ pub enum EffectSetup {
 impl EffectSetup {
     /// Prepare an entry outside checked audio production.
     /// # Errors
-    /// Returns the configured effect's pool admission failure.
+    /// Returns the effect's format or pool admission failure.
     pub fn prepare<S: HasPool<f32>>(
         self,
         spec: AudioSpec,
         pools: &PoolRegion<S>,
-    ) -> Result<Box<dyn AudioEffect>, PoolError> {
+    ) -> Result<Box<dyn AudioEffect>, EffectPrepareError> {
+        if spec.channels == 0 {
+            return Err(EffectPrepareError::Shape);
+        }
         match self {
-            Self::Prepared(effect) => Ok(effect),
+            Self::Prepared(mut effect) => {
+                effect.service_deferred(spec)?;
+                if !effect.accepts_spec(spec) {
+                    return Err(EffectPrepareError::Shape);
+                }
+                Ok(effect)
+            }
             Self::Config(EffectConfig::Equalizer(bands)) => Ok(Box::new(EqEffect::new(
                 &EqConfig::builder(pools.clone()).build(),
                 bands,
@@ -63,6 +84,12 @@ impl EffectTarget {
 #[non_exhaustive]
 pub enum EffectChange {
     EqBand(EqBandConfigChange),
+}
+
+impl From<EqBandConfigChange> for EffectChange {
+    fn from(change: EqBandConfigChange) -> Self {
+        Self::EqBand(change)
+    }
 }
 
 /// A change cannot apply to the addressed prepared effect.

@@ -5,7 +5,7 @@ use kithara_dsp::filter::{Biquad, FilterError};
 use kithara_signal::{AudioChunk, AudioSpec};
 
 use super::FilterConfig;
-use crate::{AudioEffect, consts};
+use crate::{AudioEffect, EffectPrepareError, consts};
 
 /// Why a filter's numerical state or pooled scratch could not be prepared.
 #[derive(Debug, thiserror::Error)]
@@ -58,7 +58,26 @@ impl<S: HasPool<f32>> FilterEffect<S> {
     }
 }
 
-impl<S: Send + Sync + 'static> AudioEffect for FilterEffect<S> {
+impl<S: HasPool<f32> + Send + Sync + 'static> AudioEffect for FilterEffect<S> {
+    fn service_deferred(&mut self, spec: AudioSpec) -> Result<(), EffectPrepareError> {
+        if self.accepts_spec(spec) {
+            return Ok(());
+        }
+        if spec.channels == 0 {
+            return Err(EffectPrepareError::Shape);
+        }
+        let prepared = Self::new(spec, self.config.clone()).map_err(|error| match error {
+            PrepareError::Filter(error) => EffectPrepareError::Filter(error),
+            PrepareError::Pool(error) => EffectPrepareError::Pool(error),
+        })?;
+        *self = prepared;
+        Ok(())
+    }
+
+    fn accepts_spec(&self, spec: AudioSpec) -> bool {
+        self.spec == spec
+    }
+
     fn flush(&mut self) -> Option<AudioChunk> {
         None
     }
@@ -69,9 +88,8 @@ impl<S: Send + Sync + 'static> AudioEffect for FilterEffect<S> {
 
     fn process(&mut self, mut chunk: AudioChunk) -> Option<AudioChunk> {
         let channels = self.planes.len();
-        if chunk.spec() != self.spec || !chunk.samples.len().is_multiple_of(channels) {
-            return None;
-        }
+        debug_assert!(self.accepts_spec(chunk.spec()));
+        debug_assert!(chunk.samples.len().is_multiple_of(channels));
         for block in chunk
             .samples
             .chunks_mut(consts::FILTER_BLOCK_FRAMES * channels)

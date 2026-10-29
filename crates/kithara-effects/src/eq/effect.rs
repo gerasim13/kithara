@@ -1,8 +1,8 @@
 use kithara_bufpool::{HasPool, PoolError};
-use kithara_signal::AudioChunk;
+use kithara_signal::{AudioChunk, AudioSpec};
 
 use super::{EqBandConfig, EqBandConfigChange, EqConfig, IsolatorEq};
-use crate::{AudioEffect, EffectChange, EffectRefusal, EffectTarget, GainDb};
+use crate::{AudioEffect, EffectChange, EffectPrepareError, EffectRefusal, EffectTarget, GainDb};
 
 #[non_exhaustive]
 pub struct EqEffect {
@@ -10,6 +10,7 @@ pub struct EqEffect {
     eq_r: IsolatorEq,
     bands: Vec<EqBandConfig>,
     channels: u16,
+    sample_rate: u32,
 }
 
 impl EqEffect {
@@ -35,6 +36,7 @@ impl EqEffect {
             eq_r,
             bands,
             channels,
+            sample_rate,
         })
     }
 
@@ -69,6 +71,27 @@ impl EqEffect {
 }
 
 impl AudioEffect for EqEffect {
+    fn service_deferred(&mut self, spec: AudioSpec) -> Result<(), EffectPrepareError> {
+        if spec.channels == 0 {
+            return Err(EffectPrepareError::Shape);
+        }
+        if self.channels != spec.channels {
+            self.reset();
+            self.channels = spec.channels;
+        }
+        let rate = spec.sample_rate.get();
+        if self.sample_rate != rate {
+            self.eq_l.update_sample_rate(rate);
+            self.eq_r.update_sample_rate(rate);
+            self.sample_rate = rate;
+        }
+        Ok(())
+    }
+
+    fn accepts_spec(&self, spec: AudioSpec) -> bool {
+        self.channels == spec.channels && self.sample_rate == spec.sample_rate.get()
+    }
+
     fn configure(
         &mut self,
         target: EffectTarget,

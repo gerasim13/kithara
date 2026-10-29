@@ -2,9 +2,9 @@
 
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use kithara_dsp::filter::{Biquad, Coefficients, Hertz, Type};
+use kithara_dsp::filter::{Biquad, Coefficients, FilterError, Hertz, Type};
 use kithara_effects::{
-    AudioEffect, GainDb, apply_effects,
+    AudioEffect, EffectPrepareError, GainDb, apply_effects,
     filter::{Cutoff, FilterConfig, FilterEffect, Kind, PrepareError, Q},
 };
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
@@ -100,7 +100,9 @@ fn filter_is_a_real_chain_consumer_and_preserves_chunk_metadata() {
     source.meta.frame_offset = 123;
     source.meta.frames = 4;
     let meta = source.meta;
-    let output = apply_effects(&mut chain, source).expect("causal effect emits immediately");
+    let output = apply_effects(&mut chain, source)
+        .expect("admitted format")
+        .expect("causal effect emits immediately");
     assert_eq!(output.meta, meta);
     assert_ne!(&output.samples[..], &input);
     assert!(
@@ -183,25 +185,64 @@ fn filter_matches_declared_corner_response(
 }
 
 #[kithara::test]
-fn rejected_chunk_leaves_filter_history_untouched() {
+fn refused_reprepare_leaves_filter_format_and_history_untouched() {
     let pools = pools();
-    let mut filter =
-        FilterEffect::new(spec(1), config(&pools, Kind::HighPass)).expect("prepared filter");
-    let mut reference =
-        FilterEffect::new(spec(1), config(&pools, Kind::HighPass)).expect("reference filter");
+    let config = FilterConfig::builder(pools.clone())
+        .kind(Kind::HighPass)
+        .cutoff_hz(Cutoff::MAX)
+        .build()
+        .expect("admitted high cutoff");
+    let mut filter = FilterEffect::new(spec(1), config.clone()).expect("prepared filter");
+    let mut reference = FilterEffect::new(spec(1), config).expect("reference filter");
     for effect in [&mut filter, &mut reference] {
         let output = effect
             .process(chunk(&pools, 1, &[0.25, 0.0, 0.0]))
             .expect("warm filter history");
         assert!(output.samples.iter().any(|sample| *sample != 0.0));
     }
-    assert!(filter.process(chunk(&pools, 2, &[0.25, -0.25])).is_none());
+    let refused = AudioSpec::new(2, NonZeroU32::new(32_000).expect("changed rate"));
+    assert!(matches!(
+        filter.service_deferred(spec(0)),
+        Err(EffectPrepareError::Shape)
+    ));
+    assert!(matches!(
+        filter.service_deferred(refused),
+        Err(EffectPrepareError::Filter(FilterError::Parameters))
+    ));
+    assert!(!filter.accepts_spec(refused));
+    assert!(filter.accepts_spec(spec(1)));
     let expected = reference
         .process(chunk(&pools, 1, &[0.0; 3]))
         .expect("reference");
     let actual = filter
         .process(chunk(&pools, 1, &[0.0; 3]))
         .expect("accepted input");
+    assert!(expected.samples.iter().any(|sample| *sample != 0.0));
+    assert_eq!(&actual.samples[..], &expected.samples[..]);
+}
+
+#[kithara::test]
+fn pool_refusal_preserves_prepared_filter_and_history() {
+    let scratch = pools_with_budget(1024);
+    let pcm = pools();
+    let mut filter =
+        FilterEffect::new(spec(1), config(&scratch, Kind::LowPass)).expect("one scratch plane");
+    let mut reference = FilterEffect::new(spec(1), config(&pcm, Kind::LowPass)).expect("reference");
+    for effect in [&mut filter, &mut reference] {
+        let _ = effect.process(chunk(&pcm, 1, &[0.25; 7]));
+    }
+    assert!(matches!(
+        filter.service_deferred(spec(2)),
+        Err(EffectPrepareError::Pool(_))
+    ));
+    assert!(filter.accepts_spec(spec(1)));
+    assert!(!filter.accepts_spec(spec(2)));
+    let actual = filter
+        .process(chunk(&pcm, 1, &[0.0; 7]))
+        .expect("old format");
+    let expected = reference
+        .process(chunk(&pcm, 1, &[0.0; 7]))
+        .expect("reference");
     assert!(expected.samples.iter().any(|sample| *sample != 0.0));
     assert_eq!(&actual.samples[..], &expected.samples[..]);
 }
@@ -410,6 +451,9 @@ fn prepared_filter_process_reset_and_flush_never_allocate() {
             );
             let allocated = pools.stats().allocated_bytes;
             let output = assert_no_alloc::assert_no_alloc(|| {
+                filter
+                    .service_deferred(spec(channels))
+                    .expect("same format");
                 let output = filter.process(source).expect("immediate output");
                 filter.reset();
                 assert_eq!(filter.held_source_frames(), 0);
