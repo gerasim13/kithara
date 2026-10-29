@@ -13,6 +13,8 @@ use kithara_integration_tests::{
 };
 use kithara_test_fixtures::assets;
 
+use crate::underrun;
+
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
 const BLOCKS: usize = 20;
@@ -233,6 +235,7 @@ async fn effect_format_change(block_on_underrun: bool) {
         SAMPLE_RATE,
     )
     .await;
+    let mut underruns = underrun::Underruns::new(&harness);
     let mut bands = generate_log_spaced_bands(3);
     for (band, gain) in bands.iter_mut().zip([-12.0, 6.0, -3.0]) {
         band.set_gain_db(GainDb::from(gain));
@@ -253,6 +256,7 @@ async fn effect_format_change(block_on_underrun: bool) {
         0,
         "initial configured-track playback"
     );
+    underruns.checkpoint(harness.metrics(), true, "initial ready playback");
     let control = harness
         .with_queue(|queue| queue.eq_band(0, 1))
         .await
@@ -269,16 +273,17 @@ async fn effect_format_change(block_on_underrun: bool) {
         .await
         .expect("Host accepts the new rate");
     let mut output = render_effect_window(&harness, 64).await;
-    assert_eq!(
-        harness.metrics().underruns(),
-        0,
-        "first callback after the Host rate change"
+    underruns.checkpoint(
+        harness.metrics(),
+        false,
+        "first 64 frames after rate admission",
     );
+    assert_eq!(harness.host().spec().await.sample_rate.get(), 48_000);
     output.extend_from_slice(&render_effect_window(&harness, 4032).await);
-    assert_eq!(
-        harness.metrics().underruns(),
-        0,
-        "continued playback at the new Host rate"
+    underruns.checkpoint(
+        harness.metrics(),
+        true,
+        "continued playback at the new rate",
     );
     assert_eq!(tap.drain(), output);
     assert!(output.iter().all(|sample| sample.is_finite()));
@@ -301,7 +306,7 @@ async fn effect_format_change(block_on_underrun: bool) {
     );
     assert_eq!(control.gain_db(), GainDb::MIN);
     assert_eq!(tap.drops(), 0);
-    assert_eq!(harness.metrics().underruns(), 0);
+    underruns.checkpoint(harness.metrics(), true, "final configured playback");
     harness.close().await;
 }
 
