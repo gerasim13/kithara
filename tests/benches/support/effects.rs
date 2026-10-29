@@ -77,13 +77,13 @@ pub(super) fn controls(c: &mut Criterion) {
                             .as_ref(),
                     );
                 });
+                let output = &chunk.as_ref().expect("EQ emits every chunk").samples;
+                assert_eq!(output.len(), input.len());
+                assert!(output.iter().all(|sample| sample.is_finite()));
+                if reset || !step {
+                    assert_eq!(output.as_ref(), input.as_slice());
+                }
             });
-            let output = &chunk.as_ref().expect("EQ emits every chunk").samples;
-            assert_eq!(output.len(), input.len());
-            assert!(output.iter().all(|sample| sample.is_finite()));
-            if reset || !step {
-                assert_eq!(output.as_ref(), input.as_slice());
-            }
         }
     }
     group.finish();
@@ -146,10 +146,10 @@ pub(super) fn empty_route(c: &mut Criterion) {
                 },
                 BatchSize::PerIteration,
             );
+            assert_eq!(last, vec![0.5; TAKE_FRAMES * 2]);
         });
         group.finish();
     }
-    assert_eq!(last, vec![0.5; TAKE_FRAMES * 2]);
     rt.block_on(harness.close());
 }
 
@@ -212,9 +212,9 @@ pub(super) fn configured_route(c: &mut Criterion) {
                 },
                 BatchSize::PerIteration,
             );
+            assert_eq!(last, vec![0.5; TAKE_FRAMES * 2]);
+            assert_eq!(control.gain_db(), GainDb::DEFAULT);
         });
-        assert_eq!(last, vec![0.5; TAKE_FRAMES * 2]);
-        assert_eq!(control.gain_db(), GainDb::DEFAULT);
         group.bench_function("configured_applied_step/640", |b| {
             b.iter_batched(
                 || {
@@ -234,11 +234,11 @@ pub(super) fn configured_route(c: &mut Criterion) {
                 },
                 BatchSize::PerIteration,
             );
+            assert_eq!(last.len(), TAKE_FRAMES * 2);
+            assert!(last[..529 * 2].iter().all(|sample| *sample == 0.5));
+            assert!(last[529 * 2..].iter().all(|sample| sample.is_finite()));
+            assert!(last[529 * 2..].iter().any(|sample| *sample != 0.5));
         });
-        assert_eq!(last.len(), TAKE_FRAMES * 2);
-        assert!(last[..529 * 2].iter().all(|sample| *sample == 0.5));
-        assert!(last[529 * 2..].iter().all(|sample| sample.is_finite()));
-        assert!(last[529 * 2..].iter().any(|sample| *sample != 0.5));
         group.finish();
     }
     rt.block_on(harness.close());
@@ -255,7 +255,7 @@ pub(super) fn configured_route(c: &mut Criterion) {
             eq.reset();
             black_box(&eq);
         });
+        assert_eq!(eq.target_gain(1), Some(GainDb::from(6.0)));
     });
-    assert_eq!(eq.target_gain(1), Some(GainDb::from(6.0)));
     group.finish();
 }
