@@ -38,13 +38,27 @@ pub(super) fn div_kernel<S: Simd>(simd: S, samples: &mut [f32], divisor: f32) ->
 }
 
 pub(crate) fn scale_in_place(samples: &mut [f32], gain: f32) -> usize {
+    if let [sample] = samples {
+        *sample *= gain;
+        return 1;
+    }
     dispatch!(Level::new(), simd => scale_in_place_kernel(simd, samples, gain))
 }
 
 #[inline(always)]
 pub(super) fn scale_in_place_kernel<S: Simd>(simd: S, samples: &mut [f32], gain: f32) -> usize {
-    let gain = S::f32s::splat(simd, gain);
-    update(simd, samples, [], |x, []| x.mul(gain))
+    let len = samples.len();
+    let tail_len = samples
+        .chunks_exact_mut(S::f32s::LEN)
+        .into_remainder()
+        .len();
+    let (blocks, tail) = samples.split_at_mut(len.saturating_sub(tail_len));
+    let gains = S::f32s::splat(simd, gain);
+    update(simd, blocks, [], |x, []| x.mul(gains));
+    for sample in tail {
+        *sample *= gain;
+    }
+    len
 }
 
 /// `output[i] = start + i*step`, rounded once while `i` stays below 2^24;
