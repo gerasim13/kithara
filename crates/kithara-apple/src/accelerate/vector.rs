@@ -38,6 +38,10 @@ pub fn multiply_in_place_f32(samples: &mut [f32], gains: &[f32]) -> usize {
     if len == 0 {
         return 0;
     }
+    if len == 1 {
+        samples[0] *= gains[0];
+        return 1;
+    }
     let values = samples.as_mut_ptr();
     // SAFETY: both slices hold len floats; vDSP permits input/output aliasing
     // SAFETY: at stride one. The exclusive samples borrow cannot overlap gains.

@@ -277,6 +277,37 @@ fn in_place_multiply_uses_the_short_side_count() {
 }
 
 #[kithara::test(native)]
+fn singleton_multiply_preserves_ieee_prefix_and_tails() {
+    for sample in SPECIALS.into_iter().chain([0.7, -1.5]) {
+        for gain in SPECIALS.into_iter().chain([0.7, -1.5]) {
+            for (sample_count, gain_count) in [(1, 1), (1, 3), (3, 1)] {
+                let mut samples = [sample, -0.0, f32::from_bits(0x7F80_0001)];
+                let before = samples;
+                let gains = [gain, -9.0, f32::INFINITY];
+                let expected = sample * gain;
+                assert_eq!(
+                    multiply_in_place_f32(&mut samples[..sample_count], &gains[..gain_count]),
+                    1
+                );
+                if expected.is_nan() {
+                    assert!(samples[0].is_nan());
+                } else {
+                    assert_eq!(samples[0].to_bits(), expected.to_bits());
+                }
+                assert_eq!(samples[1].to_bits(), before[1].to_bits());
+                assert_eq!(samples[2].to_bits(), before[2].to_bits());
+            }
+        }
+    }
+    let mut samples = [-0.0, f32::from_bits(0x7F80_0001)];
+    let before = bits(samples);
+    assert_eq!(multiply_in_place_f32(&mut samples, &[]), 0);
+    assert_eq!(bits(samples), before);
+    assert_eq!(multiply_in_place_f32(&mut samples[..0], &[f32::NAN]), 0);
+    assert_eq!(bits(samples), before);
+}
+
+#[kithara::test(native)]
 fn correlate_slides_the_kernel_along_the_signal() {
     let signal = [1.0_f32, 2.0, 3.0, 4.0, 5.0];
     let kernel = [1.0_f32, 0.5, -1.0];
