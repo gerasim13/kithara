@@ -2,7 +2,7 @@
 
 use std::hint::black_box;
 
-use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use kithara_dsp::fade::{self, FadeCurve};
 use num_traits::ToPrimitive;
 
@@ -98,5 +98,54 @@ fn fade_gains(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, vector, fade_gains);
+fn render_products(c: &mut Criterion) {
+    let mut group = c.benchmark_group("render_products");
+    for size in [1, 128, 257, 1023] {
+        let samples: Vec<_> = tone(size)
+            .into_iter()
+            .map(|sample| sample + 0.125)
+            .collect();
+        let gains = vec![0.7; size];
+        group.bench_with_input(BenchmarkId::new("scalar_scale", size), &size, |b, _| {
+            b.iter_batched_ref(
+                || samples.clone(),
+                |samples| {
+                    let gain = black_box(0.7);
+                    for sample in black_box(samples) {
+                        *sample *= gain;
+                    }
+                },
+                BatchSize::SmallInput,
+            );
+        });
+        group.bench_with_input(BenchmarkId::new("scale", size), &size, |b, _| {
+            b.iter_batched_ref(
+                || samples.clone(),
+                |samples| kithara_dsp::scale_in_place(black_box(samples), black_box(0.7)),
+                BatchSize::SmallInput,
+            );
+        });
+        group.bench_with_input(BenchmarkId::new("scalar_product", size), &size, |b, _| {
+            b.iter_batched_ref(
+                || samples.clone(),
+                |samples| {
+                    for (sample, gain) in black_box(samples).iter_mut().zip(black_box(&gains)) {
+                        *sample *= *gain;
+                    }
+                },
+                BatchSize::SmallInput,
+            );
+        });
+        group.bench_with_input(BenchmarkId::new("product", size), &size, |b, _| {
+            b.iter_batched_ref(
+                || samples.clone(),
+                |samples| kithara_dsp::multiply_in_place(black_box(samples), black_box(&gains)),
+                BatchSize::SmallInput,
+            );
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(benches, vector, fade_gains, render_products);
 criterion_main!(benches);

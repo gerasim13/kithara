@@ -17,7 +17,9 @@ use crate::{
     interp::{InterpError, Interpolation},
 };
 
-const SIZES: [usize; 15] = [0, 1, 3, 4, 5, 7, 8, 9, 15, 16, 17, 63, 64, 1023, 4096];
+const SIZES: [usize; 19] = [
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17, 63, 64, 66, 258, 1023, 4096,
+];
 const OFFSETS: [usize; 2] = [0, 1];
 const STRIDES: [usize; 5] = [1, 2, 3, 6, 9];
 const RATE: u32 = 48_000;
@@ -1101,7 +1103,7 @@ fn affine_rounds_within_one_ulp_on_every_backend() {
                     let count = (row.affine)(region.split_at_mut(size).0, scale, offset_value);
                     let input = input.split_at(offset).1;
                     assert_prefix(
-                        &format!("{name}: ·{scale} + {offset_value}, size {size}, offset {offset}"),
+                        &format!("{name}: *{scale} + {offset_value}, size {size}, offset {offset}"),
                         count,
                         region,
                         size,
@@ -1162,7 +1164,7 @@ fn scale_add_rounds_within_one_ulp_on_every_backend() {
                     let count = (row.scale_add)(x.split_at(offset).1, gain, region);
                     let (x, acc) = (x.split_at(offset).1, acc.split_at(offset).1);
                     assert_prefix(
-                        &format!("{name}: ·{gain}, size {size}, offset {offset}"),
+                        &format!("{name}: *{gain}, size {size}, offset {offset}"),
                         count,
                         region,
                         size,
@@ -1228,7 +1230,7 @@ fn mul_add_rounds_within_one_ulp_at_every_level() {
     }
 }
 
-/// `(1 + 2⁻¹²)·(1 + 2⁻¹²) − (1 + 2⁻¹¹)` is exactly 2⁻²⁴, but the product
+/// `(1 + 2^-12)*(1 + 2^-12) - (1 + 2^-11)` is exactly 2^-24, but the product
 /// rounded alone cancels to `0.0`: a kernel that rounds the product before
 /// the add loses the whole result.
 const CANCELLING_TRIPLE: [f32; 3] = [1.000_244_1, 1.000_244_1, -1.000_488_3];
@@ -1311,7 +1313,7 @@ fn a_short_target_bounds_every_elementwise_kernel() {
 }
 
 /// Edges first, then a band just below the incoming edge where the cosine
-/// side tends to zero, then an even grid over `[−1/8, 9/8]`.
+/// side tends to zero, then an even grid over `[-1/8, 9/8]`.
 fn fade_positions() -> Vec<f32> {
     const GRID: u16 = 4_096;
     let start = 0.000_01_f32;
@@ -1388,7 +1390,7 @@ const CURVES: [FadeCurve; 4] = [
 #[kithara::test]
 fn in_place_product_preserves_ieee_prefixes_at_every_level() {
     type Product = fn(&mut [f32], &[f32]) -> usize;
-    let fallback: Product = |samples, gains| dispatch!(Level::fallback(), simd => simd::multiply_in_place_kernel(simd, samples, gains));
+    let fallback: Product = |samples, gains| dispatch!(Level::fallback(), simd => portable::multiply_in_place_kernel(simd, samples, gains));
     let mut products: Vec<(&str, Product)> = vec![
         ("native", portable::multiply_in_place),
         ("fallback", fallback),
