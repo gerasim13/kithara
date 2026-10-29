@@ -3,6 +3,7 @@ use core::num::{NonZeroU32, NonZeroUsize};
 use firewheel::{
     StreamInfo,
     channel_config::{ChannelConfig, ChannelCount},
+    mask::MaskType,
     node::{
         AudioNode, AudioNodeInfo, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig,
         NodeError, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
@@ -103,7 +104,11 @@ impl AudioNodeProcessor for LimiterProcessor {
         ];
         self.limiter.process_planar(&mut channels);
 
-        ProcessStatus::OutputsModified
+        if info.in_silence_mask.all_channels_silent(Self::STEREO.get()) {
+            ProcessStatus::OutputsModifiedWithMask(MaskType::Silence(info.in_silence_mask))
+        } else {
+            ProcessStatus::OutputsModified
+        }
     }
 }
 
@@ -173,7 +178,7 @@ mod tests {
             };
             let mut actual_left = [0.0; FRAMES];
             let mut actual_right = [0.0; FRAMES];
-            processor.process(
+            let status = processor.process(
                 &info,
                 ProcBuffers {
                     inputs: &[&left, &right],
@@ -191,6 +196,14 @@ mod tests {
                 expected_right.map(f32::to_bits),
                 "right block {block}"
             );
+            let expected_status = if value == 0.0 {
+                ProcessStatus::OutputsModifiedWithMask(MaskType::Silence(
+                    SilenceMask::new_all_silent(2),
+                ))
+            } else {
+                ProcessStatus::OutputsModified
+            };
+            assert_eq!(status, expected_status, "status block {block}");
         }
     }
 }

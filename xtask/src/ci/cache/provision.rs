@@ -252,9 +252,9 @@ fn initialize_bucket(program: &Path, destination: &str, cancel: &Cancel) -> Resu
     )
 }
 
-/// How long each snapshot layer in a scope's bucket lives.
+/// How long snapshots and replaceable prediction hints live.
 ///
-/// The compiler cache has no age rule. An age rule measures an entry's write,
+/// Compiler results have no age rule. An age rule measures an entry's write,
 /// and a hit does not renew it, so it expired first the entries every build
 /// reads, the ones written longest ago. The evictor keeps that layer under the
 /// scope's quota by last use instead. The snapshot layers are keyed by content
@@ -275,6 +275,11 @@ fn retention() -> serde_json::Value {
                 "ID": "source-snapshots", "Status": "Enabled",
                 "Filter": {"Prefix": "source-snapshots/"},
                 "Expiration": {"Days": 30}
+            },
+            {
+                "ID": "kache-predictions", "Status": "Enabled",
+                "Filter": {"Prefix": "kache/v3/predictions/"},
+                "Expiration": {"Days": 1}
             }
         ]
     })
@@ -495,6 +500,26 @@ mod retention_tests {
             assert!(
                 !compiler.starts_with(prefix) && !prefix.starts_with(&compiler),
                 "{prefix} expires compiler-cache entries by age"
+            );
+        }
+    }
+
+    #[test]
+    fn remote_prediction_hints_expire_without_expiring_compiler_results() {
+        let policy = retention();
+        let rules = policy["Rules"].as_array().unwrap();
+        let prediction = rules
+            .iter()
+            .find(|rule| rule["Filter"]["Prefix"] == "kache/v3/predictions/");
+        assert_eq!(
+            prediction.map(|rule| &rule["Expiration"]["Days"]),
+            Some(&json!(1))
+        );
+        for prefix in ["kache/v3/manifests/", "kache/v3/packs/"] {
+            assert!(
+                rules
+                    .iter()
+                    .all(|rule| !prefix.starts_with(rule["Filter"]["Prefix"].as_str().unwrap()))
             );
         }
     }

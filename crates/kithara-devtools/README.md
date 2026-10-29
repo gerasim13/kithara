@@ -47,6 +47,34 @@ fn main() -> anyhow::Result<()> {
 
 ### Configuration
 
+For a selected workspace in another directory, load its manifest with
+`Ctx::load_from_manifest(&manifest_path)` and pass that context to `run`.
+The lint, manifest, Clippy, test and health commands use its Cargo membership,
+configuration and child working directory. They do not change the process cwd.
+Root packages, custom member directories and dependency aliases retain their
+Cargo identity; explicit lint paths keep their requested scope and exclusions.
+`[workspace-scan].default_roots` can select a project's existing default Rust
+source domain; an empty list follows Cargo targets and their declared modules.
+Explicit scopes override those defaults. Configured dependency-direction checks
+resolve the full graph through the selected context; ordinary contexts can load
+empty workspaces. Prepare dependencies before an offline graph check.
+
+Generic checks are enabled independently of Kithara ownership. Arc/Tokio,
+cancellation, smoothing, Firewheel and Kithara-specific derive checks require
+explicit subjects or enable/owner settings in the existing arch/idioms config.
+Kithara's own configuration selects that policy; a consumer does not inherit
+it from the dependency's checkout. README checks resolve declared or inherited
+package metadata only for selected files, using each package's declared README
+path. Unit tests use local policy fixtures; workspace tests own Kithara's actual
+configuration and source contracts.
+
+Clippy uses the configured Cargo tool role. Its optional
+`[clippy].macos_features` defaults to an empty list; Kithara explicitly selects
+its Apple product feature in its own config. Test lanes and health stages
+continue to use the selected project's existing command/tool configuration.
+Prepare dependency and executable inputs before an offline run; a prepared
+locked consumer needs no adjacent Kithara checkout.
+
 Everything project-specific comes from `.config/xtask.toml`, parsed once into
 the context. The file is optional: a project with none gets documented code
 defaults. A project puts its own sections under `[ext.*]`, which the core passes

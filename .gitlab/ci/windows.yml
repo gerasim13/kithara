@@ -16,6 +16,7 @@
     reports:
       junit: target/nextest/ci/junit.xml
     paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID.json
       - target/nextest/ci/junit.xml
 
 windows:arm64:
