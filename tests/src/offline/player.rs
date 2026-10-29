@@ -127,8 +127,8 @@ impl OfflinePlayer {
 
 impl<F> OfflinePlayer<F>
 where
-    F: TrackFactory<TestPools> + MaybeSend + 'static,
-    F::Track: MaybeSend,
+    F: TrackFactory<TestPools> + Send + 'static,
+    F::Track: Send,
 {
     pub async fn with_factory(
         options: OfflinePlayerOptions,
