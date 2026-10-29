@@ -385,7 +385,7 @@ impl<'a> RunnerManager<'a> {
             .zip(1..)
             .map(|(token, number)| {
                 format!(
-                    "[[runners]]\n  name = \"kithara-mac-mini-macos-{number}\"\n  url = \"{url}\"\n  token = \"{token}\"\n  limit = 1\n  executor = \"shell\"\n  shell = \"bash\"\n  pre_get_sources_script = {preflight}\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"SCCACHE_SERVER_UDS=/tmp/kithara-mac-mini-macos-{number}-sccache.sock\", \"{cargo_build_jobs}\"{sccache_s3}]\n\n"
+                    "[[runners]]\n  name = \"kithara-mac-mini-macos-{number}\"\n  url = \"{url}\"\n  token = \"{token}\"\n  limit = 1\n  executor = \"shell\"\n  shell = \"bash\"\n  pre_get_sources_script = {preflight}\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"KITHARA_CI_PINS={root}/services/pins.toml\", \"SCCACHE_SERVER_UDS=/tmp/kithara-mac-mini-macos-{number}-sccache.sock\", \"{cargo_build_jobs}\"{sccache_s3}]\n\n"
                 )
             })
             .collect::<String>();
@@ -394,8 +394,8 @@ impl<'a> RunnerManager<'a> {
              [[runners]]\n  name = \"kithara-mac-mini-linux\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"docker\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={cache}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={cache}\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"RUSTUP_HOME=/usr/local/rustup\", \"{cargo_build_jobs}\"{docker_sccache_s3}]\n\
              [runners.docker]\n    host = \"{}\"\n    image = \"{image}\"\n    pull_policy = \"never\"\n    allowed_pull_policies = [\"never\"]\n    allowed_images = [\"{image}\"]\n    cpus = \"5\"\n    memory = \"6500m\"\n    privileged = false\n    disable_cache = true\n    shm_size = 1073741824\n    volumes = [\"{root}/cache:{cache}:rw\", \"{root}/cache/gitlab-runner:/cache:rw\", \"{root}/services/mac-host.toml:{lane_config}:ro\", \"{container_builds}:{builds}/workspaces/gitlab:rw\"]\n\n\
              {macos}\
-             [[runners]]\n  name = \"kithara-mac-mini-android\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  pre_get_sources_script = {preflight}\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"SCCACHE_SERVER_UDS=/tmp/kithara-mac-mini-android-sccache.sock\", \"{cargo_build_jobs}\"{sccache_s3}]\n\n\
-             [[runners]]\n  name = \"kithara-mac-mini-release\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  pre_get_sources_script = {preflight}\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"SCCACHE_SERVER_UDS=/tmp/kithara-mac-mini-release-sccache.sock\", \"{cargo_build_jobs}\"{sccache_s3}]\n",
+             [[runners]]\n  name = \"kithara-mac-mini-android\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  pre_get_sources_script = {preflight}\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"KITHARA_CI_PINS={root}/services/pins.toml\", \"SCCACHE_SERVER_UDS=/tmp/kithara-mac-mini-android-sccache.sock\", \"{cargo_build_jobs}\"{sccache_s3}]\n\n\
+             [[runners]]\n  name = \"kithara-mac-mini-release\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  pre_get_sources_script = {preflight}\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"KITHARA_CI_PINS={root}/services/pins.toml\", \"SCCACHE_SERVER_UDS=/tmp/kithara-mac-mini-release-sccache.sock\", \"{cargo_build_jobs}\"{sccache_s3}]\n",
             tokens.linux,
             docker_host(home, &self.config.host.colima_profile),
             tokens.android,
@@ -1267,7 +1267,27 @@ mod tests {
                 .all(|roots| roots[0] == roots[1]),
             "all shell registrations must contend on one host-global slot root"
         );
+        let deployed_pins = format!(
+            "KITHARA_CI_PINS={}/services/pins.toml",
+            config.host.host_root.display()
+        );
         for runner in runners {
+            let environment = runner["environment"].as_array().unwrap();
+            let pins: Vec<&str> = environment
+                .iter()
+                .filter_map(toml::Value::as_str)
+                .filter(|entry| entry.starts_with("KITHARA_CI_PINS="))
+                .collect();
+            if runner["executor"].as_str() == Some("shell") {
+                assert_eq!(
+                    pins,
+                    [deployed_pins.as_str()],
+                    "{} must use deployed pins when mutating shared host state",
+                    runner["name"]
+                );
+            } else {
+                assert!(pins.is_empty(), "the guest cannot read host service pins");
+            }
             assert!(
                 runner["environment"]
                     .as_array()
