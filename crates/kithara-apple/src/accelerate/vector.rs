@@ -19,24 +19,25 @@ pub fn phase_f32(re: &[f32], im: &[f32], output: &mut [f32]) -> usize {
         return 0;
     }
     let chunk_size = usize::try_from(c_int::MAX).expect("invariant: Apple usize holds c_int::MAX");
-    for ((re, im), output) in re[..len]
-        .chunks(chunk_size)
-        .zip(im[..len].chunks(chunk_size))
-        .zip(output[..len].chunks_mut(chunk_size))
-    {
-        let n =
-            c_int::try_from(output.len()).expect("invariant: each chunk is bounded by c_int::MAX");
+    let (mut re, mut im, mut output) = (&re[..len], &im[..len], &mut output[..len]);
+    while !output.is_empty() {
+        let count = output.len().min(chunk_size);
+        let (re_chunk, re_tail) = re.split_at(count);
+        let (im_chunk, im_tail) = im.split_at(count);
+        let (output_chunk, output_tail) = output.split_at_mut(count);
+        let n = c_int::try_from(count).expect("invariant: each chunk is bounded by c_int::MAX");
         // SAFETY: all three nonempty chunks hold n contiguous f32 values.
         // SAFETY: output is exclusive and overlaps neither input; inputs may share storage.
         // SAFETY: n is a valid positive C int for the synchronous call; atan2 takes im before re.
         unsafe {
             vvatan2f(
-                output.as_mut_ptr(),
-                im.as_ptr(),
-                re.as_ptr(),
+                output_chunk.as_mut_ptr(),
+                im_chunk.as_ptr(),
+                re_chunk.as_ptr(),
                 ptr::from_ref(&n),
             );
         }
+        (re, im, output) = (re_tail, im_tail, output_tail);
     }
     len
 }
