@@ -940,6 +940,55 @@ pub(in super::super) struct DecodedCapture {
     rejected: bool,
 }
 
+/// A captured chunk's source clock normalized to its own rate, with the raw
+/// source extent a basis lookup may land in. The extent is widened by the
+/// chunk's own width on both sides, so it only skips chunks whose exact
+/// inverse cannot reach their frame range: the mapping is affine with a
+/// positive step.
+struct PhysicalCandidate<'a> {
+    decoded: &'a AudioChunkInfo,
+    basis: Result<(kithara::signal::SourceSpan, std::ops::RangeInclusive<f64>), String>,
+}
+
+impl<'a> PhysicalCandidate<'a> {
+    fn new(decoded: &'a AudioChunkInfo) -> Self {
+        let basis = decoded
+            .source_geometry()
+            .ok_or_else(|| "decoded PCM has no source geometry".to_owned())
+            .and_then(|basis| {
+                basis
+                    .scaled_from(
+                        (0, std::num::NonZeroU128::MIN),
+                        (0, std::num::NonZeroU128::MIN),
+                        (
+                            u128::from(decoded.spec.sample_rate.get()),
+                            std::num::NonZeroU128::from(basis.sample_rate()),
+                        ),
+                    )
+                    .ok_or_else(|| "decoded PCM source clock cannot be normalized".to_owned())
+            })
+            .map(|basis| {
+                let at = |frame| {
+                    basis
+                        .source_ratio_at(frame)
+                        .map_or(f64::NAN, |(numerator, denominator)| {
+                            numerator.to_f64().unwrap_or(f64::NAN)
+                                / denominator.get().to_f64().unwrap_or(f64::NAN)
+                        })
+                };
+                let (start, end) = (at(0), at(basis.output_frames()));
+                let width = end - start + 1.0;
+                let extent = if width.is_finite() {
+                    start - width..=end + width
+                } else {
+                    f64::NEG_INFINITY..=f64::INFINITY
+                };
+                (basis, extent)
+            });
+        Self { decoded, basis }
+    }
+}
+
 pub(in super::super) struct DecodedRecorder {
     incoming: HeapCons<Result<DecodedChunk, AudioObserveError>>,
     capture: DecodedCapture,
@@ -1183,24 +1232,43 @@ impl DecodedCapture {
         position: (u128, std::num::NonZeroU128),
     ) -> Result<(u64, kithara::signal::SourceSpan), String> {
         let info = info.into();
-        for (decoded, _) in self.chunks.values().filter(|(decoded, _)| {
-            decoded.source_revision == info.source_revision
-                && decoded.spec == info.spec
-                && decoded.media_origin == info.media_origin
-        }) {
-            let basis = decoded
-                .source_geometry()
-                .ok_or_else(|| "decoded PCM has no source geometry".to_owned())?;
-            let basis = basis
-                .scaled_from(
-                    (0, std::num::NonZeroU128::MIN),
-                    (0, std::num::NonZeroU128::MIN),
-                    (
-                        u128::from(info.spec.sample_rate.get()),
-                        std::num::NonZeroU128::from(basis.sample_rate()),
-                    ),
-                )
-                .ok_or_else(|| "decoded PCM source clock cannot be normalized".to_owned())?;
+        self.physical_basis_among(
+            self.chunks
+                .values()
+                .filter(|(decoded, _)| info.describes(decoded))
+                .map(|(decoded, _)| PhysicalCandidate::new(decoded)),
+            info,
+            position,
+        )
+    }
+
+    /// Every captured chunk as a basis candidate, for a batch of lookups that
+    /// would otherwise normalize the same chunks once per lookup.
+    fn physical_candidates(&self) -> Vec<PhysicalCandidate<'_>> {
+        self.chunks
+            .values()
+            .map(|(decoded, _)| PhysicalCandidate::new(decoded))
+            .collect()
+    }
+
+    fn physical_basis_among<'a>(
+        &self,
+        candidates: impl IntoIterator<Item = impl std::borrow::Borrow<PhysicalCandidate<'a>>>,
+        info: consumed::SourceIdentity,
+        position: (u128, std::num::NonZeroU128),
+    ) -> Result<(u64, kithara::signal::SourceSpan), String> {
+        let raw =
+            position.0.to_f64().unwrap_or(f64::NAN) / position.1.get().to_f64().unwrap_or(f64::NAN);
+        for candidate in candidates {
+            let candidate = candidate.borrow();
+            let decoded = candidate.decoded;
+            if !info.describes(decoded) {
+                continue;
+            }
+            let (basis, extent) = candidate.basis.as_ref().map_err(Clone::clone)?;
+            if !extent.contains(&raw) {
+                continue;
+            }
             let Some((frame, denominator)) =
                 basis.output_ratio_at_source(decoded.frame_offset, position)
             else {
@@ -1209,7 +1277,7 @@ impl DecodedCapture {
             let frame =
                 u64::try_from(frame / denominator.get()).map_err(|error| error.to_string())?;
             if decoded.frame_range().contains(&frame) {
-                return Ok((decoded.frame_offset, basis));
+                return Ok((decoded.frame_offset, *basis));
             }
         }
         let mut identities = std::collections::BTreeMap::new();
@@ -1443,6 +1511,7 @@ impl DecodedCapture {
         let sample_rate = consumed.sample_rate;
         check_physical_marks(marks, sample_rate)?;
         let intervals = physical_intervals(capture_start, frames, consumed, jump)?;
+        let candidates = self.physical_candidates();
         let mut physical_bases = intervals
             .iter()
             .map(|(&start, interval)| {
@@ -1451,7 +1520,7 @@ impl DecodedCapture {
                     .source
                     .source_ratio_at(0)
                     .ok_or_else(|| "physical source interval has no raw origin".to_owned())?;
-                let (origin, basis) = self.physical_basis(info, position)?;
+                let (origin, basis) = self.physical_basis_among(&candidates, info, position)?;
                 let first = basis
                     .output_ratio_at_source(origin, position)
                     .ok_or_else(|| "wrong-tempo negative has no physical origin".to_owned())?;
