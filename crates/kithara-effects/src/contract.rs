@@ -1,5 +1,7 @@
 use kithara_signal::{AudioChunk, AudioSpec};
 
+use crate::{EffectChange, EffectRefusal, EffectTarget};
+
 mod kithara {
     pub(crate) use kithara_test_macros::mock;
 }
@@ -7,6 +9,18 @@ mod kithara {
 /// Audio processing effect in the chain (transforms decoded-audio chunks).
 #[kithara::mock(api = AudioEffectMock)]
 pub trait AudioEffect: Send + 'static {
+    /// Apply one prepared field without clearing history or allocating.
+    /// # Errors
+    /// Refuses unsupported targets or contextual bounds without changing state.
+    fn configure(
+        &mut self,
+        target: EffectTarget,
+        change: EffectChange,
+    ) -> Result<(), EffectRefusal> {
+        let _ = (target, change);
+        Err(EffectRefusal)
+    }
+
     /// Flush one remaining buffered chunk at end of stream.
     ///
     /// Repeated calls must reach `None` after a finite number of chunks and

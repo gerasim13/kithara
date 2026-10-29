@@ -893,7 +893,12 @@ fn buffered_audio_track(
         .render_quantum_frames(NonZeroUsize::new(256).expect("quantum"))
         .build();
     crate::TrackConfig::for_audio(audio)
-        .effects(effects)
+        .effects(
+            effects
+                .into_iter()
+                .map(kithara_effects::EffectSetup::Prepared)
+                .collect(),
+        )
         .warp(warp)
         .preload_chunks(NonZeroUsize::MIN)
         .audio_buffer_chunks(NonZeroUsize::MIN)

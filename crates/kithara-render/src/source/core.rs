@@ -132,9 +132,12 @@ where
     /// # Errors
     /// Returns the source's seek classification or a render failure.
     pub fn service_commands(&mut self) -> Result<bool, TrackFailureKind> {
-        let changed = self
-            .lane
-            .execute_due(&mut self.source, &mut self.warp, self.spec)?;
+        let changed = self.lane.execute_due(
+            &mut self.source,
+            &mut self.warp,
+            self.spec,
+            &mut self.effects,
+        )?;
         if changed == LaneChange::Source {
             self.discard_staged_input();
             reset_effects(&mut self.effects);
