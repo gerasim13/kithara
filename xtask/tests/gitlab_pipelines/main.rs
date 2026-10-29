@@ -2,6 +2,8 @@ use std::{collections::BTreeSet, fs, path::Path};
 
 use serde_yaml_ng::{Mapping, Value};
 
+mod deps_deny;
+
 const MERGE_REQUEST_KIND: &str = "merge-request";
 /// How a job on a host that carries `just` runs a lane.
 const JUST_LANE: &str = "just ci run ";
@@ -738,7 +740,7 @@ fn macos_review_jobs_can_use_either_native_registration() {
         ["kithara-macos", "kithara-macos-1"],
         ["kithara-macos", "kithara-macos-2"],
     ];
-    for job in ["apple:lint", "apple:test", "verdict"] {
+    for job in ["apple:lint", "apple:test", "apple:xcframework", "verdict"] {
         let tags = config.effective_value(job, "tags").expect("job has tags");
         let tags = tags.as_sequence().expect("job tags are a sequence");
         assert!(!tags.is_empty(), "`{job}` must select the native pool");
@@ -749,6 +751,55 @@ fn macos_review_jobs_can_use_either_native_registration() {
                 "`{job}` cannot use free registration {registration:?}: {tags:?}"
             );
         }
+    }
+}
+
+#[test]
+fn each_independent_store_has_a_default_branch_source_publisher() {
+    let lanes = lane_catalog(workspace_root());
+    let gitlab = GitlabConfig::load(workspace_root());
+    for (name, os) in [("apple-lint", "macos"), ("linux-lint", "linux")] {
+        assert_eq!(lanes[name]["publishes_sources"].as_bool(), Some(true));
+        assert_eq!(lanes[name]["os"].as_str(), Some(os));
+    }
+    assert!(gitlab.admitted_kinds("apple:lint").contains("main"));
+    assert!(
+        lanes["linux-lint"]["kinds_github"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|kind| kind.as_str() == Some("main"))
+    );
+}
+
+#[test]
+fn cache_evidence_uploads_only_the_current_job_even_when_it_fails() {
+    let config = GitlabConfig::load(workspace_root());
+    let default = &config.definition("default")["artifacts"];
+    let target = ".ci-artifacts/cache/gitlab-$CI_JOB_ID.json";
+    for (name, _) in config.lane_jobs() {
+        let artifact = config
+            .effective_value(&name, "artifacts")
+            .unwrap_or_else(|| default.clone());
+        let paths = artifact["paths"].as_sequence().expect("artifact paths");
+        assert!(
+            paths.iter().any(|path| path.as_str() == Some(target)),
+            "{name}: missing current-job cache report"
+        );
+        assert!(
+            !paths
+                .iter()
+                .any(|path| path
+                    .as_str()
+                    .is_some_and(|path| path == ".ci-artifacts/cache/"
+                        || path == ".ci-artifacts/cache/job.json")),
+            "{name}: uploads inherited cache reports"
+        );
+        assert_eq!(
+            artifact["when"].as_str(),
+            Some("always"),
+            "{name}: loses failure evidence"
+        );
     }
 }
 

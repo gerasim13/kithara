@@ -4,6 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use anyhow::{Context as _, Result};
 use glob::Pattern;
 use syn::{
     Attribute, Expr, Item, Lit, Meta,
@@ -18,6 +19,49 @@ struct ModuleFile {
     children: Vec<(PathBuf, bool)>,
     root_children: Vec<(PathBuf, bool)>,
     test_only: bool,
+}
+
+/// Follow Cargo target declarations without reading excluded or unrelated files.
+pub(crate) fn module_files(
+    target: &Path,
+    excluded: impl Fn(&Path) -> bool,
+) -> Result<Vec<PathBuf>> {
+    let target =
+        fs::canonicalize(target).with_context(|| format!("resolve target {}", target.display()))?;
+    let mut pending = vec![(target, true)];
+    let mut reached = BTreeSet::new();
+    while let Some((path, root)) = pending.pop() {
+        if excluded(&path) || !reached.insert(path.clone()) {
+            continue;
+        }
+        let source =
+            fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+        let file = syn::parse_file(&source).with_context(|| format!("parse {}", path.display()))?;
+        let Some(parent) = path.parent() else {
+            continue;
+        };
+        let Some(directory) = (if root {
+            Some(parent.to_path_buf())
+        } else {
+            module_dir(&path)
+        }) else {
+            continue;
+        };
+        let mut children = Vec::new();
+        let mut uncertain = BTreeSet::new();
+        collect_children(
+            &file.items,
+            &directory,
+            parent,
+            false,
+            false,
+            &mut children,
+            &mut uncertain,
+        );
+        pending.extend(children.into_iter().map(|(child, _)| (child, false)));
+        pending.extend(uncertain.into_iter().map(|child| (child, false)));
+    }
+    Ok(reached.into_iter().collect())
 }
 
 /// Exact existing files reachable only through test-only module declarations.

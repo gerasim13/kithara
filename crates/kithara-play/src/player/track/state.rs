@@ -21,6 +21,12 @@ pub type Position = Duration;
 
 /// What a track is told to do.
 pub enum TrackCommand<S> {
+    ConfigureEffect {
+        lane: kithara_render::LaneId,
+        target: kithara_effects::EffectTarget,
+        change: kithara_effects::EffectChange,
+        at: When<SessionFrame>,
+    },
     Load {
         item: ResourceLoad<S>,
         position: Position,
@@ -101,6 +107,7 @@ pub enum TrackStatus {
 /// The owner's settled track state and the latest mixer observation.
 #[derive(Clone)]
 pub struct TrackSnapshot {
+    pub effects: Vec<super::effects::EffectSnapshot>,
     pub item: TrackId,
     /// None while a background load holds the track off the deck.
     pub slot: Option<Slot>,
@@ -125,6 +132,7 @@ impl std::fmt::Debug for TrackSnapshot {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("TrackSnapshot")
+            .field("effects", &self.effects)
             .field("item", &self.item)
             .field("slot", &self.slot)
             .field("status", &self.status)

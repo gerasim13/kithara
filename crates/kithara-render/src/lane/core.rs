@@ -33,6 +33,10 @@ pub struct LaneFrame {
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum LaneCommand {
+    ConfigureEffect {
+        target: kithara_effects::EffectTarget,
+        change: kithara_effects::EffectChange,
+    },
     SetSpeed(SpeedCurve),
     Jump {
         to: Duration,
@@ -579,7 +583,7 @@ mod tests {
         );
         let mut warp = Warp::new((), &WarpConfig::builder().build()).renderer(spec, pools);
         jump(&mut sender);
-        lane.execute_due(&mut JumpSource, &mut warp, spec)
+        lane.execute_due(&mut JumpSource, &mut warp, spec, &mut [])
             .expect("jump accepted");
         assert_eq!(
             lane.output_limit(),
@@ -677,7 +681,7 @@ mod tests {
         );
         let mut warp = Warp::new((), &WarpConfig::builder().build()).renderer(spec, pools);
         jump(&mut sender);
-        lane.execute_due(&mut JumpSource, &mut warp, spec)
+        lane.execute_due(&mut JumpSource, &mut warp, spec, &mut [])
             .expect("first jump");
         if during_up {
             let frames = lane.output_limit();
@@ -689,7 +693,7 @@ mod tests {
                 &vec![1.0; frames],
             );
             lane.stamp(&mut down);
-            lane.execute_due(&mut JumpSource, &mut warp, spec)
+            lane.execute_due(&mut JumpSource, &mut warp, spec, &mut [])
                 .expect("landing");
         }
         let mut before = crate::worker::packet_tests::chunk(
@@ -702,7 +706,7 @@ mod tests {
         lane.stamp(&mut before);
         let previous = before.samples[99];
         jump(&mut sender);
-        lane.execute_due(&mut JumpSource, &mut warp, spec)
+        lane.execute_due(&mut JumpSource, &mut warp, spec, &mut [])
             .expect("second jump");
         let mut after = crate::worker::packet_tests::chunk(
             spec,
@@ -763,7 +767,7 @@ mod tests {
                 },
             )
             .expect("segment credit");
-        lane.execute_due(&mut JumpSource, &mut warp, spec)
+        lane.execute_due(&mut JumpSource, &mut warp, spec, &mut [])
             .expect("segment accepted");
         assert_eq!(lane.state.cursor.frame, if pending_repeat { 64 } else { 0 });
         assert_eq!(

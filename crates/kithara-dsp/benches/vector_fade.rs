@@ -35,7 +35,10 @@ fn vector(c: &mut Criterion) {
             b.iter(|| kithara_dsp::div(black_box(&mut output), -1.0));
         });
         group.bench_with_input(BenchmarkId::new("scale_in_place", size), &size, |b, _| {
-            b.iter(|| kithara_dsp::scale_in_place(black_box(&mut output), -1.0));
+            b.iter(|| {
+                let samples: &mut Vec<f32> = black_box(&mut output);
+                kithara_dsp::scale_in_place(samples, -1.0)
+            });
         });
         group.bench_with_input(BenchmarkId::new("affine", size), &size, |b, _| {
             b.iter(|| kithara_dsp::affine(black_box(&mut output), 0.5, 0.25));
@@ -121,7 +124,11 @@ fn render_products(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("scale", size), &size, |b, _| {
             b.iter_batched_ref(
                 || samples.clone(),
-                |samples| kithara_dsp::scale_in_place(black_box(samples), black_box(0.7)),
+                |samples| {
+                    let samples: &mut Vec<f32> = black_box(samples);
+                    let gain = black_box(0.7);
+                    kithara_dsp::scale_in_place(samples, gain)
+                },
                 BatchSize::SmallInput,
             );
         });
@@ -139,7 +146,11 @@ fn render_products(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("product", size), &size, |b, _| {
             b.iter_batched_ref(
                 || samples.clone(),
-                |samples| kithara_dsp::multiply_in_place(black_box(samples), black_box(&gains)),
+                |samples| {
+                    let samples: &mut Vec<f32> = black_box(samples);
+                    let gains: &Vec<f32> = black_box(&gains);
+                    kithara_dsp::multiply_in_place(samples, gains)
+                },
                 BatchSize::SmallInput,
             );
         });
