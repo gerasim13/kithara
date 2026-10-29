@@ -115,7 +115,7 @@ _desktop-ready:
 [no-exit-message]
 [positional-arguments]
 _xtask *ARGS:
-    @if [[ -z "${KITHARA_XTASK_TARGET:-}" ]]; then exec just _xtask-unleased "$@"; fi; helper="${TMPDIR:-/tmp}/kithara-target-lease-${CI_JOB_ID:-$$}-$$"; trap 'rm -f "$helper" "$helper.exe"' EXIT; if [[ -n "${CI_JOB_ID:-}${GITHUB_RUN_ID:-}" ]]; then bash .config/ci/compiler-cache.sh bootstrap-lease kache rustc --edition=2024 "$PWD/xtask/bootstrap_lease.rs" -o "$helper"; else rustc --edition=2024 "$PWD/xtask/bootstrap_lease.rs" -o "$helper"; fi; "$helper" "$KITHARA_XTASK_TARGET" just _xtask-unleased "$@"
+    @if [[ -z "${KITHARA_XTASK_TARGET:-}" ]]; then exec just _xtask-unleased "$@"; fi; helper="${TMPDIR:-/tmp}/kithara-target-lease-${CI_JOB_ID:-$$}-$$"; trap 'rm -f "$helper" "$helper.exe"' EXIT; if [[ -n "${CI_JOB_ID:-}${GITHUB_RUN_ID:-}" ]]; then bash .config/ci/compiler-cache.sh bootstrap-lease kache "$(rustup which rustc)" --edition=2024 "$PWD/xtask/bootstrap_lease.rs" -o "$helper"; else rustc --edition=2024 "$PWD/xtask/bootstrap_lease.rs" -o "$helper"; fi; "$helper" "$KITHARA_XTASK_TARGET" just _xtask-unleased "$@"
 
 [no-exit-message]
 [positional-arguments]

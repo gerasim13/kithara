@@ -33,18 +33,21 @@ pub(in crate::ci) fn report_path(process: &Process, lane: &str) -> Result<PathBu
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')),
         "invalid cache evidence lane"
     );
-    let number = |name: &str| -> Result<u64> {
-        let value = process
+    let configured = |name: &str| {
+        process
             .environment_var(name)
-            .context("missing cache evidence job identity")?;
+            .filter(|value| !value.is_empty())
+    };
+    let number = |name: &str| -> Result<u64> {
+        let value = configured(name).context("missing cache evidence job identity")?;
         Ok(value
             .to_str()
             .context("invalid cache evidence job identity")?
             .parse()?)
     };
-    let key = if process.environment_var("CI_JOB_ID").is_some() {
+    let key = if configured("CI_JOB_ID").is_some() {
         format!("gitlab-{}-{lane}", number("CI_JOB_ID")?)
-    } else if process.environment_var("GITHUB_RUN_ID").is_some() {
+    } else if configured("GITHUB_RUN_ID").is_some() {
         format!(
             "github-{}-{}-{lane}",
             number("GITHUB_RUN_ID")?,
@@ -336,6 +339,25 @@ fn history(process: &Process) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cleared_ci_identities_select_local_evidence() {
+        let root = tempfile::tempdir().unwrap();
+        let process = Process::new(
+            root.path(),
+            std::collections::BTreeMap::from([
+                ("CI_JOB_ID".into(), "".into()),
+                ("GITHUB_RUN_ID".into(), "".into()),
+            ]),
+        );
+        assert_eq!(
+            report_path(&process, "test").unwrap(),
+            root.path().join(format!(
+                ".ci-artifacts/cache/local-{}-test.json",
+                std::process::id()
+            ))
+        );
+    }
 
     #[test]
     fn cache_evidence_drops_secrets_even_in_known_fields() {

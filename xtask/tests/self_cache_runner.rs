@@ -161,6 +161,9 @@ exit 98
         command
             .args(["self-cache", "bootstrap"])
             .current_dir(&self.root)
+            .env("CI_JOB_ID", "")
+            .env("GITHUB_RUN_ID", "")
+            .env("PATH", self.fake_path().expect("fixture PATH"))
             .env("CARGO_TARGET_DIR", &self.target)
             .env("CARGO", env!("CARGO"))
             .env("CARGO_HOME", &self.cargo_home)
@@ -202,6 +205,8 @@ exit 98
         command
             .args(args)
             .current_dir(&self.root)
+            .env("CI_JOB_ID", "")
+            .env("GITHUB_RUN_ID", "")
             .env("CARGO_TARGET_DIR", &self.target)
             .env("CARGO_HOME", &self.cargo_home)
             .env("RUSTC_WRAPPER", "")
@@ -237,6 +242,8 @@ exit 98
         command
             .args(args)
             .current_dir(root)
+            .env("CI_JOB_ID", "")
+            .env("GITHUB_RUN_ID", "")
             .env("CARGO", env!("CARGO"))
             .env("CARGO_HOME", &self.cargo_home)
             .env("RUSTC_WRAPPER", "")
@@ -291,6 +298,8 @@ exit 98
             .arg("--working-directory")
             .arg(root)
             .args(args)
+            .env("CI_JOB_ID", "")
+            .env("GITHUB_RUN_ID", "")
             .env_remove("KITHARA_XTASK_TARGET")
             .env(
                 "KACHE_HOST_CONFIG",
@@ -1233,6 +1242,36 @@ fn a_stale_ci_self_cache_refreshes_where_the_bootstrap_builds() -> Result<()> {
     assert_eq!(
         fs::read_to_string(&fixture.cargo_log)?,
         cargo_build_log(&fs::canonicalize(&fixture.root)?, &xtask)
+    );
+    Ok(())
+}
+
+#[test]
+fn ci_bootstrap_lease_passes_the_selected_compiler_to_the_cache() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let selected = fixture.fake_bin.join("selected compiler");
+    let log = fixture._temp.path().join("compiler.log");
+    write_executable(&fixture.fake_bin.join("rustc"), "#!/bin/sh\nexit 96\n")?;
+    write_executable(
+        &fixture.fake_bin.join("rustup"),
+        "#!/bin/sh\nset -eu\ntest \"$*\" = 'which rustc'\nprintf '%s\\n' \"$SELECTED_RUSTC\"\n",
+    )?;
+    write_executable(
+        &selected,
+        "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$0\" > \"$SELF_CACHE_COMPILER_LOG\"\nwhile test \"$1\" != -o; do shift; done\nprintf '#!/bin/sh\\nexit 0\\n' > \"$2\"\nchmod +x \"$2\"\n",
+    )?;
+    let output = fixture
+        .just_command(&fixture.root, &["_xtask", "--help"])?
+        .env("CI_JOB_ID", "42")
+        .env("KITHARA_XTASK_TARGET", &fixture.target)
+        .env("SELECTED_RUSTC", &selected)
+        .env("SELF_CACHE_COMPILER_LOG", &log)
+        .env("TMPDIR", fixture._temp.path())
+        .output()?;
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(log)?,
+        format!("{}\n", selected.display())
     );
     Ok(())
 }

@@ -305,3 +305,6 @@ RUN curl -fsSL -o /tmp/monkeys-audio.zip "${MONKEYS_AUDIO_SOURCE_URL}" \
  && rm -rf /tmp/monkeys-audio /tmp/monkeys-audio.zip
 
 ENV MONKEYS_AUDIO_DIR=/usr/local
+
+# Cached CMake build scripts retain Cargo's compiler-launcher path.
+RUN ln -s /usr/local/bin/kache /usr/local/cargo/bin/kache

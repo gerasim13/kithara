@@ -300,8 +300,9 @@ fn cargo_build_command(root: &Path, release: bool) -> Command {
     let cargo = env::var_os("XTASK_SELF_CACHE_CARGO")
         .or_else(|| env::var_os("CARGO"))
         .unwrap_or_else(|| "cargo".into());
-    let mut command = if (env::var_os("CI_JOB_ID").is_some()
-        || env::var_os("GITHUB_RUN_ID").is_some())
+    let mut command = if (["CI_JOB_ID", "GITHUB_RUN_ID"]
+        .iter()
+        .any(|name| env::var_os(name).is_some_and(|value| !value.is_empty())))
         && env::var_os("KACHE_RUNTIME_DIR").is_none()
     {
         let mut command = Command::new("bash");

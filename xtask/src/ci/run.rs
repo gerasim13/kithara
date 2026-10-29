@@ -262,8 +262,11 @@ fn execute_lane(
                 )?;
             }
             if let Some(kache) = kache
-                && (process.environment_var("CI_JOB_ID").is_some()
-                    || process.environment_var("GITHUB_RUN_ID").is_some())
+                && ["CI_JOB_ID", "GITHUB_RUN_ID"].iter().any(|name| {
+                    process
+                        .environment_var(name)
+                        .is_some_and(|value| !value.is_empty())
+                })
             {
                 kache.verify_remote(process, tools)?;
             }
@@ -1115,6 +1118,63 @@ mod tests {
     }
 
     #[test]
+    fn a_named_ci_job_checks_the_remote_before_dispatch() {
+        for readonly in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let bin = directory.path().join("bin");
+            crate::testing::install_double(&bin, "sccache");
+            crate::testing::install_double(&bin, "kache");
+            let trace = directory.path().join("trace");
+            let stats = serde_json::json!({
+                "remote": "s3://fixture/kache",
+                "daemon_connected": true,
+                "daemon_remote_readonly": readonly,
+                "local_hits": 0,
+                "remote_hits": 0,
+                "prefetch_hits": 0,
+                "misses": 0,
+            });
+            let process = Process::new(
+                directory.path(),
+                BTreeMap::from([
+                    (OsString::from("PATH"), bin.into_os_string()),
+                    (OsString::from("CI_JOB_ID"), OsString::from("42")),
+                    (OsString::from("GITHUB_RUN_ID"), OsString::new()),
+                    (OsString::from("KITHARA_TEST_RULES"), OsString::new()),
+                    (
+                        OsString::from("KITHARA_TEST_STDOUT"),
+                        stats.to_string().into(),
+                    ),
+                    (
+                        OsString::from("KITHARA_TEST_TRACE"),
+                        trace.clone().into_os_string(),
+                    ),
+                ]),
+            );
+            let kache = KacheJob::prepare(directory.path().join("kache"), None).unwrap();
+            let outcome = execute_lane(
+                &process,
+                &ToolsConfig::default(),
+                Some(&kache),
+                "recorded",
+                || {
+                    let mut events = fs::read_to_string(&trace)?;
+                    events.push_str("lane\n");
+                    fs::write(&trace, events)?;
+                    Ok(())
+                },
+            );
+            assert_eq!(outcome.is_ok(), !readonly, "{outcome:?}");
+            let events = fs::read_to_string(trace).unwrap();
+            if readonly {
+                assert!(!events.lines().any(|line| line == "lane"));
+            } else {
+                assert!(events.contains("stats --json\nlane\n"), "{events}");
+            }
+        }
+    }
+
+    #[test]
     fn sccache_lifecycle_precedes_real_lane_dispatch() {
         const READY: &str = "--stop-server\n--start-server\nlane\nstats --json\n--show-stats\nstats --full --json\nexplain --json\ndaemon stop\n";
 
@@ -1154,6 +1214,8 @@ mod tests {
                 fs::write(&artifacts, "prevent evidence creation").unwrap();
             }
             let mut vars = BTreeMap::from([
+                (OsString::from("CI_JOB_ID"), OsString::new()),
+                (OsString::from("GITHUB_RUN_ID"), OsString::new()),
                 (OsString::from("PATH"), bin.clone().into_os_string()),
                 (
                     OsString::from("KITHARA_TEST_SCENARIO"),

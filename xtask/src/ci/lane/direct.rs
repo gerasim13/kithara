@@ -972,7 +972,7 @@ cargo.packages = ["tools"]
             ),
             (
                 "kache",
-                r#"{\"remote\":\"s3://test/kache\",\"daemon_connected\":true,\"daemon_remote_readonly\":false,\"local_hits\":3,\"prefetch_hits\":0,\"remote_hits\":0,\"misses\":1}"#,
+                r#"{"remote":"s3://test/kache","daemon_connected":true,"daemon_remote_readonly":false,"local_hits":3,"prefetch_hits":0,"remote_hits":0,"misses":1}"#,
             ),
         ] {
             let program = root.join(name);
