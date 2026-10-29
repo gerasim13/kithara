@@ -478,45 +478,51 @@ fn bench_layout(c: &mut Criterion) {
     group.finish();
 }
 
+async fn render_player(ducking: SessionDuckingMode) -> OfflinePlayer {
+    let rate = NonZeroU32::new(48_000).expect("bench sample rate");
+    let player = OfflinePlayer::with_options(
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(0.02)
+            .block_on_underrun(true)
+            .build(),
+        HostConfig::offline(pools())
+            .max_block_frames(NonZeroU32::new(1024).expect("bench block"))
+            .settings(
+                HostSettings::builder()
+                    .sample_rate(rate)
+                    .ducking(ducking)
+                    .build(),
+            )
+            .build(),
+    )
+    .await;
+    let source = player.pcm_deck(Box::new(TestPcmReader::with_pcm(
+        AudioSpec::new(2, rate),
+        120.0,
+        benchmark_half(),
+    )));
+    player
+        .with_queue(|queue| queue.set_repeat(RepeatMode::All))
+        .await;
+    player.load_and_fadein(source).await;
+    player.set_volume(0.5).await.expect("bench gain");
+    let warm = player.render(48_000).await;
+    assert!(
+        warm.iter().any(|sample| sample.abs() > 0.0),
+        "bench must render audio"
+    );
+    player
+}
+
+#[path = "support/render_buffers.rs"]
+mod render_buffer_cases;
+
 fn bench_render_buffers(c: &mut Criterion) {
     let runtime = make_runtime();
     let mut group = c.benchmark_group("render_buffers");
     for (label, frames) in [("settled", 128), ("moving", 257), ("seek_tail", 1023)] {
-        let player = runtime.block_on(async {
-            let rate = NonZeroU32::new(48_000).expect("bench sample rate");
-            let player = OfflinePlayer::with_options(
-                OfflinePlayerOptions::builder()
-                    .crossfade_duration(0.02)
-                    .block_on_underrun(true)
-                    .build(),
-                HostConfig::offline(pools())
-                    .max_block_frames(NonZeroU32::new(1024).expect("bench block"))
-                    .settings(
-                        HostSettings::builder()
-                            .sample_rate(rate)
-                            .ducking(SessionDuckingMode::Soft)
-                            .build(),
-                    )
-                    .build(),
-            )
-            .await;
-            let source = player.pcm_deck(Box::new(TestPcmReader::with_pcm(
-                AudioSpec::new(2, rate),
-                120.0,
-                benchmark_half(),
-            )));
-            player
-                .with_queue(|queue| queue.set_repeat(RepeatMode::All))
-                .await;
-            player.load_and_fadein(source).await;
-            player.set_volume(0.5).await.expect("bench gain");
-            let warm = player.render(48_000).await;
-            assert!(
-                warm.iter().any(|sample| sample.abs() > 0.0),
-                "bench must render audio"
-            );
-            player
-        });
+        let player = runtime.block_on(render_player(SessionDuckingMode::Soft));
+        runtime.block_on(render_buffer_cases::admit_player(&player, label, frames));
         let mut high = false;
         group.bench_function(format!("{label}/{frames}"), |b| {
             b.iter(|| {
@@ -552,6 +558,7 @@ criterion_group!(
     bench_audio_file_new_and_read,
     bench_hls_stream_seek_read,
     bench_layout,
-    bench_render_buffers
+    bench_render_buffers,
+    render_buffer_cases::bench
 );
 criterion_main!(benches);
