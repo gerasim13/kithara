@@ -141,6 +141,14 @@ jobs:
           export GIT_CONFIG_VALUE_1="AUTHORIZATION: basic $auth"
           just ci lane "${{ inputs.lane }}" --kind "${{ inputs.kind }}" ${NARROW:+--narrow "$NARROW"}
 
+      - name: Upload compiler-cache evidence
+        if: ${{ always() && hashFiles(format('.ci-artifacts/cache/github-{0}-{1}-{2}.json', github.run_id, github.run_attempt, inputs.lane)) != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: compiler-cache-${{ inputs.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .ci-artifacts/cache/github-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.lane }}.json
+          if-no-files-found: error
+
       # `ci lane` copies this job's reports out of the slot it held into the
       # job's own temporary directory and names that copy only when the build
       # wrote a report. A job that wrote none, or was cancelled first, has

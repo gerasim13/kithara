@@ -5,7 +5,12 @@
 [project]
 name = "kithara"
 
+[clippy]
+macos_features = ["kithara-ffi/apple"]
+
 [workspace-scan]
+# Preserve this project's existing default Rust scan domain.
+default_roots = ["crates"]
 # Cargo build output can also live below an individual crate (for example the
 # multi-target FFI builds). Generated bindings are not workspace source.
 exclude = ["target/**", "**/target/**"]
@@ -1319,6 +1324,7 @@ handler = "format-edited-paths"
 
 [ext.ci]
 pins = ".config/ci-pins.toml"
+pr_review_line_limit = 5000
 
 # Moving integration sources into domain packages changed nextest's package
 # and binary prefix without changing the tests. The verdict canonicalizes both
@@ -2840,6 +2846,7 @@ timeout_minutes = 90
 # wrong Xcode has to fail in the job that would have used it.
 [ext.ci.lanes.apple-lint]
 cache_group = "macos"
+publishes_sources = true
 label = "Apple"
 os = "macos"
 tools = ["cargo", "just", "sccache", "kache", "swift", "xcodebuild", "xcodegen"]

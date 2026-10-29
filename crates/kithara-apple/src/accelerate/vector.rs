@@ -19,25 +19,22 @@ pub fn phase_f32(re: &[f32], im: &[f32], output: &mut [f32]) -> usize {
         return 0;
     }
     let chunk_size = usize::try_from(c_int::MAX).expect("invariant: Apple usize holds c_int::MAX");
-    let (mut re, mut im, mut output) = (&re[..len], &im[..len], &mut output[..len]);
-    while !output.is_empty() {
-        let count = output.len().min(chunk_size);
-        let (re_chunk, re_tail) = re.split_at(count);
-        let (im_chunk, im_tail) = im.split_at(count);
-        let (output_chunk, output_tail) = output.split_at_mut(count);
+    let mut offset = 0;
+    while offset < len {
+        let count = (len - offset).min(chunk_size);
         let n = c_int::try_from(count).expect("invariant: each chunk is bounded by c_int::MAX");
-        // SAFETY: all three nonempty chunks hold n contiguous f32 values.
+        // SAFETY: offset..offset + count stays within all three slices' common prefix.
         // SAFETY: output is exclusive and overlaps neither input; inputs may share storage.
         // SAFETY: n is a valid positive C int for the synchronous call; atan2 takes im before re.
         unsafe {
             vvatan2f(
-                output_chunk.as_mut_ptr(),
-                im_chunk.as_ptr(),
-                re_chunk.as_ptr(),
+                output.as_mut_ptr().add(offset),
+                im.as_ptr().add(offset),
+                re.as_ptr().add(offset),
                 ptr::from_ref(&n),
             );
         }
-        (re, im, output) = (re_tail, im_tail, output_tail);
+        offset += count;
     }
     len
 }
