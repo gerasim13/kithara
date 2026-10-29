@@ -4,7 +4,7 @@ use fearless_simd::{Level, dispatch};
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
-use super::*;
+use super::Fir;
 
 type Detector = Fir<17, 7, 8, 9>;
 
@@ -23,7 +23,7 @@ fn coefficients() -> [[f32; 17]; 7] {
     })
 }
 
-fn clean(value: f32) -> f32 {
+pub(super) fn clean(value: f32) -> f32 {
     if value.is_normal() { value } else { 0.0 }
 }
 
@@ -62,7 +62,7 @@ fn interval(
     peak
 }
 
-fn bits(values: impl IntoIterator<Item = f32>) -> Vec<u32> {
+pub(super) fn bits(values: impl IntoIterator<Item = f32>) -> Vec<u32> {
     values.into_iter().map(f32::to_bits).collect()
 }
 

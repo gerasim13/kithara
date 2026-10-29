@@ -60,20 +60,23 @@ impl<const TAPS: usize, const PHASES: usize, const CHANNELS: usize, const HISTOR
             return 0;
         };
         let len = raw.len().min(current.len()).min(peaks.len());
-        for (frame, (&sample, peak)) in current.iter().zip(peaks).take(len).enumerate() {
+        let mut future = raw.iter();
+        for (&sample, peak) in current.iter().zip(peaks).take(len) {
+            let _ = future.next();
             *peak = sample.abs().max(0.0);
             if self.reconstruct {
-                let ahead = Self::interval(&self.taps, history, raw, sample, frame, frame as isize);
+                let future = future.as_slice();
+                let ahead =
+                    Self::interval(&self.taps, &history[HISTORY.min(1)..], sample, future, 0);
                 let behind = if *valid {
                     *shared
                 } else {
                     Self::interval(
                         &self.taps,
                         history,
-                        raw,
                         sample,
-                        frame,
-                        (frame as isize).saturating_sub(1),
+                        future,
+                        usize::from(HISTORY == 0),
                     )
                 };
                 *shared = ahead;
@@ -93,42 +96,31 @@ impl<const TAPS: usize, const PHASES: usize, const CHANNELS: usize, const HISTOR
     #[inline(always)]
     fn interval(
         taps: &[[f32; TAPS]; PHASES],
-        history: &[f32; HISTORY],
-        raw: &[f32],
+        past: &[f32],
         current: f32,
-        frame: usize,
-        base: isize,
+        future: &[f32],
+        padding: usize,
     ) -> f32 {
         let mut peak = 0.0_f32;
+        let held = future.last().copied().unwrap_or(current);
         for branch in taps {
             let mut sum = 0.0_f32;
-            for (tap, coefficient) in branch.iter().enumerate() {
-                let position = base
-                    .saturating_add(tap as isize)
-                    .saturating_sub(HISTORY.saturating_sub(1) as isize);
-                let sample = if position < frame as isize {
-                    usize::try_from((frame as isize).saturating_sub(position))
-                        .ok()
-                        .and_then(|age| HISTORY.checked_sub(age))
-                        .and_then(|slot| history.get(slot).copied())
-                        .unwrap_or(0.0)
-                } else if position == frame as isize {
-                    current
-                } else {
-                    usize::try_from(position)
-                        .ok()
-                        .and_then(|index| {
-                            raw.get(index).copied().or_else(|| {
-                                if frame.checked_add(1) == Some(raw.len()) {
-                                    Some(current)
-                                } else {
-                                    raw.last().copied()
-                                }
-                            })
-                        })
-                        .unwrap_or(0.0)
-                };
+            let mut coefficients = branch.iter();
+            for coefficient in coefficients.by_ref().take(padding) {
+                sum = coefficient.mul_add(0.0, sum);
+            }
+            // Bound zip before it can consume the next region's coefficient.
+            for (coefficient, &sample) in coefficients.by_ref().take(past.len()).zip(past) {
                 sum = coefficient.mul_add(sample, sum);
+            }
+            if let Some(coefficient) = coefficients.next() {
+                sum = coefficient.mul_add(current, sum);
+            }
+            for (coefficient, &sample) in coefficients.by_ref().take(future.len()).zip(future) {
+                sum = coefficient.mul_add(sample, sum);
+            }
+            for coefficient in coefficients {
+                sum = coefficient.mul_add(held, sum);
             }
             peak = peak.max(sum.abs());
         }

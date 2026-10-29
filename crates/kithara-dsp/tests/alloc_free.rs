@@ -236,7 +236,7 @@ fn fir_history_peak_linking_and_envelope_never_allocate() {
     let mut peaks = [0.0; 600];
     let mut linked = peaks;
     assert_no_alloc(|| {
-        for frames in [0, 1, 7, 255, 256, 257, 600] {
+        for frames in [600, 1, 0, 7, 255, 256, 257, 1, 0, 600] {
             detector.begin_block(&[&mut left[..frames], &mut right[..frames + 7]], 0.98);
             linked.fill(0.0);
             assert_eq!(

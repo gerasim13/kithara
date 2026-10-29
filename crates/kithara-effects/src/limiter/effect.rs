@@ -68,9 +68,13 @@ pub struct PeakLimiter {
     config: LimiterConfig,
     envelope: AttackRelease,
     channels: usize,
+    scratch: [[f32; Self::CHUNK_FRAMES]; 3],
 }
 
 impl PeakLimiter {
+    /// Frames covered by one reusable scratch prefix.
+    const CHUNK_FRAMES: usize = 256;
+
     /// Channels the detector keeps history for. The limiter links its channels into one
     /// gain, so a block wider than a small surround layout has no caller here; the extra
     /// channels would silently lose their inter-sample peaks, so `new` rejects them.
@@ -124,6 +128,7 @@ impl PeakLimiter {
             detector: Fir::new(taps),
             envelope: AttackRelease::new(release_coeff),
             channels: channels.get(),
+            scratch: [[0.0; Self::CHUNK_FRAMES]; 3],
         })
     }
 
@@ -142,7 +147,6 @@ impl PeakLimiter {
     /// Sanitized current samples and untouched future samples remain separate
     /// until reconstruction has recorded the pre-gain history.
     pub fn process_planar(&mut self, channels: &mut [&mut [f32]]) {
-        const CHUNK: usize = 256;
         debug_assert_eq!(channels.len(), self.channels);
         debug_assert!(self.channels <= Self::DETECTOR_CHANNELS);
         let frames = channels
@@ -152,26 +156,26 @@ impl PeakLimiter {
             .unwrap_or(0);
         let ceiling = f32::from(self.ceiling());
         self.detector.begin_block(channels, ceiling);
-        for start in (0..frames).step_by(CHUNK) {
-            let end = frames.min(start + CHUNK);
+        let [linked, current, peaks] = &mut self.scratch;
+        for start in (0..frames).step_by(Self::CHUNK_FRAMES) {
+            let end = frames.min(start + Self::CHUNK_FRAMES);
             let count = end - start;
-            let mut linked = [0.0; CHUNK];
+            let linked = &mut linked[..count];
+            let current = &mut current[..count];
+            let peaks = &mut peaks[..count];
+            linked.fill(0.0);
             for (index, channel) in channels.iter_mut().enumerate() {
-                let mut current = [0.0; CHUNK];
                 for (sample, &raw) in current.iter_mut().zip(&channel[start..end]) {
                     *sample = sanitize_sample(raw);
                 }
-                let mut peaks = [0.0; CHUNK];
-                self.detector.process(
-                    index,
-                    &channel[start..],
-                    &current[..count],
-                    &mut peaks[..count],
-                );
-                PeakHold::link(&peaks[..count], &mut linked[..count]);
-                channel[start..end].copy_from_slice(&current[..count]);
+                let processed = self
+                    .detector
+                    .process(index, &channel[start..], current, peaks);
+                peaks[processed..].fill(0.0);
+                PeakHold::link(peaks, linked);
+                channel[start..end].copy_from_slice(current);
             }
-            let gains = &mut linked[..count];
+            let gains = linked;
             for peak in gains.iter_mut() {
                 *peak = if *peak > ceiling {
                     ceiling / *peak
@@ -285,6 +289,81 @@ mod tests {
                     {
                         assert_eq!(actual.to_bits(), expected.to_bits());
                     }
+                }
+            }
+        }
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn varying_block_sizes_preserve_history_and_untouched_tails() {
+        for channels in [1, 2, 8] {
+            let rate = NonZeroU32::new(48_000).unwrap();
+            let channels = NonZeroUsize::new(channels).unwrap();
+            let config = LimiterConfig::default();
+            let mut actual = PeakLimiter::new(rate, channels, config).unwrap();
+            let mut reference = scalar::ScalarLimiter::new(rate, channels, config).unwrap();
+            for (stage, frames) in [600_usize, 1, 0, 7, 257, 1, 256, 0, 255, 7, 600]
+                .into_iter()
+                .enumerate()
+            {
+                let mut input: Vec<Vec<f32>> = (0..channels.get())
+                    .map(|channel| {
+                        (0..frames + channel)
+                            .map(|frame| {
+                                if stage % 4 == 3 && frame >= frames / 2 {
+                                    *[f32::NAN, f32::INFINITY, f32::NEG_INFINITY]
+                                        .get(channel % 3)
+                                        .unwrap()
+                                } else {
+                                    let sample = *[0.0, -0.0, 0.125, -0.5, 1.0, -1.0]
+                                        .get((frame + channel) % 6)
+                                        .unwrap();
+                                    sample * if stage % 4 == 0 { 2.0 } else { 0.02 }
+                                }
+                            })
+                            .collect()
+                    })
+                    .collect();
+                let original = input.clone();
+                let mut expected = input.clone();
+                actual.process_planar(
+                    &mut input.iter_mut().map(Vec::as_mut_slice).collect::<Vec<_>>(),
+                );
+                reference.process_planar(
+                    &mut expected
+                        .iter_mut()
+                        .map(Vec::as_mut_slice)
+                        .collect::<Vec<_>>(),
+                );
+                for ((actual, expected), original) in input.iter().zip(&expected).zip(&original) {
+                    assert_eq!(
+                        actual
+                            .iter()
+                            .map(|sample| sample.to_bits())
+                            .collect::<Vec<_>>(),
+                        expected
+                            .iter()
+                            .map(|sample| sample.to_bits())
+                            .collect::<Vec<_>>()
+                    );
+                    assert_eq!(
+                        actual
+                            .get(frames..)
+                            .unwrap()
+                            .iter()
+                            .map(|sample| sample.to_bits())
+                            .collect::<Vec<_>>(),
+                        original
+                            .get(frames..)
+                            .unwrap()
+                            .iter()
+                            .map(|sample| sample.to_bits())
+                            .collect::<Vec<_>>()
+                    );
+                }
+                if stage == 5 {
+                    actual.reset();
+                    reference.reset();
                 }
             }
         }
