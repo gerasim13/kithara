@@ -67,11 +67,14 @@ pub fn weighted_frames(
     {
         return Err(InterpError::InvalidShape);
     }
-    output.fill(0.0);
-    for (&offset, &weight) in offsets.iter().zip(weights) {
-        for (total, &sample) in output.iter_mut().zip(samples.iter().skip(offset)) {
-            *total += f64::from(sample) * weight;
+    for (channel, total) in output.iter_mut().enumerate() {
+        let samples = samples.get(channel..).ok_or(InterpError::InvalidShape)?;
+        let mut sum = 0.0;
+        for (&offset, &weight) in offsets.iter().zip(weights) {
+            let sample = samples.get(offset).ok_or(InterpError::InvalidShape)?;
+            sum += f64::from(*sample) * weight;
         }
+        *total = sum;
     }
     Ok(())
 }
