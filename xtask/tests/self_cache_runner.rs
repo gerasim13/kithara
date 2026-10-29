@@ -1237,6 +1237,31 @@ fn a_stale_ci_self_cache_refreshes_where_the_bootstrap_builds() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn a_cached_ci_worker_refreshes_a_checkout_without_its_wrapper_script() -> Result<()> {
+    let fixture = Fixture::new()?;
+    assert_success(&fixture.bootstrap()?);
+    fs::remove_file(fixture.root.join(".config/ci/compiler-cache.sh"))?;
+    fs::write(
+        fixture.root.join("xtask/src/main.rs"),
+        "fn main() { changed(); }\n",
+    )?;
+    let output = fixture
+        .just_command(&fixture.root, &["_xtask-ready"])?
+        .env("GITHUB_RUN_ID", "checkout-transition")
+        .env("GITHUB_ACTIONS", "true")
+        .env_remove("KACHE_RUNTIME_DIR")
+        .env("XTASK_SELF_CACHE_CARGO", fixture.fake_bin.join("cargo"))
+        .output()?;
+
+    assert!(!output.status.success(), "the fixture Cargo refuses builds");
+    assert_eq!(
+        fs::read_to_string(&fixture.cargo_log)?,
+        cargo_build_log(&fs::canonicalize(&fixture.root)?, &fixture.target)
+    );
+    Ok(())
+}
+
 /// Outside CI the refresh builds where `_xtask-bootstrap` does, not in a
 /// build directory the caller happened to export.
 #[test]

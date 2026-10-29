@@ -306,8 +306,12 @@ fn cargo_build_command(root: &Path, release: bool) -> Command {
     {
         let mut command = Command::new("bash");
         command
-            .arg(root.join(".config/ci/compiler-cache.sh"))
-            .arg("bootstrap-refresh")
+            .args([
+                "-c",
+                include_str!("../../../.config/ci/compiler-cache.sh"),
+                "--",
+                "bootstrap-refresh",
+            ])
             .arg(cargo);
         command
     } else {
