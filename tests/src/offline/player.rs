@@ -264,13 +264,13 @@ where
         self.snapshot.lock().clone()
     }
 
-    /// Issues queue control calls from the host owner thread.
+    /// Awaits queue control calls outside their session executor.
     pub async fn with_queue<R>(
         &self,
-        use_queue: impl FnOnce(&QueueControl<TestPools>) -> R + MaybeSend + 'static,
+        use_queue: impl FnOnce(&QueueControl<TestPools>) -> R + Send + 'static,
     ) -> R
     where
-        R: MaybeSend + 'static,
+        R: Send + 'static,
     {
         assert!(
             !self.queue.is_closed(),
@@ -279,12 +279,11 @@ where
         self.run(self.queue.control(), use_queue).await
     }
 
-    /// Issues a control call on `control` from the host owner thread, as the
-    /// app would.
-    pub async fn run<C, R>(&self, control: &C, f: impl FnOnce(&C) -> R + MaybeSend + 'static) -> R
+    /// Awaits a blocking control call outside the session executor.
+    pub async fn run<C, R>(&self, control: &C, f: impl FnOnce(&C) -> R + Send + 'static) -> R
     where
-        C: Clone + MaybeSend + 'static,
-        R: MaybeSend + 'static,
+        C: Clone + Send + 'static,
+        R: Send + 'static,
     {
         let control = control.clone();
         self.host.run(move || f(&control)).await
