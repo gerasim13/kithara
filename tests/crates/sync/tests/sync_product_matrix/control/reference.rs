@@ -1498,6 +1498,30 @@ impl DecodedCapture {
         Ok((capture_start, frames))
     }
 
+    /// The affine inverse of the decoded basis holding raw `position`, with the
+    /// physical PCM position it assigns to `position`.
+    fn physical_inverse(
+        &self,
+        candidates: &[PhysicalCandidate<'_>],
+        info: consumed::SourceIdentity,
+        position: (u128, std::num::NonZeroU128),
+    ) -> Result<
+        (
+            kithara::signal::SourceInverse,
+            (u128, std::num::NonZeroU128),
+        ),
+        String,
+    > {
+        let (origin, basis) = self.physical_basis_among(candidates, info, position)?;
+        let inverse = basis
+            .source_inverse(origin)
+            .ok_or_else(|| "physical basis has no affine inverse".to_owned())?;
+        let first = inverse
+            .output_at(position)
+            .ok_or_else(|| "wrong-tempo negative has no physical origin".to_owned())?;
+        Ok((inverse, first))
+    }
+
     pub(in super::super) fn check_physical(
         &self,
         pcm: &[f32],
@@ -1520,12 +1544,9 @@ impl DecodedCapture {
                     .source
                     .source_ratio_at(0)
                     .ok_or_else(|| "physical source interval has no raw origin".to_owned())?;
-                let (origin, basis) = self.physical_basis_among(&candidates, info, position)?;
-                let first = basis
-                    .output_ratio_at_source(origin, position)
-                    .ok_or_else(|| "wrong-tempo negative has no physical origin".to_owned())?;
+                let (inverse, first) = self.physical_inverse(&candidates, info, position)?;
                 let samplers = [self.sampler(info), self.sampler(info), self.sampler(info)];
-                Ok((start, (origin, basis, first, samplers)))
+                Ok((start, (inverse, first, samplers)))
             })
             .collect::<Result<std::collections::BTreeMap<_, _>, String>>()?;
         let mut reference = PhysicalReference {
@@ -1561,10 +1582,10 @@ impl DecodedCapture {
             let raw_next = span
                 .source_ratio_at(offset + 1)
                 .ok_or_else(|| "physical capture has an unmapped source endpoint".to_owned())?;
-            let (origin, basis, first, samplers) = physical_bases
+            let (inverse, first, samplers) = physical_bases
                 .get_mut(&start)
                 .ok_or_else(|| "physical source interval lost its decoded basis".to_owned())?;
-            let (origin, basis, first) = (*origin, *basis, *first);
+            let (inverse, first) = (*inverse, *first);
             let [expected_source, cue_source, tempo_source] = samplers;
             let (raw_position, (numerator, denominator)) = if let Some((_, raw, physical)) =
                 next_position.filter(|(previous_start, _, _)| *previous_start == start)
@@ -1574,7 +1595,7 @@ impl DecodedCapture {
                 let raw = span
                     .source_ratio_at(offset)
                     .ok_or_else(|| "physical capture has an unmapped source frame".to_owned())?;
-                let physical = basis.output_ratio_at_source(origin, raw).ok_or_else(|| {
+                let physical = inverse.output_at(raw).ok_or_else(|| {
                     "raw source coordinate has no physical PCM position".to_owned()
                 })?;
                 (raw, physical)
@@ -1584,8 +1605,8 @@ impl DecodedCapture {
                     "physical source interval origin differs from its captured basis".to_owned(),
                 );
             }
-            let physical_next = basis
-                .output_ratio_at_source(origin, raw_next)
+            let physical_next = inverse
+                .output_at(raw_next)
                 .ok_or_else(|| "raw source endpoint has no physical PCM position".to_owned())?;
             next_position = Some((start, raw_next, physical_next));
             let speed = physical_source_speed((numerator, denominator), physical_next)?;
