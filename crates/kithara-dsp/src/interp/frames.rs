@@ -57,13 +57,13 @@ pub fn weighted_frames(
     let output = output
         .get_mut(..channels)
         .ok_or(InterpError::InvalidShape)?;
+    let last_start = samples
+        .len()
+        .checked_sub(channels)
+        .ok_or(InterpError::InvalidShape)?;
     if offsets.is_empty()
         || offsets.len() != weights.len()
-        || offsets.iter().any(|offset| {
-            offset
-                .checked_add(channels)
-                .is_none_or(|end| end > samples.len())
-        })
+        || offsets.iter().any(|&offset| offset > last_start)
     {
         return Err(InterpError::InvalidShape);
     }

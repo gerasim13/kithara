@@ -208,6 +208,11 @@ fn weighted_shape_refusal_precedes_all_writes() {
     }
     let mut output = [7.0; 7];
     assert_eq!(
+        weighted_frames(&[0.25], &[0], &[1.0], 2, &mut output),
+        Err(InterpError::InvalidShape)
+    );
+    assert_eq!(output, [7.0; 7]);
+    assert_eq!(
         weighted_frames(&[], &[usize::MAX], &[], 0, &mut output),
         Ok(())
     );
