@@ -9,7 +9,10 @@ use super::{
         RunnerManager, Tokens, docker_host, path_text, read_trimmed, require_macos, write_secure,
     },
 };
-use crate::{ci::image::linux_build_args, consts};
+use crate::{
+    ci::{image::linux_build_args, kache::BuildSecrets},
+    consts,
+};
 
 impl RunnerManager<'_> {
     /// Makes the image this commit pins the one every Linux job runs.
@@ -64,6 +67,11 @@ impl RunnerManager<'_> {
     }
 
     fn build_pinned_linux_image(&self, home: &Path, dockerfile: &Path) -> Result<()> {
+        let environment = super::runners::docker_client_environment(
+            self.store_environment()?
+                .context("image compilation requires scoped RustFS credentials")?,
+        );
+        let secrets = BuildSecrets::new(&environment)?;
         let context = self
             .config
             .host
@@ -101,6 +109,7 @@ impl RunnerManager<'_> {
             for (name, value) in linux_build_args(&self.config.pins)? {
                 command.arg("--build-arg").arg(format!("{name}={value}"));
             }
+            secrets.apply(&mut command);
             command.arg(path_text(&context)?);
             self.process
                 .run_command(&mut command, "build pinned Linux CI image")

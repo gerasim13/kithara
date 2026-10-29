@@ -65,17 +65,6 @@ pub(crate) enum CacheGroup {
 }
 
 impl CacheGroup {
-    /// Everywhere but Windows. `ffmpeg-sys-next` declares a `--cfg` for every
-    /// library version it knows, which is thousands of them, and the command
-    /// Cargo builds for it passes what Windows accepts. Cargo hands that to the
-    /// wrapper through a response file; sccache expands it and spawns the
-    /// compiler with the arguments themselves, which does not fit:
-    /// `failed to spawn rustc.exe: The filename or extension is too long.
-    /// (os error 206)`. The cache is worth less than the lane.
-    pub(crate) const fn uses_sccache(self) -> bool {
-        !matches!(self, Self::Windows)
-    }
-
     const fn as_str(self) -> &'static str {
         match self {
             Self::Macos => "macos",
@@ -271,6 +260,12 @@ fn execute_lane(
                     &["--start-server"],
                     "start the compiler cache",
                 )?;
+            }
+            if let Some(kache) = kache
+                && (process.environment_var("CI_JOB_ID").is_some()
+                    || process.environment_var("GITHUB_RUN_ID").is_some())
+            {
+                kache.verify_remote(process, tools)?;
             }
             dispatch()
         })();
@@ -523,7 +518,7 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     execute_lane(
         &process,
         &ctx.config.tools,
-        environment.kache(),
+        Some(environment.kache()),
         &args.lane,
         || match lane {
             Lane::ReleaseXcframework => {
@@ -1276,12 +1271,6 @@ mod tests {
     #[test]
     fn verdict_uses_the_macos_cache_group() {
         assert_eq!(Lane::Verdict.cache_group(), CacheGroup::Macos);
-    }
-
-    #[test]
-    fn windows_lanes_disable_sccache() {
-        assert!(!CacheGroup::Windows.uses_sccache());
-        assert!(CacheGroup::Linux.uses_sccache());
     }
 
     #[test]

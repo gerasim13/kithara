@@ -345,6 +345,21 @@ impl<'a> RunnerManager<'a> {
             .into_iter()
             .flatten()
             .chain(shell_kache)
+            .chain([
+                (
+                    consts::KACHE_LOCAL_ROOT_ENV.to_owned(),
+                    self.config
+                        .host
+                        .host_root
+                        .join("cache")
+                        .display()
+                        .to_string(),
+                ),
+                (
+                    "SCCACHE_CACHE_SIZE".to_owned(),
+                    self.config.host.sccache_size.clone(),
+                ),
+            ])
             .map(|(name, value)| format!(", \"{name}={value}\""))
             .collect::<String>();
         let docker_sccache_s3 = sccache_environment
@@ -352,6 +367,16 @@ impl<'a> RunnerManager<'a> {
             .into_iter()
             .flatten()
             .chain(docker_kache)
+            .chain([
+                (
+                    consts::KACHE_LOCAL_ROOT_ENV.to_owned(),
+                    consts::KACHE_CONTAINER_ROOT.to_owned(),
+                ),
+                (
+                    "SCCACHE_CACHE_SIZE".to_owned(),
+                    self.config.host.sccache_size.clone(),
+                ),
+            ])
             .map(|(name, value)| format!(", \"{name}={value}\""))
             .collect::<String>();
         let macos = tokens
@@ -526,18 +551,30 @@ impl<'a> RunnerManager<'a> {
             return Ok(Vec::new());
         };
         let shared = self.kache_root();
-        let inside = self.config.host.cache_root_linux.join(consts::KACHE_DIR);
         let size = &self.config.host.sccache_size;
         Ok(vec![
             (
                 shared.join(consts::KACHE_HOST_FILE),
-                kache::host_config(&environment, &shared.join(consts::KACHE_STORE), size)?,
+                kache::host_config(
+                    &environment,
+                    &self
+                        .config
+                        .host
+                        .host_root
+                        .join("cache/bootstrap")
+                        .join(format!("macos-{}", std::env::consts::ARCH))
+                        .join(consts::KACHE_DIR),
+                    size,
+                )?,
             ),
             (
                 shared.join(consts::KACHE_DOCKER_HOST_FILE),
                 kache::host_config(
                     &docker_client_environment(environment),
-                    &inside.join(consts::KACHE_STORE),
+                    &Path::new(consts::KACHE_CONTAINER_ROOT)
+                        .join("bootstrap")
+                        .join(format!("linux-{}", std::env::consts::ARCH))
+                        .join(consts::KACHE_DIR),
                     size,
                 )?,
             ),
@@ -552,7 +589,7 @@ impl<'a> RunnerManager<'a> {
             .join(consts::KACHE_DIR)
     }
 
-    fn store_environment(&self) -> Result<Option<BTreeMap<String, String>>> {
+    pub(super) fn store_environment(&self) -> Result<Option<BTreeMap<String, String>>> {
         self.config
             .host
             .sccache_s3_env_file
@@ -595,7 +632,7 @@ pub(super) fn docker_host(home: &Path, profile: &str) -> String {
     format!("unix://{}", docker_socket(home, profile).display())
 }
 
-fn docker_client_environment(
+pub(super) fn docker_client_environment(
     mut environment: BTreeMap<String, String>,
 ) -> BTreeMap<String, String> {
     if let Some(endpoint) = environment.get_mut("SCCACHE_ENDPOINT") {
@@ -1303,13 +1340,21 @@ mod tests {
             let (named, store, endpoint) = if docker {
                 (
                     inside.join(consts::KACHE_DOCKER_HOST_FILE),
-                    inside.join(consts::KACHE_STORE),
+                    Path::new(consts::KACHE_CONTAINER_ROOT)
+                        .join("bootstrap")
+                        .join(format!("linux-{}", std::env::consts::ARCH))
+                        .join(consts::KACHE_DIR),
                     "http://host.docker.internal:19000",
                 )
             } else {
                 (
                     shared.join(consts::KACHE_HOST_FILE),
-                    shared.join(consts::KACHE_STORE),
+                    config
+                        .host
+                        .host_root
+                        .join("cache/bootstrap")
+                        .join(format!("macos-{}", std::env::consts::ARCH))
+                        .join(consts::KACHE_DIR),
                     "http://127.0.0.1:19000",
                 )
             };
@@ -1339,6 +1384,35 @@ mod tests {
             );
             assert_eq!(file["cache"]["remote"]["endpoint"].as_str(), Some(endpoint));
             assert_eq!(file["cache"]["remote"]["bucket"].as_str(), Some("cache"));
+        }
+    }
+
+    #[test]
+    fn bootstrap_compiler_stores_belong_to_their_execution_kernel() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let config = scoped_config(directory.path());
+        let process = Process::new(Path::new("/"), BTreeMap::new());
+        let manager = RunnerManager::new(&config, &process);
+        for (path, contents) in manager.kache_host_files().expect("host files") {
+            let config: toml::Value = toml::from_str(&contents).expect("host configuration");
+            let store = Path::new(
+                config["cache"]["local_store"]
+                    .as_str()
+                    .expect("local store"),
+            );
+            if path.file_name() == Some(OsStr::new(consts::KACHE_DOCKER_HOST_FILE)) {
+                assert!(
+                    !store.starts_with(&manager.config.host.cache_root_linux),
+                    "the container's SQLite index must not live on the host's virtiofs share"
+                );
+            } else {
+                assert!(
+                    store
+                        .components()
+                        .any(|part| part.as_os_str().to_string_lossy().starts_with("macos-")),
+                    "a native bootstrap must not open the guest's SQLite index"
+                );
+            }
         }
     }
 

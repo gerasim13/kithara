@@ -57,14 +57,30 @@ impl Fixture {
         let cargo_home = temp.path().join("cargo-home");
         let justfile = root.join("justfile");
         fs::create_dir_all(root.join(".config"))?;
+        fs::create_dir_all(root.join(".config/ci"))?;
         fs::create_dir_all(root.join(".git/xtask-cache"))?;
         fs::create_dir_all(root.join("xtask/src"))?;
         fs::create_dir_all(&fake_bin)?;
         fs::create_dir_all(&cargo_home)?;
+        fs::write(temp.path().join("kache-host.toml"), "[cache]\n")?;
+        write_executable(
+            &fake_bin.join("kache"),
+            r#"#!/bin/sh
+case "$1 $2" in
+  'stats --json') printf '%s' '{"remote":"s3://fixture/kache","daemon_connected":true,"daemon_remote_readonly":false}' ;;
+  'daemon stop') ;;
+  *) exec "$@" ;;
+esac
+"#,
+        )?;
         let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .context("resolve repository root")?;
         fs::copy(repository.join("justfile"), &justfile)?;
+        fs::copy(
+            repository.join(".config/ci/compiler-cache.sh"),
+            root.join(".config/ci/compiler-cache.sh"),
+        )?;
         fs::copy(
             repository.join("xtask/bootstrap_lease.rs"),
             root.join("xtask/bootstrap_lease.rs"),
@@ -150,6 +166,12 @@ exit 98
             .env("CARGO_HOME", &self.cargo_home)
             .env("RUSTC_WRAPPER", "")
             .env("RUSTC_WORKSPACE_WRAPPER", "")
+            .env(
+                "KACHE_HOST_CONFIG",
+                self._temp.path().join("kache-host.toml"),
+            )
+            .env("SCCACHE_BUCKET", "fixture")
+            .env("SCCACHE_ENDPOINT", "http://cache:9000")
             .env("XTASK_SELF_CACHE_CARGO", &self.bootstrap_cargo)
             .env("SELF_CACHE_BOOTSTRAP_ARTIFACT", &self.bootstrap_artifact)
             .stdin(Stdio::null());
@@ -270,6 +292,12 @@ exit 98
             .arg(root)
             .args(args)
             .env_remove("KITHARA_XTASK_TARGET")
+            .env(
+                "KACHE_HOST_CONFIG",
+                self._temp.path().join("kache-host.toml"),
+            )
+            .env("SCCACHE_BUCKET", "fixture")
+            .env("SCCACHE_ENDPOINT", "http://cache:9000")
             .env("CARGO_TARGET_DIR", &self.target)
             .env("CARGO", env!("CARGO"))
             .env("CARGO_HOME", &self.cargo_home)
