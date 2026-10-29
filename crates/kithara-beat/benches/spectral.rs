@@ -64,16 +64,27 @@ fn spectral_beats(c: &mut Criterion) {
         detector.analyze(&pcm).expect("a reused detector analyzes"),
         expected
     );
-    let mut calls = Vec::new();
-    {
-        let mut group = c.benchmark_group("spectral_beats");
-        group.sample_size(20);
-        group.warm_up_time(Duration::from_secs(1));
-        group.measurement_time(Duration::from_secs(1));
+    let mut group = c.benchmark_group("spectral_beats");
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(1));
+    for (case, input) in [
+        (
+            "1024_samples",
+            pcm.get(..1024).expect("the excerpt holds a short frame"),
+        ),
+        (
+            "1537_samples",
+            pcm.get(..1537).expect("the excerpt holds a padded frame"),
+        ),
+        ("30s", pcm.as_slice()),
+    ] {
+        let expected = detector.analyze(input).expect("the analysis succeeds");
+        let mut calls = Vec::new();
         group.throughput(Throughput::Elements(
-            u64::try_from(pcm.len()).expect("frame count fits u64"),
+            u64::try_from(input.len()).expect("frame count fits u64"),
         ));
-        group.bench_function("analyze/30s", |b| {
+        group.bench_function(format!("analyze/{case}"), |b| {
             b.iter_custom(|iterations| {
                 let mut elapsed = Duration::ZERO;
                 let mut samples = Vec::with_capacity(
@@ -81,7 +92,7 @@ fn spectral_beats(c: &mut Criterion) {
                 );
                 for _ in 0..iterations {
                     let start = Instant::now();
-                    let result = black_box(detector.analyze(black_box(&pcm)));
+                    let result = black_box(detector.analyze(black_box(input)));
                     let duration = start.elapsed();
                     elapsed += duration;
                     samples.push(duration.as_nanos());
@@ -91,16 +102,16 @@ fn spectral_beats(c: &mut Criterion) {
                 elapsed
             });
         });
-        group.finish();
+        // Batch averages cannot give tail latency; retain individual calls outside elapsed.
+        eprintln!("spectral_beats_consumer_calls_ns/{case}={calls:?}");
+        let marks: Vec<_> = expected
+            .beats
+            .iter()
+            .map(|mark| [mark.at.to_bits(), mark.confidence.to_bits()])
+            .collect();
+        eprintln!("spectral_beats_consumer_marks_bits/{case}={marks:?}");
     }
-    // Each batch retains individual calls; Criterion's batch averages cannot give tail latency.
-    eprintln!("dsp_phase_consumer_calls_ns={calls:?}");
-    let marks: Vec<_> = expected
-        .beats
-        .iter()
-        .map(|mark| [mark.at.to_bits(), mark.confidence.to_bits()])
-        .collect();
-    eprintln!("dsp_phase_consumer_marks_bits={marks:?}");
+    group.finish();
 }
 
 criterion_group!(benches, spectral_beats);
