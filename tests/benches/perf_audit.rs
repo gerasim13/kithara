@@ -38,9 +38,12 @@ mod limiter {
         num::{NonZeroU32, NonZeroUsize},
     };
 
+    use audioadapter_buffers::direct::InterleavedSlice;
     use criterion::{BatchSize, BenchmarkGroup, BenchmarkId, Criterion, measurement::WallTime};
     use firewheel::{
-        StreamInfo,
+        ActivateInfo, FirewheelConfig, FirewheelContext, StreamInfo,
+        backend::BackendProcessInfo,
+        channel_config::ChannelCount,
         clock::InstantSamples,
         dsp::{buffer::ConstSequentialBuffer, declick::DeclickValues},
         log::{RealtimeLoggerConfig, realtime_logger},
@@ -49,6 +52,7 @@ mod limiter {
             AudioNode, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig,
             NUM_SCRATCH_BUFFERS, NodeID, ProcBuffers, ProcExtra, ProcInfo, ProcStore, StreamStatus,
         },
+        nodes::volume::VolumeNode,
     };
     use kithara::{
         effects::{LimiterConfig, PeakLimiter, node::LimiterNode},
@@ -162,6 +166,84 @@ mod limiter {
         });
     }
 
+    fn graph(group: &mut BenchmarkGroup<'_, WallTime>) {
+        const FRAMES: usize = 128;
+
+        let mut context = FirewheelContext::new(FirewheelConfig {
+            num_graph_inputs: ChannelCount::STEREO,
+            ..FirewheelConfig::default()
+        });
+        let limiter = context
+            .add_node(LimiterNode::new(LimiterConfig::default()), None)
+            .expect("graph limiter");
+        let volume = context
+            .add_node(VolumeNode::from_linear(1.0), None)
+            .expect("graph unity volume");
+        for (from, to) in [
+            (context.graph_in_node_id(), limiter),
+            (limiter, volume),
+            (volume, context.graph_out_node_id()),
+        ] {
+            context
+                .connect(from, to, &[(0, 0), (1, 1)], false)
+                .expect("graph stereo edge");
+        }
+        let mut processor = context
+            .activate(ActivateInfo {
+                sample_rate: NonZeroU32::new(48_000).expect("sample rate"),
+                max_block_frames: NonZeroU32::new(u32::try_from(FRAMES).expect("block frames"))
+                    .expect("nonempty block"),
+                num_stream_in_channels: 2,
+                num_stream_out_channels: 2,
+                input_to_output_latency_seconds: 0.0,
+            })
+            .expect("activate graph");
+        let input = blocks(FRAMES).map(|block| {
+            block.planes[0]
+                .iter()
+                .zip(&block.planes[1])
+                .flat_map(|(&left, &right)| [left, right])
+                .collect::<Vec<_>>()
+        });
+        let mut output = [0.0; FRAMES * 2];
+        let process_info = BackendProcessInfo {
+            frames: FRAMES,
+            process_timestamp: None,
+            duration_since_stream_start: Duration::ZERO,
+            input_stream_status: StreamStatus::empty(),
+            output_stream_status: StreamStatus::empty(),
+            dropped_frames: 0,
+            process_to_playback_delay: None,
+        };
+        for block in &input {
+            output.fill(f32::NAN);
+            processor.process(
+                &InterleavedSlice::new(block, 2, FRAMES).expect("graph input"),
+                &mut InterleavedSlice::new_mut(&mut output, 2, FRAMES).expect("graph output"),
+                process_info.clone(),
+            );
+            assert!(output.iter().all(|sample| sample.is_finite()));
+            if block[0] == 0.0 {
+                assert!(output.iter().all(|sample| *sample == 0.0));
+            } else {
+                assert!(output.iter().any(|sample| *sample != 0.0));
+            }
+        }
+        group.bench_function(BenchmarkId::new("graph_unity", FRAMES), |b| {
+            b.iter(|| {
+                for block in &input {
+                    processor.process(
+                        &InterleavedSlice::new(block, 2, FRAMES).expect("graph input"),
+                        &mut InterleavedSlice::new_mut(&mut output, 2, FRAMES)
+                            .expect("graph output"),
+                        process_info.clone(),
+                    );
+                    black_box(&output);
+                }
+            });
+        });
+    }
+
     pub(super) fn bench(c: &mut Criterion) {
         let mut group = c.benchmark_group("limiter_lifecycle");
         group.sample_size(20);
@@ -170,6 +252,7 @@ mod limiter {
             owner(&mut group, frames, &input);
             callback(&mut group, frames, &input);
         }
+        graph(&mut group);
         group.finish();
     }
 }
