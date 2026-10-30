@@ -139,19 +139,21 @@ fn downsample_source_frame(
             usize::try_from(frame - first).map_err(|_| ElasticError::SampleCountOverflow)?;
         *sample = window.start + relative * channels;
     }
-    for (channel, sample) in output.iter_mut().enumerate() {
-        let mut total = 0.0;
+    let mut totals = [0.0; 8];
+    for (group, output) in output.chunks_mut(totals.len()).enumerate() {
         kithara_dsp::interp::weighted_frames(
-            &resident.samples[channel..],
+            &resident.samples[group * totals.len()..],
             &offsets,
             &tap_weights,
-            1,
-            std::slice::from_mut(&mut total),
+            output.len(),
+            &mut totals,
         )
         .map_err(|_| ElasticError::SampleCountOverflow)?;
-        *sample = (total / weights)
-            .to_f32()
-            .ok_or(ElasticError::SampleCountOverflow)?;
+        for (sample, &total) in output.iter_mut().zip(&totals) {
+            *sample = (total / weights)
+                .to_f32()
+                .ok_or(ElasticError::SampleCountOverflow)?;
+        }
     }
     Ok(())
 }
