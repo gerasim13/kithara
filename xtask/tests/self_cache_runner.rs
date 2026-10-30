@@ -127,6 +127,7 @@ case "$*" in
 esac
 printf '%s\n' "$*" >> "$SELF_CACHE_CARGO_LOG"
 printf 'target=%s\n' "${CARGO_TARGET_DIR-}" >> "$SELF_CACHE_CARGO_LOG"
+printf '%s\n' 'compiler-cache diagnostic from the failed build'
 exit 97
 "#,
         )?;
@@ -1174,6 +1175,11 @@ fn failed_refresh_preserves_locator_and_uses_canonical_cargo_args() -> Result<()
     let refresh = fixture.cached(&["self-cache", "refresh", "--force"])?;
 
     assert!(!refresh.status.success());
+    assert!(
+        String::from_utf8_lossy(&refresh.stderr)
+            .contains("compiler-cache diagnostic from the failed build"),
+        "failed compilation stdout must remain visible on stderr"
+    );
     assert_eq!(fs::read(locator)?, before);
     let canonical_root = fs::canonicalize(&fixture.root)?;
     assert_eq!(

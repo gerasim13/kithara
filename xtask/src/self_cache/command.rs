@@ -349,7 +349,8 @@ where
         let output = output?;
         ensure!(
             status.success(),
-            "xtask self-cache refresh build failed: {status}"
+            "xtask self-cache refresh build failed: {status}\n{}",
+            String::from_utf8_lossy(&output)
         );
         let artifact = parse_artifact(root, &output)?;
         println!("{}", artifact.display());

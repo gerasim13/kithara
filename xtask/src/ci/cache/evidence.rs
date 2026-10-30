@@ -438,8 +438,9 @@ mod tests {
         let event = json!({"cache_key": "a".repeat(64), "unit_id": "b".repeat(16), "schema": 20,
             "key_fields": {"compiler": "c".repeat(16), "args": "AWS_SECRET_ACCESS_KEY=secret", "AWS_SECRET_ACCESS_KEY": "secret"},
             "key_env_deps": {"AWS_SECRET_ACCESS_KEY": "secret"}, "command": "secret"});
+        let runtime = process.environment_path("KACHE_RUNTIME_DIR").unwrap();
         fs::write(
-            directory.path().join("kache/runtime/events.jsonl"),
+            runtime.join("events.jsonl"),
             format!(
                 "{}invalid\n",
                 format!("{event}\n").repeat(consts::CACHE_EVIDENCE_RECORD_LIMIT + 1)
@@ -476,7 +477,7 @@ mod tests {
         assert!(!report.to_string().contains("secret"));
         job.stop(&process, &tools);
         drop(job);
-        assert!(!directory.path().join("kache/runtime").exists());
+        assert!(!runtime.exists());
         assert_eq!(
             serde_json::from_slice::<Value>(&fs::read(&path).unwrap()).unwrap(),
             report
