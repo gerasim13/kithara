@@ -24,6 +24,7 @@ pub fn div(samples: &mut [f32], divisor: f32) -> usize {
 /// `samples[i] *= gain`, correctly rounded as IEEE multiplication; returns
 /// `samples.len()`. Preserves signed zero and non-finite propagation without
 /// sanitization; `NaN` payloads are unspecified.
+#[inline]
 pub fn scale_in_place(samples: &mut [f32], gain: f32) -> usize {
     backend::scale_in_place(samples, gain)
 }

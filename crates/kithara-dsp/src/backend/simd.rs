@@ -37,6 +37,7 @@ pub(super) fn div_kernel<S: Simd>(simd: S, samples: &mut [f32], divisor: f32) ->
     update(simd, samples, [], |x, []| x.div(divisor))
 }
 
+#[inline(always)]
 pub(crate) fn scale_in_place(samples: &mut [f32], gain: f32) -> usize {
     if let [sample] = samples {
         *sample *= gain;
@@ -48,14 +49,14 @@ pub(crate) fn scale_in_place(samples: &mut [f32], gain: f32) -> usize {
 #[inline(always)]
 pub(super) fn scale_in_place_kernel<S: Simd>(simd: S, samples: &mut [f32], gain: f32) -> usize {
     let len = samples.len();
-    let tail_len = samples
-        .chunks_exact_mut(S::f32s::LEN)
-        .into_remainder()
-        .len();
-    let (blocks, tail) = samples.split_at_mut(len.saturating_sub(tail_len));
     let gains = S::f32s::splat(simd, gain);
-    update(simd, blocks, [], |x, []| x.mul(gains));
-    for sample in tail {
+    let mut chunks = samples.chunks_exact_mut(S::f32s::LEN);
+    for chunk in &mut chunks {
+        S::f32s::from_slice(simd, chunk)
+            .mul(gains)
+            .store_slice(chunk);
+    }
+    for sample in chunks.into_remainder() {
         *sample *= gain;
     }
     len
