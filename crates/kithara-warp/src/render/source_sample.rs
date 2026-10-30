@@ -156,7 +156,7 @@ fn downsample_source_frame(
             &mut totals,
         )
         .map_err(|_| ElasticError::SampleCountOverflow)?;
-        for (sample, total) in output.iter_mut().zip(totals) {
+        for (sample, &total) in output.iter_mut().zip(&totals) {
             *sample = (total / weights)
                 .to_f32()
                 .ok_or(ElasticError::SampleCountOverflow)?;
