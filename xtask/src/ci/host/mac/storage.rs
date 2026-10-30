@@ -11,6 +11,8 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+#[cfg(unix)]
+use kithara_devtools::lock::FileLock;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
@@ -22,6 +24,7 @@ use crate::{
         build_cache,
         config::CiConfig,
         environment::{CacheTrust, scratch_root},
+        kache,
         process::Process,
     },
     consts,
@@ -163,6 +166,9 @@ impl<'a> HostStorage<'a> {
     }
 
     pub(super) fn preflight(&self) -> Result<()> {
+        if let Err(error) = self.cleanup() {
+            warn!(%error, "pre-job cleanup failed; checking current host capacity");
+        }
         let free = self.free_bytes()?;
         let (pressure, volume) = self.worst_pressure()?;
         match pressure {
@@ -191,6 +197,17 @@ impl<'a> HostStorage<'a> {
     }
 
     pub(super) fn cleanup(&self) -> Result<()> {
+        #[cfg(unix)]
+        let _cleanup = match FileLock::try_exclusive(
+            fs::File::open(&self.host_root).context("opening the host cleanup root")?,
+        ) {
+            Ok(lock) => lock,
+            Err(fs4::TryLockError::WouldBlock) => {
+                info!("another host cleanup is running; leaving it owned by its caller");
+                return Ok(());
+            }
+            Err(fs4::TryLockError::Error(error)) => return Err(error.into()),
+        };
         // The worst single volume, not the sum: adding a second volume's bytes
         // to the first and comparing that against thresholds calibrated for the
         // first reads every machine with a guest volume as full, and the branch
@@ -213,12 +230,7 @@ impl<'a> HostStorage<'a> {
         self.prune_host_files("logs", 14 * Self::DAY)?;
         self.rotate_logs()?;
         self.prune_retired_caches(7 * Self::DAY)?;
-
-        let build_roots = build_cache::budget_roots(
-            &self.build_root.join("workspaces/gitlab"),
-            &self.host_root.join("cache"),
-        )?;
-        build_cache::enforce_budget(&build_roots, self.config.host.build_cache_budget_bytes()?)?;
+        let build_roots = self.prune_build_caches()?;
 
         // Cargo targets are the largest reproducible caches and already have a
         // bounded owner. Re-read pressure after enforcing that budget so a
@@ -312,6 +324,18 @@ impl<'a> HostStorage<'a> {
             );
         }
         Ok(())
+    }
+
+    fn prune_build_caches(&self) -> Result<Vec<PathBuf>> {
+        if let Err(error) = kache::reclaim_local_stores(self.config, self.process) {
+            warn!(%error, "local compiler stores could not be collected");
+        }
+        let roots = build_cache::budget_roots(
+            &self.build_root.join("workspaces/gitlab"),
+            &self.host_root.join("cache"),
+        )?;
+        build_cache::enforce_budget(&roots, self.config.host.build_cache_budget_bytes()?)?;
+        Ok(roots)
     }
 
     pub(super) fn health(&self) -> Result<()> {
@@ -1173,6 +1197,126 @@ mod tests {
         config.host.aggressive_cleanup_bytes = 270;
         config.host.soft_cleanup_bytes = 240;
         config
+    }
+
+    #[test]
+    fn cleanup_collects_local_compiler_stores_before_budgeting_builds() {
+        let directory = tempfile::tempdir().unwrap();
+        let cfg = config(directory.path());
+        let platform = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
+        let stores = [
+            format!("cache/trusted/{platform}/kache"),
+            format!("cache/quarantine/{platform}/kache"),
+            "cache/kache/store".to_owned(),
+            "cache/trusted/another-platform/kache".to_owned(),
+        ];
+        for relative in &stores {
+            let store = directory.path().join(relative);
+            fs::create_dir_all(&store).unwrap();
+            fs::write(store.join("index.db"), "owned by kache").unwrap();
+        }
+        let process = Process::recording(
+            directory.path(),
+            Recording::default().with_reply(
+                &["kache", "gc"],
+                r#"{"success":true,"skipped":false,"disk":{"store_bytes":3600000000,"store_limit_bytes":4000000000}}"#,
+            ),
+        );
+        let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
+        storage.set_available_sequence([consts::FREE_NORMAL; 3]);
+
+        storage.cleanup().unwrap();
+
+        let recorded = process.recorded().unwrap();
+        let collections = recorded
+            .steps()
+            .iter()
+            .filter(|step| step.args == ["gc", "--json"])
+            .collect::<Vec<_>>();
+        assert_eq!(collections.len(), 2);
+        assert!(
+            collections
+                .iter()
+                .all(|step| { step.env.get("KACHE_LOCAL_ONLY").map(String::as_str) == Some("1") })
+        );
+        for relative in &stores {
+            assert_eq!(
+                fs::read_to_string(directory.path().join(relative).join("index.db")).unwrap(),
+                "owned by kache"
+            );
+        }
+    }
+
+    #[test]
+    fn preflight_reclaims_before_its_final_capacity_check() {
+        let directory = tempfile::tempdir().unwrap();
+        for name in ["cache", "logs", "toolchains", "vm", "workspaces"] {
+            fs::create_dir_all(directory.path().join(name)).unwrap();
+        }
+        let stale = scratch_entry(directory.path(), "trusted", 4 * HostStorage::DAY);
+        let live = scratch_entry(directory.path(), "review", Duration::from_secs(60));
+        let cfg = config(directory.path());
+        let process = Process::recording(directory.path(), Recording::default());
+        let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
+        storage.set_available_sequence([0, 61, 61, 61]);
+
+        storage.preflight().unwrap();
+
+        assert!(!stale.exists(), "preflight must run the existing cleanup");
+        assert!(live.exists(), "the existing retention policy still applies");
+    }
+
+    #[test]
+    fn preflight_uses_fresh_capacity_after_a_cleanup_error() {
+        let directory = tempfile::tempdir().unwrap();
+        for name in ["cache", "logs", "toolchains", "vm", "workspaces"] {
+            fs::create_dir_all(directory.path().join(name)).unwrap();
+        }
+        let cfg = config(directory.path());
+        let process = Process::recording(directory.path(), Recording::default());
+        let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
+        // Cleanup cannot restore its soft floor, but admission has its own floor.
+        storage.set_available_sequence([30, 30, 30, 30, 61]);
+        storage.preflight().unwrap();
+
+        storage.set_available_sequence([0; 6]);
+        let error = storage.preflight().unwrap_err();
+        assert!(error.to_string().contains("is full"), "{error:#}");
+
+        fs::remove_dir(directory.path().join("toolchains")).unwrap();
+        storage.set_available_sequence([61; 4]);
+        let error = storage.preflight().unwrap_err();
+        assert!(
+            error.to_string().contains("missing CI directory"),
+            "{error:#}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preflight_leaves_peer_cleanup_owned_and_reclaims_after_its_release() {
+        let directory = tempfile::tempdir().unwrap();
+        for name in ["cache", "logs", "toolchains", "vm", "workspaces"] {
+            fs::create_dir_all(directory.path().join(name)).unwrap();
+        }
+        let stale = scratch_entry(directory.path(), "trusted", 4 * HostStorage::DAY);
+        let open = || fs::File::open(directory.path()).unwrap();
+        let peer = FileLock::try_exclusive(open()).unwrap();
+        let cfg = config(directory.path());
+        let process = Process::recording(directory.path(), Recording::default());
+        let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
+        storage.set_available_sequence([61; 5]);
+
+        storage.preflight().unwrap();
+        assert!(stale.exists(), "a peer owns this cleanup pass");
+        assert!(matches!(
+            FileLock::try_exclusive(open()),
+            Err(fs4::TryLockError::WouldBlock)
+        ));
+
+        drop(peer);
+        storage.preflight().unwrap();
+        assert!(!stale.exists(), "a released lock must not suppress cleanup");
     }
 
     #[test]

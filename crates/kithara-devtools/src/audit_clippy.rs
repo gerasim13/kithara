@@ -37,7 +37,7 @@ pub struct AuditClippyArgs {
 
 pub(crate) fn run(args: &AuditClippyArgs, ctx: &Ctx) -> Result<()> {
     if args.fix {
-        ensure_clean_tree(args.allow_dirty, "audit-clippy")?;
+        ensure_clean_tree(&ctx.root, args.allow_dirty, "audit-clippy")?;
     }
     let fix = args.fix.then(|| clippy_command(args, ctx, true));
     let report = clippy_command(args, ctx, false);

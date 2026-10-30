@@ -220,12 +220,86 @@ mod tests {
         path::{Path, PathBuf},
     };
 
+    use kithara_devtools::common::tools::ToolsConfig;
+
     use self::consts::UUID;
-    use super::Simulator;
-    use crate::{ci::process::Process, testing::install_script};
+    use super::{Simulator, ios_test};
+    use crate::{
+        ci::{
+            config::fixture,
+            process::{Process, Recording},
+        },
+        testing::{install_script, signals},
+    };
 
     mod consts {
         pub(super) const UUID: &str = "5F1C0B6E-0000-4000-8000-000000000001";
+    }
+
+    #[test]
+    fn ios_device_exclusion_covers_the_entire_job() {
+        let apple: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str(include_str!("../../../../.gitlab/ci/apple.yml")).unwrap();
+        let common: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str(include_str!("../../../../.gitlab/ci/common.yml")).unwrap();
+        let extends = apple["apple:ios-test"]["extends"].as_sequence().unwrap();
+        for owner in [".apple-device-job", ".measured"] {
+            assert!(extends.iter().any(|value| value.as_str() == Some(owner)));
+        }
+        assert_eq!(
+            common[".apple-device-job"]["tags"][0].as_str(),
+            Some("kithara-macos-2")
+        );
+        assert_eq!(
+            common[".measured"]["resource_group"].as_str(),
+            Some("kithara-suite")
+        );
+    }
+
+    #[test]
+    fn ios_lane_keeps_its_fixed_server_and_deletes_its_device_before_returning() {
+        let _signals = signals();
+        let directory = tempfile::tempdir().unwrap();
+        let config = fixture();
+        let process = Process::recording(
+            directory.path(),
+            Recording::default()
+                .with_reply(
+                    &["xcodebuild", "-version"],
+                    &format!("Xcode {}", config.pins.expected_xcode_version),
+                )
+                .with_reply(&["xcrun", "simctl", "create"], UUID),
+        );
+
+        ios_test(&process, &config, &ToolsConfig::default(), "project-lane").unwrap();
+
+        let recording = process.recorded().unwrap();
+        let steps = recording.steps();
+        let server = steps
+            .iter()
+            .position(|step| step.env.contains_key("TEST_SERVER_PORT"))
+            .unwrap();
+        assert_eq!(
+            steps[server].env["TEST_SERVER_PORT"],
+            crate::consts::TEST_SERVER_PORT.to_string()
+        );
+        let suite = steps
+            .iter()
+            .position(|step| step.args == ["platform", "apple", "test", "--skip-build"])
+            .unwrap();
+        assert!(server < suite);
+        assert_eq!(
+            steps[suite].env["KITHARA_IOS_DESTINATION"],
+            format!("platform=iOS Simulator,id={UUID}")
+        );
+        assert_eq!(
+            steps[suite].env["KITHARA_TEST_SERVER_URL"],
+            format!("http://127.0.0.1:{}", crate::consts::TEST_SERVER_PORT)
+        );
+        let last = steps.last().unwrap();
+        assert_eq!(last.program, "xcrun");
+        assert_eq!(last.args, ["simctl", "delete", UUID]);
+        assert!(suite < steps.len() - 1);
     }
 
     /// An `xcrun` that creates one device and answers a delete the way

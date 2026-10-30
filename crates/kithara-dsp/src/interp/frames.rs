@@ -57,21 +57,16 @@ pub fn weighted_frames(
     let output = output
         .get_mut(..channels)
         .ok_or(InterpError::InvalidShape)?;
-    let last_start = samples
+    let window_len = samples
         .len()
         .checked_sub(channels)
+        .and_then(|last_start| last_start.checked_add(1))
         .ok_or(InterpError::InvalidShape)?;
     if offsets.is_empty() || offsets.len() != weights.len() {
         return Err(InterpError::InvalidShape);
     }
-    for (channel, total) in output.iter_mut().enumerate() {
-        // The first channel checks whole-frame bounds before the first output write.
-        let samples = if channel == 0 {
-            samples.get(..=last_start)
-        } else {
-            samples.get(channel..)
-        }
-        .ok_or(InterpError::InvalidShape)?;
+    // Equal view lengths prevent later channels from refusing after the first write.
+    for (samples, total) in samples.windows(window_len).zip(output) {
         let mut sum = 0.0;
         for (&offset, &weight) in offsets.iter().zip(weights) {
             let sample = samples.get(offset).ok_or(InterpError::InvalidShape)?;
