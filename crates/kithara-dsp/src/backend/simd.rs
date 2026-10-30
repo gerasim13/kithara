@@ -263,19 +263,17 @@ pub(super) fn crossfade_linear_kernel<S: Simd>(
     let (Some(outgoing), Some(samples)) = (outgoing.get(..len), samples.get_mut(..len)) else {
         return 0;
     };
-    let padding: u128 = S::f32s::LEN.as_();
-    let first_wide: u128 = first.as_();
-    let channel_count: u128 = channels.get().as_();
-    // Four usize values fit u128 on supported targets.
-    let last = first_wide
-        .wrapping_add(count.as_())
-        .wrapping_add(padding.wrapping_mul(2));
-    // Include padded lanes and the final advance in the integer-width bound.
-    if last <= u32::MAX.as_() && channel_count.wrapping_add(padding) <= u32::MAX.as_() {
+    let maximum: usize = u32::MAX.as_();
+    let frame_limit = maximum.wrapping_sub(S::f32s::LEN.wrapping_mul(2));
+    // Reserve padded lanes and the final advance without widening the common path.
+    if first <= frame_limit
+        && count <= frame_limit.wrapping_sub(first)
+        && channels.get() <= maximum.wrapping_sub(S::f32s::LEN)
+    {
         crossfade_linear_u32(simd, outgoing, samples, channels, first.as_(), frames);
         return count;
     }
-    crossfade_linear_frames(simd, outgoing, samples, channels, first_wide, frames);
+    crossfade_linear_frames(simd, outgoing, samples, channels, first.as_(), frames);
     count
 }
 
