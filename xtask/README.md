@@ -38,6 +38,17 @@ cancellation half of that supervision is Unix-only: there the build runs in its
 own process group and the parent relays signals and parent death into it, while
 on Windows Cargo shares the console and receives the control event directly.
 
+## Bootstrap
+
+The `kithara-ci-bootstrap` binary in `bin/` builds from this package with
+`--no-default-features`. Only `serde_json` and `tempfile` are required; the default
+`cli` feature enables the full xtask command and its dependencies. Shared cache
+and target-lease ownership lives in `src/bootstrap/`.
+
+The driver's build uses the provisioned host kache. Before compiling xtask, the
+driver validates an isolated writable RustFS daemon and holds the CI target
+lease. The full CLI reuses the same cache policy and runtime lifecycle.
+
 ## Common Commands
 
 - `just lint` runs the architecture, style, and Rust-idiom checks.

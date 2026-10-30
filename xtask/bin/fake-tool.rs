@@ -40,7 +40,7 @@ fn main() -> ExitCode {
         .unwrap_or_default();
     let args: Vec<String> = env::args().skip(1).collect();
     if role == "kithara-ci-bootstrap" {
-        return match kithara_ci_bootstrap::run(env::args_os().skip(1)) {
+        return match xtask::bootstrap::run(env::args_os().skip(1)) {
             Ok(status) => ExitCode::from(
                 status
                     .code()

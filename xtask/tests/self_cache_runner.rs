@@ -109,7 +109,7 @@ esac
             r#"#!/bin/sh
 set -eu
 case "$*" in
-  *'-p kithara-ci-bootstrap'*)
+  *'-p xtask --no-default-features --bin kithara-ci-bootstrap'*)
     driver_target=; driver_host=
     while test "$#" -gt 0; do
       case "$1" in
@@ -384,7 +384,7 @@ esac
             r#"#!/bin/sh
 set -eu
 case "$*" in
-  *'-p kithara-ci-bootstrap'*)
+  *'-p xtask --no-default-features --bin kithara-ci-bootstrap'*)
     driver_target=; driver_host=
     while test "$#" -gt 0; do
       case "$1" in
@@ -1020,7 +1020,7 @@ esac
             r#"#!/bin/sh
 set -eu
 case "$*" in
-  *'-p kithara-ci-bootstrap'*)
+  *'-p xtask --no-default-features --bin kithara-ci-bootstrap'*)
     driver_target=; driver_host=
     while test "$#" -gt 0; do
       case "$1" in
@@ -1075,7 +1075,7 @@ fn concurrent_public_stale_refreshes_build_once() -> Result<()> {
         r#"#!/bin/sh
 set -eu
 case "$*" in
-  *'-p kithara-ci-bootstrap'*)
+  *'-p xtask --no-default-features --bin kithara-ci-bootstrap'*)
     driver_target=; driver_host=
     while test "$#" -gt 0; do
       case "$1" in
@@ -1327,7 +1327,12 @@ fn ci_bootstrap_driver_owns_the_target_lease() -> Result<()> {
 fn a_cached_ci_worker_refreshes_a_checkout_without_its_bootstrap_driver() -> Result<()> {
     let fixture = Fixture::new()?;
     assert_success(&fixture.bootstrap()?);
-    assert!(!fixture.root.join("xtask/bootstrap").exists());
+    assert!(
+        !fixture
+            .root
+            .join("xtask/bin/kithara-ci-bootstrap.rs")
+            .exists()
+    );
     fs::write(
         fixture.root.join("xtask/src/main.rs"),
         "fn main() { changed(); }\n",

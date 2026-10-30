@@ -245,7 +245,7 @@ pub(crate) fn run(args: &CacheArgs) -> Result<()> {
         CacheCommand::Verify { env_file } => verify::run(env_file.as_deref()),
         CacheCommand::Record { phase } => evidence::record(phase),
         CacheCommand::Exec { phase, arguments } => {
-            let status = kithara_ci_bootstrap::run(
+            let status = xtask::bootstrap::run(
                 [OsString::from("cache"), phase.into()]
                     .into_iter()
                     .chain(arguments.iter().cloned()),

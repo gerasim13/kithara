@@ -120,7 +120,7 @@ impl KacheJob {
 }
 
 pub(crate) fn require_remote(stats: &str) -> Result<()> {
-    kithara_ci_bootstrap::require_remote(stats).map_err(Into::into)
+    xtask::bootstrap::require_remote(stats).map_err(Into::into)
 }
 
 pub(in crate::ci) fn collection_report(output: &str) -> Result<serde_json::Value> {

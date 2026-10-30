@@ -644,7 +644,6 @@ cargo.exclude = [
   "kithara-devtools",
   "kithara-devtools-trace-format",
   "xtask",
-  "kithara-ci-bootstrap",
   "kithara-test-utils",
   "kithara-test-macros",
   "kithara-ffi-web-tests",
@@ -1004,12 +1003,7 @@ owns = [
   "crates/kithara-devtools-trace-format/",
   "crates/kithara-devtools/",
 ]
-cargo.packages = [
-  "kithara-devtools-trace-format",
-  "kithara-devtools",
-  "xtask",
-  "kithara-ci-bootstrap",
-]
+cargo.packages = ["kithara-devtools-trace-format", "kithara-devtools", "xtask"]
 cargo.profile = "test-release"
 runner.nextest.ignore_default_filter = true
 # These crates declare no `flash` feature — the virtual clock is a property of

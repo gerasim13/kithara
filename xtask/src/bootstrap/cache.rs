@@ -11,7 +11,7 @@ use std::{
 
 use tempfile::TempDir;
 
-use crate::consts;
+use crate::bootstrap::consts;
 
 /// Require the effective daemon, rather than merely a configured remote URL.
 ///

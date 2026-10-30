@@ -324,7 +324,7 @@ where
     F: FnOnce(&mut Child) -> Result<ExitStatus>,
 {
     let cache = if env::var_os("KACHE_RUNTIME_DIR").is_none() {
-        kithara_ci_bootstrap::CompilerCache::enter()?
+        xtask::bootstrap::CompilerCache::enter()?
     } else {
         None
     };
