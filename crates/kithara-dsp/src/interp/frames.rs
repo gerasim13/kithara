@@ -66,11 +66,7 @@ pub fn weighted_frames(
         return Err(InterpError::InvalidShape);
     }
     // Equal view lengths prevent later channels from refusing after the first write.
-    for (channel, total) in output.iter_mut().enumerate() {
-        let end = channel
-            .checked_add(window_len)
-            .ok_or(InterpError::InvalidShape)?;
-        let samples = samples.get(channel..end).ok_or(InterpError::InvalidShape)?;
+    for (samples, total) in samples.windows(window_len).zip(output) {
         let mut sum = 0.0;
         for (&offset, &weight) in offsets.iter().zip(weights) {
             let sample = samples.get(offset).ok_or(InterpError::InvalidShape)?;

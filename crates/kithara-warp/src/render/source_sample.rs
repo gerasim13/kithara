@@ -1,5 +1,5 @@
 use kithara_stretch::ElasticError;
-use num_traits::ToPrimitive;
+use num_traits::{AsPrimitive, ToPrimitive};
 
 use super::renderer::residency::SourceResidency;
 
@@ -120,28 +120,24 @@ fn downsample_source_frame(
     source
         .checked_add(radius)
         .ok_or(ElasticError::SampleCountOverflow)?;
-    let mut offsets = [0; 2 * crate::consts::SOURCE_RADIUS + 1];
-    let mut tap_weights = [0.0; 2 * crate::consts::SOURCE_RADIUS + 1];
+    let width = (radius + 1)
+        .to_f64()
+        .ok_or(ElasticError::SampleCountOverflow)?;
     let mut weights = 0.0;
-    for ((sample, tap_weight), offset) in offsets
-        .iter_mut()
-        .zip(&mut tap_weights)
-        .zip(-radius..=radius)
-    {
-        let distance = offset.to_f64().ok_or(ElasticError::SampleCountOverflow)? - fraction;
-        let weight = kithara_dsp::interp::sinc_hann_weight(
-            distance,
-            cutoff,
-            (radius + 1)
-                .to_f64()
-                .ok_or(ElasticError::SampleCountOverflow)?,
-        );
+    let mut tap = -radius;
+    let tap_weights: [f64; 2 * crate::consts::SOURCE_RADIUS + 1] = std::array::from_fn(|_| {
+        let distance: f64 = tap.as_();
+        tap += 1;
+        let weight = kithara_dsp::interp::sinc_hann_weight(distance - fraction, cutoff, width);
+        weights += weight;
+        weight
+    });
+    let mut offsets = [0; 2 * crate::consts::SOURCE_RADIUS + 1];
+    for (sample, offset) in offsets.iter_mut().zip(-radius..=radius) {
         let frame = sample_frame(offset)?;
         let relative =
             usize::try_from(frame - first).map_err(|_| ElasticError::SampleCountOverflow)?;
         *sample = window.start + relative * channels;
-        *tap_weight = weight;
-        weights += weight;
     }
     for (channel, sample) in output.iter_mut().enumerate() {
         let mut total = 0.0;
