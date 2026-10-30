@@ -41,13 +41,14 @@ on Windows Cargo shares the console and receives the control event directly.
 ## Bootstrap
 
 The `ci-bootstrap` binary in `bin/` builds from this package with
-`--no-default-features`. Only `serde_json` and `tempfile` are required; the default
+`--no-default-features`. Only `serde_json`, `tempfile` and the Unix `socket2` transport are required; the default
 `cli` feature enables the full xtask command and its dependencies. Shared cache
 and target-lease ownership lives in `src/ci/bootstrap/`.
 
 The driver's build uses the provisioned host kache. Before compiling xtask, the
 driver validates an isolated writable RustFS daemon and holds the CI target
-lease. The full CLI reuses the same cache policy and runtime lifecycle.
+lease. The full CLI reuses the same cache policy and runtime lifecycle. On Unix,
+policy and counters come directly from daemon IPC, avoiding blob extent scans.
 
 ## Common Commands
 

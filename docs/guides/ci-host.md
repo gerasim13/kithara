@@ -189,39 +189,33 @@ calling container's CPU count, so independent containers would otherwise
 compete for one container's slots. Other invocations retain their scheduler
 setting, enabled by default.
 
-Each host runs its own RustFS stack, the compose project `kithara-ci-cache`
-published on `127.0.0.1:19000`; the two hosts share no cache. Jobs reach it
-through the `rc` client.
-`docker/ci-cache.compose.yml` declares it, and
-`docker/ci-cache/linux.env.example` and `docker/ci-cache/macos.env.example`
-give the shape of the environment each is started with. The environment itself
-lives on the host, outside the repository, because it names directories and
-quotas of that machine.
+Each office has RustFS; their firewalls prevent a shared
+endpoint. No public S3 route is needed. Mac runs native RustFS under launchd
+on `127.0.0.1:9000`; Docker clients use `host.docker.internal:9000`. Linux
+retains the Compose service published on `127.0.0.1:19000`.
 
-Everything the stack keeps - the admin credentials, the objects, the client
-keys - sits in a directory on the host's disk that the environment names. A
-named volume lives wherever the Docker daemon keeps it, inside colima's
-virtual machine on the Mac, so a reset of that daemon would take the store and
-the admin password with it, and every client key the runners hold would stop
-working.
+As the Mac CI user, run `ci host mac install-cache` with the profile and pins. It verifies the pinned archive, installs under `toolchains/rustfs/`
+and stages `com.zvuk.kithara-ci.cache.plist` without starting it. Scopes and
+quotas come from `services/ci-cache/macos.env`. The agent runs
+`ci cache serve --root <host-root>/services/ci-cache` with a private
+`admin-home` for rc; launchd restarts the supervisor when a child fails.
 
-The server needs RustFS 1.0.1 or later. 1.0.0 answers a bucket quota request
-with 503 for about ten seconds after it reports ready (rustfs/rustfs#8014), so
-a setup started on a fresh stack fails at its first quota request.
+Drain writers and retain an offline copy before replacing the old container.
+Never open the same writable data directory from both servers. Stop the old
+container, disable its restart, load the native agent, verify scoped writes
+and independent compiler reuse, update runner environments, then resume jobs.
+Rollback stops native RustFS before restoring the offline data, configuration
+and old container. Remaining Linux jobs still require Colima.
 
-The stack is one container. Its image carries RustFS, `rc` and `xtask`, and
-runs `xtask ci cache serve`: it writes the administrator's credentials if
-there are none, starts RustFS as its child, waits for it to answer ready,
-creates each scope's bucket, lifecycle and client key, and then runs the
-evictor beside the store. They start and stop together: a stop signal is
-passed to RustFS and waited on, and when either RustFS or the evictor ends,
-the container ends and Docker restarts it. Every start applies the setup
-again, from the code the store is served with. `serve` builds every bucket
-policy from `ci::cache::provision`. So the copy of this repository the image
-was built from, not the repository itself, decides what the live policy says.
-The Linux host's deployment copy is `/etc/kithara-ci/cache-compose/source`;
-refreshing it is copying a tree over that path, keeping the one it replaces as
-`source.before-<stamp>` beside it, and rebuilding the image from it.
+Both supervisors preserve administrator and client identities, initialize
+scope buckets and lifecycle rules through `ci::cache::provision`, and run the
+audit receiver and evictor beside RustFS. State lives in host directories;
+State must survive VM resets; do not use Docker named volumes.
+
+Linux uses `docker/ci-cache.compose.yml` and a host-owned environment file.
+Docker init propagates stop signals.
+Refresh `/etc/kithara-ci/cache-compose/source`, retain the previous tree as
+`source.before-<stamp>`, and rebuild to deploy changed bucket policy.
 
 Which copy a running stack was actually started from is a question to ask the
 stack, not this page:
@@ -275,6 +269,12 @@ a per-scope quota never reached it, and every setup set each scope to
 `CACHE_ENV_FILE`, and the service reads it as its `env_file`. A copy of the
 source older than that still flattens the quotas: refresh it before starting
 the stack.
+
+Policy checks and routine counters read the pinned kache daemon's IPC
+statistics on Unix. They do not run `kache stats --json`, whose disk accounting
+walks blobs and synchronizes Linux extents. Full event reports remain available.
+Maintenance runs `kache gc` and checks its exit status; its JSON rendering also
+probes extents and must not run concurrently with normal CI work.
 
 The compiler cache has no age rule: a hit does not renew an object's date, so
 an age rule expires first the entries every build reads. The evictor keeps

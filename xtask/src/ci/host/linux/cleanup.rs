@@ -5,7 +5,7 @@ use tracing::info;
 
 use super::{container::Container, profile::LinuxHost};
 use crate::{
-    ci::{build_cache, kache, process::Process},
+    ci::{build_cache, process::Process},
     consts,
 };
 
@@ -124,11 +124,9 @@ fn reclaim_compiler_stores(process: &Process, host: &LinuxHost, image: &str) -> 
                 "15",
                 "kache",
                 "gc",
-                "--json",
             ],
             "collect the local compiler store",
         )?;
-        let report = kache::collection_report(&report)?;
         info!(path = %store.display(), %report, "local compiler store collected");
     }
     Ok(())
@@ -270,7 +268,7 @@ mod tests {
             assert!(call.contains("--env=KACHE_LOCAL_ONLY=1"));
             assert!(call.contains("--user=1000:1000"));
             assert!(call.contains("installed:reviewed"));
-            assert!(call.ends_with("kache gc --json"));
+            assert!(call.ends_with("kache gc"));
             assert!(!call.contains("AWS_"));
         }
     }

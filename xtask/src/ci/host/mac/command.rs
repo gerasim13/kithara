@@ -39,6 +39,8 @@ enum MacCommand {
     InstallHostTools,
     /// Install pinned Rust and Android tools for the CI account.
     InstallUserTools,
+    /// Install pinned native `RustFS` and stage its launch agent without starting it.
+    InstallCache,
     /// Install the current Rust executable and launchd service definitions.
     InstallServices,
     /// Validate credentials and activate the repository bridge daemon.
@@ -119,6 +121,10 @@ pub(crate) fn run(args: &MacArgs) -> Result<()> {
         }
         MacCommand::InstallUserTools => {
             ToolchainInstaller::new(&config, &process).install_user_tools()
+        }
+        MacCommand::InstallCache => {
+            let directory = ToolchainInstaller::new(&config, &process).install_cache()?;
+            ServiceInstaller::new(&config, &process).install_cache(&directory)
         }
         MacCommand::InstallServices => {
             ServiceInstaller::new(&config, &process).install(&args.config, &args.pins)
@@ -220,6 +226,7 @@ mod tests {
             ["finish"].as_slice(),
             ["install-host-tools"].as_slice(),
             ["install-user-tools"].as_slice(),
+            ["install-cache"].as_slice(),
             ["install-services"].as_slice(),
             ["activate-bridge"].as_slice(),
             ["configure-runners"].as_slice(),

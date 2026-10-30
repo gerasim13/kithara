@@ -61,7 +61,10 @@ impl CompilerCache {
                 .tempdir()?,
             active: true,
         };
-        require_remote(&cache.capture(&["stats", "--json"])?)?;
+        require_remote(&super::statistics(
+            &mut kache_command(cache.directory.path(), &[]),
+            cache.directory.path(),
+        )?)?;
         Ok(Some(cache))
     }
 
@@ -101,7 +104,7 @@ impl Drop for CompilerCache {
     }
 }
 
-fn output(command: &mut Command) -> io::Result<String> {
+pub(super) fn output(command: &mut Command) -> io::Result<String> {
     let mut output = tempfile::tempfile()?;
     command
         .stdin(Stdio::null())
@@ -230,7 +233,7 @@ pub(super) fn finish_bootstrap(runtime: &Path) -> io::Result<()> {
         if in_ci {
             require_host()?;
         }
-        let stats = output(&mut kache_command(runtime, &["stats", "--json"]))?;
+        let stats = super::statistics(&mut kache_command(runtime, &[]), runtime)?;
         if in_ci {
             require_remote(&stats)?;
             record(runtime, OsStr::new("bootstrap-driver"));

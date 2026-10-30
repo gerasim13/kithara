@@ -535,6 +535,7 @@ signal-hook = "0.4"
 signalsmith-stretch = "0.1.3"
 skrifa = "0.37"
 smallvec = "1"
+socket2 = "0.6.5"
 symphonia = { version = "0.6.1", features = ["all", "opt-simd"] }
 symphonia-codec-aac = "0.6.1"
 symphonia-codec-pcm = "0.6.1"

@@ -320,13 +320,7 @@ pub(crate) fn note_compiler_cache(
     if process.is_recording() {
         return;
     }
-    let kache = tools.program("kache");
-    let primary = process.capture_bounded(
-        kache,
-        &["stats", "--json"],
-        "kache statistics",
-        consts::CACHE_EVIDENCE_INPUT_LIMIT,
-    );
+    let primary = crate::ci::kache::statistics(process, tools);
     let (event, detail) = primary.as_ref().map_or_else(
         |_| {
             (
@@ -1139,6 +1133,10 @@ mod tests {
                 BTreeMap::from([
                     (OsString::from("PATH"), bin.into_os_string()),
                     (OsString::from("CI_JOB_ID"), OsString::from("42")),
+                    (
+                        OsString::from("KACHE_RUNTIME_DIR"),
+                        directory.path().join("kache/runtime").into_os_string(),
+                    ),
                     (OsString::from("GITHUB_RUN_ID"), OsString::new()),
                     (OsString::from("KITHARA_TEST_RULES"), OsString::new()),
                     (
@@ -1169,14 +1167,14 @@ mod tests {
             if readonly {
                 assert!(!events.lines().any(|line| line == "lane"));
             } else {
-                assert!(events.contains("stats --json\nlane\n"), "{events}");
+                assert!(events.contains("daemon start\nlane\n"), "{events}");
             }
         }
     }
 
     #[test]
     fn sccache_lifecycle_precedes_real_lane_dispatch() {
-        const READY: &str = "--stop-server\n--start-server\nlane\nstats --json\n--show-stats\nstats --full --json\nexplain --json\ndaemon stop\n";
+        const READY: &str = "--stop-server\n--start-server\nlane\ndaemon start\n--show-stats\nstats --full --json\nexplain --json\ndaemon stop\n";
 
         let directory = tempfile::tempdir().unwrap();
         let bin = directory.path().join("bin");
@@ -1198,12 +1196,12 @@ mod tests {
             (
                 "stop-failure",
                 true,
-                "--stop-server\nstats --json\n--show-stats\nstats --full --json\nexplain --json\ndaemon stop\n",
+                "--stop-server\ndaemon start\n--show-stats\nstats --full --json\nexplain --json\ndaemon stop\n",
             ),
             (
                 "start-failure",
                 true,
-                "--stop-server\n--start-server\nstats --json\n--show-stats\nstats --full --json\nexplain --json\ndaemon stop\n",
+                "--stop-server\n--start-server\ndaemon start\n--show-stats\nstats --full --json\nexplain --json\ndaemon stop\n",
             ),
             ("success", false, "lane\n"),
         ] {
@@ -1216,6 +1214,10 @@ mod tests {
             let mut vars = BTreeMap::from([
                 (OsString::from("CI_JOB_ID"), OsString::new()),
                 (OsString::from("GITHUB_RUN_ID"), OsString::new()),
+                (
+                    OsString::from("KACHE_RUNTIME_DIR"),
+                    directory.path().join("kache/runtime").into_os_string(),
+                ),
                 (OsString::from("PATH"), bin.clone().into_os_string()),
                 (
                     OsString::from("KITHARA_TEST_SCENARIO"),

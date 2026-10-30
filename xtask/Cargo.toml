@@ -18,7 +18,7 @@ path = "bin/ci-bootstrap.rs"
 
 [[bin]]
 name = "fake-tool"
-path = "bin/fake-tool.rs"
+path = "bin/fake-tool/main.rs"
 
 [features]
 default = ["cli"]
@@ -89,6 +89,7 @@ uniffi_bindgen = { workspace = true, optional = true }
 # handles from a pool with no per-process limit to lift.
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true, optional = true }
+socket2 = { workspace = true }
 
 [dev-dependencies]
 proc-macro2 = { workspace = true }

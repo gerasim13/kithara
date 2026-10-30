@@ -91,6 +91,8 @@ pub(crate) struct CiPins {
     /// links. It tracks the LLVM the libraries were cut from, not a toolchain
     /// pinned here.
     pub(crate) rtsan_version: String,
+    pub(crate) rustfs_version: String,
+    pub(crate) rustfs_macos_arm64_sha256: String,
     pub(crate) rustup_version: String,
     pub(crate) rustup_windows_sha256: String,
     pub(crate) stable_toolchain: String,
@@ -165,6 +167,7 @@ impl CiPins {
             ("msrv_toolchain", self.msrv_toolchain.as_str()),
             ("nightly_toolchain", self.nightly_toolchain.as_str()),
             ("rtsan_version", self.rtsan_version.as_str()),
+            ("rustfs_version", self.rustfs_version.as_str()),
             ("rustup_version", self.rustup_version.as_str()),
             ("stable_toolchain", self.stable_toolchain.as_str()),
             ("windows_eval_iso_url", self.windows_eval_iso_url.as_str()),
@@ -279,6 +282,10 @@ impl CiPins {
                 "rtsan_linux_arm64_sha256",
                 self.rtsan_linux_arm64_sha256.as_str(),
             ),
+            (
+                "rustfs_macos_arm64_sha256",
+                self.rustfs_macos_arm64_sha256.as_str(),
+            ),
             ("rustup_windows_sha256", self.rustup_windows_sha256.as_str()),
             (
                 "windows_eval_iso_sha256",
@@ -326,6 +333,15 @@ mod tests {
 
     use super::*;
     use crate::{ci::config::profile::workspace_root, consts};
+
+    #[test]
+    fn native_and_container_stores_use_the_same_release() {
+        let pins = CiPins::load(&workspace_root().join(consts::PINS_PATH)).unwrap();
+        assert!(
+            pins.cache_server_image
+                .starts_with(&format!("rustfs/rustfs:{}@sha256:", pins.rustfs_version))
+        );
+    }
 
     #[test]
     fn digests_are_bounded() {

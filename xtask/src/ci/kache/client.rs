@@ -3,7 +3,7 @@ use std::{
     ffi::OsString,
     fs,
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, ensure};
@@ -72,13 +72,17 @@ impl KacheJob {
     /// that is not a push to a protected branch from writing, whatever its
     /// credentials allow, and every branch job of the fork is such a job. The
     /// scope's credentials are what decide where a job writes.
-    pub(crate) fn environment(&self, tools: &ToolsConfig) -> [(&'static str, OsString); 7] {
+    pub(crate) fn environment(&self, tools: &ToolsConfig) -> [(&'static str, OsString); 8] {
         [
             ("CMAKE_CXX_COMPILER_LAUNCHER", tools.program("kache").into()),
             ("CMAKE_C_COMPILER_LAUNCHER", tools.program("kache").into()),
             ("GITHUB_ACTIONS", OsString::new()),
             ("GITLAB_CI", OsString::new()),
             ("KACHE_CONFIG", self.config().into_os_string()),
+            (
+                "KACHE_RUNTIME_DIR",
+                self.directory.join("runtime").into_os_string(),
+            ),
             ("KACHE_FALLBACK", tools.program("sccache").into()),
             ("RUSTC_WRAPPER", tools.program("kache").into()),
         ]
@@ -103,16 +107,22 @@ impl KacheJob {
 
     pub(crate) fn verify_remote(&self, process: &Process, tools: &ToolsConfig) -> Result<()> {
         let mut command = process.command(tools.program("kache"));
+        let runtime = self.directory.join("runtime");
         command
             .env("KACHE_CONFIG", self.config())
-            .args(["stats", "--json"]);
-        let stats = process.capture_bounded_command(
-            &mut command,
+            .env("KACHE_RUNTIME_DIR", &runtime);
+        if process.is_recording() {
+            command.args(["daemon", "start"]);
+            return process.run_command(&mut command, "start compiler-cache statistics");
+        }
+        let started = Instant::now();
+        let stats = bootstrap::statistics(&mut command, &runtime);
+        process.time(
             "verify the compiler cache remote",
-            Duration::from_secs(60),
-            consts::CACHE_EVIDENCE_INPUT_LIMIT,
-        )?;
-        require_remote(&stats)
+            started.elapsed(),
+            stats.is_ok(),
+        );
+        require_remote(&stats?)
     }
 
     fn config(&self) -> PathBuf {
@@ -120,17 +130,19 @@ impl KacheJob {
     }
 }
 
-pub(crate) fn require_remote(stats: &str) -> Result<()> {
-    bootstrap::require_remote(stats).map_err(Into::into)
+pub(crate) fn statistics(process: &Process, tools: &ToolsConfig) -> Result<String> {
+    let runtime = process
+        .environment_path("KACHE_RUNTIME_DIR")
+        .context("compiler-cache statistics require the job runtime")?;
+    let mut command = process.command(tools.program("kache"));
+    let started = Instant::now();
+    let result = bootstrap::statistics(&mut command, &runtime).map_err(Into::into);
+    process.time("kache statistics", started.elapsed(), result.is_ok());
+    result
 }
 
-pub(in crate::ci) fn collection_report(output: &str) -> Result<serde_json::Value> {
-    let report: serde_json::Value = serde_json::from_str(output)?;
-    ensure!(
-        report["success"] == true,
-        "compiler-store collection failed: {report}"
-    );
-    Ok(report)
+pub(crate) fn require_remote(stats: &str) -> Result<()> {
+    bootstrap::require_remote(stats).map_err(Into::into)
 }
 
 pub(crate) fn reclaim_local_stores(config: &CiConfig, process: &Process) -> Result<()> {
@@ -199,7 +211,7 @@ fn reclaim_store(process: &Process, store: &Path, max_size: &str) -> Result<()> 
     };
     // Automatic GC keeps remote imports for six hours even above the size limit.
     let result = process.capture_bounded_command(
-        &mut command(&["gc", "--json"]),
+        &mut command(&["gc"]),
         "collect the local compiler store",
         Duration::from_secs(60),
         65_536,
@@ -213,9 +225,8 @@ fn reclaim_store(process: &Process, store: &Path, max_size: &str) -> Result<()> 
     if let Err(error) = stopped {
         warn!(%error, "compiler-cache maintenance daemon did not stop");
     }
-    let report = collection_report(
-        &result.with_context(|| format!("collecting compiler store {}", store.display()))?,
-    )?;
+    let report =
+        result.with_context(|| format!("collecting compiler store {}", store.display()))?;
     info!(path = %store.display(), %report, "local compiler store collected");
     Ok(())
 }
@@ -322,7 +333,7 @@ mod tests {
             &program,
             &format!(
                 "#!/bin/sh\ncase \"$*\" in\n\
-                 'gc --json') test \"$KACHE_LOCAL_ONLY\" = 1 || exit 2; \
+                 'gc') test \"$KACHE_LOCAL_ONLY\" = 1 || exit 2; \
                  test -z \"${{KACHE_CACHE_DIR+x}}\" || exit 2; \
                  test -z \"${{KACHE_SOCKET_PATH+x}}\" || exit 2; \
                  cp \"$KACHE_CONFIG\" '{}'; printf '%s' '{{\"success\":true}}' ;;\n\
@@ -351,15 +362,11 @@ mod tests {
         let program = directory.path().join("kache");
         let stopped = directory.path().join("stopped");
         let process = maintenance_process(directory.path());
-        for result in [
-            "exit 7",
-            "printf invalid",
-            "printf '%s' '{\"success\":false}'",
-        ] {
+        for result in ["exit 7", "exit 9"] {
             crate::testing::install_script(
                 &program,
                 &format!(
-                    "#!/bin/sh\ncase \"$*\" in\n'gc --json') {result} ;;\n\
+                    "#!/bin/sh\ncase \"$*\" in\n'gc') {result} ;;\n\
                      'daemon stop') touch '{}' ;;\n*) exit 3 ;;\nesac\n",
                     stopped.display(),
                 ),
@@ -576,6 +583,10 @@ mod tests {
                 ("GITHUB_ACTIONS", OsString::new()),
                 ("GITLAB_CI", OsString::new()),
                 ("KACHE_CONFIG", job.config().into_os_string()),
+                (
+                    "KACHE_RUNTIME_DIR",
+                    job.directory.join("runtime").into_os_string()
+                ),
                 ("KACHE_FALLBACK", OsString::from(tools.program("sccache"))),
                 ("RUSTC_WRAPPER", OsString::from(tools.program("kache"))),
             ]

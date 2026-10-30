@@ -104,6 +104,35 @@ impl<'a> ToolchainInstaller<'a> {
         Ok(())
     }
 
+    pub(super) fn install_cache(&self) -> Result<PathBuf> {
+        require_macos()?;
+        self.require_user(&self.config.host.ci_user)?;
+        let version = &self.config.pins.rustfs_version;
+        let directory = self
+            .config
+            .host
+            .host_root
+            .join("toolchains/rustfs")
+            .join(version);
+        let temporary = tempfile::tempdir()?;
+        let archive = temporary.path().join("rustfs.zip");
+        download(
+            &format!(
+                "https://github.com/rustfs/rustfs/releases/download/{version}/rustfs-macos-aarch64-v{version}.zip"
+            ),
+            &archive,
+        )?;
+        verify_sha256(&archive, &self.config.pins.rustfs_macos_arm64_sha256)?;
+        let extracted = temporary.path().join("extracted");
+        let mut extract = self.process.command("/usr/bin/ditto");
+        extract.args(["-x", "-k"]).arg(&archive).arg(&extracted);
+        self.process
+            .run_command(&mut extract, "extract pinned native RustFS")?;
+        fs::create_dir_all(&directory)?;
+        super::runners::replace_file(&extracted.join("rustfs"), &directory.join("rustfs"))?;
+        Ok(directory)
+    }
+
     fn install_rust(&self) -> Result<()> {
         let home = self.ci_home();
         let cargo_home = home.join(".cargo");

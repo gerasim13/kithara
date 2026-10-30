@@ -67,6 +67,7 @@ impl Fixture {
             &fake_bin.join("kache"),
             r#"#!/bin/sh
 case "$1 $2" in
+  'daemon start') exec "$BOOTSTRAP_FAKE_KACHE" --kache-start ;;
   'stats --json') printf '%s' '{"remote":"s3://fixture/kache","daemon_connected":true,"daemon_remote_readonly":false}' ;;
   'daemon stop') ;;
   *) exec "$@" ;;
@@ -185,6 +186,8 @@ exit 98
                 "KACHE_HOST_CONFIG",
                 self._temp.path().join("kache-host.toml"),
             )
+            .env("BOOTSTRAP_FAKE_KACHE", env!("CARGO_BIN_EXE_fake-tool"))
+            .env("KITHARA_TEST_STDOUT", r#"{"remote":"s3://fixture/kache","daemon_connected":true,"daemon_remote_readonly":false}"#)
             .env("SCCACHE_BUCKET", "fixture")
             .env("SCCACHE_ENDPOINT", "http://cache:9000")
             .env("XTASK_SELF_CACHE_CARGO", &self.bootstrap_cargo)
@@ -317,6 +320,8 @@ exit 98
                 "KACHE_HOST_CONFIG",
                 self._temp.path().join("kache-host.toml"),
             )
+            .env("BOOTSTRAP_FAKE_KACHE", env!("CARGO_BIN_EXE_fake-tool"))
+            .env("KITHARA_TEST_STDOUT", r#"{"remote":"s3://fixture/kache","daemon_connected":true,"daemon_remote_readonly":false}"#)
             .env("SCCACHE_BUCKET", "fixture")
             .env("SCCACHE_ENDPOINT", "http://cache:9000")
             .env("CARGO_TARGET_DIR", &self.target)

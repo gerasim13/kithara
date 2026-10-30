@@ -4,6 +4,11 @@ use std::{fs, os::unix::fs::PermissionsExt, path::Path, process::Command};
 
 use serde_json::json;
 
+fn ready_stats() -> String {
+    json!({"remote":"s3://scope/kache","daemon_connected":true,"daemon_remote_readonly":false})
+        .to_string()
+}
+
 fn executable(path: &Path, contents: &str) {
     fs::write(path, contents).expect("write compiler-cache fixture executable");
     fs::set_permissions(path, fs::Permissions::from_mode(0o755))
@@ -29,7 +34,7 @@ fn bootstrap_compiles_only_with_a_writable_s3_daemon() {
         executable(
             &kache,
             &format!(
-                "#!/bin/sh\ncase \"$1 $2\" in\n'stats --json') printf '%s' '{}' ;;\n'daemon stop') test -d \"$KACHE_RUNTIME_DIR\" ;;\n*) exit 2 ;;\nesac\n",
+                "#!/bin/sh\ncase \"$1 $2\" in\n'daemon start') exec \"$BOOTSTRAP_FAKE_KACHE\" --kache-start ;;\n'stats --json') printf '%s' '{}' ;;\n'daemon stop') test -d \"$KACHE_RUNTIME_DIR\" ;;\n*) exit 2 ;;\nesac\n",
                 stats
             ),
         );
@@ -44,7 +49,9 @@ fn bootstrap_compiles_only_with_a_writable_s3_daemon() {
         let output = Command::new(env!("CARGO_BIN_EXE_ci-bootstrap")).args(["cache", "bootstrap"])
             .args(["sh", "-c", "test -z \"$GITHUB_ACTIONS$GITLAB_CI\" && test \"$RUSTC_WRAPPER\" = kache && test \"$KACHE_PREFETCH_ENABLED\" = false && touch \"$1\"", "compile"])
             .arg(&marker).env("PATH", path).env("TMPDIR", temp.path())
-            .env("CI_JOB_ID", "42").env_remove("GITHUB_RUN_ID")
+            .env("BOOTSTRAP_FAKE_KACHE", env!("CARGO_BIN_EXE_fake-tool"))
+            .env("KITHARA_TEST_STDOUT", ready_stats())
+            .env("CI_JOB_ID", "42").env("KITHARA_TEST_STDOUT", stats.to_string()).env_remove("GITHUB_RUN_ID")
             .env("GITHUB_ACTIONS", "true").env("GITLAB_CI", "true").env_remove("KACHE_RUNTIME_DIR")
             .env("KACHE_HOST_CONFIG", &host).env("SCCACHE_BUCKET", "scope")
             .env("SCCACHE_ENDPOINT", "http://cache:9000").output().unwrap();
@@ -75,7 +82,7 @@ fn child_failure_preserves_its_exit_and_stops_only_the_owned_daemon() {
     executable(
         &temp.path().join("kache"),
         &format!(
-            "#!/bin/sh\ntest \"$KACHE_RUNTIME_DIR\" != /foreign || exit 9\ncase \"$1 $2\" in\n'stats --json') printf '%s' '{{\"remote\":\"s3://scope/kache\",\"daemon_connected\":true,\"daemon_remote_readonly\":false}}' ;;\n'daemon stop') printf '%s' \"$KACHE_RUNTIME_DIR\" > '{}' ;;\n*) exit 2 ;;\nesac\n",
+            "#!/bin/sh\ntest \"$KACHE_RUNTIME_DIR\" != /foreign || exit 9\ncase \"$1 $2\" in\n'daemon start') exec \"$BOOTSTRAP_FAKE_KACHE\" --kache-start ;;\n'stats --json') printf '%s' '{{\"remote\":\"s3://scope/kache\",\"daemon_connected\":true,\"daemon_remote_readonly\":false}}' ;;\n'daemon stop') printf '%s' \"$KACHE_RUNTIME_DIR\" > '{}' ;;\n*) exit 2 ;;\nesac\n",
             stopped.display(),
         ),
     );
@@ -87,6 +94,8 @@ fn child_failure_preserves_its_exit_and_stops_only_the_owned_daemon() {
         .args(["cache", "failed-child", "sh", "-c", "exit 7"])
         .env("PATH", path)
         .env("TMPDIR", temp.path())
+        .env("BOOTSTRAP_FAKE_KACHE", env!("CARGO_BIN_EXE_fake-tool"))
+        .env("KITHARA_TEST_STDOUT", ready_stats())
         .env("CI_JOB_ID", "42")
         .env("KACHE_RUNTIME_DIR", "/foreign")
         .env("KACHE_HOST_CONFIG", &host)
@@ -127,7 +136,7 @@ fn a_failed_daemon_drain_fails_a_successful_compilation() {
     executable(&temp.path().join("just"), "#!/bin/sh\nexit 0\n");
     executable(
         &temp.path().join("kache"),
-        "#!/bin/sh\ncase \"$1 $2\" in\n'stats --json') printf '%s' '{\"remote\":\"s3://scope/kache\",\"daemon_connected\":true,\"daemon_remote_readonly\":false}' ;;\n'daemon stop') printf '%s' 'drain refused' >&2; exit 4 ;;\n*) exit 2 ;;\nesac\n",
+        "#!/bin/sh\ncase \"$1 $2\" in\n'daemon start') exec \"$BOOTSTRAP_FAKE_KACHE\" --kache-start ;;\n'stats --json') printf '%s' '{\"remote\":\"s3://scope/kache\",\"daemon_connected\":true,\"daemon_remote_readonly\":false}' ;;\n'daemon stop') printf '%s' 'drain refused' >&2; exit 4 ;;\n*) exit 2 ;;\nesac\n",
     );
     let path = std::env::join_paths(std::iter::once(temp.path().to_path_buf()).chain(
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
@@ -137,6 +146,8 @@ fn a_failed_daemon_drain_fails_a_successful_compilation() {
         .args(["cache", "drain", "sh", "-c", "exit 0"])
         .env("PATH", path)
         .env("TMPDIR", temp.path())
+        .env("BOOTSTRAP_FAKE_KACHE", env!("CARGO_BIN_EXE_fake-tool"))
+        .env("KITHARA_TEST_STDOUT", ready_stats())
         .env("CI_JOB_ID", "42")
         .env_remove("KACHE_RUNTIME_DIR")
         .env("KACHE_HOST_CONFIG", host)
@@ -170,6 +181,8 @@ fn the_target_lease_preserves_the_ci_context_and_child_exit() {
             "-c",
             "test \"$GITHUB_ACTIONS\" = true && test \"$GITLAB_CI\" = true || exit 9; exit 7",
         ])
+        .env("BOOTSTRAP_FAKE_KACHE", env!("CARGO_BIN_EXE_fake-tool"))
+        .env("KITHARA_TEST_STDOUT", ready_stats())
         .env("CI_JOB_ID", "42")
         .env("GITHUB_RUN_ID", "43")
         .env("GITHUB_ACTIONS", "true")
@@ -205,7 +218,7 @@ fn the_initial_driver_daemon_is_verified_and_released_before_the_child() {
         executable(
             &temp.path().join("kache"),
             &format!(
-                "#!/bin/sh\ncase \"$1 $2\" in\n'stats --json') printf '%s' '{}' ;;\n'daemon stop') touch \"$BOOTSTRAP_STOPPED\" ;;\n*) exit 2 ;;\nesac\n",
+                "#!/bin/sh\ncase \"$1 $2\" in\n'daemon start') exec \"$BOOTSTRAP_FAKE_KACHE\" --kache-start ;;\n'stats --json') printf '%s' '{}' ;;\n'daemon stop') touch \"$BOOTSTRAP_STOPPED\" ;;\n*) exit 2 ;;\nesac\n",
                 stats
             ),
         );
@@ -227,11 +240,14 @@ fn the_initial_driver_daemon_is_verified_and_released_before_the_child() {
             ])
             .current_dir(&checkout)
             .env("PATH", path)
+            .env("BOOTSTRAP_FAKE_KACHE", env!("CARGO_BIN_EXE_fake-tool"))
+            .env("KITHARA_TEST_STDOUT", ready_stats())
             .env("CI_JOB_ID", "42")
             .env("TMPDIR", temp.path())
             .env("KACHE_HOST_CONFIG", host)
             .env("SCCACHE_BUCKET", "scope")
             .env("SCCACHE_ENDPOINT", "http://cache:9000")
+            .env("KITHARA_TEST_STDOUT", stats.to_string())
             .env("BOOTSTRAP_STOPPED", &stopped)
             .env("BOOTSTRAP_COMPILED", &compiled)
             .output()
@@ -308,6 +324,8 @@ fn the_initial_runtime_cannot_delete_other_data_or_follow_a_symlink() {
             .args(["cache", "unsafe-runtime", "sh", "-c", "exit 0"])
             .current_dir(temp.path())
             .env("PATH", &path)
+            .env("BOOTSTRAP_FAKE_KACHE", env!("CARGO_BIN_EXE_fake-tool"))
+            .env("KITHARA_TEST_STDOUT", ready_stats())
             .env("CI_JOB_ID", "42")
             .env("TMPDIR", &owned)
             .env("BOOTSTRAP_CALLED", &called)

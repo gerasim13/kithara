@@ -66,12 +66,7 @@ pub(super) fn record(phase: &str) -> Result<()> {
     let root = std::env::current_dir()?;
     let tools = kithara_devtools::common::project::ProjectConfig::load(&root)?.tools;
     let process = Process::new(&root, std::collections::BTreeMap::new());
-    let primary = process.capture_bounded(
-        tools.program("kache"),
-        &["stats", "--json"],
-        "kache statistics",
-        consts::CACHE_EVIDENCE_INPUT_LIMIT,
-    );
+    let primary = crate::ci::kache::statistics(&process, &tools);
     let fallback = process.capture_bounded(
         tools.program("sccache"),
         &["--show-stats"],

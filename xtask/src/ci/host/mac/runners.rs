@@ -427,7 +427,7 @@ impl<'a> RunnerManager<'a> {
             "--cpus",
             "5",
             "--memory",
-            "11",
+            "8",
             "--disk",
             "100",
             "--vm-type",
@@ -852,7 +852,7 @@ mod tests {
     }
 
     #[test]
-    fn the_linux_guest_reserves_memory_for_its_job_and_cache_service() {
+    fn the_linux_guest_reserves_memory_for_its_admitted_job() {
         let config = fixture();
         let process = Process::new(Path::new("/"), BTreeMap::new());
         let manager = RunnerManager::new(&config, &process);
@@ -885,8 +885,8 @@ mod tests {
                 .parse::<u64>()
                 .unwrap();
             assert!(
-                slots * job_mib + 4 * 1024 <= guest_mib,
-                "{slots} Docker jobs of {job_mib} MiB leave no room for RustFS and the guest OS in {guest_mib} MiB"
+                slots * job_mib + 1536 <= guest_mib,
+                "{slots} Docker jobs of {job_mib} MiB leave no room for the guest OS in {guest_mib} MiB"
             );
         }
     }

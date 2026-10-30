@@ -1231,7 +1231,7 @@ mod tests {
         let collections = recorded
             .steps()
             .iter()
-            .filter(|step| step.args == ["gc", "--json"])
+            .filter(|step| step.args == ["gc"])
             .collect::<Vec<_>>();
         assert_eq!(collections.len(), 2);
         assert!(
