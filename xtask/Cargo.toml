@@ -50,7 +50,6 @@ cli = [
     "dep:tracing",
     "dep:tracing-subscriber",
     "dep:uniffi_bindgen",
-    "dep:nix",
 ]
 
 [dependencies]
@@ -88,7 +87,7 @@ uniffi_bindgen = { workspace = true, optional = true }
 # The descriptor ceiling this raises is a Unix concept; Windows hands out
 # handles from a pool with no per-process limit to lift.
 [target.'cfg(unix)'.dependencies]
-nix = { workspace = true, optional = true }
+nix = { workspace = true }
 socket2 = { workspace = true }
 
 [dev-dependencies]

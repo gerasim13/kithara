@@ -41,7 +41,7 @@ on Windows Cargo shares the console and receives the control event directly.
 ## Bootstrap
 
 The `ci-bootstrap` binary in `bin/` builds from this package with
-`--no-default-features`. Only `serde_json`, `tempfile` and the Unix `socket2` transport are required; the default
+`--no-default-features`. Only `serde_json`, `tempfile` and the Unix `socket2`/`nix` transport are required; the default
 `cli` feature enables the full xtask command and its dependencies. Shared cache
 and target-lease ownership lives in `src/ci/bootstrap/`.
 

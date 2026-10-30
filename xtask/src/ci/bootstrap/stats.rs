@@ -2,10 +2,15 @@ use std::{io, path::Path, process::Command};
 #[cfg(unix)]
 use std::{
     io::{Read, Write},
-    os::{fd::OwnedFd, unix::net::UnixStream},
+    os::{
+        fd::{AsFd, OwnedFd},
+        unix::net::UnixStream,
+    },
     time::Instant,
 };
 
+#[cfg(unix)]
+use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 #[cfg(unix)]
 use serde_json::{Value, json};
 #[cfg(unix)]
@@ -57,6 +62,13 @@ fn query(runtime: &Path, deadline: Instant) -> io::Result<String> {
         })?;
     socket.set_write_timeout(Some(remaining))?;
     socket.write_all(b"{\"stats\":{\"include_entries\":false,\"include_summaries\":false,\"sort_by\":null,\"event_hours\":24,\"event_secs\":86400,\"client_epoch\":0}}\n")?;
+    read_reply(&mut socket, deadline)
+}
+
+#[cfg(unix)]
+fn read_reply(socket: &mut UnixStream, deadline: Instant) -> io::Result<String> {
+    // Darwin rejects socket timeout changes after the peer closes a buffered reply.
+    socket.set_nonblocking(true)?;
     let mut reply = Vec::new();
     loop {
         let remaining = deadline
@@ -67,9 +79,20 @@ fn query(runtime: &Path, deadline: Instant) -> io::Result<String> {
                     "compiler-cache statistics timed out",
                 )
             })?;
-        socket.set_read_timeout(Some(remaining))?;
+        let timeout = PollTimeout::try_from(remaining)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+        let mut descriptors = [PollFd::new(socket.as_fd(), PollFlags::POLLIN)];
+        match poll(&mut descriptors, timeout) {
+            Ok(0) | Err(nix::errno::Errno::EINTR) => continue,
+            Ok(_) => {}
+            Err(error) => return Err(error.into()),
+        }
         let mut bytes = [0; 4096];
-        let count = socket.read(&mut bytes)?;
+        let count = match socket.read(&mut bytes) {
+            Ok(count) => count,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        };
         if count == 0 {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
@@ -177,6 +200,27 @@ mod tests {
         let stats = query(directory.path(), Instant::now() + consts::COMMAND_TIMEOUT).unwrap();
         super::super::require_remote(&stats).unwrap();
         server.join().unwrap();
+    }
+
+    #[test]
+    fn buffered_reply_survives_the_daemon_closing_its_socket() {
+        let (mut socket, mut daemon) = UnixStream::pair().unwrap();
+        writeln!(daemon, "{}", response()).unwrap();
+        drop(daemon);
+        let stats = read_reply(&mut socket, Instant::now() + consts::COMMAND_TIMEOUT).unwrap();
+        super::super::require_remote(&stats).unwrap();
+    }
+
+    #[test]
+    fn an_unfinished_reply_keeps_the_original_deadline() {
+        let (mut socket, mut daemon) = UnixStream::pair().unwrap();
+        daemon.write_all(b"{\"ok\":true").unwrap();
+        let error = read_reply(
+            &mut socket,
+            Instant::now() + std::time::Duration::from_millis(20),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
     }
 
     #[test]
