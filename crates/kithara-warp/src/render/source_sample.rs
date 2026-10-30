@@ -61,17 +61,14 @@ fn interpolate_source_frame(
 ) -> Result<(), ElasticError> {
     let channels = output.len();
     let current = sample_offset(0)?;
+    let current = &resident.samples[current..current + channels];
     let next = if fraction == 0.0 {
         current
     } else {
-        sample_offset(1)?
+        let next = sample_offset(1)?;
+        &resident.samples[next..next + channels]
     };
-    kithara_dsp::interp::interpolate_frame(
-        &resident.samples[current..current + channels],
-        &resident.samples[next..next + channels],
-        fraction,
-        output,
-    );
+    kithara_dsp::interp::interpolate_frame(current, next, fraction, output);
     Ok(())
 }
 
