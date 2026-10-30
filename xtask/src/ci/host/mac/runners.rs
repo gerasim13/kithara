@@ -391,7 +391,7 @@ impl<'a> RunnerManager<'a> {
             .collect::<String>();
         Ok(format!(
             "concurrent = {concurrency}\ncheck_interval = 3\nshutdown_timeout = 30\n\n\
-             [[runners]]\n  name = \"kithara-mac-mini-linux\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"docker\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={cache}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={cache}\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"RUSTUP_HOME=/usr/local/rustup\", \"{cargo_build_jobs}\"{docker_sccache_s3}]\n\
+             [[runners]]\n  name = \"kithara-mac-mini-linux\"\n  url = \"{url}\"\n  token = \"{}\"\n  limit = 1\n  executor = \"docker\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={cache}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={cache}\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"RUSTUP_HOME=/usr/local/rustup\", \"{cargo_build_jobs}\"{docker_sccache_s3}]\n\
              [runners.docker]\n    host = \"{}\"\n    image = \"{image}\"\n    pull_policy = \"never\"\n    allowed_pull_policies = [\"never\"]\n    allowed_images = [\"{image}\"]\n    cpus = \"5\"\n    memory = \"6500m\"\n    privileged = false\n    disable_cache = true\n    shm_size = 1073741824\n    volumes = [\"{root}/cache:{cache}:rw\", \"{root}/cache/gitlab-runner:/cache:rw\", \"{root}/services/mac-host.toml:{lane_config}:ro\", \"{container_builds}:{builds}/workspaces/gitlab:rw\"]\n\n\
              {macos}\
              [[runners]]\n  name = \"kithara-mac-mini-android\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  pre_get_sources_script = {preflight}\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"KITHARA_CI_PINS={root}/services/pins.toml\", \"KITHARA_CI_HOST_BINARY={root}/toolchains/shared-bin/kithara-ci\", \"SCCACHE_SERVER_UDS=/tmp/kithara-mac-mini-android-sccache.sock\", \"{cargo_build_jobs}\"{sccache_s3}]\n\n\
@@ -426,13 +426,8 @@ impl<'a> RunnerManager<'a> {
             "--foreground",
             "--cpus",
             "5",
-            // Linking is this workspace's memory peak, not compiling it. At
-            // five gigabytes the kernel killed `ld` outright in both the test
-            // and the coverage lane, leaving only "terminated with signal 9"
-            // behind. The macOS guest keeps twelve of the host's twenty-four
-            // and the two rarely peak together.
             "--memory",
-            "8",
+            "11",
             "--disk",
             "100",
             "--vm-type",
@@ -853,6 +848,46 @@ mod tests {
                         .ends_with(" preflight\n")
                 );
             }
+        }
+    }
+
+    #[test]
+    fn the_linux_guest_reserves_memory_for_its_job_and_cache_service() {
+        let config = fixture();
+        let process = Process::new(Path::new("/"), BTreeMap::new());
+        let manager = RunnerManager::new(&config, &process);
+        let args = manager.colima_args("colima");
+        let guest_mib = args.windows(2).find(|pair| pair[0] == "--memory").unwrap()[1]
+            .parse::<u64>()
+            .unwrap()
+            * 1024;
+        let rendered: toml::Value = toml::from_str(
+            &manager
+                .runner_config(&manager.ci_home(), &tokens(&config))
+                .unwrap(),
+        )
+        .unwrap();
+        let concurrent = u64::try_from(rendered["concurrent"].as_integer().unwrap()).unwrap();
+        for runner in rendered["runners"].as_array().unwrap() {
+            let Some(docker) = runner.get("docker") else {
+                continue;
+            };
+            let slots = runner
+                .get("limit")
+                .and_then(toml::Value::as_integer)
+                .filter(|limit| *limit > 0)
+                .map_or(concurrent, |limit| u64::try_from(limit).unwrap());
+            let job_mib = docker["memory"]
+                .as_str()
+                .unwrap()
+                .strip_suffix('m')
+                .unwrap()
+                .parse::<u64>()
+                .unwrap();
+            assert!(
+                slots * job_mib + 4 * 1024 <= guest_mib,
+                "{slots} Docker jobs of {job_mib} MiB leave no room for RustFS and the guest OS in {guest_mib} MiB"
+            );
         }
     }
 
