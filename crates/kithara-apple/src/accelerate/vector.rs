@@ -33,12 +33,19 @@ pub fn multiply_f32(a: &[f32], b: &[f32], output: &mut [f32]) -> usize {
 
 /// `samples[i] *= gains[i]` over the common prefix; returns its length.
 #[must_use]
+#[inline(always)]
 pub fn multiply_in_place_f32(samples: &mut [f32], gains: &[f32]) -> usize {
     let len = samples.len().min(gains.len());
     if len == 1 {
         samples[0] *= gains[0];
         return 1;
     }
+    multiply_in_place_vdsp(samples, gains)
+}
+
+#[inline(never)]
+fn multiply_in_place_vdsp(samples: &mut [f32], gains: &[f32]) -> usize {
+    let len = samples.len().min(gains.len());
     if len == 0 {
         return 0;
     }
