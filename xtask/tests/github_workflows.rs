@@ -2250,6 +2250,12 @@ fn ui_ownership_selection_uses_the_fleet_checkout_and_build_environment() {
         mapping_field(selection, "runs-on"),
         mapping_field(reference, "runs-on")
     );
+    assert_eq!(
+        mapping_field(reference, "runs-on"),
+        &serde_yaml_ng::to_value(["self-hosted", "linux", "x64", "kithara-report"])
+            .expect("control runner labels"),
+        "selectors must stay schedulable when compilation runners are occupied"
+    );
     assert_eq!(first_step(selection), first_step(reference));
     assert_no_key(&Value::Mapping(selection.clone()), "fetch-depth");
     for variable in [
