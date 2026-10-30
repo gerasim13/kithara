@@ -627,6 +627,13 @@ pub(crate) const SCCACHE_MISSING_UDS_CODE: Option<&str> = if cfg!(unix) {
 
 pub(crate) const SCCACHE_STOP_MESSAGE: &str = "Stopping sccache server...";
 
+pub(crate) const CACHE_EVIDENCE_INPUT_LIMIT: usize = 8 * 1024 * 1024;
+
+pub(crate) const CACHE_EVIDENCE_RECORD_LIMIT: usize = 128;
+
+pub(crate) const CACHE_EVIDENCE_KEY_GROUPS: &str =
+    "compiler args sources env_deps externs link env_cfg remap crate";
+
 /// How `simctl delete` refuses a device that does not exist.
 pub(crate) const SIMCTL_INVALID_DEVICE: &str = "Invalid device";
 
@@ -950,7 +957,5 @@ pub(crate) const SERVICE_RENEWAL_TIMER: &str = "kithara-ci-windows-renewal.timer
 pub(crate) const PROBE_MANIFEST: &str =
     "[package]\nname = \"probe\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[workspace]\n";
 
-/// How far back from a unit's newest build the build-directory tests keep its
-/// other builds.
-#[cfg(test)]
+/// How far back from a CI bootstrap unit's newest build to keep its other builds.
 pub(crate) const GARBAGE_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);

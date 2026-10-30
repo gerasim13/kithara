@@ -132,7 +132,7 @@ fn run_in(args: &LaneArgs, ctx: &Ctx, var: &dyn Fn(&str) -> Option<OsString>) ->
         let result = declared::run(&process, lane, &pins, &ctx.config.tools, args.kind, narrow);
         if wrapped {
             let on_github = crate::job::github_in(&text);
-            crate::ci::run::note_compiler_cache(&process, &ctx.config.tools, on_github);
+            crate::ci::run::note_compiler_cache(&process, &ctx.config.tools, on_github, &args.lane);
         }
         if let Some(kache) = &kache {
             kache.stop(&process, &ctx.config.tools);
@@ -1003,7 +1003,7 @@ cargo.packages = ["tools"]
             .expect("lane runs through the wrapper");
         assert_eq!(
             fs::read_to_string(&asked).expect("the cache was asked"),
-            "kache stats --json\nsccache --show-stats\n"
+            "kache stats --json\nsccache --show-stats\nkache stats --full --json\nkache explain --json\n"
         );
     }
 
@@ -1058,7 +1058,7 @@ cargo.packages = ["tools"]
         );
         assert_eq!(
             fs::read_to_string(&asked).expect("the cache was asked"),
-            "kache stats --json\nsccache --show-stats\nkache daemon stop\n"
+            "kache stats --json\nsccache --show-stats\nkache stats --full --json\nkache explain --json\nkache daemon stop\n"
         );
     }
 

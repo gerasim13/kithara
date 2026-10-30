@@ -35,23 +35,14 @@ struct CacheContents {
     held: Vec<CacheEntry>,
 }
 
-/// The least recently used entries, oldest first, until what is left fits the
-/// budget.
-fn select_evictions(mut entries: Vec<CacheEntry>, budget_bytes: u64) -> Vec<CacheEntry> {
-    let mut remaining_bytes = total_bytes(&entries);
+/// The least recently used entries, oldest first, breaking ties by path.
+fn eviction_order(mut entries: Vec<CacheEntry>) -> Vec<CacheEntry> {
     entries.sort_by(|left, right| {
         left.used
             .cmp(&right.used)
             .then_with(|| left.path.cmp(&right.path))
     });
     entries
-        .into_iter()
-        .take_while(|entry| {
-            let over = remaining_bytes > budget_bytes;
-            remaining_bytes = remaining_bytes.saturating_sub(entry.size_bytes);
-            over
-        })
-        .collect()
 }
 
 /// The budget is what the host can afford in total, not what one checkout may
@@ -119,9 +110,14 @@ fn total_bytes(entries: &[CacheEntry]) -> u64 {
 /// reported and the others still go. Stopping on it left the host's budget
 /// unenforced and refused every job its room for as long as it stood.
 fn evict_to_budget(candidates: Vec<CacheEntry>, held_bytes: u64, budget_bytes: u64) {
-    let bytes_before = total_bytes(&candidates).saturating_add(held_bytes);
+    let candidate_bytes = total_bytes(&candidates);
+    let bytes_before = candidate_bytes.saturating_add(held_bytes);
+    let bytes_needed = candidate_bytes.saturating_sub(budget_bytes.saturating_sub(held_bytes));
     let mut bytes_freed = 0_u64;
-    for entry in select_evictions(candidates, budget_bytes.saturating_sub(held_bytes)) {
+    for entry in eviction_order(candidates) {
+        if bytes_freed >= bytes_needed {
+            break;
+        }
         match evict(&entry) {
             Ok(bytes) => bytes_freed = bytes_freed.saturating_add(bytes),
             Err(error) => warn!(
@@ -199,7 +195,7 @@ fn evict(entry: &CacheEntry) -> Result<u64> {
 
 /// The `.cargo-lock` of every profile in `entry`, held so Cargo cannot start
 /// building in one while it is removed, or `None` when Cargo already holds one.
-fn hold_cargo_locks(entry: &Path) -> Result<Option<Vec<FileLock>>> {
+pub(super) fn hold_cargo_locks(entry: &Path) -> Result<Option<Vec<FileLock>>> {
     let mut held = Vec::new();
     for dir in levels(entry, consts::CARGO_LOCK_DEPTH)? {
         match try_hold(&dir.join(consts::CARGO_LOCK))? {
@@ -354,33 +350,7 @@ fn candidate_entries(target_dir: &Path) -> Result<CacheContents> {
         if is_hidden(&path) {
             continue;
         }
-        let mut used = SystemTime::UNIX_EPOCH;
-        let mut held = lock_is_held(&lock_beside(&path));
-        for dir in levels(&path, consts::LEASE_DEPTH)? {
-            for mark in [lease::FILE, lease::HEARTBEAT] {
-                let mark = dir.join(mark);
-                if let Some(found) = still_there(fs::metadata(&mark))
-                    .with_context(|| format!("reading {}", mark.display()))?
-                {
-                    let date = found
-                        .modified()
-                        .with_context(|| format!("reading the date of {}", mark.display()))?;
-                    used = used.max(date);
-                }
-            }
-            held = held
-                || lock_is_held(&dir.join(lease::FILE))
-                || heartbeat_is_fresh(&dir.join(lease::HEARTBEAT));
-        }
-        held = held
-            || levels(&path, consts::CARGO_LOCK_DEPTH)?
-                .iter()
-                .any(|dir| lock_is_held(&dir.join(consts::CARGO_LOCK)));
-        let entry = CacheEntry {
-            size_bytes: directory_bytes(&path)?,
-            used,
-            path,
-        };
+        let (entry, held) = inspect_entry(path)?;
         if held {
             contents.held.push(entry);
         } else {
@@ -388,6 +358,37 @@ fn candidate_entries(target_dir: &Path) -> Result<CacheContents> {
         }
     }
     Ok(contents)
+}
+
+fn inspect_entry(path: PathBuf) -> Result<(CacheEntry, bool)> {
+    let mut used = SystemTime::UNIX_EPOCH;
+    let mut held = lock_is_held(&lock_beside(&path));
+    for dir in levels(&path, consts::LEASE_DEPTH)? {
+        for mark in [lease::FILE, lease::HEARTBEAT] {
+            let mark = dir.join(mark);
+            if let Some(found) = still_there(fs::metadata(&mark))
+                .with_context(|| format!("reading {}", mark.display()))?
+            {
+                let date = found
+                    .modified()
+                    .with_context(|| format!("reading the date of {}", mark.display()))?;
+                used = used.max(date);
+            }
+        }
+        held = held
+            || lock_is_held(&dir.join(lease::FILE))
+            || heartbeat_is_fresh(&dir.join(lease::HEARTBEAT));
+    }
+    held = held
+        || levels(&path, consts::CARGO_LOCK_DEPTH)?
+            .iter()
+            .any(|dir| lock_is_held(&dir.join(consts::CARGO_LOCK)));
+    let entry = CacheEntry {
+        size_bytes: directory_bytes(&path)?,
+        used,
+        path,
+    };
+    Ok((entry, held))
 }
 
 /// Cargo writes no hidden directory at the top of a build directory, so one
@@ -990,9 +991,14 @@ mod tests {
 
     #[test]
     fn under_budget_deletes_nothing() {
-        let entries = vec![entry("lint", 10, 1), entry("usdt", 20, 2)];
+        let root = tempfile::tempdir().unwrap();
+        let lint = build_dir(root.path(), "lint", 4096);
+        let usdt = build_dir(root.path(), "usdt", 4096);
 
-        assert!(select_evictions(entries, 30).is_empty());
+        enforce_budget(&[root.path().to_path_buf()], occupied(root.path())).unwrap();
+
+        assert!(lint.exists());
+        assert!(usdt.exists());
     }
 
     #[test]
@@ -1002,22 +1008,27 @@ mod tests {
             entry("oldest", 10, 1),
             entry("middle", 10, 2),
         ];
-        let paths = evicted(select_evictions(entries, 0));
+        let paths = evicted(eviction_order(entries));
 
         assert_eq!(paths, ["oldest", "middle", "newest"].map(PathBuf::from));
     }
 
     #[test]
     fn deletion_stops_as_soon_as_the_budget_is_met() {
-        let entries = vec![entry("oldest", 5, 1), entry("newest", 7, 2)];
+        let root = tempfile::tempdir().unwrap();
+        let oldest = build_dir(root.path(), "a-oldest", 4096);
+        let newest = build_dir(root.path(), "b-newest", 4096);
 
-        assert_eq!(select_evictions(entries, 7).len(), 1);
+        enforce_budget(&[root.path().to_path_buf()], occupied(root.path()) - 1).unwrap();
+
+        assert!(!oldest.exists());
+        assert!(newest.exists());
     }
 
     #[test]
     fn equal_timestamps_break_ties_by_path() {
         let entries = vec![entry("b", 1, 1), entry("a", 1, 1)];
-        let paths = evicted(select_evictions(entries, 0));
+        let paths = evicted(eviction_order(entries));
 
         assert_eq!(paths, ["a", "b"].map(PathBuf::from));
     }
@@ -1126,6 +1137,34 @@ mod tests {
         assert_eq!(evict(&scanned[0]).unwrap(), 0);
         assert!(lane.join("debug/artifact").exists());
         drop(job);
+    }
+
+    #[test]
+    fn a_late_lease_does_not_leave_the_budget_unpaid() {
+        let root = tempfile::tempdir().unwrap();
+        let oldest = build_dir(root.path(), "a-oldest", 4096);
+        let idle = build_dir(root.path(), "b-idle", 4096);
+        let (candidates, held_bytes) = collect(&[root.path().to_path_buf()]).unwrap();
+        assert_eq!(held_bytes, 0);
+        assert_eq!(candidates.len(), 2);
+        assert!(
+            candidates
+                .iter()
+                .all(|entry| entry.size_bytes > 0 && entry.used == UNIX_EPOCH)
+        );
+        assert!(oldest < idle);
+        let budget = total_bytes(&candidates) - 1;
+
+        let _job = lease::hold(&oldest).unwrap();
+        assert!(lease::evict(&oldest).unwrap().is_none());
+
+        evict_to_budget(candidates, held_bytes, budget);
+
+        assert!(oldest.join("debug/artifact").is_file());
+        assert!(
+            !idle.exists(),
+            "the next idle candidate must pay the shortfall"
+        );
     }
 
     /// An evicted entry is moved aside before it is removed, and nothing of

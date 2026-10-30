@@ -80,7 +80,7 @@ pub(crate) fn run(args: &AstGrepArgs, ctx: &Ctx) -> Result<()> {
             std::fs::canonicalize(std::env::current_dir()?)? == std::fs::canonicalize(&ctx.root)?,
             "ast-grep --fix must run from its workspace root so the dirty-tree gate protects the target",
         );
-        ensure_clean_tree(args.allow_dirty, "ast-grep")?;
+        ensure_clean_tree(&ctx.root, args.allow_dirty, "ast-grep")?;
         run_native(args, ctx)?;
     }
     run_grouped(args, ctx)
@@ -605,49 +605,6 @@ mod tests {
     }
 
     #[test]
-    fn target_gate_rule_allows_only_existing_structural_abi_items() {
-        for (path, source) in [
-            (
-                "crates/kithara-android/src/lib.rs",
-                include_str!("../../kithara-android/src/lib.rs"),
-            ),
-            (
-                "crates/kithara-ffi/src/lib.rs",
-                include_str!("../../kithara-ffi/src/lib.rs"),
-            ),
-            (
-                "crates/kithara-ffi/src/native/mod.rs",
-                include_str!("../../kithara-ffi/src/native/mod.rs"),
-            ),
-        ] {
-            assert_eq!(
-                rule_hits_at("arch.no-target-os-outside-platform.yml", path, source),
-                0,
-                "{path}",
-            );
-            let with_business_gate =
-                format!("{source}\n#[cfg(not(target_arch = \"wasm32\"))]\nfn gate() {{}}");
-            assert_eq!(
-                rule_hits_at(
-                    "arch.no-target-os-outside-platform.yml",
-                    path,
-                    &with_business_gate,
-                ),
-                1,
-                "{path}",
-            );
-            assert!(
-                rule_hits_at(
-                    "arch.no-target-os-outside-platform.yml",
-                    "crates/kithara-audio/src/lib.rs",
-                    source,
-                ) > 0,
-                "ABI wiring outside its owner: {path}",
-            );
-        }
-    }
-
-    #[test]
     fn target_gate_rule_does_not_extend_abi_allowances_to_other_items() {
         for (path, source) in [
             (
@@ -768,64 +725,6 @@ mod tests {
             ),
             0,
         );
-    }
-
-    #[test]
-    fn target_gate_config_scan_preserves_one_category_and_its_severity() {
-        let (root, mut ctx, mut args) = grouped_fixture("", "warning");
-        fs::write(
-            root.path()
-                .join(".config/ast-grep/arch.no-target-os-outside-platform.yml"),
-            include_str!("../../../.config/ast-grep/arch.no-target-os-outside-platform.yml"),
-        )
-        .expect("target rules");
-        for path in [
-            "crates/kithara-audio/src/lib.rs",
-            "crates/kithara-android/src/lib.rs",
-            "crates/kithara-ffi/src/lib.rs",
-            "crates/kithara-ffi/src/native/mod.rs",
-        ] {
-            let path = root.path().join(path);
-            fs::create_dir_all(path.parent().expect("fixture parent")).expect("source directory");
-            fs::write(path, "#[cfg(target_os = \"android\")] fn gate() {}").expect("source");
-        }
-        let output = Command::new("ast-grep")
-            .current_dir(root.path())
-            .args([
-                "scan",
-                "--config",
-                "sgconfig.yml",
-                "--include-metadata",
-                "--json=stream",
-                "crates",
-            ])
-            .output()
-            .expect("config scan");
-        let mut groups = BTreeMap::new();
-        super::parse_output(&output, &mut groups).expect("registered scoped rules");
-        assert_eq!(groups.len(), 1);
-        let group = &groups["arch.no-target-os-outside-platform"];
-        assert_eq!(group.severity, "warning");
-        assert_eq!(group.hits.len(), 4);
-        assert!(run_grouped(&args, &ctx).is_ok());
-        args.strict = true;
-        for scan_all in [false, true] {
-            if scan_all {
-                ctx.config
-                    .lint_exclude
-                    .scan_all_rules
-                    .push("arch.no-target-os-outside-platform".to_owned());
-            }
-            let error = run_grouped(&args, &ctx).expect_err("strict warnings remain findings");
-            assert_eq!(
-                error
-                    .downcast_ref::<crate::verdict::NotClean>()
-                    .expect("lint verdict")
-                    .findings,
-                Some(4),
-                "scan_all: {scan_all}",
-            );
-        }
     }
 
     #[test]

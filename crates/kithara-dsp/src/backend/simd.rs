@@ -260,7 +260,7 @@ pub(super) fn crossfade_linear_kernel<S: Simd>(
 ) -> usize {
     let count = outgoing.len().min(samples.len()) / channels;
     let len = count.saturating_mul(channels.get());
-    let Some(samples) = samples.get_mut(..len) else {
+    let (Some(outgoing), Some(samples)) = (outgoing.get(..len), samples.get_mut(..len)) else {
         return 0;
     };
     let padding: u128 = S::f32s::LEN.as_();
@@ -359,12 +359,50 @@ fn crossfade_linear_positions<S: Simd>(
 ) {
     let denominator = S::f32s::splat(simd, frames.as_());
     let one = S::f32s::splat(simd, 1.0);
-    update(simd, samples, [outgoing], |incoming, [outgoing]| {
+    let lanes = S::f32s::LEN;
+    let len = samples.len();
+    let full = samples.chunks_exact(lanes).len().wrapping_mul(lanes);
+    let mut start = 0;
+    while start < len {
         let gain = positions().div(denominator);
-        let blended = outgoing.mul_add_precise(one.sub(gain), incoming.mul(gain));
-        outgoing
-            .bitcast::<S::u32s>()
-            .simd_eq(incoming.bitcast::<S::u32s>())
-            .select(incoming, blended)
-    });
+        if start < full {
+            let end = start.wrapping_add(lanes);
+            if let (Some(outgoing), Some(block)) =
+                (outgoing.get(start..end), samples.get_mut(start..end))
+            {
+                crossfade_linear_blend::<S>(
+                    S::f32s::from_slice(simd, outgoing),
+                    S::f32s::from_slice(simd, block),
+                    gain,
+                    one,
+                )
+                .store_slice(block);
+            }
+            start = end;
+        } else {
+            let (Some(outgoing), Some(tail)) = (outgoing.get(start..), samples.get_mut(start..))
+            else {
+                break;
+            };
+            store::<S>(
+                crossfade_linear_blend::<S>(padded(simd, outgoing), padded(simd, tail), gain, one),
+                tail,
+            );
+            break;
+        }
+    }
+}
+
+#[inline(always)]
+fn crossfade_linear_blend<S: Simd>(
+    outgoing: S::f32s,
+    incoming: S::f32s,
+    gain: S::f32s,
+    one: S::f32s,
+) -> S::f32s {
+    let blended = outgoing.mul_add_precise(one.sub(gain), incoming.mul(gain));
+    outgoing
+        .bitcast::<S::u32s>()
+        .simd_eq(incoming.bitcast::<S::u32s>())
+        .select(incoming, blended)
 }
