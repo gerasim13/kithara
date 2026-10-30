@@ -1,6 +1,6 @@
 use std::{
     num::NonZeroUsize,
-    ops::{Add, Div, Mul, Sub},
+    ops::{Add, Div, Mul, Shr, Sub},
 };
 
 use fearless_simd::{Level, dispatch, prelude::*};
@@ -326,23 +326,15 @@ fn crossfade_linear_u32<S: Simd>(
         crossfade_linear_channels(simd, outgoing, samples, channels.get().as_(), first, frames);
         return;
     }
-    let mut positions = S::u32s::splat(simd, first);
-    let mut frame = first;
-    let mut channel = 0_u32;
-    let channel_count: u32 = channels.get().as_();
-    for position in positions.as_mut_slice() {
-        *position = frame;
-        channel = channel.wrapping_add(1);
-        if channel == channel_count {
-            frame = frame.wrapping_add(1);
-            channel = 0;
-        }
-    }
-    if channel != 0 {
+    if !channels.get().is_power_of_two() || S::f32s::LEN & channels.get().wrapping_sub(1) != 0 {
         crossfade_linear_frames(simd, outgoing, samples, channels, first.as_(), frames);
         return;
     }
-    let step = S::u32s::splat(simd, frame.wrapping_sub(first));
+    let shift = channels.get().trailing_zeros();
+    let mut positions = crossfade_lane_offsets::<S>(simd)
+        .shr(shift)
+        .add(S::u32s::splat(simd, first));
+    let step = S::u32s::splat(simd, S::f32s::LEN.wrapping_shr(shift).as_());
     let denominator = S::f32s::splat(simd, frames.as_());
     crossfade_linear_gains(simd, outgoing, samples, || {
         let gain = positions.to_float::<S::f32s>().div(denominator);
@@ -361,10 +353,7 @@ fn crossfade_linear_channels<S: Simd>(
     first: u32,
     frames: usize,
 ) {
-    let mut offsets = S::u32s::splat(simd, 0);
-    for (index, offset) in offsets.as_mut_slice().iter_mut().enumerate() {
-        *offset = index.as_();
-    }
+    let offsets = crossfade_lane_offsets::<S>(simd);
     let denominator: f32 = frames.as_();
     let position: f32 = first.as_();
     let mut current_gain = position.div(denominator);
@@ -389,6 +378,15 @@ fn crossfade_linear_channels<S: Simd>(
         }
         gain
     });
+}
+
+#[inline(always)]
+fn crossfade_lane_offsets<S: Simd>(simd: S) -> S::u32s {
+    let mut offsets = S::u32s::splat(simd, 0);
+    for (index, offset) in offsets.as_mut_slice().iter_mut().enumerate() {
+        *offset = index.as_();
+    }
+    offsets
 }
 
 #[inline(always)]

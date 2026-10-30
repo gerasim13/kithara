@@ -1270,7 +1270,16 @@ fn crossfade_linear_preserves_identity_and_integer_frame_gains() {
     for (name, crossfade) in crossfades() {
         for size in SIZES {
             for offset in OFFSETS {
-                for channels in [stride(1), stride(2), stride(3), stride(5), stride(6)] {
+                for channels in [
+                    stride(1),
+                    stride(2),
+                    stride(3),
+                    stride(4),
+                    stride(5),
+                    stride(6),
+                    stride(8),
+                    stride(16),
+                ] {
                     for first in [
                         0,
                         1,
