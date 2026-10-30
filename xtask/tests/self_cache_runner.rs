@@ -1432,17 +1432,12 @@ publish_pid "$descendant" "$SELF_CACHE_DESCENDANT_PID"
 wait "$descendant"
 "#,
     )?;
-    let fake_cargo = fixture.fake_bin.join("cargo");
-    let mut command = Command::new(fixture.active_binary()?);
+    let mut command = fixture.cached_command(
+        &fixture.root,
+        &["self-cache", "refresh", "--force"],
+        Some(&fixture.target),
+    )?;
     command
-        .args(["self-cache", "refresh", "--force"])
-        .current_dir(&fixture.root)
-        .env("CARGO_TARGET_DIR", &fixture.target)
-        .env("CARGO", env!("CARGO"))
-        .env("CARGO_HOME", &fixture.cargo_home)
-        .env("RUSTC_WRAPPER", "")
-        .env("RUSTC_WORKSPACE_WRAPPER", "")
-        .env("XTASK_SELF_CACHE_CARGO", &fake_cargo)
         .env("SELF_CACHE_CARGO_PID", &cargo_pid)
         .env("SELF_CACHE_DESCENDANT_PID", &descendant_pid)
         .env("SELF_CACHE_WORKER_PID", &worker_pid)
