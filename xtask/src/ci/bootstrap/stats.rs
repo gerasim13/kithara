@@ -2,7 +2,7 @@ use std::{io, path::Path, process::Command};
 #[cfg(unix)]
 use std::{
     io::{Read, Write},
-    os::unix::net::UnixStream,
+    os::{fd::OwnedFd, unix::net::UnixStream},
     time::Instant,
 };
 
@@ -45,7 +45,8 @@ fn query(runtime: &Path, deadline: Instant) -> io::Result<String> {
     socket.set_nonblocking(true)?;
     socket.connect(&SockAddr::unix(runtime.join("daemon.sock"))?)?;
     socket.set_nonblocking(false)?;
-    let mut socket: UnixStream = socket.into();
+    let descriptor: OwnedFd = socket.into();
+    let mut socket = UnixStream::from(descriptor);
     let remaining = deadline
         .checked_duration_since(Instant::now())
         .ok_or_else(|| {
