@@ -37,12 +37,8 @@ pub(super) fn div_kernel<S: Simd>(simd: S, samples: &mut [f32], divisor: f32) ->
     update(simd, samples, [], |x, []| x.div(divisor))
 }
 
-#[inline(always)]
+#[inline(never)]
 pub(crate) fn scale_in_place(samples: &mut [f32], gain: f32) -> usize {
-    if let [sample] = samples {
-        *sample *= gain;
-        return 1;
-    }
     dispatch!(Level::new(), simd => scale_in_place_kernel(simd, samples, gain))
 }
 

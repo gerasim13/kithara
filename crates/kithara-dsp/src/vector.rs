@@ -26,6 +26,10 @@ pub fn div(samples: &mut [f32], divisor: f32) -> usize {
 /// sanitization; `NaN` payloads are unspecified.
 #[inline(always)]
 pub fn scale_in_place(samples: &mut [f32], gain: f32) -> usize {
+    if let [sample] = samples {
+        *sample *= gain;
+        return 1;
+    }
     backend::scale_in_place(samples, gain)
 }
 
