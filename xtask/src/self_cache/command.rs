@@ -33,6 +33,7 @@ use signal_hook::{
     consts::signal::{SIGHUP, SIGINT, SIGQUIT, SIGTERM},
     flag, low_level,
 };
+use xtask::ci::bootstrap;
 
 use super::{
     layout, lease,
@@ -324,7 +325,7 @@ where
     F: FnOnce(&mut Child) -> Result<ExitStatus>,
 {
     let cache = if env::var_os("KACHE_RUNTIME_DIR").is_none() {
-        xtask::bootstrap::CompilerCache::enter()?
+        bootstrap::CompilerCache::enter()?
     } else {
         None
     };

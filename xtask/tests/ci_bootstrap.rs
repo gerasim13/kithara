@@ -41,7 +41,7 @@ fn bootstrap_compiles_only_with_a_writable_s3_daemon() {
             std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
         ))
         .unwrap();
-        let output = Command::new(env!("CARGO_BIN_EXE_kithara-ci-bootstrap")).args(["cache", "bootstrap"])
+        let output = Command::new(env!("CARGO_BIN_EXE_ci-bootstrap")).args(["cache", "bootstrap"])
             .args(["sh", "-c", "test -z \"$GITHUB_ACTIONS$GITLAB_CI\" && test \"$RUSTC_WRAPPER\" = kache && test \"$KACHE_PREFETCH_ENABLED\" = false && touch \"$1\"", "compile"])
             .arg(&marker).env("PATH", path).env("TMPDIR", temp.path())
             .env("CI_JOB_ID", "42").env_remove("GITHUB_RUN_ID")
@@ -83,7 +83,7 @@ fn child_failure_preserves_its_exit_and_stops_only_the_owned_daemon() {
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_kithara-ci-bootstrap"))
+    let output = Command::new(env!("CARGO_BIN_EXE_ci-bootstrap"))
         .args(["cache", "failed-child", "sh", "-c", "exit 7"])
         .env("PATH", path)
         .env("TMPDIR", temp.path())
@@ -107,7 +107,7 @@ fn child_failure_preserves_its_exit_and_stops_only_the_owned_daemon() {
 
 #[test]
 fn local_compilation_does_not_require_ci_services() {
-    let output = Command::new(env!("CARGO_BIN_EXE_kithara-ci-bootstrap"))
+    let output = Command::new(env!("CARGO_BIN_EXE_ci-bootstrap"))
         .args(["cache", "local", "sh", "-c", "exit 7"])
         .env_remove("CI_JOB_ID")
         .env_remove("GITHUB_RUN_ID")
@@ -133,7 +133,7 @@ fn a_failed_daemon_drain_fails_a_successful_compilation() {
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_kithara-ci-bootstrap"))
+    let output = Command::new(env!("CARGO_BIN_EXE_ci-bootstrap"))
         .args(["cache", "drain", "sh", "-c", "exit 0"])
         .env("PATH", path)
         .env("TMPDIR", temp.path())
@@ -161,7 +161,7 @@ fn a_failed_daemon_drain_fails_a_successful_compilation() {
 fn the_target_lease_preserves_the_ci_context_and_child_exit() {
     let temp = tempfile::tempdir().unwrap();
     let target = temp.path().join("target");
-    let output = Command::new(env!("CARGO_BIN_EXE_kithara-ci-bootstrap"))
+    let output = Command::new(env!("CARGO_BIN_EXE_ci-bootstrap"))
         .arg("lease")
         .arg(&target)
         .args([
@@ -214,7 +214,7 @@ fn the_initial_driver_daemon_is_verified_and_released_before_the_child() {
             std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
         ))
         .unwrap();
-        let output = Command::new(env!("CARGO_BIN_EXE_kithara-ci-bootstrap"))
+        let output = Command::new(env!("CARGO_BIN_EXE_ci-bootstrap"))
             .arg("--bootstrap-runtime")
             .arg(&runtime)
             .arg("lease")
@@ -259,7 +259,7 @@ fn an_unused_local_startup_runtime_needs_no_compiler_cache_service() {
     let temp = tempfile::tempdir().unwrap();
     let runtime = temp.path().join("kithara-bootstrap.123456");
     fs::create_dir(&runtime).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_kithara-ci-bootstrap"))
+    let output = Command::new(env!("CARGO_BIN_EXE_ci-bootstrap"))
         .arg("--bootstrap-runtime")
         .arg(&runtime)
         .arg("lease")
@@ -302,7 +302,7 @@ fn the_initial_runtime_cannot_delete_other_data_or_follow_a_symlink() {
     ))
     .unwrap();
     for runtime in [&foreign, &alias, &file] {
-        let output = Command::new(env!("CARGO_BIN_EXE_kithara-ci-bootstrap"))
+        let output = Command::new(env!("CARGO_BIN_EXE_ci-bootstrap"))
             .arg("--bootstrap-runtime")
             .arg(runtime)
             .args(["cache", "unsafe-runtime", "sh", "-c", "exit 0"])

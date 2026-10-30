@@ -9,6 +9,7 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use kithara_devtools::common::tools::ToolsConfig;
 use tracing::{info, warn};
+use xtask::ci::bootstrap;
 
 use crate::{
     ci::{config::CiConfig, environment::CacheTrust, process::Process},
@@ -120,7 +121,7 @@ impl KacheJob {
 }
 
 pub(crate) fn require_remote(stats: &str) -> Result<()> {
-    xtask::bootstrap::require_remote(stats).map_err(Into::into)
+    bootstrap::require_remote(stats).map_err(Into::into)
 }
 
 pub(in crate::ci) fn collection_report(output: &str) -> Result<serde_json::Value> {

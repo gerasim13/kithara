@@ -78,8 +78,8 @@ esac
             .context("resolve repository root")?;
         fs::copy(repository.join("justfile"), &justfile)?;
         fs::copy(
-            env!("CARGO_BIN_EXE_fake-tool"),
-            fake_bin.join("kithara-ci-bootstrap"),
+            env!("CARGO_BIN_EXE_ci-bootstrap"),
+            fake_bin.join("ci-bootstrap"),
         )?;
         let module_source = repository.join(".config/just");
         let module_target = root.join(".config/just");
@@ -109,7 +109,7 @@ esac
             r#"#!/bin/sh
 set -eu
 case "$*" in
-  *'-p xtask --no-default-features --bin kithara-ci-bootstrap'*)
+  *'-p xtask --no-default-features --bin ci-bootstrap'*)
     driver_target=; driver_host=
     while test "$#" -gt 0; do
       case "$1" in
@@ -120,7 +120,7 @@ case "$*" in
     done
     if test -n "${KACHE_RUNTIME_DIR-}"; then mkdir -p "$KACHE_RUNTIME_DIR"; fi
     mkdir -p "$driver_target/$driver_host/debug"
-    cp "$(command -v kithara-ci-bootstrap)" "$driver_target/$driver_host/debug/kithara-ci-bootstrap"
+    cp "$(command -v ci-bootstrap)" "$driver_target/$driver_host/debug/ci-bootstrap"
     exit 0
     ;;
 esac
@@ -384,7 +384,7 @@ esac
             r#"#!/bin/sh
 set -eu
 case "$*" in
-  *'-p xtask --no-default-features --bin kithara-ci-bootstrap'*)
+  *'-p xtask --no-default-features --bin ci-bootstrap'*)
     driver_target=; driver_host=
     while test "$#" -gt 0; do
       case "$1" in
@@ -395,7 +395,7 @@ case "$*" in
     done
     if test -n "${KACHE_RUNTIME_DIR-}"; then mkdir -p "$KACHE_RUNTIME_DIR"; fi
     mkdir -p "$driver_target/$driver_host/debug"
-    cp "$(command -v kithara-ci-bootstrap)" "$driver_target/$driver_host/debug/kithara-ci-bootstrap"
+    cp "$(command -v ci-bootstrap)" "$driver_target/$driver_host/debug/ci-bootstrap"
     exit 0
     ;;
 esac
@@ -1020,7 +1020,7 @@ esac
             r#"#!/bin/sh
 set -eu
 case "$*" in
-  *'-p xtask --no-default-features --bin kithara-ci-bootstrap'*)
+  *'-p xtask --no-default-features --bin ci-bootstrap'*)
     driver_target=; driver_host=
     while test "$#" -gt 0; do
       case "$1" in
@@ -1031,7 +1031,7 @@ case "$*" in
     done
     if test -n "${KACHE_RUNTIME_DIR-}"; then mkdir -p "$KACHE_RUNTIME_DIR"; fi
     mkdir -p "$driver_target/$driver_host/debug"
-    cp "$(command -v kithara-ci-bootstrap)" "$driver_target/$driver_host/debug/kithara-ci-bootstrap"
+    cp "$(command -v ci-bootstrap)" "$driver_target/$driver_host/debug/ci-bootstrap"
     exit 0
     ;;
 esac
@@ -1075,7 +1075,7 @@ fn concurrent_public_stale_refreshes_build_once() -> Result<()> {
         r#"#!/bin/sh
 set -eu
 case "$*" in
-  *'-p xtask --no-default-features --bin kithara-ci-bootstrap'*)
+  *'-p xtask --no-default-features --bin ci-bootstrap'*)
     driver_target=; driver_host=
     while test "$#" -gt 0; do
       case "$1" in
@@ -1086,7 +1086,7 @@ case "$*" in
     done
     if test -n "${KACHE_RUNTIME_DIR-}"; then mkdir -p "$KACHE_RUNTIME_DIR"; fi
     mkdir -p "$driver_target/$driver_host/debug"
-    cp "$(command -v kithara-ci-bootstrap)" "$driver_target/$driver_host/debug/kithara-ci-bootstrap"
+    cp "$(command -v ci-bootstrap)" "$driver_target/$driver_host/debug/ci-bootstrap"
     exit 0
     ;;
 esac
@@ -1327,12 +1327,7 @@ fn ci_bootstrap_driver_owns_the_target_lease() -> Result<()> {
 fn a_cached_ci_worker_refreshes_a_checkout_without_its_bootstrap_driver() -> Result<()> {
     let fixture = Fixture::new()?;
     assert_success(&fixture.bootstrap()?);
-    assert!(
-        !fixture
-            .root
-            .join("xtask/bin/kithara-ci-bootstrap.rs")
-            .exists()
-    );
+    assert!(!fixture.root.join("xtask/bin/ci-bootstrap.rs").exists());
     fs::write(
         fixture.root.join("xtask/src/main.rs"),
         "fn main() { changed(); }\n",

@@ -13,8 +13,8 @@ path = "src/main.rs"
 required-features = ["cli"]
 
 [[bin]]
-name = "kithara-ci-bootstrap"
-path = "bin/kithara-ci-bootstrap.rs"
+name = "ci-bootstrap"
+path = "bin/ci-bootstrap.rs"
 
 [[bin]]
 name = "fake-tool"
