@@ -259,45 +259,60 @@ pub(super) fn crossfade_linear_kernel<S: Simd>(
     frames: usize,
 ) -> usize {
     let count = outgoing.len().min(samples.len()) / channels;
-    let len = count.saturating_mul(channels.get());
+    let len = count.wrapping_mul(channels.get());
     let (Some(outgoing), Some(samples)) = (outgoing.get(..len), samples.get_mut(..len)) else {
         return 0;
     };
     let padding: u128 = S::f32s::LEN.as_();
     let first_wide: u128 = first.as_();
     let channel_count: u128 = channels.get().as_();
+    // Four usize values fit u128 on supported targets.
     let last = first_wide
-        .saturating_add(count.as_())
-        .saturating_add(padding.saturating_mul(2));
+        .wrapping_add(count.as_())
+        .wrapping_add(padding.wrapping_mul(2));
     // Include padded lanes and the final advance in the integer-width bound.
-    if last <= u32::MAX.as_() && channel_count.saturating_add(padding) <= u32::MAX.as_() {
+    if last <= u32::MAX.as_() && channel_count.wrapping_add(padding) <= u32::MAX.as_() {
         crossfade_linear_u32(simd, outgoing, samples, channels, first.as_(), frames);
         return count;
     }
-    let mut frame: u128 = first.as_();
+    crossfade_linear_frames(simd, outgoing, samples, channels, first_wide, frames);
+    count
+}
+
+#[inline(always)]
+fn crossfade_linear_frames<S: Simd>(
+    simd: S,
+    outgoing: &[f32],
+    samples: &mut [f32],
+    channels: NonZeroUsize,
+    first: u128,
+    frames: usize,
+) {
+    let mut frame = first;
     let mut channel = channels.get();
-    let mut frame_position = 0.0_f32;
-    crossfade_linear_positions(simd, outgoing, samples, frames, || {
-        let mut positions = S::f32s::splat(simd, 0.0);
-        for position in positions.as_mut_slice() {
+    let denominator: f32 = frames.as_();
+    let mut gain = 0.0_f32;
+    crossfade_linear_gains(simd, outgoing, samples, || {
+        let mut gains = S::f32s::splat(simd, 0.0);
+        for lane in gains.as_mut_slice() {
             if channel == channels.get() {
                 // Exact narrowing avoids wide float conversion for ordinary frame positions.
-                frame_position = if frame <= u32::MAX.as_() {
+                let position: f32 = if frame <= u32::MAX.as_() {
                     let frame: u32 = frame.as_();
                     frame.as_()
                 } else {
                     frame.as_()
                 };
+                gain = position.div(denominator);
                 // Slice bounds keep the frame counter below u128::MAX.
                 frame = frame.wrapping_add(1);
                 channel = 0;
             }
-            *position = frame_position;
+            *lane = gain;
             channel = channel.wrapping_add(1);
         }
-        positions
+        gains
     });
-    count
 }
 
 #[inline(always)]
@@ -309,62 +324,89 @@ fn crossfade_linear_u32<S: Simd>(
     first: u32,
     frames: usize,
 ) {
+    if channels.get() > S::f32s::LEN {
+        crossfade_linear_channels(simd, outgoing, samples, channels.get().as_(), first, frames);
+        return;
+    }
     let mut positions = S::u32s::splat(simd, first);
-    let mut phases = S::u32s::splat(simd, 0);
     let mut frame = first;
     let mut channel = 0_u32;
     let channel_count: u32 = channels.get().as_();
-    for (position, phase) in positions
-        .as_mut_slice()
-        .iter_mut()
-        .zip(phases.as_mut_slice())
-    {
+    for position in positions.as_mut_slice() {
         *position = frame;
-        *phase = channel;
         channel = channel.wrapping_add(1);
         if channel == channel_count {
             frame = frame.wrapping_add(1);
             channel = 0;
         }
     }
-    let step = S::u32s::splat(simd, frame.wrapping_sub(first));
-    if channel == 0 {
-        crossfade_linear_positions(simd, outgoing, samples, frames, || {
-            let current = positions.to_float::<S::f32s>();
-            positions = positions.add(step);
-            current
-        });
-    } else {
-        let remainder = S::u32s::splat(simd, channel);
-        let channels = S::u32s::splat(simd, channel_count);
-        let next_step = step.add(S::u32s::splat(simd, 1));
-        crossfade_linear_positions(simd, outgoing, samples, frames, || {
-            let current = positions.to_float::<S::f32s>();
-            phases = phases.add(remainder);
-            let carry = phases.simd_ge(channels);
-            positions = positions.add(carry.select(next_step, step));
-            phases = carry.select(phases.sub(channels), phases);
-            current
-        });
+    if channel != 0 {
+        crossfade_linear_frames(simd, outgoing, samples, channels, first.as_(), frames);
+        return;
     }
+    let step = S::u32s::splat(simd, frame.wrapping_sub(first));
+    let denominator = S::f32s::splat(simd, frames.as_());
+    crossfade_linear_gains(simd, outgoing, samples, || {
+        let gain = positions.to_float::<S::f32s>().div(denominator);
+        positions = positions.add(step);
+        gain
+    });
 }
 
+/// A vector spans at most two frames when a frame is wider than the vector.
 #[inline(always)]
-fn crossfade_linear_positions<S: Simd>(
+fn crossfade_linear_channels<S: Simd>(
     simd: S,
     outgoing: &[f32],
     samples: &mut [f32],
+    channels: u32,
+    first: u32,
     frames: usize,
-    mut positions: impl FnMut() -> S::f32s,
 ) {
-    let denominator = S::f32s::splat(simd, frames.as_());
+    let mut offsets = S::u32s::splat(simd, 0);
+    for (index, offset) in offsets.as_mut_slice().iter_mut().enumerate() {
+        *offset = index.as_();
+    }
+    let denominator: f32 = frames.as_();
+    let position: f32 = first.as_();
+    let mut current_gain = position.div(denominator);
+    let mut next_frame = first.wrapping_add(1);
+    let position: f32 = next_frame.as_();
+    let mut next_gain = position.div(denominator);
+    let width: u32 = S::f32s::LEN.as_();
+    let mut channel = 0_u32;
+    crossfade_linear_gains(simd, outgoing, samples, || {
+        let boundary = S::u32s::splat(simd, channels.wrapping_sub(channel));
+        let gain = offsets.simd_ge(boundary).select(
+            S::f32s::splat(simd, next_gain),
+            S::f32s::splat(simd, current_gain),
+        );
+        channel = channel.wrapping_add(width);
+        if channel >= channels {
+            channel = channel.wrapping_sub(channels);
+            current_gain = next_gain;
+            next_frame = next_frame.wrapping_add(1);
+            let position: f32 = next_frame.as_();
+            next_gain = position.div(denominator);
+        }
+        gain
+    });
+}
+
+#[inline(always)]
+fn crossfade_linear_gains<S: Simd>(
+    simd: S,
+    outgoing: &[f32],
+    samples: &mut [f32],
+    mut gains: impl FnMut() -> S::f32s,
+) {
     let one = S::f32s::splat(simd, 1.0);
     let lanes = S::f32s::LEN;
     let len = samples.len();
     let full = samples.chunks_exact(lanes).len().wrapping_mul(lanes);
     let mut start = 0;
     while start < len {
-        let gain = positions().div(denominator);
+        let gain = gains();
         if start < full {
             let end = start.wrapping_add(lanes);
             if let (Some(outgoing), Some(block)) =
