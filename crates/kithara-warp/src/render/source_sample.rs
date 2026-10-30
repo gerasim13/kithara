@@ -59,14 +59,14 @@ fn interpolate_source_frame(
     fraction: f64,
     output: &mut [f32],
 ) -> Result<(), ElasticError> {
-    let channels = output.len();
     let current = sample_offset(0)?;
-    let current = &resident.samples[current..current + channels];
+    // sample_offset admits a full frame; output bounds the DSP prefix.
+    let current = &resident.samples[current..];
     let next = if fraction == 0.0 {
         current
     } else {
         let next = sample_offset(1)?;
-        &resident.samples[next..next + channels]
+        &resident.samples[next..]
     };
     kithara_dsp::interp::interpolate_frame(current, next, fraction, output);
     Ok(())
@@ -143,21 +143,19 @@ fn downsample_source_frame(
         *tap_weight = weight;
         weights += weight;
     }
-    let mut totals = [0.0; 8];
-    for (group, output) in output.chunks_mut(totals.len()).enumerate() {
+    for (channel, sample) in output.iter_mut().enumerate() {
+        let mut total = 0.0;
         kithara_dsp::interp::weighted_frames(
-            &resident.samples[group * totals.len()..],
+            &resident.samples[channel..],
             &offsets,
             &tap_weights,
-            output.len(),
-            &mut totals,
+            1,
+            std::slice::from_mut(&mut total),
         )
         .map_err(|_| ElasticError::SampleCountOverflow)?;
-        for (sample, &total) in output.iter_mut().zip(&totals) {
-            *sample = (total / weights)
-                .to_f32()
-                .ok_or(ElasticError::SampleCountOverflow)?;
-        }
+        *sample = (total / weights)
+            .to_f32()
+            .ok_or(ElasticError::SampleCountOverflow)?;
     }
     Ok(())
 }
