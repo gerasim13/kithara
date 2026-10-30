@@ -115,6 +115,52 @@ fn child_failure_preserves_its_exit_and_stops_only_the_owned_daemon() {
 }
 
 #[test]
+fn a_quiet_phase_can_finish_after_its_daemon_expires() {
+    let temp = tempfile::tempdir().unwrap();
+    let host = temp.path().join("host.toml");
+    fs::write(&host, "[cache]\n").unwrap();
+    executable(&temp.path().join("just"), "#!/bin/sh\nexit 0\n");
+    executable(
+        &temp.path().join("kache"),
+        "#!/bin/sh\ncase \"$1 $2\" in\n'daemon start') rm -f \"$KACHE_RUNTIME_DIR/expired\"; exec \"$BOOTSTRAP_FAKE_KACHE\" --kache-start ;;\n'daemon stop') test ! -f \"$KACHE_RUNTIME_DIR/expired\" ;;\n*) exit 2 ;;\nesac\n",
+    );
+    let path = std::env::join_paths(std::iter::once(temp.path().to_path_buf()).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_ci-bootstrap"))
+        .args([
+            "cache",
+            "quiet",
+            "sh",
+            "-c",
+            "touch \"$KACHE_RUNTIME_DIR/expired\"",
+        ])
+        .env("PATH", path)
+        .env("TMPDIR", temp.path())
+        .env("CI_JOB_ID", "42")
+        .env("BOOTSTRAP_FAKE_KACHE", env!("CARGO_BIN_EXE_fake-tool"))
+        .env("KITHARA_TEST_STDOUT", ready_stats())
+        .env("KACHE_HOST_CONFIG", host)
+        .env("SCCACHE_BUCKET", "scope")
+        .env("SCCACHE_ENDPOINT", "http://cache:9000")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(fs::read_dir(temp.path()).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with("kithara-compiler.")
+    }));
+}
+
+#[test]
 fn local_compilation_does_not_require_ci_services() {
     let output = Command::new(env!("CARGO_BIN_EXE_ci-bootstrap"))
         .args(["cache", "local", "sh", "-c", "exit 7"])

@@ -961,8 +961,10 @@ cargo.packages = ["tools"]
     /// them are answered here rather than by the machine's own daemons.
     #[cfg(unix)]
     fn cache_doubles(root: &Path) -> (toml::Table, PathBuf) {
-        use std::os::unix::fs::PermissionsExt as _;
-
+        let socket_tool = root.join("cache-double").join("fake-tool");
+        if !socket_tool.exists() {
+            crate::testing::install_double(&root.join("cache-double"), "fake-tool");
+        }
         let asked = root.join("asked");
         let mut tools = toml::Table::new();
         for (name, answer) in [
@@ -976,16 +978,21 @@ cargo.packages = ["tools"]
             ),
         ] {
             let program = root.join(name);
-            fs::write(
-                &program,
+            let start = if name == "kache" {
                 format!(
-                    "#!/bin/sh\necho \"{name} $@\" >> '{}'\nprintf '{answer}'\n",
+                    "if [ \"$1 $2\" = \"daemon start\" ] && [ -n \"$KACHE_RUNTIME_DIR\" ]; then\nKITHARA_TEST_STDOUT='{answer}' exec '{}' --kache-start\nfi\n",
+                    socket_tool.display()
+                )
+            } else {
+                String::new()
+            };
+            crate::testing::install_script(
+                &program,
+                &format!(
+                    "#!/bin/sh\necho \"{name} $@\" >> '{}'\n{start}printf '{answer}'\n",
                     asked.display()
                 ),
-            )
-            .expect("write the cache double");
-            fs::set_permissions(&program, fs::Permissions::from_mode(0o755))
-                .expect("make the cache double runnable");
+            );
             tools.insert(
                 name.to_owned(),
                 toml::Table::from_iter([(
@@ -1019,7 +1026,7 @@ cargo.packages = ["tools"]
             .expect("lane runs through the wrapper");
         assert_eq!(
             fs::read_to_string(&asked).expect("the cache was asked"),
-            "kache stats --json\nsccache --show-stats\nkache stats --full --json\nkache explain --json\n"
+            "kache daemon start\nsccache --show-stats\nkache stats --full --json\nkache explain --json\n"
         );
     }
 
@@ -1074,7 +1081,7 @@ cargo.packages = ["tools"]
         );
         assert_eq!(
             fs::read_to_string(&asked).expect("the cache was asked"),
-            "kache stats --json\nkache stats --json\nsccache --show-stats\nkache stats --full --json\nkache explain --json\nkache daemon stop\n"
+            "kache daemon start\nkache daemon start\nsccache --show-stats\nkache stats --full --json\nkache explain --json\nkache daemon stop\n"
         );
     }
 

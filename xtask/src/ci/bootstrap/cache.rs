@@ -61,10 +61,7 @@ impl CompilerCache {
                 .tempdir()?,
             active: true,
         };
-        require_remote(&super::statistics(
-            &mut kache_command(cache.directory.path(), &[]),
-            cache.directory.path(),
-        )?)?;
+        cache.verify_remote()?;
         Ok(Some(cache))
     }
 
@@ -81,11 +78,20 @@ impl CompilerCache {
     /// Drain queued uploads and report a failed stop to the compilation owner.
     ///
     /// # Errors
-    /// Returns an error when the daemon cannot drain and stop within the command bound.
+    /// Returns an error when the writable daemon cannot be established, drained or stopped.
     pub fn finish(mut self) -> io::Result<()> {
-        let result = self.capture(&["daemon", "stop"]).map(|_| ());
+        // The idle policy can retire this daemon while the compilation child is quiet.
+        let verified = self.verify_remote();
+        let stopped = self.capture(&["daemon", "stop"]).map(|_| ());
         self.active = false;
-        result
+        verified.and(stopped)
+    }
+
+    fn verify_remote(&self) -> io::Result<()> {
+        require_remote(&super::statistics(
+            &mut kache_command(self.directory.path(), &[]),
+            self.directory.path(),
+        )?)
     }
 
     fn capture(&self, args: &[&str]) -> io::Result<String> {
