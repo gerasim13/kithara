@@ -29,23 +29,28 @@ impl<'a> ReadRoot<'a> {
         let cache = &state.ui.cache;
         let focus = cache.focus_deck();
         let snapshot = &*state.snapshot;
+
         let decks: Vec<DeckNode<'a>> = snapshot
             .decks
             .iter()
-            .zip(cache.decks())
-            .enumerate()
-            .map(|(at, (deck, deck_cache))| {
-                DeckNode::new(deck, deck_cache, snapshot.eq_mode, at == focus)
+            .filter_map(|deck| {
+                let deck_cache = cache.deck(deck.letter)?;
+                Some(DeckNode::new(
+                    deck,
+                    deck_cache,
+                    snapshot.eq_mode,
+                    deck.letter == focus,
+                ))
             })
             .collect();
         let engine = EngineNode::new(&decks);
+
         let tempos: Vec<DeckTempo> = snapshot
             .decks
             .iter()
-            .enumerate()
-            .map(|(at, deck)| DeckTempo {
+            .map(|deck| DeckTempo {
                 bpm: deck.analysis.bpm,
-                focused: at == focus,
+                focused: deck.letter == focus,
                 position: deck.position.max(0.0),
             })
             .collect();
@@ -61,8 +66,8 @@ impl<'a> ReadRoot<'a> {
                 Broadcaster::is_available(),
             ),
             mix: MixNode::new(&snapshot.mix),
-            mixer: StripsNode::new(&snapshot.mix),
-            player: PlayerNode::new(&snapshot.mix),
+            mixer: StripsNode::new(snapshot),
+            player: PlayerNode::new(&snapshot.mix, &snapshot.decks),
             tempo: TempoNode::new(&tempos),
             vis: VisNode::new(&cache.stage, &tempos),
             ui: UiNode::new(
@@ -113,8 +118,8 @@ mod tests {
     use super::*;
     use crate::{
         analysis::fixtures::{self, short_wav},
-        deck::{DeckId, EqMode},
-        engine::{DeckSettings, DeckSnapshot, EngineSnapshot},
+        deck::{DeckSet, EqMode, TempoPercent},
+        engine::{DeckSnapshot, EngineSnapshot},
         gui::{
             library::{Library, StartupSource},
             test_fixture::{self, Probe},
@@ -125,7 +130,7 @@ mod tests {
                 window::WindowState,
             },
         },
-        mix::MixState,
+        mix::{MixState, MixStrip},
         pools::AppTrackSource,
         sources::build_resource_config,
         state::{AbrVariant, UiState, covered},
@@ -138,7 +143,7 @@ mod tests {
         mix: MixState,
         modules: Modules,
         stage: StageView,
-        decks: Vec<(UiState, DeckSettings, DeckCache)>,
+        decks: Vec<(UiState, Vec<GainDb>, DeckCache)>,
         window: WindowState,
         broadcast_available: bool,
     }
@@ -156,29 +161,30 @@ mod tests {
                 modules: Modules::default(),
                 window: WindowState::default(),
                 broadcast_available: false,
-                mix: MixState::new(tempos.len()),
+                mix: MixState::default(),
                 stage: StageView::default(),
                 eq_mode: EqMode::default(),
                 decks: tempos.into_iter().map(deck).collect(),
             }
         }
 
-        fn root<'a>(&'a self, shown: &'a [DeckSnapshot]) -> ReadRoot<'a> {
+        fn root<'a>(&'a self, shown: &'a EngineSnapshot) -> ReadRoot<'a> {
             let decks: Vec<DeckNode<'_>> = shown
+                .decks
                 .iter()
                 .zip(&self.decks)
-                .enumerate()
-                .map(|(at, (deck, (_, _, cache)))| {
-                    DeckNode::new(deck, cache, self.eq_mode, at == 0)
+                .map(|(deck, (_, _, cache))| {
+                    DeckNode::new(deck, cache, self.eq_mode, deck.letter == "a")
                 })
                 .collect();
             let engine = EngineNode::new(&decks);
+
             let tempos: Vec<DeckTempo> = shown
+                .decks
                 .iter()
-                .enumerate()
-                .map(|(at, deck)| DeckTempo {
+                .map(|deck| DeckTempo {
                     bpm: deck.analysis.bpm,
-                    focused: at == 0,
+                    focused: deck.letter == "a",
                     position: deck.position.max(0.0),
                 })
                 .collect();
@@ -190,20 +196,35 @@ mod tests {
                 engine,
                 broadcast: BroadcastNode::new(false, "", self.broadcast_available),
                 mix: MixNode::new(&self.mix),
-                mixer: StripsNode::new(&self.mix),
-                player: PlayerNode::new(&self.mix),
+                mixer: StripsNode::new(shown),
+                player: PlayerNode::new(&self.mix, &shown.decks),
                 tempo: TempoNode::new(&tempos),
                 vis: VisNode::new(&self.stage, &tempos),
                 ui: UiNode::new(DeckLayout::Dual, &self.modules, &self.window, ""),
             }
         }
 
-        fn shown(&self) -> Vec<DeckSnapshot> {
-            self.decks
-                .iter()
+        fn shown(&self) -> EngineSnapshot {
+            let count = self.decks.len();
+            let mut snapshot = EngineSnapshot::unpublished();
+
+            snapshot.decks = DeckSet::LETTERS
+                .into_iter()
+                .zip(&self.decks)
                 .enumerate()
-                .map(|(at, (ui, settings, _))| DeckSnapshot::new(DeckId(at), ui, settings))
-                .collect()
+                .map(|(at, (letter, (ui, eq_bands, _)))| {
+                    DeckSnapshot::new(
+                        ::kithara::warp::BeatGridId::allocate().expect("a fixture deck id"),
+                        letter,
+                        MixStrip::new(at, count),
+                        eq_bands.clone(),
+                        TempoPercent::DEFAULT,
+                        ui,
+                    )
+                })
+                .collect();
+
+            snapshot
         }
     }
 
@@ -222,25 +243,29 @@ mod tests {
         ]
     }
 
-    fn deck(tempo: &str) -> (UiState, DeckSettings, DeckCache) {
+    fn deck(tempo: &str) -> (UiState, Vec<GainDb>, DeckCache) {
         let mut ui = UiState::empty();
         ui.track_name = "Loaded".to_string();
         ui.duration = 120.0;
         ui.abr_variants = hls_ladder();
+
         let mut cache = DeckCache::default();
         cache.tempo = tempo.to_string();
         cache.remain = "-02:00".to_string();
         cache.subtitle = "file".to_string();
         cache.view.zoom = Some(1.0);
-        (ui, DeckSettings::new(3), cache)
+
+        (ui, vec![GainDb::default(); 3], cache)
     }
 
     fn fixture_in(mode: EqMode) -> Fixture {
         let mut fixture = Fixture::new(["+2.0%", "-1.0%"]);
         fixture.eq_mode = mode;
-        for (_, settings, _) in &mut fixture.decks {
-            settings.eq_bands = vec![GainDb::default(); mode.bands().len()];
+
+        for (_, eq_bands, _) in &mut fixture.decks {
+            *eq_bands = vec![GainDb::default(); mode.bands().len()];
         }
+
         fixture
     }
 
@@ -363,29 +388,37 @@ mod tests {
 
         let config = test_fixture::config(&Handle::current());
         let (host, queue) = fixtures::queue_off().await;
+
         let mut source = build_resource_config(&short_wav, &config).expect("fixture source");
         source.set_metadata(TrackMetadata {
             artwork: Some(test_fixture::cover([255, 0, 0], ImageFormat::Png)),
             ..Default::default()
         });
         let source = AppTrackSource::from(source);
+
         host.call(move |(_, queue)| queue.append(source).expect("fixture track"))
             .await;
+
         let mut covered = fixture_in(EqMode::ThreeBand);
         covered.decks[0].0.tracks = queue.tracks();
         covered.decks[0].0.current_track_index = Some(0);
+
         let mut snapshot = EngineSnapshot::unpublished();
-        snapshot.decks = covered.shown();
+        snapshot.decks = covered.shown().decks;
+
         let mut cache = ViewCache::default();
         let runtime = Handle::current();
         wait_until(Duration::from_secs(2), "fixture artwork is decoded", || {
             cache.refresh(&snapshot, &runtime);
-            cache.decks()[0].artwork.image().is_some()
+            cache
+                .deck("a")
+                .is_some_and(|deck| deck.artwork.image().is_some())
         })
         .await
         .expect("fixture artwork completes");
+
         covered.decks[0].2.artwork =
-            mem::take(&mut cache.deck_mut(0).expect("fixture cache").artwork);
+            mem::take(&mut cache.deck_mut("a").expect("fixture cache").artwork);
 
         let documented = readable_endpoints().map(|(id, scopes)| {
             let scope: Vec<String> = scopes
@@ -611,17 +644,22 @@ mod tests {
             }
         }
     }
+
     #[kithara::test]
     fn library_followup_known_bpm_is_a_source_row_cell() {
         let mut fixture = Fixture::new(["0", "0"]);
         let known = fixtures::grid().artifact().bpm();
         assert_eq!(known, 128.0);
         fixture.bpms.insert("dropped.mp3".to_owned(), known);
-        let root = fixture.root(&[]);
+
+        let shown = EngineSnapshot::unpublished();
+        let root = fixture.root(&shown);
         let walk = Walk::new(&root);
+
         let Some(ReadValue::Table(rows)) = walk.get("source.rows@source=startup") else {
             panic!("startup rows are readable");
         };
+
         assert_eq!(
             rows[0]
                 .cells()

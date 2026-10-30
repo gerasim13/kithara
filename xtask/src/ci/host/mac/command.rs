@@ -149,8 +149,7 @@ pub(crate) fn run(args: &MacArgs) -> Result<()> {
                 Boot::Installed
             })
         }
-        MacCommand::Preflight => HostStorage::new(&config, &process)?.preflight(),
-        MacCommand::Cleanup => {
+        MacCommand::Preflight | MacCommand::Cleanup => {
             let deadline = config.host.cleanup_deadline();
             end_the_process_after(deadline, move || {
                 error!(
@@ -159,7 +158,12 @@ pub(crate) fn run(args: &MacArgs) -> Result<()> {
                 );
                 std::process::exit(1);
             });
-            HostStorage::new(&config, &process)?.cleanup()
+            let storage = HostStorage::new(&config, &process)?;
+            if matches!(args.command, MacCommand::Preflight) {
+                storage.preflight()
+            } else {
+                storage.cleanup()
+            }
         }
         MacCommand::Health => HostStorage::new(&config, &process)?.health(),
     }

@@ -2,10 +2,15 @@
 
 use std::num::{NonZeroU32, NonZeroUsize};
 
+use kithara_config::LiveConfig;
 use kithara_dsp::filter::{Biquad, Coefficients, FilterError, Hertz, Type};
 use kithara_effects::{
-    AudioEffect, EffectPrepareError, GainDb, apply_effects,
-    filter::{Cutoff, FilterConfig, FilterEffect, Kind, PrepareError, Q},
+    AudioEffect, EffectConfig, EffectPrepareError, EffectSetup, EffectTarget, GainDb,
+    apply_effects,
+    filter::{
+        Cutoff, FilterConfig, FilterEffect, FilterSettings, FilterSettingsChange, Kind,
+        PrepareError, Q,
+    },
 };
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_test_fixtures::{
@@ -49,6 +54,74 @@ fn low_pass_reference(channels: NonZeroUsize) -> Biquad {
     filter
 }
 
+#[kithara::test]
+fn manual_cutoff_follows_the_f64_smoothing_law_across_odd_blocks(eq_sine_1000: Vec<f32>) {
+    let pools = pools();
+    let mut whole =
+        FilterEffect::new(spec(1), config(&pools, Kind::LowPass)).expect("prepared filter");
+    let mut split =
+        FilterEffect::new(spec(1), config(&pools, Kind::LowPass)).expect("prepared filter");
+    let mut reference = low_pass_reference(NonZeroUsize::MIN);
+    let mut warmup = eq_sine_1000[..4096].to_vec();
+    reference
+        .process(&mut [warmup.as_mut_slice()], 0..4096)
+        .expect("reference warmup");
+    for filter in [&mut whole, &mut split] {
+        filter
+            .process(chunk(&pools, 1, &eq_sine_1000[..4096]))
+            .expect("warmup");
+        filter
+            .configure(
+                EffectTarget::Filter { effect: 0 },
+                FilterSettingsChange::CutoffHz(Cutoff::checked(200.0).expect("admitted target"))
+                    .into(),
+            )
+            .expect("manual cutoff is admitted");
+    }
+    let input = &eq_sine_1000[4096..12_288];
+    let mut expected = input.to_vec();
+    let smoothing = kithara_dsp::param::SmootherConfig::default();
+    let ratio = f64::from(smoothing.settle_ratio);
+    let b1 = ratio.powf((f64::from(smoothing.smooth_seconds) * 44_100.0).recip());
+    let mut cutoff = 1_000.0;
+    for frame in 0..expected.len() {
+        if cutoff != 200.0 {
+            cutoff = 200.0 * (1.0 - b1) + cutoff * b1;
+            if (cutoff - 200.0).abs() < 800.0 * ratio {
+                cutoff = 200.0;
+            }
+        }
+        reference
+            .retune(
+                0,
+                Coefficients::from_params(
+                    Type::LowPass,
+                    Hertz::from_hz(44_100.0).expect("reference rate"),
+                    Hertz::from_hz(cutoff).expect("smoothed positive cutoff"),
+                    std::f64::consts::FRAC_1_SQRT_2,
+                )
+                .expect("reference coefficients"),
+            )
+            .expect("stable reference section");
+        reference
+            .process(&mut [expected.as_mut_slice()], frame..frame + 1)
+            .expect("reference frame");
+    }
+    let actual = whole.process(chunk(&pools, 1, input)).expect("whole block");
+    assert_eq!(&actual.samples[..], expected);
+    let mut partitioned = Vec::with_capacity(input.len());
+    for block in input.chunks(7) {
+        partitioned.extend_from_slice(
+            &split
+                .process(chunk(&pools, 1, block))
+                .expect("split block")
+                .samples,
+        );
+    }
+    assert_eq!(partitioned, expected);
+    assert_eq!(cutoff, 200.0);
+}
+
 fn chunk(pools: &Pools, channels: u16, input: &[f32]) -> AudioChunk {
     AudioChunk::new(
         AudioChunkInfo {
@@ -87,6 +160,12 @@ fn filter_rejects_invalid_parameters_and_unstable_designs() {
     let low_rate = AudioSpec::new(1, NonZeroU32::new(40_000).expect("nonzero rate"));
     assert!(FilterEffect::new(low_rate, at_nyquist).is_err());
     assert!(FilterEffect::new(spec(0), config(&pools, Kind::HighPass)).is_err());
+    let mut pass = config(&pools, Kind::HighPass).settings();
+    pass.apply_change(FilterSettingsChange::GainDb(GainDb::MAX));
+    assert!(matches!(
+        EffectSetup::Config(EffectConfig::Filter(pass)).prepare(spec(1), &pools),
+        Err(EffectPrepareError::Filter(FilterError::Parameters))
+    ));
 }
 
 #[kithara::test]
@@ -443,7 +522,18 @@ fn prepared_filter_process_reset_and_flush_never_allocate() {
     for channels in [1, 2, 6] {
         let mut filter = FilterEffect::new(spec(channels), config(&pools, Kind::LowPass))
             .expect("prepared filter");
-        for frames in [0, 1, 7, 256, 1027] {
+        for (index, frames) in [0, 1, 7, 256, 1027].into_iter().enumerate() {
+            let cutoff = Cutoff::checked(if index.is_multiple_of(2) {
+                800.0
+            } else {
+                1200.0
+            })
+            .expect("alternating target");
+            let q = if index.is_multiple_of(2) {
+                Q::MAX
+            } else {
+                Q::MIN
+            };
             let source = chunk(
                 &pools,
                 channels,
@@ -454,6 +544,18 @@ fn prepared_filter_process_reset_and_flush_never_allocate() {
                 filter
                     .service_deferred(spec(channels))
                     .expect("same format");
+                filter
+                    .configure(
+                        EffectTarget::Filter { effect: 0 },
+                        FilterSettingsChange::CutoffHz(cutoff).into(),
+                    )
+                    .expect("bounded manual update");
+                filter
+                    .configure(
+                        EffectTarget::Filter { effect: 0 },
+                        FilterSettingsChange::Q(q).into(),
+                    )
+                    .expect("bounded Q update");
                 let output = filter.process(source).expect("immediate output");
                 filter.reset();
                 assert_eq!(filter.held_source_frames(), 0);
@@ -465,4 +567,74 @@ fn prepared_filter_process_reset_and_flush_never_allocate() {
             assert_eq!(pools.stats().allocated_bytes, allocated);
         }
     }
+}
+
+#[kithara::test]
+fn configured_filter_preparation_preserves_design_geometry_and_pool_errors() {
+    let pools = pools();
+    let settings = FilterSettings::builder()
+        .kind(Kind::LowPass)
+        .cutoff_hz(Cutoff::MAX)
+        .build()
+        .expect("admitted construction settings");
+    let low_rate = AudioSpec::new(1, NonZeroU32::new(40_000).expect("nonzero rate"));
+    assert!(matches!(
+        EffectSetup::Config(EffectConfig::Filter(settings)).prepare(low_rate, &pools),
+        Err(EffectPrepareError::Filter(FilterError::Parameters))
+    ));
+    assert!(matches!(
+        EffectSetup::Config(EffectConfig::Filter(settings)).prepare(spec(0), &pools),
+        Err(EffectPrepareError::Shape)
+    ));
+    let tight = pools_with_budget(512);
+    let settings = config(&tight, Kind::LowPass).settings();
+    assert!(matches!(
+        EffectSetup::Config(EffectConfig::Filter(settings)).prepare(spec(2), &tight),
+        Err(EffectPrepareError::Pool(_))
+    ));
+}
+
+#[kithara::test]
+fn manual_refusal_keeps_settings_smoothing_and_filter_history() {
+    let pools = pools();
+    let low = AudioSpec::new(1, NonZeroU32::new(32_000).expect("rate"));
+    let mut filters: Vec<_> = (0..2)
+        .map(|_| FilterEffect::new(low, config(&pools, Kind::LowPass)).expect("prepared"))
+        .collect();
+    for filter in &mut filters {
+        filter
+            .configure(
+                EffectTarget::Filter { effect: 0 },
+                FilterSettingsChange::CutoffHz(Cutoff::checked(200.0).expect("target")).into(),
+            )
+            .expect("admitted step");
+        let mut input = chunk(&pools, 1, &[0.25; 7]);
+        input.meta.spec = low;
+        filter.process(input).expect("warm smoothing/history");
+    }
+    assert!(
+        filters[0]
+            .configure(
+                EffectTarget::Filter { effect: 0 },
+                FilterSettingsChange::CutoffHz(Cutoff::MAX).into()
+            )
+            .is_err()
+    );
+    assert!(
+        filters[0]
+            .configure(
+                EffectTarget::Filter { effect: 0 },
+                FilterSettingsChange::GainDb(GainDb::MAX).into()
+            )
+            .is_err()
+    );
+    let output: Vec<_> = filters
+        .iter_mut()
+        .map(|filter| {
+            let mut input = chunk(&pools, 1, &[0.125; 257]);
+            input.meta.spec = low;
+            filter.process(input).expect("old admitted state")
+        })
+        .collect();
+    assert_eq!(&output[0].samples[..], &output[1].samples[..]);
 }

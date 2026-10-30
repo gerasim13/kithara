@@ -1,6 +1,6 @@
 use std::{
     num::NonZeroUsize,
-    ops::{Deref, DerefMut, Range},
+    ops::{DerefMut, Range},
 };
 
 use num_traits::ToPrimitive;
@@ -11,9 +11,9 @@ use crate::{backend::platform, consts};
 /// Cascaded biquad sections applied in place to channel planes.
 ///
 /// Sections start as identity. The state carries over between calls, so a
-/// stream split into any chunks yields the same samples. A call of at least
-/// two frames whose input and output both stay at or below `1e-9` resets the
-/// state, so silence never decays into denormals.
+/// stream split into any chunks yields the same samples. Two consecutive
+/// frames whose input and output both stay at or below `1e-9` reset the
+/// state, independently of call boundaries.
 pub struct Biquad {
     cascade: platform::Cascade,
     decay: Box<[usize]>,
@@ -22,8 +22,7 @@ pub struct Biquad {
 
 impl Biquad {
     /// # Errors
-    /// [`FilterError::Shape`] when `channels × sections` overflows,
-    /// [`FilterError::Setup`] when the platform refuses the filter.
+    /// [`FilterError::Shape`] when `channels × sections` overflows.
     pub fn new(channels: NonZeroUsize, sections: NonZeroUsize) -> Result<Self, FilterError> {
         Ok(Self {
             cascade: platform::Cascade::new(channels, sections)?,
@@ -62,15 +61,7 @@ impl Biquad {
         planes: &mut [P],
         range: Range<usize>,
     ) -> Result<(), FilterError> {
-        if range.len() < consts::SECTION_MEMORY {
-            return self.cascade.process(planes, range);
-        }
-        let input = peak(planes, &range);
-        self.cascade.process(planes, range.clone())?;
-        if input.max(peak(planes, &range)) <= consts::SILENT_PEAK {
-            self.cascade.reset();
-        }
-        Ok(())
+        self.cascade.process(planes, range)
     }
 
     /// Puts channel `c` in the steady state for the constant input `levels[c]`.
@@ -109,14 +100,6 @@ impl Biquad {
     pub fn reset(&mut self) {
         self.cascade.reset();
     }
-}
-
-fn peak<P: Deref<Target = [f32]>>(planes: &[P], range: &Range<usize>) -> f32 {
-    planes
-        .iter()
-        .filter_map(|plane| plane.get(range.clone()))
-        .map(platform::peak)
-        .fold(0.0, f32::max)
 }
 
 /// `[b0, b1, b2, a1, a2]` rounded to `f32`, when every value stays finite

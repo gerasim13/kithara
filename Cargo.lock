@@ -5221,6 +5221,7 @@ dependencies = [
  "bon",
  "delegate",
  "derive-where",
+ "derive_more",
  "fearless_simd",
  "fieldwork",
  "firewheel",
