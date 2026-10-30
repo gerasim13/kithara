@@ -73,9 +73,9 @@ fn magnitudes() -> [Kernel; 2] {
     ]
 }
 
-/// The current SIMD levels and the native candidate read identical inputs.
-fn phases() -> Vec<Kernel> {
-    Vec::from([
+/// Every SIMD level reads identical phase inputs.
+fn phases() -> [Kernel; 2] {
+    [
         Kernel {
             name: "native",
             run: phase,
@@ -84,12 +84,7 @@ fn phases() -> Vec<Kernel> {
             name: "fallback",
             run: |re, im, output| dispatch!(Level::fallback(), simd => phase_kernel(simd, re, im, output)),
         },
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
-        Kernel {
-            name: "accelerate",
-            run: kithara_apple::accelerate::phase_f32,
-        },
-    ])
+    ]
 }
 
 /// Points around the circle at three radii, then the four signed zeros and

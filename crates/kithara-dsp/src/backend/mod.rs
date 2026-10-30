@@ -20,12 +20,8 @@ mod tests;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) use accelerate as platform;
-#[cfg(all(feature = "spectrum", any(target_os = "macos", target_os = "ios")))]
-pub(crate) use accelerate::phase;
 #[cfg(feature = "spectrum")]
-pub(crate) use bins::magnitude;
-#[cfg(all(feature = "spectrum", not(any(target_os = "macos", target_os = "ios"))))]
-pub(crate) use bins::phase;
+pub(crate) use bins::{magnitude, phase};
 pub(crate) use fade::gains;
 pub(crate) use interpolate::quadratic;
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]

@@ -1,43 +1,8 @@
-use std::{ffi::c_int, ptr};
+use std::ptr;
 
 use super::ffi::{
     vDSP_conv, vDSP_maxmgv, vDSP_svesq, vDSP_vadd, vDSP_vmul, vDSP_vsma, vDSP_vsmsa, vDSP_vsub,
-    vvatan2f,
 };
-
-/// `output[i] = atan2(im[i], re[i])` in radians over the common prefix;
-/// returns its length and leaves the remaining output untouched.
-///
-/// # Panics
-///
-/// Only if an internal length invariant fails: Apple's `usize` holds
-/// `c_int::MAX`, and each chunk is bounded by that positive maximum.
-#[must_use]
-pub fn phase_f32(re: &[f32], im: &[f32], output: &mut [f32]) -> usize {
-    let len = re.len().min(im.len()).min(output.len());
-    if len == 0 {
-        return 0;
-    }
-    let chunk_size = usize::try_from(c_int::MAX).expect("invariant: Apple usize holds c_int::MAX");
-    let mut offset = 0;
-    while offset < len {
-        let count = (len - offset).min(chunk_size);
-        let n = c_int::try_from(count).expect("invariant: each chunk is bounded by c_int::MAX");
-        // SAFETY: offset..offset + count stays within all three slices' common prefix.
-        // SAFETY: output is exclusive and overlaps neither input; inputs may share storage.
-        // SAFETY: n is a valid positive C int for the synchronous call; atan2 takes im before re.
-        unsafe {
-            vvatan2f(
-                output.as_mut_ptr().add(offset),
-                im.as_ptr().add(offset),
-                re.as_ptr().add(offset),
-                ptr::from_ref(&n),
-            );
-        }
-        offset += count;
-    }
-    len
-}
 
 /// The largest `|x|` in `samples`; `0.0` for an empty slice.
 #[must_use]

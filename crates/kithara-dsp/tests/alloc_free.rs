@@ -167,15 +167,6 @@ fn phase_never_allocates_for_prefixes_and_offsets() {
                 phase(&re[1..len + 1], &im[2..len + 3], &mut output[3..]),
                 len
             );
-            #[cfg(any(target_os = "macos", target_os = "ios"))]
-            assert_eq!(
-                kithara_apple::accelerate::phase_f32(
-                    &re[1..len + 1],
-                    &im[2..len + 3],
-                    &mut output[3..]
-                ),
-                len
-            );
         }
     });
 }
