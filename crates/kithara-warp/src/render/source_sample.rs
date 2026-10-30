@@ -132,13 +132,13 @@ fn downsample_source_frame(
         weights += weight;
         weight
     });
-    let mut offsets = [0; 2 * crate::consts::SOURCE_RADIUS + 1];
-    for (sample, offset) in offsets.iter_mut().zip(-radius..=radius) {
-        let frame = sample_frame(offset)?;
-        let relative =
-            usize::try_from(frame - first).map_err(|_| ElasticError::SampleCountOverflow)?;
-        *sample = window.start + relative * channels;
-    }
+    // Admitted endpoint projection is equivalent for every tap in the checked radius.
+    let offsets: [usize; 2 * crate::consts::SOURCE_RADIUS + 1] = std::array::from_fn(|index| {
+        let offset: i64 = index.as_();
+        let frame = (source + (offset - radius)).max(first).min(last);
+        let relative: usize = (frame - first).as_();
+        window.start + relative * channels
+    });
     let mut totals = [0.0; 8];
     for (group, output) in output.chunks_mut(totals.len()).enumerate() {
         kithara_dsp::interp::weighted_frames(
