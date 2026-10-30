@@ -411,7 +411,7 @@ mod tests {
     fn key_history_survives_runtime_cleanup_without_raw_inputs() {
         let directory = tempfile::tempdir().unwrap();
         let job =
-            crate::ci::kache::KacheJob::prepare(directory.path().join("kache"), None).unwrap();
+            crate::ci::kache::KacheJob::prepare(&directory.path().join("kache"), None).unwrap();
         let tools = ToolsConfig::default();
         let bin = directory.path().join("bin");
         crate::testing::install_double(&bin, "kache");

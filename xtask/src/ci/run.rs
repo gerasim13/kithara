@@ -1149,7 +1149,7 @@ mod tests {
                     ),
                 ]),
             );
-            let kache = KacheJob::prepare(directory.path().join("kache"), None).unwrap();
+            let kache = KacheJob::prepare(&directory.path().join("kache"), None).unwrap();
             let outcome = execute_lane(
                 &process,
                 &ToolsConfig::default(),
@@ -1182,7 +1182,7 @@ mod tests {
         crate::testing::install_double(&bin, "kache");
         let trace = directory.path().join("trace");
 
-        let kache = KacheJob::prepare(directory.path().join("kache"), None).unwrap();
+        let kache = KacheJob::prepare(&directory.path().join("kache"), None).unwrap();
 
         for (scenario, uses_kache, expected_trace) in [
             ("success", true, READY),

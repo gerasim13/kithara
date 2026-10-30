@@ -24,7 +24,7 @@ use crate::{
 /// for its scope, and the job's file outranks that layer key by key only
 /// where it names a key.
 pub(crate) struct KacheJob {
-    directory: PathBuf,
+    directory: tempfile::TempDir,
 }
 
 /// Where a job keeps what it compiled, and how much of it.
@@ -34,12 +34,16 @@ pub(crate) struct LocalStore<'a> {
 }
 
 impl KacheJob {
-    pub(crate) fn prepare(directory: PathBuf, store: Option<LocalStore<'_>>) -> Result<Self> {
-        let job = Self { directory };
-        let runtime = job.directory.join("runtime");
-        // A directory left by a job that died under the same name holds a
-        // daemon's socket that nothing answers.
-        let _ = fs::remove_dir_all(&job.directory);
+    pub(crate) fn prepare(directory: &Path, store: Option<LocalStore<'_>>) -> Result<Self> {
+        fs::create_dir_all(directory)
+            .with_context(|| format!("creating cache session parent {}", directory.display()))?;
+        let job = Self {
+            directory: tempfile::Builder::new()
+                .prefix("daemon-")
+                .tempdir_in(directory)
+                .context("create an owned compiler-cache session")?,
+        };
+        let runtime = job.directory.path().join("runtime");
         fs::create_dir_all(&runtime)
             .with_context(|| format!("creating kache's directory {}", runtime.display()))?;
         let mut cache = toml::Table::new();
@@ -81,7 +85,7 @@ impl KacheJob {
             ("KACHE_CONFIG", self.config().into_os_string()),
             (
                 "KACHE_RUNTIME_DIR",
-                self.directory.join("runtime").into_os_string(),
+                self.directory.path().join("runtime").into_os_string(),
             ),
             ("KACHE_FALLBACK", tools.program("sccache").into()),
             ("RUSTC_WRAPPER", tools.program("kache").into()),
@@ -107,7 +111,7 @@ impl KacheJob {
 
     pub(crate) fn verify_remote(&self, process: &Process, tools: &ToolsConfig) -> Result<()> {
         let mut command = process.command(tools.program("kache"));
-        let runtime = self.directory.join("runtime");
+        let runtime = self.directory.path().join("runtime");
         command
             .env("KACHE_CONFIG", self.config())
             .env("KACHE_RUNTIME_DIR", &runtime);
@@ -126,7 +130,7 @@ impl KacheJob {
     }
 
     fn config(&self) -> PathBuf {
-        self.directory.join("config.toml")
+        self.directory.path().join("config.toml")
     }
 }
 
@@ -192,7 +196,7 @@ pub(crate) fn reclaim_local_stores(config: &CiConfig, process: &Process) -> Resu
 fn reclaim_store(process: &Process, store: &Path, max_size: &str) -> Result<()> {
     let directory = tempfile::tempdir().context("creating compiler-cache maintenance runtime")?;
     let job = KacheJob::prepare(
-        directory.path().join("kache"),
+        &directory.path().join("kache"),
         Some(LocalStore {
             directory: store,
             max_size,
@@ -273,12 +277,6 @@ fn path_value(path: &Path) -> Result<toml::Value> {
         .to_str()
         .with_context(|| format!("{} is not UTF-8", path.display()))?
         .into())
-}
-
-impl Drop for KacheJob {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.directory);
-    }
 }
 
 #[cfg(test)]
@@ -447,7 +445,7 @@ mod tests {
     fn a_jobs_own_file_leaves_the_remote_to_its_runner() {
         let directory = tempfile::tempdir().unwrap();
 
-        let job = KacheJob::prepare(directory.path().join("job"), None).unwrap();
+        let job = KacheJob::prepare(&directory.path().join("job"), None).unwrap();
 
         let config = written(&job);
         let cache = config["cache"].as_table().unwrap();
@@ -524,7 +522,7 @@ mod tests {
         let store_root = directory.path().join("store");
 
         let job = KacheJob::prepare(
-            directory.path().join("job"),
+            &directory.path().join("job"),
             Some(LocalStore {
                 directory: &store_root,
                 max_size: "4G",
@@ -539,7 +537,7 @@ mod tests {
         assert_eq!(cache["local_max_size"].as_str(), Some("4G"));
         assert_eq!(
             cache["runtime_dir"].as_str().map(PathBuf::from),
-            Some(directory.path().join("job/runtime"))
+            Some(job.directory.path().join("runtime"))
         );
     }
 
@@ -549,7 +547,7 @@ mod tests {
     fn a_daemon_whose_job_never_stops_it_exits_once_idle() {
         let directory = tempfile::tempdir().unwrap();
 
-        let job = KacheJob::prepare(directory.path().join("job"), None).unwrap();
+        let job = KacheJob::prepare(&directory.path().join("job"), None).unwrap();
 
         let config = written(&job);
         let timeout = config["cache"]["daemon_idle_timeout_secs"].as_integer();
@@ -565,7 +563,7 @@ mod tests {
     fn a_job_compiles_through_kache_and_hands_on_to_sccache() {
         let directory = tempfile::tempdir().unwrap();
         let tools = ToolsConfig::default();
-        let job = KacheJob::prepare(directory.path().join("job"), None).unwrap();
+        let job = KacheJob::prepare(&directory.path().join("job"), None).unwrap();
 
         let environment = job.environment(&tools);
 
@@ -585,7 +583,7 @@ mod tests {
                 ("KACHE_CONFIG", job.config().into_os_string()),
                 (
                     "KACHE_RUNTIME_DIR",
-                    job.directory.join("runtime").into_os_string()
+                    job.directory.path().join("runtime").into_os_string()
                 ),
                 ("KACHE_FALLBACK", OsString::from(tools.program("sccache"))),
                 ("RUSTC_WRAPPER", OsString::from(tools.program("kache"))),
@@ -599,7 +597,7 @@ mod tests {
     #[test]
     fn kache_sees_no_ci_system_whose_policy_would_keep_a_job_read_only() {
         let directory = tempfile::tempdir().unwrap();
-        let job = KacheJob::prepare(directory.path().join("job"), None).unwrap();
+        let job = KacheJob::prepare(&directory.path().join("job"), None).unwrap();
 
         let environment = job.environment(&ToolsConfig::default());
 
@@ -616,12 +614,36 @@ mod tests {
     }
 
     #[test]
+    fn sessions_for_one_job_never_replace_each_others_runtime() {
+        let directory = tempfile::tempdir().unwrap();
+        let shared = directory.path().join("job");
+        fs::create_dir_all(&shared).unwrap();
+        let unrelated = shared.join("unrelated");
+        fs::write(&unrelated, "keep").unwrap();
+
+        let first = KacheJob::prepare(&shared, None).unwrap();
+        let second = KacheJob::prepare(&shared, None).unwrap();
+        assert_ne!(first.config(), second.config());
+        assert!(first.config().is_file());
+        assert!(second.config().is_file());
+        assert_eq!(fs::read_to_string(&unrelated).unwrap(), "keep");
+        let second_path = second.directory.path().to_path_buf();
+        drop(second);
+        assert!(!second_path.exists());
+        assert!(first.config().is_file());
+        drop(first);
+        assert_eq!(fs::read_to_string(unrelated).unwrap(), "keep");
+    }
+
+    #[test]
     fn a_finished_job_leaves_nothing_of_its_own_behind() {
         let directory = tempfile::tempdir().unwrap();
         let own = directory.path().join("job");
 
-        drop(KacheJob::prepare(own.clone(), None).unwrap());
+        let job = KacheJob::prepare(&own, None).unwrap();
+        let owned = job.directory.path().to_path_buf();
+        drop(job);
 
-        assert!(!own.exists());
+        assert!(!owned.exists());
     }
 }

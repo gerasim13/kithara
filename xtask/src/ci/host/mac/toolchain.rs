@@ -312,7 +312,7 @@ impl<'a> ToolchainInstaller<'a> {
                 &self.config.host.sccache_size,
             )?,
         )?;
-        let job = KacheJob::prepare(temporary.path().join("job"), None)?;
+        let job = KacheJob::prepare(&temporary.path().join("job"), None)?;
         let tools = ToolsConfig::default();
         let mut vars = environment
             .into_iter()
