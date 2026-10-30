@@ -42,7 +42,7 @@ fn bootstrap_compiles_only_with_a_writable_s3_daemon() {
         ))
         .unwrap();
         let output = Command::new(env!("CARGO_BIN_EXE_kithara-ci-bootstrap")).args(["cache", "bootstrap"])
-            .args(["sh", "-c", "test -z \"$GITHUB_ACTIONS$GITLAB_CI\" && test \"$RUSTC_WRAPPER\" = kache && touch \"$1\"", "compile"])
+            .args(["sh", "-c", "test -z \"$GITHUB_ACTIONS$GITLAB_CI\" && test \"$RUSTC_WRAPPER\" = kache && test \"$KACHE_PREFETCH_ENABLED\" = false && touch \"$1\"", "compile"])
             .arg(&marker).env("PATH", path).env("TMPDIR", temp.path())
             .env("CI_JOB_ID", "42").env_remove("GITHUB_RUN_ID")
             .env("GITHUB_ACTIONS", "true").env("GITLAB_CI", "true").env_remove("KACHE_RUNTIME_DIR")
@@ -127,7 +127,7 @@ fn a_failed_daemon_drain_fails_a_successful_compilation() {
     executable(&temp.path().join("just"), "#!/bin/sh\nexit 0\n");
     executable(
         &temp.path().join("kache"),
-        "#!/bin/sh\ncase \"$1 $2\" in\n'stats --json') printf '%s' '{\"remote\":\"s3://scope/kache\",\"daemon_connected\":true,\"daemon_remote_readonly\":false}' ;;\n'daemon stop') exit 4 ;;\n*) exit 2 ;;\nesac\n",
+        "#!/bin/sh\ncase \"$1 $2\" in\n'stats --json') printf '%s' '{\"remote\":\"s3://scope/kache\",\"daemon_connected\":true,\"daemon_remote_readonly\":false}' ;;\n'daemon stop') printf '%s' 'drain refused' >&2; exit 4 ;;\n*) exit 2 ;;\nesac\n",
     );
     let path = std::env::join_paths(std::iter::once(temp.path().to_path_buf()).chain(
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
@@ -145,6 +145,9 @@ fn a_failed_daemon_drain_fails_a_successful_compilation() {
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("drain refused"), "{stderr}");
+    assert!(stderr.contains("exit status: 4"), "{stderr}");
     assert!(fs::read_dir(temp.path()).unwrap().all(|entry| {
         !entry
             .unwrap()

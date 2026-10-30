@@ -43,6 +43,7 @@ impl KacheJob {
             .with_context(|| format!("creating kache's directory {}", runtime.display()))?;
         let mut cache = toml::Table::new();
         cache.insert("explain_miss".into(), true.into());
+        cache.insert("prefetch_enabled".into(), false.into());
         cache.insert("runtime_dir".into(), path_value(&runtime)?);
         cache.insert(
             "daemon_idle_timeout_secs".into(),
@@ -120,6 +121,15 @@ impl KacheJob {
 
 pub(crate) fn require_remote(stats: &str) -> Result<()> {
     kithara_ci_bootstrap::require_remote(stats).map_err(Into::into)
+}
+
+pub(in crate::ci) fn collection_report(output: &str) -> Result<serde_json::Value> {
+    let report: serde_json::Value = serde_json::from_str(output)?;
+    ensure!(
+        report["success"] == true,
+        "compiler-store collection failed: {report}"
+    );
+    Ok(report)
 }
 
 pub(crate) fn reclaim_local_stores(config: &CiConfig, process: &Process) -> Result<()> {
@@ -202,13 +212,9 @@ fn reclaim_store(process: &Process, store: &Path, max_size: &str) -> Result<()> 
     if let Err(error) = stopped {
         warn!(%error, "compiler-cache maintenance daemon did not stop");
     }
-    let report: serde_json::Value = serde_json::from_str(
+    let report = collection_report(
         &result.with_context(|| format!("collecting compiler store {}", store.display()))?,
     )?;
-    ensure!(
-        report["success"] == true,
-        "compiler-store collection failed: {report}"
-    );
     info!(path = %store.display(), %report, "local compiler store collected");
     Ok(())
 }
@@ -243,6 +249,7 @@ pub(crate) fn host_config(
     let mut cache = toml::Table::new();
     cache.insert("local_store".into(), path_value(store)?);
     cache.insert("local_max_size".into(), max_size.into());
+    cache.insert("prefetch_enabled".into(), false.into());
     cache.insert("remote".into(), remote.into());
     let mut config = toml::Table::new();
     config.insert("cache".into(), cache.into());
@@ -438,6 +445,7 @@ mod tests {
         let cache = config["cache"].as_table().unwrap();
         assert!(!cache.contains_key("remote"), "{cache:?}");
         assert!(!cache.contains_key("local_store"), "{cache:?}");
+        assert_eq!(cache["prefetch_enabled"].as_bool(), Some(false));
     }
 
     fn store_environment(bucket: &str) -> BTreeMap<String, String> {
@@ -471,6 +479,10 @@ mod tests {
             let cache = config["cache"].as_table().unwrap();
             assert_eq!(cache["local_store"].as_str(), Some("/cache/kache/store"));
             assert_eq!(cache["local_max_size"].as_str(), Some("50G"));
+            assert_eq!(
+                cache.get("prefetch_enabled").and_then(toml::Value::as_bool),
+                Some(false)
+            );
             let remote = cache["remote"].as_table().unwrap();
             assert_eq!(remote["type"].as_str(), Some("s3"), "{bucket}");
             assert_eq!(remote["bucket"].as_str(), Some(bucket));
