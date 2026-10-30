@@ -1991,9 +1991,28 @@ pub(super) fn load(track: &mut Track, rig: &mut Rig, position: Position) -> Seq 
 
 /// A track of `src` in `slot`, its consumer attached on frame 0.
 pub(super) async fn loaded(rig: &mut Rig, slot: Slot, src: &str) -> (Track, Inbox<LaneProtocol>) {
+    loaded_with_item(rig, slot, src, item()).await
+}
+
+pub(super) async fn loaded_with_item(
+    rig: &mut Rig,
+    slot: Slot,
+    src: &str,
+    item: ResourceLoad<TestPools>,
+) -> (Track, Inbox<LaneProtocol>) {
     let (sender, inbox) = lane();
     let mut track = track(slot);
-    load(&mut track, rig, Position::ZERO);
+    rig.with_outbox(|out| {
+        track.apply(
+            TrackCommand::Load {
+                item,
+                position: Position::ZERO,
+            },
+            out,
+        )
+    })
+    .expect("live deck scope")
+    .expect("configured load");
     let opened = opened_fixture(rig, src).await;
     let receipt = rig
         .open(Ok(opened))

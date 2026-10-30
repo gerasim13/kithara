@@ -416,31 +416,27 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
         mapping_field(authorize, "if").as_str(),
         Some("github.event.repository.fork || vars.KITHARA_RUNNER_LABELS != ''")
     );
-    let gate = workflow_job(jobs, "gate");
-    assert_eq!(job_needs(gate), BTreeSet::from(["authorize".to_owned()]));
-    assert_eq!(
-        mapping_field(gate, "runs-on").as_str(),
-        Some("${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}")
+    assert!(
+        !jobs.contains_key("gate"),
+        "a runner reachability check must not add a self-hosted admission"
     );
 
     let (selection_name, _) = ui_selection(jobs);
     for name in workflow_job_names(jobs) {
-        if matches!(name.as_str(), "authorize" | "gate" | "required") {
+        if matches!(name.as_str(), "authorize" | "required") {
             continue;
         }
         let job = workflow_job(jobs, &name);
         assert_no_key(&Value::Mapping(job.clone()), "continue-on-error");
-        let expected_needs = if name == selection_name {
-            job_needs(gate)
-        } else if name == "ui" {
-            BTreeSet::from(["gate".to_owned(), selection_name.to_owned()])
+        let expected_needs = if name == "ui" {
+            BTreeSet::from(["authorize".to_owned(), selection_name.to_owned()])
         } else {
-            BTreeSet::from(["gate".to_owned()])
+            BTreeSet::from(["authorize".to_owned()])
         };
         assert_eq!(
             job_needs(job),
             expected_needs,
-            "workflow job `{name}` bypasses the self-hosted gate"
+            "workflow job `{name}` must depend directly on hosted authorization"
         );
         let condition = job.get("if").and_then(Value::as_str).unwrap_or_default();
         assert!(!condition.contains("KITHARA_RUNNER_LABELS"));
@@ -585,21 +581,13 @@ fn a_ready_pull_request_is_a_merge_request_pipeline() {
         );
     }
 
-    let gate = workflow_job(jobs, "gate");
-    let outputs = mapping_field(gate, "outputs")
-        .as_mapping()
-        .expect("the gate hands the kind on");
-    assert_eq!(
-        mapping_field(outputs, "kind").as_str(),
-        Some("${{ needs.authorize.outputs.kind }}")
-    );
     for name in ["lanes", "deep", "platforms", "quality"] {
         let with = mapping_field(workflow_job(jobs, name), "with")
             .as_mapping()
             .unwrap_or_else(|| panic!("{name} passes inputs"));
         assert_eq!(
             mapping_field(with, "kind").as_str(),
-            Some("${{ needs.gate.outputs.kind }}"),
+            Some("${{ needs.authorize.outputs.kind }}"),
             "role `{name}` decides the pipeline kind again"
         );
     }
@@ -1314,11 +1302,8 @@ fn stress_report_verifies_and_publishes_the_raw_evidence() {
     );
 }
 
-/// Every cadence repeats its own stress tier: the night the player's core,
-/// the week the engine, the month everything. The run is admitted by the
-/// repository switch and the runner pool, not by which cadence fired.
 #[test]
-fn scheduled_stress_repeats_the_tier_of_its_cadence() {
+fn stress_dispatch_keeps_its_tiers_and_admission_guards() {
     let workflow = github_workflow("dispatch.yml");
     let stress = workflow_job(workflow_jobs(&workflow), "stress");
     assert_eq!(
@@ -1331,6 +1316,7 @@ fn scheduled_stress_repeats_the_tier_of_its_cadence() {
     for contract in [
         "vars.KITHARA_STRESS_ENABLED == 'true'",
         "vars.KITHARA_STRESS_RUNNER_LABELS != ''",
+        "(inputs.only || '') == ''",
     ] {
         assert!(
             condition.contains(contract),
@@ -1338,10 +1324,6 @@ fn scheduled_stress_repeats_the_tier_of_its_cadence() {
         );
     }
     let cadence = dispatch_cadence(&workflow);
-    assert!(
-        !condition.contains(cadence_expression(&cadence)),
-        "scheduled stress runs at every cadence: {condition}"
-    );
     let with = mapping_field(stress, "with")
         .as_mapping()
         .expect("scheduled stress names its tier");
@@ -1363,6 +1345,67 @@ fn scheduled_stress_repeats_the_tier_of_its_cadence() {
             "cadence `{kind}` has no stress tier"
         );
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn stress_dispatch_omits_only_scheduled_nightly() -> anyhow::Result<()> {
+    let workflow = github_workflow("dispatch.yml");
+    let stress = workflow_job(workflow_jobs(&workflow), "stress");
+    let condition = mapping_field(stress, "if")
+        .as_str()
+        .expect("stress admission is an expression");
+    let cadence = dispatch_cadence(&workflow);
+    let mut cases = Vec::new();
+    for (cron, kind) in dispatch_crons(&workflow)
+        .into_iter()
+        .zip(dispatch_kinds(&workflow))
+    {
+        for event in ["schedule", "workflow_dispatch"] {
+            for (enabled, labels, only, eligible) in [
+                ("true", "[\"kithara-stress\"]", "", true),
+                ("false", "[\"kithara-stress\"]", "", false),
+                ("true", "", "", false),
+                ("true", "[\"kithara-stress\"]", "gate-test", false),
+            ] {
+                cases.push(serde_json::json!({
+                    "context": {
+                        "github.event_name": event,
+                        "github.event.schedule": if event == "schedule" { cron } else { "" },
+                        "inputs.kind": if event == "schedule" { "" } else { kind },
+                        "inputs.only": only,
+                        "vars.KITHARA_STRESS_ENABLED": enabled,
+                        "vars.KITHARA_STRESS_RUNNER_LABELS": labels,
+                    },
+                    "tier": kind,
+                    "admitted": eligible && (event != "schedule" || kind != "nightly"),
+                }));
+            }
+        }
+    }
+    let output = Command::new("python3")
+        .args([
+            "-c",
+            r#"import json
+import os
+
+for case in json.loads(os.environ["CASES"]):
+    def evaluate(expression):
+        for name, value in case["context"].items():
+            expression = expression.replace(name, repr(value))
+        expression = expression.replace("&&", " and ").replace("||", " or ")
+        return eval(expression, {"__builtins__": {}})
+
+    assert evaluate(os.environ["CADENCE"]) == case["tier"], case
+    assert bool(evaluate(os.environ["CONDITION"])) == case["admitted"], case
+"#,
+        ])
+        .env("CONDITION", condition)
+        .env("CADENCE", cadence_expression(&cadence))
+        .env("CASES", serde_json::to_string(&cases)?)
+        .output()?;
+    assert!(output.status.success(), "{output:?}");
+    Ok(())
 }
 
 /// The crons `dispatch.yml` is scheduled by, in declaration order.
@@ -2299,7 +2342,10 @@ fn lane_jobs_do_not_wait_for_ui_ownership_selection() {
     let ci = github_workflow("ci.yml");
     let jobs = workflow_jobs(&ci);
     let (selection_name, selection) = ui_selection(jobs);
-    assert_eq!(job_needs(selection), job_needs(workflow_job(jobs, "gate")));
+    assert_eq!(
+        job_needs(selection),
+        BTreeSet::from(["authorize".to_owned()])
+    );
     for (name, job) in jobs {
         let job = job.as_mapping().expect("job is a mapping");
         if job.get("uses").and_then(Value::as_str) == Some("./.github/workflows/run.yml") {
@@ -2309,7 +2355,6 @@ fn lane_jobs_do_not_wait_for_ui_ownership_selection() {
             );
         }
     }
-    assert!(!job_needs(workflow_job(jobs, "gate")).contains(selection_name));
 }
 
 // A lane declared in the catalog and a workflow spelling out the same command
@@ -2688,14 +2733,24 @@ fn the_role_runner_reads_its_matrix_from_the_catalog() {
             "dependent".to_owned()
         ])
     );
+    let select = workflow_job(jobs, "select");
+    let outputs = mapping_field(select, "outputs")
+        .as_mapping()
+        .expect("the selector publishes its matrices");
+    for field in ["matrix", "dependent"] {
+        let expected =
+            format!("${{{{ toJSON(fromJSON(steps.render.outputs.selection).{field}) }}}}");
+        assert_eq!(
+            mapping_field(outputs, field).as_str(),
+            Some(expected.as_str()),
+            "the selector must split `{field}` from one render"
+        );
+    }
 
     // The role and the kind reach the script as environment variables. A
     // workflow that pastes a caller's string into a shell command runs a
     // command the caller wrote, not one this repository reviewed.
-    let render = named_step(
-        workflow_job(jobs, "select"),
-        "Render the jobs this role schedules",
-    );
+    let render = named_step(select, "Render the jobs this role schedules");
     let env = mapping_field(render, "env")
         .as_mapping()
         .expect("the render step has an environment");
@@ -2706,6 +2761,10 @@ fn the_role_runner_reads_its_matrix_from_the_catalog() {
     assert_eq!(
         mapping_field(env, "KIND").as_str(),
         Some("${{ inputs.kind }}")
+    );
+    assert_eq!(
+        mapping_field(env, "ONLY").as_str(),
+        Some("${{ inputs.only }}")
     );
     assert!(
         mapping_field(render, "run")
@@ -2759,8 +2818,6 @@ fn the_role_runner_reads_its_matrix_from_the_catalog() {
 #[cfg(unix)]
 #[test]
 fn failed_catalog_reads_publish_no_selection_outputs() -> anyhow::Result<()> {
-    use std::process::Command;
-
     let workflow = github_workflow("run.yml");
     let render = named_step(
         workflow_job(workflow_jobs(&workflow), "select"),
@@ -2771,29 +2828,38 @@ fn failed_catalog_reads_publish_no_selection_outputs() -> anyhow::Result<()> {
         .expect("the selection step runs a script");
     let temp = tempfile::tempdir()?;
     let outputs = temp.path().join("outputs");
-    for fail_field in ["matrix", "dependent", ""] {
+    let calls = temp.path().join("calls");
+    let selection = serde_json::json!({
+        "matrix": [{"lane": "matrix", "artifact": {"path": "target/a b\"c"}}],
+        "dependent": [{"lane": "dependent", "needs": ["matrix"]}]
+    });
+    for select_status in [0, 73] {
         fs::write(&outputs, "")?;
+        fs::write(&calls, "")?;
         let output = Command::new("bash")
             .args(["-euo", "pipefail", "-c"])
             .arg(format!(
                 r#"just() {{
-  field="${{@: -1}}"
-  if [[ "$field" = "$FAIL_FIELD" ]]; then return 73; fi
-  printf '[{{"lane":"%s"}}]\n' "$field"
+  printf 'call\n' >> "$CALLS"
+  printf '%s\n' "$SELECTION"
+  return "$SELECT_STATUS"
 }}
 {script}"#
             ))
             .env("ROLE", "quality")
             .env("KIND", "branch")
             .env("ONLY", "all")
-            .env("FAIL_FIELD", fail_field)
+            .env("SELECT_STATUS", select_status.to_string())
+            .env("SELECTION", selection.to_string())
+            .env("CALLS", &calls)
             .env("GITHUB_OUTPUT", &outputs)
             .output()?;
-        if fail_field.is_empty() {
+        assert_eq!(fs::read_to_string(&calls)?, "call\n");
+        if select_status == 0 {
             assert!(output.status.success(), "{output:?}");
             assert_eq!(
                 fs::read_to_string(&outputs)?,
-                "matrix=[{\"lane\":\"matrix\"}]\ndependent=[{\"lane\":\"dependent\"}]\n"
+                format!("selection={selection}\n")
             );
         } else {
             assert_eq!(output.status.code(), Some(73), "{output:?}");

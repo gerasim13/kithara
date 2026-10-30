@@ -422,11 +422,13 @@ pub(super) fn process_var(name: &str) -> Option<OsString> {
 /// The room asked for is on `volume`, the one the job builds on.
 fn ensure_room_for_a_job(config: &CiConfig, volume: &FsPath) -> Result<()> {
     let required = config.host.free_bytes_for_a_job();
+    let workspaces = gitlab_workspaces(config.host.build_root());
+    let cache = config.host.host_root.join("cache");
+    let targets = build_cache::budget_roots(&workspaces, &cache)?;
+    build_cache::enforce_budget(&targets, config.host.build_cache_budget_bytes()?)?;
     if free_bytes(volume)? >= required {
         return Ok(());
     }
-    let workspaces = gitlab_workspaces(config.host.build_root());
-    let cache = config.host.host_root.join("cache");
     let deadline = Instant::now() + config.host.job_room_wait();
     loop {
         let free = free_bytes(volume)?;

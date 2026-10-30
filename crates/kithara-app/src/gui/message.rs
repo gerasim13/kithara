@@ -1,9 +1,9 @@
-use kithara::ui::render::{Published, WindowCommand};
-
-use crate::{
-    deck::{DeckId, EqMode},
-    engine::MixCmd,
+use kithara::{
+    host::DeckId,
+    ui::render::{Published, WindowCommand},
 };
+
+use crate::{deck::EqMode, engine::MixCmd};
 
 /// All GUI events flow through this enum.
 ///

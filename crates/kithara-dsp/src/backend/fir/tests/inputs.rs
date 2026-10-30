@@ -138,14 +138,15 @@ fn current_and_history_preserve_uncleaned_ieee_inputs() {
     uncleaned_current::<9>();
 }
 
-fn prefixes<const HISTORY: usize>() {
+fn prefixes<const HISTORY: usize>(threshold: f32) {
     let taps = [[0.25; 17], [-0.125; 17]];
     let mut actual = Fir::<17, 2, 1, HISTORY>::new(taps);
     let mut expected = actual.clone();
     let mut raw = [2.0, -3.0, 4.0, -5.0, 6.0, -7.0];
     let current = [-0.0, 0.25, -0.5, 0.125];
-    actual.begin_block(&[&mut raw], 0.98);
-    expected.begin_block(&[&mut raw], 0.98);
+    actual.begin_block(&[&mut raw], threshold);
+    expected.begin_block(&[&mut raw], threshold);
+    assert_eq!(actual.reconstruct, threshold == 0.98);
     let mut output = [0.0; 4];
     let mut wanted = output;
     assert_eq!(actual.process(0, &raw, &current, &mut output), 4);
@@ -157,8 +158,8 @@ fn prefixes<const HISTORY: usize>() {
     assert_state(&actual, &expected);
     for boundary in [false, true] {
         if boundary {
-            actual.begin_block(&[&mut raw], 0.98);
-            expected.begin_block(&[&mut raw], 0.98);
+            actual.begin_block(&[&mut raw], threshold);
+            expected.begin_block(&[&mut raw], threshold);
         }
         for (raw_len, current_len, output_len) in [(0, 4, 6), (6, 0, 6), (6, 4, 0)] {
             let before = actual.clone();
@@ -203,7 +204,68 @@ fn prefixes<const HISTORY: usize>() {
 
 #[kithara::test]
 fn warmed_empty_and_mismatched_prefixes_keep_state_and_sentinels() {
-    prefixes::<0>();
-    prefixes::<1>();
-    prefixes::<9>();
+    for threshold in [0.98, 32.0] {
+        prefixes::<0>(threshold);
+        prefixes::<1>(threshold);
+        prefixes::<9>(threshold);
+    }
+}
+
+fn zero_windows<const HISTORY: usize>() {
+    for coefficient in [0.25, f32::INFINITY, f32::NAN] {
+        let mut actual = Fir::<17, 2, 1, HISTORY>::new([[coefficient; 17], [-0.125; 17]]);
+        let mut expected = actual.clone();
+        for (stage, frames) in [9_usize, 1, 7, 128, 1024, 0, 7, 13].into_iter().enumerate() {
+            let mut raw = vec![if stage == 0 { 2.0 } else { 0.0 }; frames.checked_add(3).unwrap()];
+            let mut current = vec![if stage == 0 { 2.0 } else { -0.0 }; frames];
+            if stage == 7 {
+                for (index, sample) in current.iter_mut().enumerate() {
+                    *sample = *[
+                        f32::NAN,
+                        f32::INFINITY,
+                        f32::NEG_INFINITY,
+                        -0.0,
+                        f32::from_bits(1),
+                    ]
+                    .get(index % 5)
+                    .unwrap();
+                }
+            }
+            let threshold = if stage % 2 == 0 { -1.0 } else { 0.98 };
+            actual.begin_block(&[&mut raw], threshold);
+            expected.begin_block(&[&mut raw], threshold);
+            if stage == 7 {
+                assert!(!actual.reconstruct);
+            }
+            let mut output = vec![f32::MIN; frames.checked_add(1).unwrap()];
+            let mut wanted = output.clone();
+            for start in (0..frames).step_by(7) {
+                let end = frames.min(start.checked_add(7).unwrap());
+                let raw = raw.get(start..).unwrap();
+                let current = current.get(start..end).unwrap();
+                assert_eq!(
+                    actual.process(0, raw, current, output.get_mut(start..end).unwrap()),
+                    indexed_process(
+                        &mut expected,
+                        raw,
+                        current,
+                        wanted.get_mut(start..end).unwrap()
+                    )
+                );
+            }
+            assert_ieee(&output, &wanted);
+            assert_state(&actual, &expected);
+            if stage == 4 {
+                actual.reset();
+                expected.reset();
+            }
+        }
+    }
+}
+
+#[kithara::test]
+fn transient_zero_windows_preserve_complete_state_and_coefficient_specials() {
+    zero_windows::<0>();
+    zero_windows::<1>();
+    zero_windows::<9>();
 }

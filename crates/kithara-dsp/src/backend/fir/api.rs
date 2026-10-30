@@ -33,8 +33,10 @@ impl<const TAPS: usize, const PHASES: usize, const CHANNELS: usize, const HISTOR
     /// whether reconstruction can exceed `threshold`. Complete channel tails
     /// and history participate; a non-finite sample prevents quiet pruning.
     /// Call once per external block, never at internal processing boundaries.
-    pub fn begin_block(&mut self, channels: &[&mut [f32]], threshold: f32) {
+    /// Returns whether reconstruction is required for this block.
+    pub fn begin_block(&mut self, channels: &[&mut [f32]], threshold: f32) -> bool {
         dispatch!(Level::new(), simd => self.begin_block_kernel(simd, channels, threshold));
+        self.reconstruct
     }
 
     /// Write sample/adjacent-interval peaks for one channel's common prefix.

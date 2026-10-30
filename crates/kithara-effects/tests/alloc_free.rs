@@ -22,7 +22,7 @@ fn limiter_process_and_reset_never_allocate() {
     let mut right = [0.0; 607];
     assert_no_alloc(|| {
         for frames in [600, 1, 0, 7, 255, 256, 257, 1, 0, 600] {
-            for amplitude in [0.1, 2.0, 0.98, 0.001] {
+            for amplitude in [0.1, 2.0, 0.98, 0.001, 0.0] {
                 left.fill(amplitude);
                 right.fill(-amplitude);
                 limiter.process_planar(&mut [&mut left[..frames], &mut right[..frames + 7]]);

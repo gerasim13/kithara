@@ -1,7 +1,7 @@
-use kithara::{effects::GainDb, queue::TrackId};
+use kithara::{effects::GainDb, host::DeckId, queue::TrackId};
 use kithara_app_library::Playable;
 
-use crate::deck::{DeckId, EqMode, TempoPercent};
+use crate::deck::{EqMode, TempoPercent};
 
 #[derive(Debug)]
 pub(crate) struct Envelope {
@@ -19,7 +19,7 @@ pub(crate) enum Command {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum DeckCmd {
-    Play,
+    TogglePlay,
     Pause,
     Next,
     Prev,

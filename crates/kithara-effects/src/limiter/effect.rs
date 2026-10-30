@@ -8,7 +8,7 @@ use kithara_config::Config;
 use kithara_dsp::{
     envelope::{AttackRelease, PeakHold},
     filter::Fir,
-    multiply_in_place,
+    multiply_in_place, sanitize,
 };
 use kithara_signal::sanitize_sample;
 use num_traits::ToPrimitive;
@@ -155,14 +155,34 @@ impl PeakLimiter {
             .min()
             .unwrap_or(0);
         let ceiling = f32::from(self.ceiling());
-        self.detector.begin_block(channels, ceiling);
+        let reconstruct = self.detector.begin_block(channels, ceiling);
         let [linked, current, peaks] = &mut self.scratch;
         for start in (0..frames).step_by(Self::CHUNK_FRAMES) {
             let end = frames.min(start + Self::CHUNK_FRAMES);
             let count = end - start;
             let linked = &mut linked[..count];
-            let current = &mut current[..count];
             let peaks = &mut peaks[..count];
+            if !reconstruct {
+                for (index, channel) in channels.iter_mut().enumerate() {
+                    sanitize(&mut channel[start..end]);
+                    let processed = self.detector.process(
+                        index,
+                        &channel[start..],
+                        &channel[start..end],
+                        peaks,
+                    );
+                    peaks[processed..].fill(0.0);
+                }
+                linked.fill(1.0);
+                self.envelope.process(linked);
+                if linked.iter().any(|&gain| gain != 1.0) {
+                    for channel in channels.iter_mut() {
+                        multiply_in_place(&mut channel[start..end], linked);
+                    }
+                }
+                continue;
+            }
+            let current = &mut current[..count];
             linked.fill(0.0);
             for (index, channel) in channels.iter_mut().enumerate() {
                 for (sample, &raw) in current.iter_mut().zip(&channel[start..end]) {

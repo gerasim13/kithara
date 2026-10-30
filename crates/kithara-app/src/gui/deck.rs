@@ -32,8 +32,7 @@ pub(crate) enum DeckMsg {
 
 pub(crate) fn command(shown: &DeckSnapshot, eq_mode: EqMode, msg: &DeckMsg) -> Option<DeckCmd> {
     Some(match *msg {
-        DeckMsg::TogglePlayPause if shown.playing => DeckCmd::Pause,
-        DeckMsg::TogglePlayPause => DeckCmd::Play,
+        DeckMsg::TogglePlayPause => DeckCmd::TogglePlay,
         DeckMsg::Next => DeckCmd::Next,
         DeckMsg::Prev => DeckCmd::Prev,
         DeckMsg::SeekTo(fraction) => DeckCmd::SeekFraction(fraction),

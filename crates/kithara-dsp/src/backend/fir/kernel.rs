@@ -60,28 +60,40 @@ impl<const TAPS: usize, const PHASES: usize, const CHANNELS: usize, const HISTOR
             return 0;
         };
         let len = raw.len().min(current.len()).min(peaks.len());
+        if !self.reconstruct {
+            for (&sample, peak) in current.iter().zip(peaks).take(len) {
+                *peak = sample.abs().max(0.0);
+            }
+            if len > 0 {
+                let retained = HISTORY.min(len);
+                history.copy_within(retained.., 0);
+                let (_, retained_history) = history.split_at_mut(HISTORY.saturating_sub(retained));
+                let (processed, _) = current.split_at(len);
+                let (_, retained_current) = processed.split_at(len.saturating_sub(retained));
+                retained_history.copy_from_slice(retained_current);
+                *valid = true;
+            }
+            return len;
+        }
         let mut future = raw.iter();
         for (&sample, peak) in current.iter().zip(peaks).take(len) {
             let _ = future.next();
             *peak = sample.abs().max(0.0);
-            if self.reconstruct {
-                let future = future.as_slice();
-                let ahead =
-                    Self::interval(&self.taps, &history[HISTORY.min(1)..], sample, future, 0);
-                let behind = if *valid {
-                    *shared
-                } else {
-                    Self::interval(
-                        &self.taps,
-                        history,
-                        sample,
-                        future,
-                        usize::from(HISTORY == 0),
-                    )
-                };
-                *shared = ahead;
-                *peak = peak.max(PeakHold::peak(&[ahead, behind]));
-            }
+            let future = future.as_slice();
+            let ahead = Self::interval(&self.taps, &history[HISTORY.min(1)..], sample, future, 0);
+            let behind = if *valid {
+                *shared
+            } else {
+                Self::interval(
+                    &self.taps,
+                    history,
+                    sample,
+                    future,
+                    usize::from(HISTORY == 0),
+                )
+            };
+            *shared = ahead;
+            *peak = peak.max(PeakHold::peak(&[ahead, behind]));
             if !history.is_empty() {
                 history.copy_within(1.., 0);
                 if let Some(newest) = history.last_mut() {
@@ -101,27 +113,42 @@ impl<const TAPS: usize, const PHASES: usize, const CHANNELS: usize, const HISTOR
         future: &[f32],
         padding: usize,
     ) -> f32 {
-        let mut peak = 0.0_f32;
+        if TAPS == 0 || PHASES == 0 {
+            return 0.0;
+        }
         let held = future.last().copied().unwrap_or(current);
-        for branch in taps {
-            let mut sum = 0.0_f32;
-            let mut coefficients = branch.iter();
-            for coefficient in coefficients.by_ref().take(padding) {
-                sum = coefficient.mul_add(0.0, sum);
+        if current == 0.0
+            && held == 0.0
+            && past.iter().all(|&sample| sample == 0.0)
+            && future.iter().take(TAPS).all(|&sample| sample == 0.0)
+        {
+            // Zero samples yield zero or NaN sums; both fold to a positive-zero peak.
+            return 0.0;
+        }
+        let mut sums = [0.0_f32; PHASES];
+        for tap in 0..TAPS {
+            let sample = match tap.checked_sub(padding) {
+                None => 0.0,
+                Some(offset) if offset == past.len() => current,
+                Some(offset) => past
+                    .get(offset)
+                    .or_else(|| {
+                        offset
+                            .checked_sub(past.len())
+                            .and_then(|index| index.checked_sub(1))
+                            .and_then(|index| future.get(index))
+                    })
+                    .copied()
+                    .unwrap_or(held),
+            };
+            for (branch, sum) in taps.iter().zip(&mut sums) {
+                if let Some(&coefficient) = branch.get(tap) {
+                    *sum = coefficient.mul_add(sample, *sum);
+                }
             }
-            // Bound zip before it can consume the next region's coefficient.
-            for (coefficient, &sample) in coefficients.by_ref().take(past.len()).zip(past) {
-                sum = coefficient.mul_add(sample, sum);
-            }
-            if let Some(coefficient) = coefficients.next() {
-                sum = coefficient.mul_add(current, sum);
-            }
-            for (coefficient, &sample) in coefficients.by_ref().take(future.len()).zip(future) {
-                sum = coefficient.mul_add(sample, sum);
-            }
-            for coefficient in coefficients {
-                sum = coefficient.mul_add(held, sum);
-            }
+        }
+        let mut peak = 0.0_f32;
+        for &sum in &sums {
             peak = peak.max(sum.abs());
         }
         peak

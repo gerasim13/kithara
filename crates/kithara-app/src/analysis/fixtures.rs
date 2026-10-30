@@ -374,6 +374,16 @@ pub(crate) fn long_wav() -> String {
     asset_url(&assets::sine_wav_a440_12s())
 }
 
+#[kithara::fixture]
+pub(crate) fn constant_fifth_wav() -> String {
+    asset_url(&assets::fixed_constant_wav_cd_fifth_1323000())
+}
+
+#[kithara::fixture]
+pub(crate) fn constant_tenth_wav() -> String {
+    asset_url(&assets::fixed_constant_wav_cd_tenth_1323000())
+}
+
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 pub(crate) async fn next_subscribe(
     requests: &mut mpsc::Receiver<Request>,

@@ -172,13 +172,14 @@ jobs:
 
   # The repeated run that turns "fails sometimes" into a rate. It has a runner
   # of its own and a group of its own, and its own admission: only the owner of
-  # a fork may spend a night of the fleet on it. Each cadence repeats the
-  # stress tier of the same name.
+  # a fork may spend a night of the fleet on it. Manual requests and weekly or
+  # monthly schedules repeat the stress tier of the same name.
   stress:
     if: >-
       vars.KITHARA_STRESS_ENABLED == 'true'
       && vars.KITHARA_STRESS_RUNNER_LABELS != ''
       && (inputs.only || '') == ''
+      && github.event.schedule != '17 1 * * *'
     uses: ./.github/workflows/stress.yml
     with:
       tier: ${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || github.event.schedule == '17 3 1 * *' && 'monthly' || 'nightly') }}

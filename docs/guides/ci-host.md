@@ -127,8 +127,11 @@ change, not a prerequisite for removing idle time between pipelines.
 
 Native lint, tests and verdict jobs use the shared `kithara-macos` tag so either
 native registration can take them. Each registration retains its own checkout,
-build root and compiler-cache socket. Device builds retain `kithara-macos-2`;
-measured jobs still serialize through `kithara-suite`.
+build root and compiler-cache socket. Framework packaging also uses the common
+native pool; bindings, staging and Xcode DerivedData stay in each job's
+checkout. Simulator/server work retains
+`kithara-macos-2` through shutdown and device deletion; measured jobs still
+serialize through `kithara-suite`.
 
 Host-shell registrations run the installed host preflight before fetching sources.
 Critical disk pressure refuses the job before checkout or compilation can spend
@@ -161,6 +164,23 @@ See [CI bridge and verdict](ci-bridge.md#the-verdict) for lane reports and the
 shared regression journal.
 
 ## Object cache service
+
+Each independent host store needs a default-branch dependency-source publisher:
+`linux-lint` on GitHub and `apple-lint` on the Mac's GitLab pipeline. Publication
+uses the bucket named by the job's actual credentials; a claimed trust label
+does not select another bucket. Branch and quarantine runs only restore the
+layer. A main publisher fails if its upload fails. A main run on another host
+does not fill this host's store.
+
+Before its compiler daemon stops, a lane retains sanitized observations in
+a job-keyed file under `.ci-artifacts/cache/`. The report separates kache and sccache, records
+the checkout revision and available step/cache costs, and carries bounded
+key-history digests for that job. Missing earlier history, provider queue
+timestamps or a binary linker observation remain unknown. The report contains
+neither raw configuration/environment data nor compiler arguments. GitHub and
+GitLab retain it as a job artifact even when the lane fails. Provider upload
+paths select only the current job key, so inherited upstream reports are never
+re-uploaded as a consumer result if bootstrap fails.
 
 Linux CI containers leave compile admission to their CPU and memory limits.
 The root `justfile` disables kache's store-wide scheduler for configured Linux
@@ -281,6 +301,23 @@ store's own lines.
 
 ## Storage policy
 
+The host profile's `sccache_size` also sets kache's local store target, including
+the runner host layer and each job's scoped store. The S3-backed fallback does
+not reserve its local limit in advance. Keep this one policy consistent before
+introducing a second budget. Protected/import-pinned entries can leave actual
+usage above the target; lowering a target does not make those bytes reclaimable.
+Size it against the protected working set, persistent Cargo slots, RustFS and
+guest disks, retaining the existing physical free-space floor. Unknown protected
+byte counts must stay unknown rather than being inferred from entry counts.
+
+Keep two admitted jobs until matched trials qualify a larger setting. For ten
+cores the existing worker budget gives four Cargo workers per job at two slots
+and three at three slots, including bootstrap. Compare the same revision cohort
+and cache-state class in at least three paired runs, retaining failures, swap,
+storage pressure and measured-suite timing. More slots are accepted only when
+cohort completion improves without violating those contracts; inconclusive
+results keep the previous profile.
+
 Profile thresholds are bytes used against the quota; cleanup takes each as the
 free space to keep. On an APFS container shared with other volumes those differ:
 read used-against-quota as free space and a volume reports `Normal` while jobs
@@ -293,9 +330,15 @@ are never deleted in place; sccache keeps its own LRU limit. No `diskutil apfs`
 verb accepts `-quota` after creation, so the quota cannot be raised and cleanup
 is the whole answer.
 
-`build_cache_size` caps one cache and cannot see whether the volume has room:
-two checkouts each under a 100 GB cap held 183 GB between them while every pass
-reported nothing freed and jobs were already refused. Warm builds are the last
+`build_cache_size` caps the build directories visible to one kernel together.
+Every CI lane enforces it before admission, even when free space is above the
+rejection floor. Mac cleanup owns native builds; containers own the separate
+Colima tree because advisory locks do not cross that boundary. Bootstrap xtask
+also collects superseded Cargo units under its build and Cargo profile locks,
+retaining the newest units, their reachable dependencies and a one-day window.
+RustFS holds reusable compiler entries; Cargo still materializes the binaries,
+linker inputs and build-script output a job executes in its local target.
+Warm builds are the last
 rung: when stale trees, the Docker build cache and the guest trim still leave
 the volume at `Aggressive` or worse, the pass reclaims what it is short of the
 soft floor, evicting past the cap. What its sweeps cannot show:
@@ -331,6 +374,18 @@ Automatic cleanup preserves the shared Colima VM, its Docker data disk and the
 services running inside it. If safe cache reclamation cannot restore the free-space
 floor, cleanup reports failure and preflight refuses new jobs. Runtime deletion
 is an explicit maintenance operation, never a disk-pressure cleanup step.
+
+Each pass also runs kache's requested collector against native-platform stores,
+using the host's size limit and an isolated local-only maintenance runtime.
+Automatic kache collection protects remote imports for six hours even above
+that limit; host maintenance must enforce the budget without that import pin.
+The collector retains its locks and protection for restores in flight. RustFS
+bucket eviction bounds remote objects separately and cannot reclaim local copies.
+Remote prediction hints expire after one day through bucket lifecycle; they are
+re-derived when absent. Compiler manifests and packs remain under the evictor's
+last-use policy, so reading an old result does not make it expire by write age.
+Stores mounted into the Linux guest stay with its owner: guest locks do not
+exclude host writers, so host collection cannot use those locks as a safety fence.
 
 Health and cleanup run through launchd, and directly as `ci host mac health` /
 `ci host mac cleanup`. A `KeepAlive` agent that dies on startup stays loaded
