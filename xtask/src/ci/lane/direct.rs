@@ -1026,7 +1026,7 @@ cargo.packages = ["tools"]
             .expect("lane runs through the wrapper");
         assert_eq!(
             fs::read_to_string(&asked).expect("the cache was asked"),
-            "kache daemon start\nsccache --show-stats\nkache stats --full --json\nkache explain --json\n"
+            "sccache --show-stats\nkache stats --full --json\nkache explain --json\n"
         );
     }
 
