@@ -59,14 +59,14 @@ fn interpolate_source_frame(
     fraction: f64,
     output: &mut [f32],
 ) -> Result<(), ElasticError> {
+    let channels = output.len();
     let current = sample_offset(0)?;
-    // sample_offset admits a full frame; output bounds the DSP prefix.
-    let current = &resident.samples[current..];
+    let current = &resident.samples[current..current + channels];
     let next = if fraction == 0.0 {
         current
     } else {
         let next = sample_offset(1)?;
-        &resident.samples[next..]
+        &resident.samples[next..next + channels]
     };
     kithara_dsp::interp::interpolate_frame(current, next, fraction, output);
     Ok(())
