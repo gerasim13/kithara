@@ -194,3 +194,53 @@ async fn effect_program_capacity_refuses_only_the_excess_field_and_returns_stora
     }
     assert_eq!(track.lane.as_ref().unwrap().available(), room);
 }
+
+#[kithara::test]
+async fn effect_program_eof_returns_credit_and_confirms_only_rendered_values() {
+    let region = pools();
+    let mut rig = rig();
+    let (mut track, inbox) = configured_track(&mut rig).await;
+    let lane = track.lane_id.unwrap();
+    let origin = (1_i64 << 40) + 4096;
+    playing(&mut track, origin);
+    let room = track.lane.as_ref().unwrap().available();
+    let seq = command_at_zero(
+        &mut track,
+        &mut rig,
+        TrackCommand::EffectProgram {
+            lane,
+            program: linear_program(origin, 0, 7, 187, 0.0, -12.0),
+        },
+    )
+    .unwrap();
+    let mut source = effect_source_with(inbox, &region, 13, 1);
+    let (pcm, _) = render(&mut track, &mut rig, &mut source);
+    in_pass(&mut rig, frame(0), |out| track.tick(frame(0), out));
+    assert_eq!(source.cursor().frame, u64::from(FRAMES));
+    for (at, channels) in pcm.as_chunks::<2>().0.iter().enumerate() {
+        let db = if at < 7 {
+            0.0
+        } else {
+            -12.0 * (f64::from(u32::try_from(at - 7).unwrap()) / 180.0)
+        };
+        let db: f32 = num_traits::cast(db).unwrap();
+        assert_eq!(
+            *channels,
+            [0.25 * 10.0_f32.powf(db / 20.0); 2],
+            "frame {at}"
+        );
+    }
+    let final_db: f32 = num_traits::cast(-12.0 * (f64::from(FRAMES - 1 - 7) / 180.0)).unwrap();
+    assert_eq!(confirmed_gain(&track), GainDb::from(final_db));
+    assert_ne!(confirmed_gain(&track), GainDb::from(-12.0));
+    assert_eq!(
+        track
+            .lane_commands
+            .iter()
+            .find(|command| command.seq == seq)
+            .unwrap()
+            .applied(),
+        Some(true)
+    );
+    assert_eq!(track.lane.as_ref().unwrap().available(), room);
+}

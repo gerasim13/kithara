@@ -19,7 +19,9 @@ use num_traits::ToPrimitive;
 use super::cases::{BLOCK_FRAMES, ROOMY_CAPACITY, SAMPLE_RATE, load_source, render_effect_window};
 
 #[kithara::test(tokio)]
-async fn public_effect_cubic_reaches_the_host_without_second_smoothing() {
+#[case::audible(false)]
+#[case::output_muted(true)]
+async fn public_effect_cubic_reaches_the_host_without_second_smoothing(#[case] muted: bool) {
     let options = OfflinePlayerOptions::builder()
         .block_on_underrun(false)
         .output_block_frames(NonZeroU32::new(64).expect("callback size"))
@@ -47,6 +49,9 @@ async fn public_effect_cubic_reaches_the_host_without_second_smoothing() {
         .with_queue(|queue| queue.eq_band(0, 0))
         .await
         .expect("bound band");
+    let item = harness
+        .with_queue(|queue| queue.current().expect("loaded item").id)
+        .await;
     let start = harness.host().position();
     let target = start + 512 + 17;
     let knots = vec![
@@ -80,6 +85,17 @@ async fn public_effect_cubic_reaches_the_host_without_second_smoothing() {
             .await,
         Err(QueueError::Play(PlayError::Late))
     ));
+    if muted {
+        let at = SessionFrame::new(i64::try_from(target + 63).expect("mute frame"));
+        let output = kithara::play::SlotGainProgram::new(vec![
+            ParameterKnot::new(at, 0.0, CurveShape::HOLD).expect("exact output mute"),
+        ])
+        .expect("one-knot output program");
+        harness
+            .with_queue(move |queue| queue.gain_program(item, output))
+            .await
+            .expect("reachable output mute");
+    }
     let mut tap = harness
         .host()
         .attach_tap(Tap::Master, ROOMY_CAPACITY)
@@ -99,10 +115,25 @@ async fn public_effect_cubic_reaches_the_host_without_second_smoothing() {
             -12.0 * (3.0 * t * t - 2.0 * t * t * t)
         };
         let db = db.to_f32().expect("canonical EQ dB");
-        let expected = 0.5 * 10.0_f32.powf(db / 20.0);
+        let expected = if muted && at >= target + 63 {
+            0.0
+        } else {
+            0.5 * 10.0_f32.powf(db / 20.0)
+        };
         assert_eq!(channels, [expected; 2], "host frame {at}");
     }
     assert_eq!(control.gain_db(), GainDb::from(-12.0));
+    if muted {
+        let slot = harness
+            .deck_snapshot()
+            .slots
+            .into_iter()
+            .find(|slot| slot.binding.is_some_and(|binding| binding.item() == item))
+            .expect("same sounding attachment");
+        assert_eq!(slot.output.gain(), 0.0);
+        assert!(slot.output.program().is_some());
+    }
+
     harness
         .with_queue(kithara::queue::QueueControl::clear)
         .await
