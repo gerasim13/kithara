@@ -12,17 +12,12 @@ android_platform_version = 36
 brew_casks = ["utm"]
 brew_formulae = [
   "cmake",
-  "colima",
-  "docker",
-  "docker-buildx",
-  "docker-compose",
   "ffmpeg",
   "ffmpeg@8",
   "gh",
   "git-lfs",
   "gitlab-runner",
   "jq",
-  "lima",
   "mac",
   "node",
   "openjdk@17",

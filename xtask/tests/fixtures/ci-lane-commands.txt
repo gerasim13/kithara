@@ -1019,67 +1019,67 @@
   <require tools> cargo just
   just test ui
 # deps-deny / branch
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps deny
 # deps-deny / platforms
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps deny
 # deps-deny / merge-request
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps deny
 # deps-deny / quarantine
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps deny
 # deps-deny / main
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps deny
 # deps-deny / nightly
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps deny
 # deps-deny / weekly
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps deny
 # deps-deny / release
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps deny
 # deps-features-full / branch
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps hack
 # deps-features-full / platforms
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps hack
 # deps-features-full / merge-request
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps hack
 # deps-features-full / quarantine
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps hack
 # deps-features-full / main
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps hack
 # deps-features-full / nightly
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps hack
 # deps-features-full / weekly
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps hack
 # deps-features-full / release
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps hack
 # deps-features-invariants / branch
@@ -1147,99 +1147,99 @@
   <require tools> cargo just
   just deps hack-workspace
 # deps-semver / branch
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps semver
 # deps-semver / platforms
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps semver
 # deps-semver / merge-request
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps semver
 # deps-semver / quarantine
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps semver
 # deps-semver / main
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps semver
 # deps-semver / nightly
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps semver
 # deps-semver / weekly
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps semver
 # deps-semver / release
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps semver
 # deps-shear / branch
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps shear
 # deps-shear / platforms
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps shear
 # deps-shear / merge-request
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps shear
 # deps-shear / quarantine
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps shear
 # deps-shear / main
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps shear
 # deps-shear / nightly
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps shear
 # deps-shear / weekly
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps shear
 # deps-shear / release
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps shear
 # deps-unused / branch
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps machete
 # deps-unused / platforms
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps machete
 # deps-unused / merge-request
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps machete
 # deps-unused / quarantine
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps machete
 # deps-unused / main
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps machete
 # deps-unused / nightly
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps machete
 # deps-unused / weekly
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps machete
 # deps-unused / release
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just
   just deps machete
 # linux-arch / branch

@@ -1300,27 +1300,6 @@ mod tests {
     }
 
     #[test]
-    fn the_linux_pipeline_uses_the_runner_provisioned_image() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("xtask has a workspace root");
-        let common = fs::read_to_string(root.join(".gitlab/ci/common.yml"))
-            .expect("the shared pipeline definition is readable");
-        let (_, after_linux) = common
-            .split_once(".linux-job:")
-            .expect("the Linux job template exists");
-        let linux_job = after_linux
-            .split_once("\n.")
-            .map_or(after_linux, |(job, _)| job);
-        assert!(
-            linux_job
-                .lines()
-                .all(|line| !line.trim().starts_with("image:")),
-            "the pipeline must not override the local image provisioned in runner config"
-        );
-    }
-
-    #[test]
     fn gitlab_setup_leaves_the_lane_target_path_unclaimed() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
@@ -1421,32 +1400,6 @@ mod tests {
     }
 
     #[test]
-    fn linux_tests_do_not_disappear_when_linux_check_fails() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("xtask has a workspace root");
-        let linux = fs::read_to_string(root.join(".gitlab/ci/linux.yml"))
-            .expect("the Linux pipeline definition is readable");
-        let (_, after_test) = linux
-            .split_once("linux:test:")
-            .expect("the Linux test job exists");
-        let (test_job, coverage_job) = after_test
-            .split_once("linux:coverage:")
-            .expect("the coverage job follows Linux test");
-
-        for (name, job) in [("linux:test", test_job), ("linux:coverage", coverage_job)] {
-            assert!(
-                job.contains("needs:\n    - job: linux:image\n      optional: true\n  script:"),
-                "{name} waits on a job other than the image it runs in"
-            );
-            assert!(
-                !job.contains("linux:check"),
-                "{name} disappears when linux:check fails"
-            );
-        }
-    }
-
-    #[test]
     fn ci_junit_paths_match_their_producers() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
@@ -1461,23 +1414,8 @@ mod tests {
             Some("junit.xml")
         );
 
-        let linux = fs::read_to_string(root.join(".gitlab/ci/linux.yml"))
-            .expect("the Linux pipeline definition is readable");
-        let (_, after_test) = linux
-            .split_once("linux:test:")
-            .expect("the Linux test job exists");
-        let (test_job, _) = after_test
-            .split_once("linux:coverage:")
-            .expect("the coverage job follows Linux test");
-        assert!(
-            test_job.lines().any(|line| {
-                line.trim() == "junit: .ci-artifacts/junit/linux-test-simulated-clock.xml"
-            }),
-            "linux:test does not publish the nextest JUnit report"
-        );
-
         let mut reports = Vec::new();
-        for name in ["apple.yml", "linux.yml", "windows.yml"] {
+        for name in ["apple.yml", "windows.yml"] {
             let pipeline = fs::read_to_string(root.join(".gitlab/ci").join(name))
                 .expect("pipeline definition is readable");
             reports.extend(
@@ -1499,7 +1437,6 @@ mod tests {
                 ".ci-artifacts/junit/apple-swift-test.xml",
                 ".ci-artifacts/junit/apple-test-flash-off.xml",
                 ".ci-artifacts/junit/apple-test.xml",
-                ".ci-artifacts/junit/linux-test-simulated-clock.xml",
                 "target/nextest/ci/junit.xml",
             ]
         );

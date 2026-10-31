@@ -99,7 +99,6 @@ impl<'a> ToolchainInstaller<'a> {
         self.install_rust()?;
         self.install_cargo_tools()?;
         self.install_android()?;
-        self.install_docker_config()?;
         info!("CI user toolchain installed");
         Ok(())
     }
@@ -481,19 +480,6 @@ impl<'a> ToolchainInstaller<'a> {
         Ok(())
     }
 
-    fn install_docker_config(&self) -> Result<()> {
-        let directory = self.ci_home().join(".docker");
-        fs::create_dir_all(&directory)?;
-        let bytes = serde_json::to_vec_pretty(&serde_json::json!({
-            "cliPluginsExtraDirs": [self.config.host.brew_root.join("lib/docker/cli-plugins")],
-        }))
-        .context("serializing Docker CLI configuration")?;
-        write_private(
-            &directory.join("config.json"),
-            &[bytes, b"\n".to_vec()].concat(),
-        )
-    }
-
     fn require_user(&self, expected: &str) -> Result<()> {
         let actual = self
             .process
@@ -576,17 +562,6 @@ fn replace_symlink(source: &Path, target: &Path) -> Result<()> {
 #[cfg(not(unix))]
 fn replace_symlink(_source: &Path, _target: &Path) -> Result<()> {
     bail!("Rust proxy installation requires Unix symlinks")
-}
-
-fn write_private(path: &Path, contents: &[u8]) -> Result<()> {
-    fs::write(path, contents).with_context(|| format!("writing {}", path.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-            .with_context(|| format!("securing {}", path.display()))?;
-    }
-    Ok(())
 }
 
 /// Every Apple xcframework slice target, plus the Android and WASM targets

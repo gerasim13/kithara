@@ -4,10 +4,7 @@ use anyhow::{Context, Result, bail};
 use tracing::info;
 
 use super::runners::path_text;
-use crate::{
-    ci::{config::CiConfig, process::Process},
-    consts,
-};
+use crate::ci::{config::CiConfig, process::Process};
 
 pub(super) struct SystemSetup<'a> {
     config: &'a CiConfig,
@@ -455,7 +452,6 @@ fn checkout_directories(config: &CiConfig) -> Vec<PathBuf> {
     }
     directories.push(build_root.join("workspaces"));
     directories.push(build_root.join("workspaces/gitlab"));
-    directories.push(build_root.join(consts::CONTAINER_BUILDS));
     directories
 }
 
@@ -518,6 +514,7 @@ mod tests {
     use std::fs;
 
     use super::*;
+    use crate::consts;
 
     #[test]
     fn root_container_parser_accepts_current_diskutil_shape() {
@@ -587,7 +584,6 @@ mod tests {
                 "/build-root",
                 "/build-root/workspaces",
                 "/build-root/workspaces/gitlab",
-                "/build-root/workspaces/colima",
             ]
             .map(PathBuf::from)
         );
