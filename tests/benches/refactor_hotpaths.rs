@@ -481,6 +481,8 @@ criterion_group!(
     effect_controls::controls,
     effect_controls::empty_route,
     effect_controls::configured_route,
+    effect_controls::curves,
+    effect_controls::curve_host,
     bench_resampler_process,
     bench_audio_file_new_and_read,
     bench_hls_stream_seek_read,

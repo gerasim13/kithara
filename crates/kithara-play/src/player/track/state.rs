@@ -21,6 +21,10 @@ pub type Position = Duration;
 
 /// What a track is told to do.
 pub enum TrackCommand<S> {
+    EffectProgram {
+        lane: kithara_render::LaneId,
+        program: kithara_render::bridge::EffectProgram,
+    },
     GainProgram(kithara_render::bridge::SlotGainProgram),
     ConfigureEffect {
         lane: kithara_render::LaneId,

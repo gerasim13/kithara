@@ -48,6 +48,9 @@ impl<S> Player<S> for PlayerImpl<S> {
             return Err(PlayError::Lane(failure));
         }
         match command {
+            TrackCommand::EffectProgram { lane, program } => {
+                self.effect_program(lane, program, out)
+            }
             TrackCommand::GainProgram(program) => self.gain_program(program, out),
             TrackCommand::Load { item, position } => self.load(item, position, out),
             command @ (TrackCommand::Play { .. }
