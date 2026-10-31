@@ -12,15 +12,13 @@ where
     pools: PoolRegion<S>,
 }
 
-/// What one curve needs while it runs. A spectrum is predicted from the frame
-/// before it, so these carry across frames within a call and nothing beyond it.
+/// What one curve needs while it runs. A spectrum is predicted from the two
+/// frames before it, so these carry across frames within a call and nothing
+/// beyond it.
 struct Frames {
     spectrum: Spectrum,
-    observed: SampleBuffer,
-    angle: SampleBuffer,
-    magnitude: SampleBuffer,
-    phase: SampleBuffer,
-    phase_step: SampleBuffer,
+    /// `[previous_re, previous_im, earlier_re, earlier_im]`.
+    history: [SampleBuffer; 4],
 }
 
 impl<S> Novelty<S>
@@ -48,11 +46,12 @@ where
         let bins = consts::NOVELTY_FFT.bins();
         let mut work = Frames {
             spectrum: self.fft.spectrum(&self.pools)?,
-            observed: self.pools.get_with_len::<f32>(bins)?,
-            angle: self.pools.get_with_len::<f32>(bins)?,
-            magnitude: self.pools.get_with_len::<f32>(bins)?,
-            phase: self.pools.get_with_len::<f32>(bins)?,
-            phase_step: self.pools.get_with_len::<f32>(bins)?,
+            history: [
+                self.pools.get_with_len::<f32>(bins)?,
+                self.pools.get_with_len::<f32>(bins)?,
+                self.pools.get_with_len::<f32>(bins)?,
+                self.pools.get_with_len::<f32>(bins)?,
+            ],
         };
         for (index, slot) in coarse.iter_mut().enumerate() {
             let at = index * consts::NOVELTY_STRIDE;
@@ -81,13 +80,9 @@ impl Frames {
         if fft.forward(frame, &mut self.spectrum).is_err() {
             return 0.0;
         }
-        let (re, im) = (self.spectrum.re(), self.spectrum.im());
-        let _ = spectrum::magnitude(re, im, &mut self.observed);
-        let _ = spectrum::phase(re, im, &mut self.angle);
         spectrum::prediction_difference(
-            [re, im],
-            [&self.observed, &self.angle],
-            [&mut self.magnitude, &mut self.phase, &mut self.phase_step],
+            [self.spectrum.re(), self.spectrum.im()],
+            self.history.each_mut().map(|plane| &mut plane[..]),
         )
     }
 }
@@ -235,49 +230,46 @@ mod tests {
 
 #[cfg(test)]
 mod oracle {
-    use std::f32::consts::TAU;
-
     use kithara_test_fixtures::unit_fixtures::{click_silence_4s, clicks_120_4s};
     use kithara_test_utils::kithara;
+    use num_traits::cast::ToPrimitive;
 
-    use super::{Frames, Novelty, consts, spectrum, tests::peaks};
+    use super::{Frames, Novelty, consts, tests::peaks};
     use crate::test_pools::pools;
 
-    // Retain the original zipped loop: bounds checks can split the paired sin_cos call.
-    fn difference(
-        re: &[f32],
-        im: &[f32],
-        observed: &[f32],
-        angle: &[f32],
-        state: &mut [Vec<f32>; 3],
-    ) -> f32 {
-        let [magnitudes, phases, phase_steps] = state;
-        let mut total = 0.0_f32;
-        for ((((re, im), (observed, angle)), (magnitude, phase)), step) in re
+    /// The phase law in `f64`: each bin predicted from the previous magnitude
+    /// and the previous phase advanced by the last step, a silent bin at phase
+    /// zero. Returns the difference and the summed magnitudes of the current
+    /// and previous bins, which scale its admissible error.
+    fn difference(re: &[f32], im: &[f32], state: &mut [Vec<f64>; 3]) -> (f64, f64) {
+        let [magnitudes, phases, steps] = state;
+        let (mut total, mut scale) = (0.0, 0.0);
+        for (((re, im), magnitude), (phase, step)) in re
             .iter()
             .zip(im)
-            .zip(observed.iter().zip(angle))
-            .zip(magnitudes.iter_mut().zip(phases.iter_mut()))
-            .zip(phase_steps.iter_mut())
+            .zip(magnitudes.iter_mut())
+            .zip(phases.iter_mut().zip(steps.iter_mut()))
         {
-            let (sin, cos) = wrap(*phase + *step).sin_cos();
+            let (re, im) = (f64::from(*re), f64::from(*im));
+            let observed = re.hypot(im);
+            let angle = if observed > 0.0 { im.atan2(re) } else { 0.0 };
+            let (sin, cos) = (*phase + *step).sin_cos();
             total += (re - *magnitude * cos).hypot(im - *magnitude * sin);
-            *step = wrap(angle - *phase);
-            *phase = *angle;
-            *magnitude = *observed;
+            scale += observed + *magnitude;
+            *step = angle - *phase;
+            *phase = angle;
+            *magnitude = observed;
         }
-        total
-    }
-
-    fn wrap(angle: f32) -> f32 {
-        angle - TAU * (angle / TAU).round()
+        (total, scale)
     }
 
     fn bits(values: &[f32]) -> Vec<u32> {
         values.iter().map(|v| v.to_bits()).collect()
     }
 
-    fn reference(mono: &[f32]) -> Vec<f32> {
+    /// The curve from the `f64` law with each point's error bound, checking the
+    /// history planes after every frame.
+    fn reference(mono: &[f32]) -> Vec<(f64, f64)> {
         if mono.len() < consts::FRAMES_FRAME {
             return Vec::new();
         }
@@ -285,96 +277,60 @@ mod oracle {
         let bins = consts::NOVELTY_FFT.bins();
         let mut work = Frames {
             spectrum: owner.fft.spectrum(&owner.pools).expect("spectrum fits"),
-            observed: owner.pools.get_with_len::<f32>(bins).expect("plane fits"),
-            angle: owner.pools.get_with_len::<f32>(bins).expect("plane fits"),
-            magnitude: owner.pools.get_with_len::<f32>(bins).expect("plane fits"),
-            phase: owner.pools.get_with_len::<f32>(bins).expect("plane fits"),
-            phase_step: owner.pools.get_with_len::<f32>(bins).expect("plane fits"),
+            history: std::array::from_fn(|_| {
+                owner.pools.get_with_len::<f32>(bins).expect("plane fits")
+            }),
         };
         let mut spectrum = owner
             .fft
             .spectrum(&owner.pools)
             .expect("oracle spectrum fits");
-        let mut observed = vec![0.0; bins];
-        let mut angle = vec![0.0; bins];
         let mut state = std::array::from_fn(|_| vec![0.0; bins]);
+        let mut previous = [vec![0.0_f32; bins], vec![0.0; bins]];
         let frames = (mono.len() - consts::FRAMES_FRAME) / consts::NOVELTY_STRIDE + 2;
         let mut coarse = Vec::new();
         for index in 0..frames {
             let at = index * consts::NOVELTY_STRIDE;
             let end = (at + consts::FRAMES_FRAME).min(mono.len());
             let frame = &mono[at..end];
-            for (actual, expected) in [&work.magnitude, &work.phase, &work.phase_step]
-                .into_iter()
-                .zip(&state)
-            {
-                assert_eq!(bits(actual), bits(expected), "frame {index}: prior state");
-            }
             owner.fft.forward(frame, &mut spectrum).expect("frame fits");
-            spectrum::magnitude(spectrum.re(), spectrum.im(), &mut observed);
-            spectrum::phase(spectrum.re(), spectrum.im(), &mut angle);
-            let expected = difference(spectrum.re(), spectrum.im(), &observed, &angle, &mut state);
-            let actual = work.difference(&owner.fft, frame);
-            let planes = [
-                ("real", work.spectrum.re(), spectrum.re()),
-                ("imaginary", work.spectrum.im(), spectrum.im()),
-                ("magnitude", &work.observed, &observed),
-                ("phase", &work.angle, &angle),
-            ];
-            for (name, actual_plane, expected_plane) in planes {
-                assert_eq!(actual_plane.len(), expected_plane.len());
-                let first_difference = actual_plane
-                    .iter()
-                    .zip(expected_plane)
-                    .enumerate()
-                    .find_map(|(bin, (actual, expected))| {
-                        (actual.to_bits() != expected.to_bits()).then_some((
-                            bin,
-                            actual.to_bits(),
-                            expected.to_bits(),
-                        ))
-                    });
-                assert_eq!(first_difference, None, "frame {index}: {name} input plane");
-            }
-            assert_eq!(
-                actual.to_bits(),
-                expected.to_bits(),
-                "frame {index}, {} samples: {actual} vs {expected}",
+            let (expected, scale) = difference(spectrum.re(), spectrum.im(), &mut state);
+            let actual = f64::from(work.difference(&owner.fft, frame));
+            let bound = 1e-5 * scale + f64::from(f32::MIN_POSITIVE);
+            assert!(
+                (actual - expected).abs() <= bound,
+                "frame {index}, {} samples: {actual} vs {expected}, bound {bound}",
                 mono.len()
             );
-            for (actual, expected) in [&work.magnitude, &work.phase, &work.phase_step]
-                .into_iter()
-                .zip(&state)
-            {
-                assert_eq!(
-                    bits(actual),
-                    bits(expected),
-                    "frame {index}: entire history plane"
-                );
-            }
-            coarse.push(expected);
+            let [previous_re, previous_im, earlier_re, earlier_im] = &work.history;
+            assert_eq!(bits(earlier_re), bits(&previous[0]), "frame {index}");
+            assert_eq!(bits(earlier_im), bits(&previous[1]), "frame {index}");
+            assert_eq!(bits(previous_re), bits(spectrum.re()), "frame {index}");
+            assert_eq!(bits(previous_im), bits(spectrum.im()), "frame {index}");
+            previous = [spectrum.re().to_vec(), spectrum.im().to_vec()];
+            coarse.push((expected, bound));
         }
-        let before = [&work.magnitude, &work.phase, &work.phase_step].map(|s| bits(s));
+        let before = work.history.each_ref().map(|plane| bits(plane));
         assert_eq!(
             work.difference(&owner.fft, &vec![1.0; consts::FRAMES_FRAME + 1])
                 .to_bits(),
             0
         );
-        assert_eq!(
-            before,
-            [&work.magnitude, &work.phase, &work.phase_step].map(|s| bits(s))
-        );
+        assert_eq!(before, work.history.each_ref().map(|plane| bits(plane)));
         let mut curve = Vec::new();
         for pair in coarse.windows(2) {
             curve.push(pair[0]);
-            curve.push((pair[0] + pair[1]) / 2.0);
+            curve.push((
+                f64::midpoint(pair[0].0, pair[1].0),
+                pair[0].1.max(pair[1].1),
+            ));
         }
         curve.push(*coarse.last().expect("at least two frames"));
         curve
     }
 
     #[kithara::test(native)]
-    fn complete_curves_and_frame_history_match_scalar_law(
+    fn complete_curves_follow_the_phase_law_within_its_bound(
         clicks_120_4s: Vec<f32>,
         click_silence_4s: Vec<f32>,
     ) {
@@ -392,10 +348,21 @@ mod oracle {
             &tone[..1537],
         ] {
             let expected = reference(pcm);
+            let law: Vec<f32> = expected
+                .iter()
+                .map(|(value, _)| value.to_f32().expect("the law stays in f32 range"))
+                .collect();
             for _ in 0..2 {
                 let actual = owner.curve(pcm).expect("curve fits");
-                assert_eq!(bits(&actual), bits(&expected));
-                assert_eq!(peaks(&actual), peaks(&expected));
+                assert_eq!(actual.len(), expected.len());
+                for (index, (actual, (expected, bound))) in actual.iter().zip(&expected).enumerate()
+                {
+                    assert!(
+                        (f64::from(*actual) - expected).abs() <= *bound,
+                        "point {index}: {actual} vs {expected}, bound {bound}"
+                    );
+                }
+                assert_eq!(peaks(&actual), peaks(&law));
             }
         }
     }

@@ -13,19 +13,16 @@ pub fn phase(re: &[f32], im: &[f32], output: &mut [f32]) -> usize {
     backend::phase(re, im, output)
 }
 
-/// Ordered `f32` distance from complex bins to their predicted spectrum.
-/// With `spectrum` enabled, processes the common prefix without allocating;
-/// empty input returns `+0.0` and state tails stay untouched. `bins` is `[re, im]`,
-/// `observed` is `[magnitude, phase]` for those bins, and caller-owned `state` is
-/// `[previous_magnitude, previous_phase, phase_step]`, zeroed for a new sequence.
-/// Uses scalar `sin_cos`/`hypot` and `x - TAU * (x / TAU).round()` wrapping,
-/// including half-turn ties away from zero, without sanitizing nonfinite values
-/// or signed zeros. Reads old phase before updating step, phase and magnitude;
-/// products stay unfused and distances accumulate in bin order.
-pub fn prediction_difference(
-    bins: [&[f32]; 2],
-    observed: [&[f32]; 2],
-    state: [&mut [f32]; 3],
-) -> f32 {
-    backend::prediction_difference(bins, observed, state)
+/// Complex spectral difference: `Σ |X − X̂|` over the common prefix of the
+/// planes, where `X̂ = X₁²·conj(X₂) / (|X₁|·|X₂|)` is the previous bin turned
+/// once more by the phase step between the two before it. A silent earlier
+/// bin counts as phase zero and a silent previous bin predicts zero.
+/// `bins` is `[re, im]`; caller-owned `history` is
+/// `[previous_re, previous_im, earlier_re, earlier_im]`, zeroed for a new
+/// sequence, and afterwards holds the current and previous bins. Empty input
+/// returns `+0.0` and plane tails stay untouched. Allocation-free, lanes
+/// accumulate separately; accurate while the squares stay finite, that is
+/// below `1.8e19`.
+pub fn prediction_difference(bins: [&[f32]; 2], history: [&mut [f32]; 4]) -> f32 {
+    backend::prediction_difference(bins, history)
 }
