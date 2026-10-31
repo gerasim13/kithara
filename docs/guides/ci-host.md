@@ -36,6 +36,13 @@ its runner siblings — never the pin, so a pin bump cannot strand a lane on an 
 nobody built: the pin says what to build, the floating tag says what to run,
 and whatever builds an image moves the tag onto it.
 
+Xcode follows the host installation rather than an exact repository version gate.
+Every Apple lane reports its version and requires completed first-launch setup.
+Target snapshot keys include the actual Xcode and macOS SDK builds; dependency
+source snapshots remain independent of the Apple toolchain. After an Xcode
+installation or update, finish its licence and first-launch components through
+host setup before admitting Apple jobs.
+
 Declared lanes select the checkout's nextest pin in child `PATH` from a
 versioned cache scoped to trust and host platform. A cache miss installs it as
 the CI user into that cache while host setup retains ownership of global tools

@@ -58,12 +58,6 @@ impl<'a> SystemSetup<'a> {
             .next()
             .and_then(|line| line.strip_prefix("Xcode "))
             .context("xcodebuild did not return an Xcode version")?;
-        if actual != self.config.pins.expected_xcode_version {
-            bail!(
-                "Xcode {} is required, found {actual}",
-                self.config.pins.expected_xcode_version
-            );
-        }
         self.process.run(
             "/usr/bin/xcodebuild",
             &["-license", "accept"],

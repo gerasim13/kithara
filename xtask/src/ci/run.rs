@@ -555,7 +555,7 @@ fn report_lane(
     swiftpm_cache: &Path,
     lanes: &BTreeMap<String, CiLaneConfig>,
 ) -> Result<()> {
-    let process = Process::recording(root, executor_replies(ci_config, &project.tools));
+    let process = Process::recording(root, executor_replies(&project.tools));
     let outcome = command_lane(
         lane,
         kind,
@@ -580,11 +580,11 @@ fn report_lane(
 /// What a recorded lane is told when it asks the executor something: enough to
 /// get past the checks a real executor answers, and a stand-in where the
 /// answer is an identity only a real run produces.
-fn executor_replies(ci_config: &CiConfig, tools: &ToolsConfig) -> Recording {
+fn executor_replies(tools: &ToolsConfig) -> Recording {
     Recording::default()
         .with_reply(
             &[tools.program("xcodebuild")],
-            &format!("Xcode {}", ci_config.pins.expected_xcode_version),
+            "Xcode 99.1\nBuild version 99A1",
         )
         .with_reply(&[tools.program("xcrun"), "simctl", "create"], "<simulator>")
 }
@@ -612,9 +612,7 @@ fn command_lane(
         | Lane::ReleaseAndroid
         | Lane::ReleasePublish
         | Lane::Verdict => bail!("{lane:?} produces artifacts and is not a command lane"),
-        Lane::AppleSwiftTest => {
-            super::lane::apple::swift_test(process, ci_config, tools, swiftpm_cache)
-        }
+        Lane::AppleSwiftTest => super::lane::apple::swift_test(process, tools, swiftpm_cache),
         // The simulator set belongs to the executor's user, which other
         // projects' lanes may share, so the device is named for both.
         Lane::AppleIosTest => super::lane::apple::ios_test(
@@ -786,7 +784,7 @@ mod tests {
         let project = kithara_devtools::common::project::ProjectConfig::load(repo())
             .expect("the project config loads");
         let lane = Lane::parse(name, &ext.ci.lanes).expect("the lane is declared");
-        let process = Process::recording(root, executor_replies(&ci_config, &project.tools));
+        let process = Process::recording(root, executor_replies(&project.tools));
         let outcome = command_lane(
             &lane,
             kind,
@@ -1021,7 +1019,7 @@ mod tests {
                     .expect("every kind has a name")
                     .get_name()
                     .to_owned();
-                let recording = executor_replies(&ci_config, &project.tools)
+                let recording = executor_replies(&project.tools)
                     // Enough for the conversion to resolve; what it makes of
                     // real results is pinned where that conversion lives.
                     .with_reply(

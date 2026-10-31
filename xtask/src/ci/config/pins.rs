@@ -40,7 +40,6 @@ pub(crate) struct CiPins {
     pub(crate) cmake_linux_arm64_sha256: String,
     pub(crate) cmake_version: String,
     pub(crate) cmake_windows_amd64_sha256: String,
-    pub(crate) expected_xcode_version: String,
     pub(crate) ffmpeg_windows_sha256: String,
     /// A monthly build from `BtbN/FFmpeg-Builds`, named in full: the tag
     /// carries the build time and the file name the commit it was cut from.
@@ -58,7 +57,7 @@ pub(crate) struct CiPins {
     pub(crate) gitleaks_linux_arm64_sha256: String,
     pub(crate) gitleaks_version: String,
     /// The `CoreSimulator` device type the simulator lane creates its device
-    /// from. It has to ship with `expected_xcode_version`.
+    /// from. It must be available in the installed Xcode simulator runtime.
     pub(crate) ios_simulator_device_type: String,
     pub(crate) kache_linux_amd64_sha256: String,
     pub(crate) kache_linux_arm64_sha256: String,
@@ -136,10 +135,6 @@ impl CiPins {
             ("cache_client_image", self.cache_client_image.as_str()),
             ("cache_server_image", self.cache_server_image.as_str()),
             ("cmake_version", self.cmake_version.as_str()),
-            (
-                "expected_xcode_version",
-                self.expected_xcode_version.as_str(),
-            ),
             ("ffmpeg_windows_url", self.ffmpeg_windows_url.as_str()),
             ("geckodriver_version", self.geckodriver_version.as_str()),
             ("gitlab_runner_version", self.gitlab_runner_version.as_str()),

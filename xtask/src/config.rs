@@ -70,9 +70,8 @@ pub(crate) struct CiLaneConfig {
     #[serde(deserialize_with = "one_or_many")]
     pub(crate) os: Vec<String>,
     pub(crate) tools: Vec<String>,
-    /// Tools whose reported version has to match a reviewed pin before the lane
-    /// spends a runner on a build it would have to throw away.
-    pub(crate) pinned: Vec<CiLanePin>,
+    /// Tool readiness commands run before installing tools or restoring caches.
+    pub(crate) checks: Vec<CiLaneCheck>,
     /// Paths a predecessor job has to have left in the checkout, and the job
     /// that leaves them. A lane that arrives without them fails minutes in, on
     /// a device, with nothing more informative than a link error.
@@ -209,18 +208,12 @@ pub(crate) enum ArtifactWhen {
     Failure,
 }
 
-/// A version check: ask `tool` how old it is, and require the answer to carry
-/// the value `pin` names in `.config/ci-pins.toml`.
+/// A tool command that must succeed before the lane can build.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub(crate) struct CiLanePin {
-    pub(crate) tool: String,
+pub(crate) struct CiLaneCheck {
     pub(crate) args: Vec<String>,
-    pub(crate) pin: String,
-    /// What the reported version has to read in full, on its first line, for
-    /// tools that print more than a number. Without it any whitespace-separated
-    /// word matching the pin is accepted.
-    pub(crate) line_prefix: Option<String>,
+    pub(crate) tool: String,
 }
 
 impl CiProjectConfig {
@@ -299,9 +292,9 @@ impl CiProjectConfig {
             if lane.label.is_empty() {
                 bail!("ext.ci.lanes.{name} must carry a label to refuse under");
             }
-            for check in &lane.pinned {
-                if check.tool.is_empty() || check.pin.is_empty() {
-                    bail!("ext.ci.lanes.{name}.pinned must name both a tool and a pin");
+            for check in &lane.checks {
+                if check.tool.is_empty() {
+                    bail!("ext.ci.lanes.{name}.checks must name a tool");
                 }
             }
             if !lane.left_behind.is_empty() && lane.left_behind_by.is_empty() {

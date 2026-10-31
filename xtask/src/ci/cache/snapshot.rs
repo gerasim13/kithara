@@ -306,6 +306,25 @@ fn fingerprint(
     let rustflags = env::var("RUSTFLAGS").unwrap_or_default();
     let encoded_rustflags = env::var("CARGO_ENCODED_RUSTFLAGS").unwrap_or_default();
     let mut hash = Sha256::new();
+    #[cfg(target_os = "macos")]
+    for (program, args, label) in [
+        (
+            "xcodebuild",
+            ["-version"].as_slice(),
+            "read Xcode build identity",
+        ),
+        (
+            "xcrun",
+            ["--sdk", "macosx", "--show-sdk-build-version"].as_slice(),
+            "read Apple SDK build identity",
+        ),
+    ] {
+        let output = Command::new(program).args(args).output().context(label)?;
+        require_success(&output, label)?;
+        hash.update((output.stdout.len() as u64).to_le_bytes());
+        hash.update(output.stdout);
+    }
+
     for value in [
         Snapshot::SCHEMA.as_bytes(),
         lane.as_bytes(),
@@ -756,6 +775,59 @@ mod tests {
         assert_eq!(
             snapshot_to_publish("miss".to_owned(), false),
             Some("miss".to_owned())
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn fingerprint_changes_when_xcode_changes() {
+        if let Some(root) = env::var_os("KITHARA_XCODE_FINGERPRINT_TEST_ROOT") {
+            let root = Path::new(&root);
+            let key =
+                fingerprint("apple-lint", "cargo", "host", root, &root.join("cargo")).unwrap();
+            fs::write(
+                env::var_os("KITHARA_XCODE_FINGERPRINT_TEST_OUTPUT").unwrap(),
+                key,
+            )
+            .unwrap();
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join(".config")).unwrap();
+        fs::write(root.path().join("Cargo.lock"), "lock").unwrap();
+        fs::write(root.path().join(".config/ci-pins.toml"), "pins").unwrap();
+        let bin = root.path().join("bin");
+        crate::testing::install_double(&bin, "xcodebuild");
+        let path = env::join_paths(
+            std::iter::once(bin).chain(env::split_paths(&env::var_os("PATH").unwrap())),
+        )
+        .unwrap();
+        let keys: Vec<String> = [
+            "Xcode 26.6\nBuild version 26G1",
+            "Xcode 27.2\nBuild version 27B52",
+        ]
+        .iter()
+        .enumerate()
+        .map(|(index, version)| {
+            let output = root.path().join(format!("key-{index}"));
+            let status = Command::new(env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "ci::cache::snapshot::tests::fingerprint_changes_when_xcode_changes",
+                ])
+                .env("KITHARA_XCODE_FINGERPRINT_TEST_ROOT", root.path())
+                .env("KITHARA_XCODE_FINGERPRINT_TEST_OUTPUT", &output)
+                .env("KITHARA_TEST_STDOUT", version)
+                .env("PATH", &path)
+                .status()
+                .unwrap();
+            assert!(status.success());
+            fs::read_to_string(output).unwrap()
+        })
+        .collect();
+        assert_ne!(
+            keys[0], keys[1],
+            "a target snapshot must not cross an Xcode build change"
         );
     }
 

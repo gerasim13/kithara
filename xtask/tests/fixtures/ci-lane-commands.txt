@@ -82,54 +82,63 @@
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just platform apple ios
     KITHARA_LOCAL_DEV=1
 # apple-ios / platforms
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just platform apple ios
     KITHARA_LOCAL_DEV=1
 # apple-ios / merge-request
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just platform apple ios
     KITHARA_LOCAL_DEV=1
 # apple-ios / quarantine
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just platform apple ios
     KITHARA_LOCAL_DEV=1
 # apple-ios / main
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just platform apple ios
     KITHARA_LOCAL_DEV=1
 # apple-ios / nightly
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just platform apple ios
     KITHARA_LOCAL_DEV=1
 # apple-ios / weekly
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just platform apple ios
     KITHARA_LOCAL_DEV=1
 # apple-ios / release
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just platform apple ios
     KITHARA_LOCAL_DEV=1
 # apple-ios-test / branch
   <require os> macos
   <require tools> cargo just kache sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   cargo build -p kithara-integration-tests --bin test_server
   <root>/target/debug/test_server
     TEST_SERVER_PORT=3444
@@ -145,6 +154,7 @@
   <require os> macos
   <require tools> cargo just kache sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   cargo build -p kithara-integration-tests --bin test_server
   <root>/target/debug/test_server
     TEST_SERVER_PORT=3444
@@ -160,6 +170,7 @@
   <require os> macos
   <require tools> cargo just kache sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   cargo build -p kithara-integration-tests --bin test_server
   <root>/target/debug/test_server
     TEST_SERVER_PORT=3444
@@ -175,6 +186,7 @@
   <require os> macos
   <require tools> cargo just kache sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   cargo build -p kithara-integration-tests --bin test_server
   <root>/target/debug/test_server
     TEST_SERVER_PORT=3444
@@ -190,6 +202,7 @@
   <require os> macos
   <require tools> cargo just kache sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   cargo build -p kithara-integration-tests --bin test_server
   <root>/target/debug/test_server
     TEST_SERVER_PORT=3444
@@ -205,6 +218,7 @@
   <require os> macos
   <require tools> cargo just kache sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   cargo build -p kithara-integration-tests --bin test_server
   <root>/target/debug/test_server
     TEST_SERVER_PORT=3444
@@ -220,6 +234,7 @@
   <require os> macos
   <require tools> cargo just kache sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   cargo build -p kithara-integration-tests --bin test_server
   <root>/target/debug/test_server
     TEST_SERVER_PORT=3444
@@ -235,6 +250,7 @@
   <require os> macos
   <require tools> cargo just kache sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   cargo build -p kithara-integration-tests --bin test_server
   <root>/target/debug/test_server
     TEST_SERVER_PORT=3444
@@ -250,88 +266,104 @@
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just lint gate
 # apple-lint / platforms
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just lint full
 # apple-lint / merge-request
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just lint gate
 # apple-lint / quarantine
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just lint gate
 # apple-lint / main
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just lint full
 # apple-lint / nightly
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just lint full
 # apple-lint / weekly
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just lint full
 # apple-lint / release
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just lint full
 # apple-msrv / branch
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just check workspace
     RUSTUP_TOOLCHAIN=1.95.0
 # apple-msrv / platforms
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just check workspace
     RUSTUP_TOOLCHAIN=1.95.0
 # apple-msrv / merge-request
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just check workspace
     RUSTUP_TOOLCHAIN=1.95.0
 # apple-msrv / quarantine
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just check workspace
     RUSTUP_TOOLCHAIN=1.95.0
 # apple-msrv / main
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just check workspace
     RUSTUP_TOOLCHAIN=1.95.0
 # apple-msrv / nightly
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just check workspace
     RUSTUP_TOOLCHAIN=1.95.0
 # apple-msrv / weekly
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just check workspace
     RUSTUP_TOOLCHAIN=1.95.0
 # apple-msrv / release
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just check workspace
     RUSTUP_TOOLCHAIN=1.95.0
 # apple-safari / branch
@@ -370,6 +402,7 @@
   <require os> macos
   <require tools> cargo just kache sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just platform apple xcframework --profile debug
   swift test --disable-xctest --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
     KITHARA_LOCAL_DEV=1
@@ -377,6 +410,7 @@
   <require os> macos
   <require tools> cargo just kache sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just platform apple xcframework --profile debug
   swift test --disable-xctest --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
     KITHARA_LOCAL_DEV=1
@@ -384,6 +418,7 @@
   <require os> macos
   <require tools> cargo just kache sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just platform apple xcframework --profile debug
   swift test --disable-xctest --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
     KITHARA_LOCAL_DEV=1
@@ -391,6 +426,7 @@
   <require os> macos
   <require tools> cargo just kache sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just platform apple xcframework --profile debug
   swift test --disable-xctest --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
     KITHARA_LOCAL_DEV=1
@@ -398,6 +434,7 @@
   <require os> macos
   <require tools> cargo just kache sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just platform apple xcframework --profile debug
   swift test --disable-xctest --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
     KITHARA_LOCAL_DEV=1
@@ -405,6 +442,7 @@
   <require os> macos
   <require tools> cargo just kache sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just platform apple xcframework --profile debug
   swift test --disable-xctest --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
     KITHARA_LOCAL_DEV=1
@@ -412,6 +450,7 @@
   <require os> macos
   <require tools> cargo just kache sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just platform apple xcframework --profile debug
   swift test --disable-xctest --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
     KITHARA_LOCAL_DEV=1
@@ -419,6 +458,7 @@
   <require os> macos
   <require tools> cargo just kache sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just platform apple xcframework --profile debug
   swift test --disable-xctest --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
     KITHARA_LOCAL_DEV=1
@@ -426,36 +466,42 @@
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --touched --selection-output=.ci-artifacts/junit/apple-test.selection.json --flash=on --no-block=on --profile ci
   just test test-utils
 # apple-test / platforms
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=on --no-block=on --profile ci
   just test test-utils
 # apple-test / merge-request
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=on --no-block=on --profile ci
   just test test-utils
 # apple-test / quarantine
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=on --no-block=on --profile ci
   just test test-utils
 # apple-test / main
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=on --no-block=on --profile ci
   just test test-utils
 # apple-test / nightly
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=on --no-block=on --profile ci
   just test test-utils
 # apple-test / weekly
@@ -464,87 +510,104 @@
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=on --no-block=on --profile ci
   just test test-utils
 # apple-test-flash-off / branch
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=off --profile ci
 # apple-test-flash-off / platforms
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=off --profile ci
 # apple-test-flash-off / merge-request
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=off --profile ci
 # apple-test-flash-off / quarantine
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=off --profile ci
 # apple-test-flash-off / main
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=off --profile ci
 # apple-test-flash-off / nightly
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=off --profile ci
 # apple-test-flash-off / weekly
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=off --profile ci
 # apple-test-flash-off / release
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=off --profile ci
 # apple-xcframework / branch
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just platform apple xcframework --profile debug
 # apple-xcframework / platforms
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just platform apple xcframework --profile debug
 # apple-xcframework / merge-request
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just platform apple xcframework --profile debug
 # apple-xcframework / quarantine
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just platform apple xcframework --profile debug
 # apple-xcframework / main
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just platform apple xcframework --profile debug
 # apple-xcframework / nightly
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just platform apple xcframework --profile debug
 # apple-xcframework / weekly
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just platform apple xcframework --profile debug
 # apple-xcframework / release
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
   just platform apple xcframework --profile debug
 # deep-bench / branch
   <require os> macos

@@ -2827,7 +2827,7 @@ timeout_minutes = 90
 
 # Every Apple job repeats the preflight instead of inheriting it from a
 # predecessor. Each one is scheduled on its own and can be retried alone, so the
-# wrong Xcode has to fail in the job that would have used it.
+# uninitialized Xcode fails in the job that would have used it.
 [ext.ci.lanes.apple-lint]
 cache_group = "macos"
 target_snapshot = "apple-lint"
@@ -2835,10 +2835,13 @@ publishes_sources = true
 label = "Apple"
 os = "macos"
 tools = ["cargo", "just", "sccache", "kache", "swift", "xcodebuild", "xcodegen"]
-pinned = [
+checks = [
   { tool = "xcodebuild", args = [
     "-version",
-  ], pin = "expected_xcode_version", line_prefix = "Xcode " },
+  ] },
+  { tool = "xcodebuild", args = [
+    "-checkFirstLaunchStatus",
+  ] },
 ]
 program = "just"
 # Both chains run the checks that answer whether a change is acceptable:
@@ -2880,10 +2883,13 @@ cache_group = "macos"
 label = "Apple"
 os = "macos"
 tools = ["cargo", "just", "sccache", "kache", "swift", "xcodebuild", "xcodegen"]
-pinned = [
+checks = [
   { tool = "xcodebuild", args = [
     "-version",
-  ], pin = "expected_xcode_version", line_prefix = "Xcode " },
+  ] },
+  { tool = "xcodebuild", args = [
+    "-checkFirstLaunchStatus",
+  ] },
 ]
 program = "just"
 steps = [
@@ -2903,10 +2909,13 @@ cache_group = "macos"
 label = "Apple"
 os = "macos"
 tools = ["cargo", "just", "sccache", "kache", "swift", "xcodebuild", "xcodegen"]
-pinned = [
+checks = [
   { tool = "xcodebuild", args = [
     "-version",
-  ], pin = "expected_xcode_version", line_prefix = "Xcode " },
+  ] },
+  { tool = "xcodebuild", args = [
+    "-checkFirstLaunchStatus",
+  ] },
 ]
 kinds_refused = { weekly = "weekly pipelines do not run the Apple suite" }
 program = "just"
@@ -2952,10 +2961,13 @@ cache_group = "macos"
 label = "Apple"
 os = "macos"
 tools = ["cargo", "just", "sccache", "kache", "swift", "xcodebuild", "xcodegen"]
-pinned = [
+checks = [
   { tool = "xcodebuild", args = [
     "-version",
-  ], pin = "expected_xcode_version", line_prefix = "Xcode " },
+  ] },
+  { tool = "xcodebuild", args = [
+    "-checkFirstLaunchStatus",
+  ] },
 ]
 program = "just"
 steps = [
@@ -2976,10 +2988,13 @@ cache_group = "macos"
 label = "Apple"
 os = "macos"
 tools = ["cargo", "just", "sccache", "kache", "swift", "xcodebuild", "xcodegen"]
-pinned = [
+checks = [
   { tool = "xcodebuild", args = [
     "-version",
-  ], pin = "expected_xcode_version", line_prefix = "Xcode " },
+  ] },
+  { tool = "xcodebuild", args = [
+    "-checkFirstLaunchStatus",
+  ] },
 ]
 program = "just"
 steps = [
@@ -3008,10 +3023,13 @@ cache_group = "macos"
 label = "Apple"
 os = "macos"
 tools = ["cargo", "just", "sccache", "kache", "swift", "xcodebuild", "xcodegen"]
-pinned = [
+checks = [
   { tool = "xcodebuild", args = [
     "-version",
-  ], pin = "expected_xcode_version", line_prefix = "Xcode " },
+  ] },
+  { tool = "xcodebuild", args = [
+    "-checkFirstLaunchStatus",
+  ] },
 ]
 program = "just"
 steps = [
