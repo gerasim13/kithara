@@ -261,10 +261,10 @@ pub(super) fn configured_route(c: &mut Criterion) {
 }
 
 pub(super) fn curves(c: &mut Criterion) {
-    use kithara::{
-        dsp::curve::CurveShape,
-        effects::{EffectAutomation, EffectParameter, apply_automated_effects, eq::EqBandConfig},
+    use kithara::effects::{
+        EffectAutomation, EffectParameter, apply_automated_effects, eq::EqBandConfig,
     };
+    use kithara_dsp::curve::CurveShape;
     use num_traits::ToPrimitive;
 
     let region = pools();
