@@ -244,3 +244,110 @@ async fn effect_program_eof_returns_credit_and_confirms_only_rendered_values() {
     );
     assert_eq!(track.lane.as_ref().unwrap().available(), room);
 }
+
+#[kithara::test]
+#[case::curve(true)]
+#[case::step(false)]
+async fn completed_effect_commands_retire_before_the_next_admission(#[case] curve: bool) {
+    let region = pools();
+    let mut rig = rig();
+    let (mut track, inbox) = configured_track(&mut rig).await;
+    let lane = track.lane_id.unwrap();
+    let origin = (1_i64 << 40) + 4096;
+    playing(&mut track, origin);
+    let room = track.lane.as_ref().unwrap().available();
+    let mut source = effect_source_with(inbox, &region, 1, 1);
+    for index in 0..8 {
+        let at = source.cursor().frame + 3;
+        let gain = GainDb::from(if index % 2 == 0 { -6.0 } else { 6.0 });
+        let command = if curve {
+            TrackCommand::EffectProgram {
+                lane,
+                program: EffectProgram::new(
+                    EffectParameter::EqGain { effect: 0, band: 0 },
+                    vec![
+                        ParameterKnot::new(
+                            frame(origin + i64::try_from(at).unwrap()),
+                            f64::from(f32::from(gain)),
+                            CurveShape::HOLD,
+                        )
+                        .unwrap(),
+                    ],
+                )
+                .unwrap(),
+            }
+        } else {
+            TrackCommand::ConfigureEffect {
+                lane,
+                target: kithara_effects::EffectTarget::EqBand { effect: 0, band: 0 },
+                change: kithara_effects::EffectChange::EqBand(
+                    kithara_effects::eq::EqBandConfigChange::GainDb(gain),
+                ),
+                at: When::At(frame(origin + i64::try_from(at).unwrap())),
+            }
+        };
+        command_at_zero(&mut track, &mut rig, command).unwrap();
+        let retained = track
+            .lane_commands
+            .iter()
+            .filter(|operation| {
+                matches!(
+                    operation.command,
+                    LaneCommand::EffectProgram { .. } | LaneCommand::ConfigureEffect { .. }
+                )
+            })
+            .count();
+        assert!(
+            retained <= 1,
+            "answered FX intent retained at admission {index}: {retained}"
+        );
+        for _ in 0..20 {
+            if source.cursor().frame > at {
+                break;
+            }
+            match produce(&mut source) {
+                TrackStep::Produced(Fetch::Data { .. }) => {
+                    source.admitted();
+                    in_pass(&mut rig, frame(0), |out| track.tick(frame(0), out));
+                }
+                TrackStep::StateChanged => {}
+                _ => panic!("finite control sequence must produce PCM"),
+            }
+        }
+        assert!(source.cursor().frame > at);
+        assert_eq!(confirmed_gain(&track), gain);
+        assert_eq!(track.lane.as_ref().unwrap().available(), room);
+    }
+}
+
+#[kithara::test]
+#[case::curve(true)]
+#[case::step(false)]
+async fn future_effect_commands_do_not_move_the_resume_boundary(#[case] curve: bool) {
+    let mut rig = rig();
+    let (mut track, _inbox) = configured_track(&mut rig).await;
+    let origin = (1_i64 << 40) + 4096;
+    playing(&mut track, origin);
+    let lane = track.lane_id.unwrap();
+    let command = if curve {
+        TrackCommand::EffectProgram {
+            lane,
+            program: linear_program(origin, 0, 17, 79, 0.0, -12.0),
+        }
+    } else {
+        TrackCommand::ConfigureEffect {
+            lane,
+            target: kithara_effects::EffectTarget::EqBand { effect: 0, band: 0 },
+            change: kithara_effects::EffectChange::EqBand(
+                kithara_effects::eq::EqBandConfigChange::GainDb(GainDb::MAX),
+            ),
+            at: When::At(frame(origin + 17)),
+        }
+    };
+    command_at_zero(&mut track, &mut rig, command).unwrap();
+    track.resume = track.mark;
+    track.status = TrackStatus::Paused { at: Duration::ZERO };
+    assert!(track.pending_resume_command().is_none());
+    assert!(!track.snapshot().pending_lane);
+    assert_eq!(confirmed_gain(&track), GainDb::DEFAULT);
+}

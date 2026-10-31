@@ -167,7 +167,7 @@ impl<S> Player<S> for PlayerImpl<S> {
             pending_lane: self
                 .lane_commands
                 .iter()
-                .any(|operation| operation.applied().is_none())
+                .any(|operation| operation.changes_time() && operation.applied().is_none())
                 || self
                     .loading
                     .as_ref()

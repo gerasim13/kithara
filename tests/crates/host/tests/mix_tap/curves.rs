@@ -134,11 +134,33 @@ async fn public_effect_cubic_reaches_the_host_without_second_smoothing(#[case] m
         assert!(slot.output.program().is_some());
     }
 
+    let future = harness.host().position() + 529;
+    let knots = [future, future + 1024]
+        .into_iter()
+        .map(|at| {
+            ParameterKnot::new(
+                SessionFrame::new(i64::try_from(at).expect("held curve frame")),
+                -12.0,
+                CurveShape::HOLD,
+            )
+            .expect("held gain")
+        })
+        .collect();
+    harness
+        .run(&control, move |effect| effect.gain_program(knots))
+        .await
+        .expect("reachable held curve");
+    let _ = render_effect_window(&harness, 640).await;
     harness
         .with_queue(kithara::queue::QueueControl::clear)
         .await
         .expect("clear queue");
-    let _ = render_effect_window(&harness, 1024).await;
+    let stopped = render_effect_window(&harness, 1024).await;
+    assert!(
+        stopped[stopped.len() - 128..]
+            .iter()
+            .all(|sample| *sample == 0.0)
+    );
     let stale = ParameterKnot::new(
         SessionFrame::new(i64::try_from(harness.host().position() + 1024).expect("future frame")),
         6.0,

@@ -199,6 +199,13 @@ pub(super) struct LaneOperation {
 }
 
 impl LaneOperation {
+    pub(super) fn changes_time(&self) -> bool {
+        !matches!(
+            self.command,
+            LaneCommand::EffectProgram { .. } | LaneCommand::ConfigureEffect { .. }
+        )
+    }
+
     pub(super) fn applied(&self) -> Option<bool> {
         self.verdict.map(|verdict| verdict.is_ok())
     }
