@@ -481,6 +481,7 @@ criterion_group!(
     effect_controls::controls,
     effect_controls::empty_route,
     effect_controls::configured_route,
+    effect_controls::gain_shape,
     effect_controls::curves,
     effect_controls::curve_host,
     bench_resampler_process,
