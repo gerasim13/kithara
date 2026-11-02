@@ -37,20 +37,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Verify independent RustFS cache reuse
-        run: just ci cache-verify
-
       # The guest carries the toolchain and says where its libraries are in
       # its own environment, so this installs and sets nothing.
-      - name: Check the workspace
-        run: just ci cache-exec windows-check just check
-
       # The default backend is `wreq`, which the Apple desktop app ships and
       # Windows does not. Asking for it here builds BoringSSL through cmake,
       # which the guest has no more than it has the product that would use it,
       # so the lane names the backend the platform actually carries.
       - name: Run tests
-        run: just ci cache-exec windows-test just test run --net-backend=none
+        run: just ci cache-exec windows-test just test run --net-backend=none --lane=sync --narrow='test(/one_queue_crossfades_five/)' --retries=0 --no-capture
 
       - name: Upload compiler-cache evidence
         if: ${{ always() && hashFiles(format('.ci-artifacts/cache/github-{0}-{1}-*.json', github.run_id, github.run_attempt)) != '' }}

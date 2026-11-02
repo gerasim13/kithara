@@ -733,6 +733,7 @@ impl QueueMusic {
                     .build(),
             )
             .build();
+        tracing::info!(target: "kithara_test::sync::queue321", phase = "setup_step", step = "worker_built");
         let host: OfflineHostHarness<TestPools, LinkedOwner<TestPools>> =
             OfflineHostHarness::layered(config, None, move |core| {
                 LinkedHost::new(
@@ -747,10 +748,12 @@ impl QueueMusic {
         host.with(|host| host.metronome().set_enabled(true))
             .await
             .expect("Host metronome");
+        tracing::info!(target: "kithara_test::sync::queue321", phase = "setup_step", step = "host_harness_built");
         let master = host
             .attach_tap(Tap::Master, BLOCK * 2 * 4)
             .await
             .expect("actual Master tap");
+        tracing::info!(target: "kithara_test::sync::queue321", phase = "setup_step", step = "master_tap_attached");
         let label = artifact_label();
         let output_wav =
             AudioArtifactTap::from_env(&format!("{label}-{}-output", kind.label()), RATE, 2)
@@ -779,6 +782,7 @@ impl QueueMusic {
             warp.region_plan().is_none() && warp.source_block_frames().get() == SOURCE_BLOCK,
             "UNSUPPORTED_ORACLE_WITNESS: capture requires the fixed Warp geometry without a region plan"
         );
+        tracing::info!(target: "kithara_test::sync::queue321", phase = "setup_step", step = "mixer_and_taps_built");
         let queue = Queue::new(
             QueueConfig::with_factory(LinkedFactory::new(
                 LinkedConfig::builder()
@@ -800,6 +804,7 @@ impl QueueMusic {
             .store(memory_asset_store())
             .build(),
         );
+        tracing::info!(target: "kithara_test::sync::queue321", phase = "setup_step", step = "queue_built");
         let deck = host
             .insert_linked(queue, observation)
             .await
@@ -836,12 +841,14 @@ impl QueueMusic {
             })
             .await
             .expect("SYNC through the actual Host owner");
+        tracing::info!(target: "kithara_test::sync::queue321", phase = "setup_step", step = "sync_sent");
         let provider = self.kind.provider();
         for (index, (name, start)) in tracks.iter().enumerate() {
             hang_tick!(format!("queue321: append real source {index}: {name}"));
             let asset =
                 kithara_test_fixtures::assets::by_name(name).expect("existing musical fixture");
             let path = asset.path().expect("musical fixture materialized on disk");
+            tracing::info!(target: "kithara_test::sync::queue321", phase = "setup_step", step = "asset_resolved");
             let fixture = kithara_integration_tests::pcm_oracle::prepared_native(&asset)
                 .expect("independent native PCM of this named musical fixture");
             assert_eq!(
@@ -856,6 +863,7 @@ impl QueueMusic {
                     "the fixed fixture is twelve seconds of stereo music"
                 );
             }
+            tracing::info!(target: "kithara_test::sync::queue321", phase = "setup_step", step = "prepared_native_done");
             let ArtifactSource::Value(model) = provider.beat_grid(index) else {
                 panic!("declared fixture analysis");
             };
@@ -906,6 +914,7 @@ impl QueueMusic {
             .discriminator(format!("queue321-{index}"))
             .beat_grid(ArtifactSource::Value(model.clone()))
             .build();
+            tracing::info!(target: "kithara_test::sync::queue321", phase = "setup_step", step = "resource_config_built");
             let (decoded, observer) = DecodedRecorder::open();
             let control = self.deck.control().clone();
             let item = self
@@ -936,6 +945,7 @@ impl QueueMusic {
                     "the selected keylock boundary stays at the requested fixture cue"
                 );
             }
+            tracing::info!(target: "kithara_test::sync::queue321", phase = "setup_step", step = "voice_built");
             self.voices.push(voice);
             hang_reset!();
         }
