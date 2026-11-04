@@ -407,6 +407,8 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
                 TrackReceipt::Event(DeckEvent::UnderrunEnded { slot: named, item, recovered: true, .. })
                     if Some(*named) == slot && *item == track.item
             );
+        let diag_event = diag_event(&receipt);
+        diag_underrun(diag_event, underrun, self.synced());
         let mut settled = self.inner.settle(receipt, out);
         self.answer_reissued(&settled);
         if let Settled::Rejected {
@@ -437,6 +439,7 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
         // with speed steps, which a short track may never have room for. A
         // waiting seek already lands on the host phase, so it is kept.
         if self.synced() && underrun {
+            diag_reentry(diag_event, out.pass().map(|pass| pass.now), self.waiting);
             self.waiting.get_or_insert_with(|| Waiting::Sync {
                 required: self.inner.snapshot().as_ref().position,
             });
@@ -809,5 +812,52 @@ impl<S, P: Track<S>> LinkedPlayer<S> for Linked<P> {
             self.alignment = Some(Cause::Drift);
             warn!(?at, %error, "tempo phase correction awaits a lane");
         }
+    }
+}
+
+fn diag_event<S>(receipt: &TrackReceipt<'_, S>) -> Option<DeckEvent> {
+    if let TrackReceipt::Event(event) = receipt {
+        Some(*event)
+    } else {
+        None
+    }
+}
+
+fn diag_underrun(event: Option<DeckEvent>, underrun: bool, synced: bool) {
+    match event {
+        Some(DeckEvent::UnderrunStarted { at, position, .. }) => {
+            warn!(?at, ?position, synced, "DIAG underrun started");
+        }
+        Some(DeckEvent::UnderrunEnded {
+            at,
+            frames,
+            recovered,
+            ..
+        }) => {
+            warn!(
+                ?at,
+                frames, recovered, underrun, synced, "DIAG underrun ended"
+            );
+        }
+        _ => {}
+    }
+}
+
+fn diag_reentry(event: Option<DeckEvent>, now: Option<SessionFrame>, waiting: Option<Waiting>) {
+    if let Some(DeckEvent::UnderrunEnded {
+        at,
+        frames,
+        position,
+        ..
+    }) = event
+    {
+        warn!(
+            ?at,
+            frames,
+            ?position,
+            ?now,
+            ?waiting,
+            "DIAG underrun ended on synced deck"
+        );
     }
 }

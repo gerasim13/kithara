@@ -273,6 +273,7 @@ impl<P> Linked<P> {
             return Err(PlayError::Full("deck"));
         }
         let to = jump_target(&self.host, source, position, at).ok_or(PlayError::NotReady)?;
+        tracing::warn!(?at, ?to, ?position, now = ?out.pass().map(|p| p.now), "DIAG align_playing");
         let start = at - self.inner.snapshot().as_ref().declick;
         let (before, _) = self.planned::<S>(start)?;
         let sent = self.inner.apply(
