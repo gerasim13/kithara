@@ -1,4 +1,5 @@
 mod arena_contracts;
+mod cold;
 mod core;
 mod legacy_fixture;
 mod no_sync_deadline;

@@ -15,3 +15,6 @@ pub use stereo::{EqLayout, StereoEq};
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod oracle;

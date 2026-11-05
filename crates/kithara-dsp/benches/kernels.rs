@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod support;
 use std::{
     f64::consts::{FRAC_1_SQRT_2, TAU},
     hint::black_box,
@@ -8,13 +9,14 @@ use std::{
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use kithara_dsp::{
-    filter::{Biquad, Coefficients, Hertz, Type},
+    filter::{Biquad, Coefficients, Crossover, Hertz, Type},
     interp::{Interpolation, interpolate},
     spectrum::{Autocorrelation, Fft, FftLen, prediction_difference},
 };
 use kithara_test_utils::bufpool::pools;
 use num_traits::ToPrimitive;
 use realfft::{RealToComplex, RealToComplexEven};
+use support::crossover as crossover_control;
 
 mod consts {
     use super::NonZeroUsize;
@@ -297,6 +299,52 @@ fn biquad_decay(c: &mut Criterion) {
     group.finish();
 }
 
+fn crossover(c: &mut Criterion) {
+    for frequencies in [
+        &[250.0, 2_500.0][..],
+        &[
+            100.0, 250.0, 500.0, 1_000.0, 2_000.0, 4_000.0, 6_000.0, 9_000.0, 12_000.0,
+        ][..],
+    ] {
+        let frequencies_hz: Vec<_> = frequencies
+            .iter()
+            .map(|&frequency| Hertz::from_hz(frequency).expect("positive benchmark frequency"))
+            .collect();
+        let mut filter = Crossover::new(
+            &frequencies_hz,
+            Hertz::from_hz(48_000.0).expect("benchmark rate"),
+        )
+        .expect("valid benchmark crossover");
+        let mut original = crossover_control::Original::new(frequencies);
+        for input in [tone(257), vec![f32::MIN_POSITIVE; 257], vec![f32::MAX; 257]] {
+            let mut actual = vec![vec![0.0; input.len()]; frequencies.len() + 1];
+            let mut expected = actual.clone();
+            assert_eq!(filter.split(&input, &mut actual), input.len());
+            assert_eq!(original.split(&input, &mut expected), input.len());
+            assert!(
+                actual
+                    .iter()
+                    .flatten()
+                    .zip(expected.iter().flatten())
+                    .all(|(a, b)| a.to_bits() == b.to_bits()),
+                "original crossover control must preserve every band"
+            );
+        }
+    }
+    crossover_control::bench(c, |frequencies| {
+        let frequencies_hz: Vec<_> = frequencies
+            .iter()
+            .map(|&frequency| Hertz::from_hz(frequency).expect("positive benchmark frequency"))
+            .collect();
+        let mut filter = Crossover::new(
+            &frequencies_hz,
+            Hertz::from_hz(48_000.0).expect("benchmark rate"),
+        )
+        .expect("valid benchmark crossover");
+        move |input: &[f32], bands: &mut [Vec<f32>]| filter.split(input, bands)
+    });
+}
+
 fn interp(c: &mut Criterion) {
     const FRAMES: usize = 1_024;
     let window: Vec<f32> = std::iter::successors(Some(0.0_f32), |phase| Some(phase + 0.05))
@@ -347,6 +395,7 @@ criterion_group!(
     downmix,
     biquad,
     biquad_decay,
+    crossover,
     interp,
     spectrum,
     prediction,

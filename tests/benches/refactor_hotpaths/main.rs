@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+mod eq;
+
 use std::{
     fs,
     hint::black_box,
@@ -514,7 +516,7 @@ async fn render_player(ducking: SessionDuckingMode) -> OfflinePlayer {
     player
 }
 
-#[path = "support/render_buffers.rs"]
+#[path = "../support/render_buffers.rs"]
 mod render_buffer_cases;
 
 fn bench_render_buffers(c: &mut Criterion) {
@@ -558,6 +560,7 @@ criterion_group!(
     bench_hls_stream_seek_read,
     bench_layout,
     bench_render_buffers,
-    render_buffer_cases::bench
+    render_buffer_cases::bench,
+    eq::bench
 );
 criterion_main!(benches);
