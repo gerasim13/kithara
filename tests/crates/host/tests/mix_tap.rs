@@ -38,7 +38,7 @@ async fn deck_eq_processes_the_crossfade_sum() {
         && flat.last().map(|sample| sample.to_bits()) == Some(0.2_f32.to_bits());
     assert!(crossfade, "the take spans the whole queue crossfade");
 
-    let pools = kithara_test_utils::bufpool::pools();
+    let pools = pools();
     let config = EqConfig::builder(pools).build();
     let rate = NonZeroU32::new(SAMPLE_RATE).expect("nonzero fixture rate");
     let layout = kithara::effects::eq::EqLayout::new(
