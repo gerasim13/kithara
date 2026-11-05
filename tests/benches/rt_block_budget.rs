@@ -7,18 +7,19 @@ use std::{
 };
 
 use firewheel::{
+    StreamInfo,
     clock::InstantSamples,
     dsp::{buffer::ConstSequentialBuffer, declick::DeclickValues},
     log::{RealtimeLoggerConfig, realtime_logger},
     mask::{ConnectedMask, ConstantMask, SilenceMask},
     node::{
-        AudioNodeProcessor, NUM_SCRATCH_BUFFERS, ProcBuffers, ProcExtra, ProcInfo, ProcStore,
-        StreamStatus,
+        AudioNode, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig, NUM_SCRATCH_BUFFERS,
+        NodeID, ProcBuffers, ProcExtra, ProcInfo, ProcStore, StreamStatus,
     },
 };
 use kithara::{
     audio::{AudioConfig, mock::TestPcmReader},
-    effects::GainDb,
+    effects::{GainDb, LimiterConfig, node::LimiterNode},
     file::{File, FileConfig, FileSrc},
     platform::{
         sync::Arc,
@@ -148,6 +149,9 @@ impl SessionInbox for BenchInbox {
 
 struct BenchMixer {
     processor: DeckMixer<BenchInbox>,
+    limiter: Box<dyn AudioNodeProcessor>,
+    limited: [Vec<f32>; 2],
+    eq_pcm: [Vec<f32>; 2],
     extra: ProcExtra,
     control: ScopedSender<DeckProtocol, DeckProtocol>,
     deck: DeckEnds,
@@ -277,8 +281,25 @@ async fn processor(count: usize, lane: Lane) -> BenchMixer {
     );
     install_render_context(&mut store).expect("install bench render context");
     let (logger, _logger_rx) = realtime_logger(RealtimeLoggerConfig::default());
+    let stream = StreamInfo {
+        sample_rate: shape.sample_rate,
+        sample_rate_recip: f64::from(shape.sample_rate.get()).recip(),
+        prev_sample_rate: shape.sample_rate,
+        max_block_frames: shape.max_block_frames,
+        ..StreamInfo::default()
+    };
+    let mut state = None;
+    let limiter = LimiterNode::new(LimiterConfig::default())
+        .construct_processor(
+            &EmptyConfig,
+            ConstructProcessorContext::new(NodeID::DANGLING, &stream, &mut state),
+        )
+        .expect("bench master limiter");
     BenchMixer {
         processor,
+        limiter: Box::new(limiter),
+        limited: std::array::from_fn(|_| vec![0.0; block_frames()]),
+        eq_pcm: std::array::from_fn(|_| vec![0.0; block_frames()]),
         extra: ProcExtra {
             logger,
             store,
@@ -345,15 +366,29 @@ fn render_block(mixer: &mut BenchMixer, out_l: &mut [f32], out_r: &mut [f32]) ->
         dropped_frames: 0,
     };
     let inputs: [&[f32]; 0] = [];
-    let mut outputs = [out_l, out_r];
+    let mut outputs = [&mut *out_l, &mut *out_r];
     let buffers = ProcBuffers {
         inputs: &inputs,
         outputs: &mut outputs,
     };
     let start = Instant::now();
     let outcome = mixer.processor.process(&info, buffers, &mut mixer.extra);
+    let inputs = [&*out_l, &*out_r];
+    let mut outputs = mixer.limited.each_mut().map(Vec::as_mut_slice);
+    let limited = mixer.limiter.process(
+        &info,
+        ProcBuffers {
+            inputs: &inputs,
+            outputs: &mut outputs,
+        },
+        &mut mixer.extra,
+    );
     let elapsed = start.elapsed();
-    black_box(outcome);
+    black_box((outcome, limited));
+    mixer.eq_pcm[0].copy_from_slice(out_l);
+    mixer.eq_pcm[1].copy_from_slice(out_r);
+    out_l.copy_from_slice(&mixer.limited[0]);
+    out_r.copy_from_slice(&mixer.limited[1]);
     mixer.frame = end;
     while mixer.control.receipt().is_some() {}
     elapsed
@@ -459,7 +494,9 @@ fn measure(tracks: usize, lane: Lane, preflight_only: bool) -> Option<Measuremen
         render_block(&mut processor, &mut out_l, &mut out_r);
         if let (Some(dry), Some(reference)) = (&mut dry_mixer, &mut admission) {
             render_block(dry, &mut reference.dry_l, &mut reference.dry_r);
-            reference.check(&out_l, &out_r);
+            reference.dry_l.copy_from_slice(&dry.eq_pcm[0]);
+            reference.dry_r.copy_from_slice(&dry.eq_pcm[1]);
+            reference.check(&processor.eq_pcm[0], &processor.eq_pcm[1]);
         }
     }
     if let Some(reference) = &admission {
@@ -492,7 +529,7 @@ fn measure(tracks: usize, lane: Lane, preflight_only: bool) -> Option<Measuremen
     for _ in 0..consts::MEASURED_BLOCKS {
         durations.push(render_block(&mut processor, &mut out_l, &mut out_r));
         if let Some(reference) = &mut admission {
-            reference.check(&out_l, &out_r);
+            reference.check(&processor.eq_pcm[0], &processor.eq_pcm[1]);
         }
         peak = peak.max(peak_of(&out_l));
         black_box(&out_l);
@@ -531,6 +568,10 @@ fn measure(tracks: usize, lane: Lane, preflight_only: bool) -> Option<Measuremen
         "a decode error skips the mix, so the timing would not be of a mix"
     );
     assert!(peak > 0.0, "measured blocks must carry audio, not silence");
+    assert!(
+        peak <= f32::from(LimiterConfig::default().ceiling()),
+        "master limiter must bound the audible mix"
+    );
 
     durations.sort_unstable();
     Some(Measurement {
@@ -568,7 +609,7 @@ fn main() {
     );
     let budget = block_budget();
     println!(
-        "DeckMixer block budget: {:.3} ms ({} frames @ {} Hz, {} ch)",
+        "DeckMixer -> master LimiterNode callback budget: {:.3} ms ({} frames @ {} Hz, {} ch)",
         budget.as_secs_f64() * 1e3,
         consts::BLOCK_FRAMES,
         consts::SAMPLE_RATE,
