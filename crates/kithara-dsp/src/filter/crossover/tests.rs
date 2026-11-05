@@ -107,40 +107,6 @@ impl Scalar {
     }
 }
 
-#[kithara::test]
-fn reset_clears_active_history_and_keeps_the_design() {
-    let frequencies = [250.0, 2_500.0];
-    let mut actual = crossover(&frequencies, 48_000.0);
-    let mut retained = crossover(&frequencies, 48_000.0);
-    let mut fresh = crossover(&frequencies, 48_000.0);
-    let warm = [0.25, -0.5, 1.0, -0.125];
-    let probe = [1.0, -0.5, 0.0, 0.25];
-    let mut discarded = vec![vec![0.0; warm.len()]; 3];
-    for filter in [&mut actual, &mut retained] {
-        assert_eq!(filter.split(&warm, &mut discarded), warm.len());
-    }
-    actual.reset();
-    let mut outputs: [Vec<Vec<f32>>; 3] = std::array::from_fn(|_| vec![vec![0.0; probe.len()]; 3]);
-    for (filter, output) in [&mut actual, &mut retained, &mut fresh]
-        .into_iter()
-        .zip(&mut outputs)
-    {
-        assert_eq!(filter.split(&probe, output), probe.len());
-    }
-    let [after_reset, retained_bits, fresh_bits] = outputs.map(|planes| {
-        planes
-            .iter()
-            .flatten()
-            .map(|sample| sample.to_bits())
-            .collect::<Vec<_>>()
-    });
-    assert_ne!(
-        retained_bits, fresh_bits,
-        "the probe must observe retained history"
-    );
-    assert_eq!(after_reset, fresh_bits);
-}
-
 fn input() -> Vec<f32> {
     [
         1.0,
@@ -173,11 +139,14 @@ fn every_band_matches_the_scalar_state_across_splits_reset_and_retune(#[case] ch
         ][..],
     ] {
         let mut actual = crossover(frequencies, 48_000.0);
+        let mut summed = crossover(frequencies, 48_000.0);
         for rate in [48_000.0, 44_100.0] {
             actual.update_sample_rate(hz(rate)).expect("valid retune");
+            summed.update_sample_rate(hz(rate)).expect("valid retune");
             for reset in [false, true] {
                 if reset {
                     actual.reset();
+                    summed.reset();
                 }
                 let mut scalar = Scalar::new(frequencies, rate);
                 for samples in input.chunks(chunk) {
@@ -187,14 +156,34 @@ fn every_band_matches_the_scalar_state_across_splits_reset_and_retune(#[case] ch
                         .expect("one more band than crossovers");
                     let mut bands = vec![vec![f32::NAN; samples.len()]; count];
                     assert_eq!(actual.split(samples, &mut bands), samples.len());
+                    let gains: Vec<_> = (0..count)
+                        .map(|band| {
+                            [0.25, -0.5, 1.25]
+                                .into_iter()
+                                .cycle()
+                                .skip(band)
+                                .take(samples.len())
+                                .collect::<Vec<_>>()
+                        })
+                        .collect();
+                    let mut output = samples.to_vec();
+                    assert_eq!(summed.sum(&mut output, &gains), samples.len());
                     for (frame, &sample) in samples.iter().enumerate() {
-                        for (band, expected) in bands.iter().zip(scalar.sample(sample)) {
+                        let mut sum = 0.0;
+                        for ((band, expected), gain) in
+                            bands.iter().zip(scalar.sample(sample)).zip(&gains)
+                        {
                             assert_eq!(
                                 band.get(frame).expect("processed band frame").to_bits(),
                                 expected.to_bits(),
                                 "rate {rate} chunk {chunk} frame {frame}"
                             );
+                            sum = expected.mul_add(*gain.get(frame).expect("gain frame"), sum);
                         }
+                        assert_eq!(
+                            output.get(frame).expect("summed frame").to_bits(),
+                            sum.to_bits()
+                        );
                     }
                 }
             }
@@ -395,4 +384,71 @@ fn a_prepared_design_is_consumed_once_without_resetting_later_history() {
                 .collect::<Vec<_>>()
         );
     }
+}
+
+#[kithara::test]
+fn reset_clears_active_history_and_keeps_the_design() {
+    let frequencies = [250.0, 2_500.0];
+    let mut actual = crossover(&frequencies, 48_000.0);
+    let mut retained = crossover(&frequencies, 48_000.0);
+    let mut fresh = crossover(&frequencies, 48_000.0);
+    let warm = [0.25, -0.5, 1.0, -0.125];
+    let probe = [1.0, -0.5, 0.0, 0.25];
+    let mut discarded = vec![vec![0.0; warm.len()]; 3];
+    for filter in [&mut actual, &mut retained] {
+        assert_eq!(filter.split(&warm, &mut discarded), warm.len());
+    }
+    actual.reset();
+    let mut outputs: [Vec<Vec<f32>>; 3] = std::array::from_fn(|_| vec![vec![0.0; probe.len()]; 3]);
+    for (filter, output) in [&mut actual, &mut retained, &mut fresh]
+        .into_iter()
+        .zip(&mut outputs)
+    {
+        assert_eq!(filter.split(&probe, output), probe.len());
+    }
+    let [after_reset, retained_bits, fresh_bits] = outputs.map(|planes| {
+        planes
+            .iter()
+            .flatten()
+            .map(|sample| sample.to_bits())
+            .collect::<Vec<_>>()
+    });
+    assert_ne!(
+        retained_bits, fresh_bits,
+        "the probe must observe retained history"
+    );
+    assert_eq!(after_reset, fresh_bits);
+}
+
+#[kithara::test]
+#[case::missing_required_plane(0)]
+#[case::empty_required_plane(1)]
+#[case::short_prefix_and_empty_extra_plane(2)]
+fn weighted_prefix_retains_tails_and_only_advances_processed_frames(#[case] shape: usize) {
+    let mut actual = crossover(&[250.0, 2_500.0], 48_000.0);
+    let mut reference = crossover(&[250.0, 2_500.0], 48_000.0);
+    let full_gains = vec![vec![0.5; 4], vec![-0.25; 4], vec![1.25; 4]];
+    let gains = match shape {
+        0 => vec![vec![0.5; 4], vec![-0.25; 4]],
+        1 => vec![vec![0.5; 4], vec![], vec![1.25; 4]],
+        _ => vec![vec![0.5; 4], vec![-0.25; 2], vec![1.25; 4], vec![]],
+    };
+    let frames = if shape == 2 { 2 } else { 0 };
+    let input = [0.25, -0.5, 0.75, -1.0];
+    let mut output = input;
+    assert_eq!(actual.sum(&mut output, &gains), frames);
+    let mut prefix = input.get(..frames).expect("processed prefix").to_vec();
+    assert_eq!(reference.sum(&mut prefix, &full_gains), frames);
+    let mut expected_output = input;
+    expected_output
+        .get_mut(..frames)
+        .expect("processed prefix")
+        .copy_from_slice(&prefix);
+    assert_eq!(output.map(f32::to_bits), expected_output.map(f32::to_bits));
+    let mut probe = [1.0, -0.5, 0.25, 0.0];
+    let mut expected = probe;
+    let gains = vec![vec![0.5, -0.25, 1.25, 0.75]; 3];
+    assert_eq!(actual.sum(&mut probe, &gains), 4);
+    assert_eq!(reference.sum(&mut expected, &gains), 4);
+    assert_eq!(probe.map(f32::to_bits), expected.map(f32::to_bits));
 }

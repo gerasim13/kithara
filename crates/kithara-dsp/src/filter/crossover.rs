@@ -1,4 +1,7 @@
-use std::{f32::consts::FRAC_1_SQRT_2, ops::DerefMut};
+use std::{
+    f32::consts::FRAC_1_SQRT_2,
+    ops::{Deref, DerefMut},
+};
 
 use biquad::{Biquad, Coefficients, DirectForm1, Hertz, Type};
 
@@ -73,6 +76,7 @@ impl Design {
 #[non_exhaustive]
 pub struct Crossover {
     splits: Box<[Split]>,
+    frame: Box<[f32]>,
     prepared_rate: Option<Hertz<f32>>,
 }
 
@@ -105,12 +109,16 @@ impl Crossover {
                     prepared: *design,
                 })
                 .collect(),
+            frame: vec![0.0; frequencies.len().saturating_add(1)].into_boxed_slice(),
             prepared_rate: None,
         })
     }
 
     /// Writes ascending band planes over their common input prefix, returning its length.
     /// Fewer than `frequencies.len()` + 1 planes is a no-op; extra planes and tails stay untouched.
+    ///
+    /// # Panics
+    /// Panics if a plane changes length between dereferences during processing.
     pub fn split<P: DerefMut<Target = [f32]>>(&mut self, input: &[f32], bands: &mut [P]) -> usize {
         let Some(bands) = bands.get_mut(..self.splits.len().saturating_add(1)) else {
             return 0;
@@ -118,20 +126,60 @@ impl Crossover {
         let count = bands
             .iter()
             .fold(input.len(), |count, band| count.min(band.len()));
-        let Some((high, lower)) = bands.split_last_mut() else {
-            return 0;
-        };
-        high[..count].copy_from_slice(&input[..count]);
-        for (split, low) in self.splits.iter_mut().zip(lower) {
-            for (low, high) in low[..count].iter_mut().zip(&mut high[..count]) {
-                *low = split.lowpass.process(*high);
-                *high = split.highpass.process(*high);
-                for section in &mut split.allpass {
-                    *low = section.run(*low);
-                }
+        for (frame, &sample) in input.iter().take(count).enumerate() {
+            for (band, value) in bands.iter_mut().zip(self.filter_sample(sample)) {
+                *band
+                    .get_mut(frame)
+                    .expect("frame belongs to the validated common prefix") = *value;
             }
         }
         count
+    }
+
+    /// Sums ascending bands in place with fused per-frame gains.
+    /// Missing required gain planes is a no-op; short planes bound the processed prefix.
+    /// Extra gain planes and the remaining samples stay untouched.
+    ///
+    /// # Panics
+    /// Panics if a gain plane changes length between dereferences during processing.
+    pub fn sum<P: Deref<Target = [f32]>>(&mut self, samples: &mut [f32], gains: &[P]) -> usize {
+        let Some(gains) = gains.get(..self.splits.len().saturating_add(1)) else {
+            return 0;
+        };
+        let count = gains
+            .iter()
+            .fold(samples.len(), |n, gain| n.min(gain.len()));
+        for (frame, sample) in samples.iter_mut().take(count).enumerate() {
+            *sample =
+                self.filter_sample(*sample)
+                    .iter()
+                    .zip(gains)
+                    .fold(0.0, |output, (value, gain)| {
+                        value.mul_add(
+                            *gain
+                                .get(frame)
+                                .expect("frame belongs to the validated common prefix"),
+                            output,
+                        )
+                    });
+        }
+        count
+    }
+
+    fn filter_sample(&mut self, mut high: f32) -> &[f32] {
+        let (high_band, lower) = self
+            .frame
+            .split_last_mut()
+            .expect("one high band after the crossovers");
+        for (split, low) in self.splits.iter_mut().zip(lower) {
+            *low = split.lowpass.process(high);
+            high = split.highpass.process(high);
+            for section in &mut split.allpass {
+                *low = section.run(*low);
+            }
+        }
+        *high_band = high;
+        &self.frame
     }
 
     /// Clears every section's history without allocation or coefficient changes.

@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod support;
+
 use std::{
     f64::consts::{FRAC_1_SQRT_2, TAU},
     hint::black_box,
@@ -10,7 +11,7 @@ use std::{
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use kithara_dsp::{
     filter::{Biquad, Coefficients, Crossover, Hertz, Type},
-    interp::{Interpolation, interpolate},
+    interp::{Interpolation, interpolate, interpolate_frame, weighted_frames},
     spectrum::{Autocorrelation, Fft, FftLen, prediction_difference},
 };
 use kithara_test_utils::bufpool::pools;
@@ -237,7 +238,7 @@ fn autocorrelation(c: &mut Criterion) {
 fn low_pass() -> Coefficients<f64> {
     Coefficients::from_params(
         Type::LowPass,
-        Hertz::from_hz(48_000.0_f32).expect("positive rate"),
+        Hertz::from_hz(48_000.0).expect("positive rate"),
         Hertz::from_hz(4_000.0).expect("positive cutoff"),
         FRAC_1_SQRT_2,
     )
@@ -388,6 +389,45 @@ fn interp(c: &mut Criterion) {
     group.finish();
 }
 
+fn source_frames(c: &mut Criterion) {
+    let mut group = c.benchmark_group("source_frames");
+    for channels in [1_usize, 2, 4, 6, 9] {
+        let samples = vec![0.25; channels * 33];
+        let offsets = std::array::from_fn::<_, 33, _>(|tap| tap * channels);
+        let weights = [0.125; 33];
+        let mut frame = vec![0.0; channels];
+        let mut sums = vec![0.0; channels];
+        group.throughput(Throughput::Elements(
+            u64::try_from(channels).expect("channels"),
+        ));
+        group.bench_function(BenchmarkId::new("interpolate", channels), |b| {
+            b.iter(|| {
+                interpolate_frame(
+                    black_box(&samples[..channels]),
+                    black_box(&samples[channels..2 * channels]),
+                    black_box(0.531_589_7),
+                    &mut frame,
+                );
+                black_box(&frame);
+            });
+        });
+        group.bench_function(BenchmarkId::new("weighted", channels), |b| {
+            b.iter(|| {
+                weighted_frames(
+                    black_box(&samples),
+                    black_box(&offsets),
+                    black_box(&weights),
+                    channels,
+                    &mut sums,
+                )
+                .expect("resolved taps");
+                black_box(&sums);
+            });
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     kernels,
@@ -397,6 +437,7 @@ criterion_group!(
     biquad_decay,
     crossover,
     interp,
+    source_frames,
     spectrum,
     prediction,
     autocorrelation
