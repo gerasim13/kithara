@@ -131,7 +131,7 @@ where
             let mut split = make(frequencies);
             let mut bands = vec![vec![0.0; frames]; frequencies.len() + 1];
             for (label, input) in [
-                ("tone", super::tone(frames)),
+                ("tone", crate::tone(frames)),
                 ("quiet", vec![f32::MIN_POSITIVE; frames]),
                 ("pathological", vec![f32::MAX; frames]),
             ] {

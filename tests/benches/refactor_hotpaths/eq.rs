@@ -80,8 +80,11 @@ pub(super) fn bench(c: &mut Criterion) {
                 )
             },
             |(eq, incoming, left, right)| {
-                eq.take_layout(incoming.take().expect("one prepared layout per iteration"))
+                let mut incoming = incoming.take().expect("one prepared layout per iteration");
+                incoming
+                    .prepare_sample_rate(RATE)
                     .expect("valid layout retune");
+                eq.take_prepared_layout(incoming);
                 eq.process(black_box(left), black_box(right));
                 black_box((left, right));
             },
@@ -94,8 +97,11 @@ pub(super) fn bench(c: &mut Criterion) {
             || {
                 let mut eq = StereoEq::with_layout(&config, RATE, layout(&config, 3))
                     .expect("valid EQ layout");
-                eq.take_layout(layout(&config, 10))
+                let mut incoming = layout(&config, 10);
+                incoming
+                    .prepare_sample_rate(RATE)
                     .expect("valid layout retune");
+                eq.take_prepared_layout(incoming);
                 eq.process(&mut [0.25], &mut [-0.125]);
                 (eq, [0.25], [-0.125])
             },

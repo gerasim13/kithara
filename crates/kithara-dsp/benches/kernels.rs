@@ -237,7 +237,7 @@ fn autocorrelation(c: &mut Criterion) {
 fn low_pass() -> Coefficients<f64> {
     Coefficients::from_params(
         Type::LowPass,
-        Hertz::from_hz(48_000.0).expect("positive rate"),
+        Hertz::from_hz(48_000.0_f32).expect("positive rate"),
         Hertz::from_hz(4_000.0).expect("positive cutoff"),
         FRAC_1_SQRT_2,
     )
@@ -312,7 +312,7 @@ fn crossover(c: &mut Criterion) {
             .collect();
         let mut filter = Crossover::new(
             &frequencies_hz,
-            Hertz::from_hz(48_000.0).expect("benchmark rate"),
+            Hertz::from_hz(48_000.0_f32).expect("benchmark rate"),
         )
         .expect("valid benchmark crossover");
         let mut original = crossover_control::Original::new(frequencies);
@@ -338,7 +338,7 @@ fn crossover(c: &mut Criterion) {
             .collect();
         let mut filter = Crossover::new(
             &frequencies_hz,
-            Hertz::from_hz(48_000.0).expect("benchmark rate"),
+            Hertz::from_hz(48_000.0_f32).expect("benchmark rate"),
         )
         .expect("valid benchmark crossover");
         move |input: &[f32], bands: &mut [Vec<f32>]| filter.split(input, bands)

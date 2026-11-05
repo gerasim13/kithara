@@ -70,9 +70,9 @@ fn late_layout_refusal_keeps_all_live_channels_targets_and_smoothing() {
     let make = || {
         let mut eq = StereoEq::with_layout(&config, TEST_RATE, layout(3)).expect("valid layout");
         eq.set_gain(0, GainDb::from(-6.0));
-        eq.take_layout(layout(3)).expect("valid incoming");
+        take_layout(&mut eq, layout(3));
         eq.process(&mut [0.25], &mut [-0.125]);
-        eq.take_layout(layout(10)).expect("valid pending");
+        take_layout(&mut eq, layout(10));
         eq.set_gain(2, GainDb::from(3.0));
         eq
     };
@@ -107,7 +107,7 @@ fn late_layout_refusal_keeps_all_live_channels_targets_and_smoothing() {
 }
 
 #[kithara::test]
-fn rejected_incoming_layout_keeps_its_ownership_and_the_sounding_layout() {
+fn rejected_initial_layout_returns_ownership_and_keeps_the_sounding_layout() {
     let config = EqConfig::builder(pools()).build();
     let rate = std::num::NonZeroU32::new(12_000).expect("positive rate");
     let mut actual =
@@ -115,9 +115,10 @@ fn rejected_incoming_layout_keeps_its_ownership_and_the_sounding_layout() {
     let mut reference = StereoEq::with_layout(&config, rate, layout(3)).expect("valid reference");
     let incoming = layout(10);
     let pointer = std::ptr::from_ref(incoming.as_ref());
-    let (error, returned) = actual
-        .take_layout(incoming)
-        .expect_err("high bands exceed new Nyquist");
+    let (error, returned) = match StereoEq::with_layout(&config, rate, incoming) {
+        Err(refusal) => refusal,
+        Ok(_) => panic!("high bands exceed new Nyquist"),
+    };
     assert_eq!(error, FilterError::Parameters);
     assert_eq!(std::ptr::from_ref(returned.as_ref()), pointer);
     let (mut left, mut right) = ([0.25; 7], [-0.125; 7]);
@@ -151,18 +152,10 @@ fn pending_and_retired_layouts_share_the_prepared_pool_budget() {
         Box::new(EqLayout::new(&config, &bands, TEST_RATE).expect("shared layout budget"))
     };
     let mut eq = StereoEq::with_layout(&config, TEST_RATE, prepare(-3.0)).expect("valid EQ layout");
-    assert!(
-        eq.take_layout(prepare(-6.0))
-            .expect("valid layout retune")
-            .is_none()
-    );
+    assert!(take_layout(&mut eq, prepare(-6.0)).is_none());
     eq.process(&mut [0.25], &mut [-0.125]);
     assert!(!eq.crossover.has_settled());
-    assert!(
-        eq.take_layout(prepare(-9.0))
-            .expect("valid layout retune")
-            .is_none()
-    );
+    assert!(take_layout(&mut eq, prepare(-9.0)).is_none());
     let mut gains = [GainDb::DEFAULT; 10];
     assert_eq!(eq.read_gains(&mut gains), gains.len());
     assert_eq!(gains[0], GainDb::from(-9.0));
@@ -173,16 +166,18 @@ fn pending_and_retired_layouts_share_the_prepared_pool_budget() {
 
     let incoming = prepare(-12.0);
     let allocated = pools.stats().allocated_bytes;
-    let returned = eq
-        .take_layout(incoming)
-        .expect("valid layout retune")
-        .expect("retired layout returned");
+    let returned = take_layout(&mut eq, incoming).expect("retired layout returned");
     assert_eq!(returned.left.target_gain(0), Some(GainDb::from(-3.0)));
     eq.process(&mut [0.25], &mut [-0.125]);
     assert_eq!(pools.stats().allocated_bytes, allocated);
     assert!(pools.stats().peak_allocated_bytes <= BUDGET);
     assert_eq!(eq.read_gains(&mut gains), gains.len());
     assert_eq!(gains[0], GainDb::from(-12.0));
+}
+
+fn take_layout(eq: &mut StereoEq, mut layout: Box<EqLayout>) -> Option<Box<EqLayout>> {
+    layout.prepare_sample_rate(TEST_RATE).expect("valid layout");
+    eq.take_prepared_layout(layout)
 }
 
 /// Crosses over to the waiting layout and lets the crossover settle.
@@ -204,28 +199,19 @@ fn bands(layout: Option<Box<EqLayout>>) -> Option<usize> {
 fn a_layout_taken_hands_back_the_one_it_displaces() {
     let mut eq = StereoEq::new(&EqConfig::builder(pools()).build(), TEST_RATE);
 
+    assert_eq!(bands(take_layout(&mut eq, layout(3))), None);
     assert_eq!(
-        bands(eq.take_layout(layout(3)).expect("valid layout retune")),
-        None
-    );
-    assert_eq!(
-        bands(eq.take_layout(layout(4)).expect("valid layout retune")),
+        bands(take_layout(&mut eq, layout(4))),
         Some(3),
         "the waiting one"
     );
     cross_over(&mut eq);
-    assert_eq!(
-        bands(eq.take_layout(layout(5)).expect("valid layout retune")),
-        None
-    );
+    assert_eq!(bands(take_layout(&mut eq, layout(5))), None);
+    cross_over(&mut eq);
+    assert_eq!(bands(take_layout(&mut eq, layout(6))), None);
     cross_over(&mut eq);
     assert_eq!(
-        bands(eq.take_layout(layout(6)).expect("valid layout retune")),
-        None
-    );
-    cross_over(&mut eq);
-    assert_eq!(
-        bands(eq.take_layout(layout(7)).expect("valid layout retune")),
+        bands(take_layout(&mut eq, layout(7))),
         Some(4),
         "the one the last crossover retired"
     );
@@ -387,7 +373,7 @@ fn a_layout_transition_preserves_pcm_and_the_retired_filters_final_state() {
     actual.set_gain(0, GainDb::MAX);
     old_left.set_gain(0, GainDb::MAX);
     old_right.set_gain(0, GainDb::MAX);
-    actual.take_layout(layout(10)).expect("valid layout retune");
+    take_layout(&mut actual, layout(10));
     actual.set_gain(2, GainDb::MIN);
     new_left.set_gain(2, GainDb::MIN);
     new_right.set_gain(2, GainDb::MIN);
@@ -445,12 +431,9 @@ fn a_layout_transition_preserves_pcm_and_the_retired_filters_final_state() {
         );
     }
     assert!(mix.has_settled());
-    actual.take_layout(layout(3)).expect("valid layout retune");
+    take_layout(&mut actual, layout(3));
     actual.process(&mut [], &mut []);
-    let mut retired = actual
-        .take_layout(layout(2))
-        .expect("valid layout retune")
-        .expect("the first layout is returned");
+    let mut retired = take_layout(&mut actual, layout(2)).expect("the first layout is returned");
     for input in [0.25, -0.5, 0.0] {
         assert_eq!(
             retired.left.process_sample(input).to_bits(),
