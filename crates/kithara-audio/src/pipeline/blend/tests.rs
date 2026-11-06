@@ -2,9 +2,12 @@ use std::num::NonZeroU32;
 
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
-use kithara_test_fixtures::unit_fixtures::{
-    blend_identity, blend_incoming, blend_join_frame, blend_multichannel, blend_outgoing,
-    blend_outgoing_constant, blend_signed_frame,
+use kithara_test_fixtures::{
+    signal::{self, SignalDirection, Wave},
+    unit_fixtures::{
+        blend_identity, blend_incoming, blend_join_frame, blend_multichannel, blend_outgoing,
+        blend_outgoing_constant, blend_signed_frame,
+    },
 };
 use kithara_test_utils::kithara;
 
@@ -219,5 +222,90 @@ fn reset_cancels_an_active_join(
             .map(|sample| sample.to_bits())
             .collect::<Vec<_>>(),
         input_bits
+    );
+}
+
+#[kithara::test]
+fn frame_100224_direction_probe_precedes_actual_join_completion() {
+    let trace = kithara_test_utils::test::usdt::scope();
+    let pools = pools();
+    let profile = spec(2, 44_100);
+    let channels = usize::from(profile.channels);
+    let cut = 100_224_usize;
+    let frames = 1_152_usize;
+    let saw = |wave: Wave, start: usize, count: usize| {
+        (start..start + count)
+            .flat_map(|frame| {
+                let sample =
+                    f32::from(wave.sample(frame, profile.sample_rate.get())) / -f32::from(i16::MIN);
+                std::iter::repeat_n(sample, channels)
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut blender = blender(&pools, profile);
+    let join = usize::try_from(blender.join_frame_count()).expect("native join fits usize");
+    assert_eq!(join, 1_764);
+    let outgoing = saw(Wave::Sawtooth, cut, join);
+    let incoming = saw(Wave::SawtoothDescending, cut, frames * 2);
+    blender.prepare_active(profile).expect("join scratch");
+    assert!(blender.prepare_join(|tail| {
+        tail.copy_from_slice(&outgoing);
+        true
+    }));
+    blender.commit_join();
+    let (first, second) = incoming.split_at(frames * channels);
+    let mut first = chunk(&pools, profile, first);
+    first.meta.frame_offset = u64::try_from(cut).expect("native cut");
+    let first = blender.process_active(first);
+    assert_eq!(
+        signal::detect_direction(&first.samples, channels),
+        SignalDirection::Descending
+    );
+    assert!(
+        !blender.is_steady(),
+        "direction must not finish a live join"
+    );
+    let progress = trace.events_of("audio_join_processed");
+    assert_eq!(progress.len(), 1);
+    assert_eq!(
+        progress
+            .first()
+            .expect("first join chunk")
+            .field("remaining"),
+        Some(612)
+    );
+    let mut second = chunk(&pools, profile, second);
+    second.meta.frame_offset = u64::try_from(cut + frames).expect("second native chunk");
+    let second = blender.process_active(second);
+    let phase = |frame: &[f32]| signal::phase::units(*frame.first().expect("stereo frame"));
+    let samples = second.samples.chunks_exact(channels);
+    let breaks = samples
+        .clone()
+        .zip(samples.skip(1))
+        .filter(|(a, b)| signal::phase::delta(phase(a), phase(b)) != -1)
+        .count();
+    assert_eq!(
+        breaks, 612,
+        "the old next-chunk oracle observes a valid join"
+    );
+    assert!(blender.is_steady());
+    let progress = trace.events_of("audio_join_processed");
+    assert_eq!(progress.len(), 2);
+    let completed = progress.last().expect("owner completion");
+    assert_eq!(completed.field("source_start"), Some(101_376));
+    assert_eq!(completed.field("frames"), Some(612));
+    assert_eq!(completed.field("remaining"), Some(0));
+    let pure = second
+        .samples
+        .get(612 * channels..)
+        .expect("post-join suffix");
+    let expected = incoming
+        .get((frames + 612) * channels..)
+        .expect("incoming suffix");
+    assert_eq!(pure.len(), expected.len());
+    assert!(
+        pure.iter()
+            .zip(expected)
+            .all(|(a, b)| a.to_bits() == b.to_bits())
     );
 }
