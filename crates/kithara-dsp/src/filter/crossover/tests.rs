@@ -453,3 +453,69 @@ fn coefficient_factory_errors_and_nonfinite_results_are_not_identity() {
         Err(FilterError::Parameters)
     ));
 }
+
+#[kithara::test]
+fn retirement_threshold_bit_patterns_keep_the_original_band_history() {
+    let frequencies = [250.0, 2_500.0];
+    let gains = [vec![0.25], vec![-0.5], vec![1.25]];
+    for bits in [
+        0,
+        1,
+        0x007f_ffff,
+        0x0080_0000,
+        0x0080_0001,
+        0x7f7f_ffff,
+        0x7f80_0000,
+        0x7fc0_0001,
+        0x7f80_0001,
+    ] {
+        for sign in [0, 0x8000_0000] {
+            let mut actual = crossover(&frequencies, 48_000.0);
+            let mut summed = crossover(&frequencies, 48_000.0);
+            let mut scalar = Scalar::new(&frequencies, 48_000.0);
+            let mut planes = vec![vec![0.0; 1]; 3];
+            for sample in [
+                f32::from_bits(bits | sign),
+                0.0,
+                f32::MIN_POSITIVE,
+                -f32::MIN_POSITIVE,
+                1.0,
+                -0.5,
+                0.0,
+            ] {
+                let expected = scalar.sample(sample);
+                assert_eq!(actual.split(&[sample], &mut planes), 1);
+                let mut output = [sample];
+                assert_eq!(summed.sum(&mut output, &gains), 1);
+                let mut total = 0.0;
+                for ((plane, value), gain) in planes.iter().zip(expected).zip(&gains) {
+                    assert_eq!(
+                        plane.first().expect("one frame").to_bits(),
+                        value.to_bits(),
+                        "input bits {bits:08x} sign {sign:08x}"
+                    );
+                    total = value.mul_add(*gain.first().expect("one gain"), total);
+                }
+                assert_eq!(output[0].to_bits(), total.to_bits());
+            }
+            actual.reset();
+            summed.reset();
+            let mut fresh = Scalar::new(&frequencies, 48_000.0);
+            for sample in [1.0, -0.5, 0.0] {
+                assert_eq!(actual.split(&[sample], &mut planes), 1);
+                let mut output = [sample];
+                assert_eq!(summed.sum(&mut output, &gains), 1);
+                let expected = fresh.sample(sample);
+                let mut total = 0.0;
+                for ((plane, value), gain) in planes.iter().zip(expected).zip(&gains) {
+                    assert_eq!(
+                        plane.first().expect("reset frame").to_bits(),
+                        value.to_bits()
+                    );
+                    total = value.mul_add(*gain.first().expect("one gain"), total);
+                }
+                assert_eq!(output[0].to_bits(), total.to_bits());
+            }
+        }
+    }
+}
