@@ -17,12 +17,13 @@ use kithara::{
     effects::{Ceiling, LimiterConfig, LookaheadMs, PeakLimiter, ReleaseMs, node::LimiterNode},
     platform::time::Duration,
 };
+use kithara_dsp::filter::Fir;
 use kithara_fixture_media::reconstruction::reconstructed_peak;
 use sha2::{Digest, Sha256};
 
 use crate::bufpool_ext::pools;
 
-/// Check fixed inputs, complete delayed output and the same-source zero-lookahead delta.
+/// Check fixed numerical inputs and sanitization/recovery through real consumers.
 pub fn check() {
     let cases: [(&str, &str, &str); 3] = [
         (
@@ -49,6 +50,8 @@ pub fn check() {
         println!("fixed numerical input: case={name} planar_sha256={digest}");
         (name, bytes)
     });
+    check_dense_support_boundary();
+    check_sanitization();
     for (name, bytes) in &cases {
         let samples: Vec<_> = bytes
             .as_chunks::<4>()
@@ -60,6 +63,93 @@ pub fn check() {
         let input = [samples[..256].to_vec(), samples[256..].to_vec()];
         for frames in [1, 7, 128, 1024] {
             numerical_case(name, &input, frames);
+        }
+    }
+}
+
+fn check_dense_support_boundary() {
+    // Isolate dense zero-tail IEEE behavior, not a non-finite true-peak guarantee.
+    let mut taps = [[0.0; 25]; 1];
+    taps[0][0] = 1.0;
+    for future in [0.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let mut detector = Fir::<25, 1, 1, 17>::new(taps);
+        let mut history = [0.0; 17];
+        history[1] = 1_048_576.0;
+        let mut discarded = [0.0; 17];
+        detector.begin_block(&[&mut history], 0.98);
+        detector.process(0, &history, &history, &mut discarded);
+        let mut raw = [0.0; 9];
+        raw[1] = future;
+        let mut peak = [0.0];
+        detector.begin_block(&[&mut raw], 0.98);
+        detector.process(0, &raw, &[0.0], &mut peak);
+        let expected: f32 = if future.is_finite() { 1_048_576.0 } else { 0.0 };
+        assert_eq!(peak[0].to_bits(), expected.to_bits());
+    }
+    println!(
+        "dense support boundary: zero-tail raw nonfinite discards past sum; not a TP guarantee"
+    );
+}
+
+fn check_sanitization() {
+    let rate = NonZeroU32::new(44_100).expect("sanitization rate");
+    let config = LimiterConfig::builder()
+        .ceiling(Ceiling::try_from(0.98).expect("sanitization ceiling"))
+        .release_ms(ReleaseMs::try_from(50.0).expect("sanitization release"))
+        .lookahead_ms(LookaheadMs::try_from(5.0).expect("5 ms lookahead"))
+        .build();
+    let latency = config.latency_frames(rate);
+    for poison in [
+        f32::NAN,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::MIN_POSITIVE * 0.5,
+    ] {
+        let mut input = [vec![0.0; 20_064], vec![0.0; 20_064]];
+        input[0][32] = poison;
+        input[1][32] = poison;
+        input[0][64..].fill(0.25);
+        input[1][64..].fill(0.125);
+        for partition in [1, 128] {
+            let total = (input[0].len() + latency + 64).next_multiple_of(partition);
+            let owner = numerical_owner(&input, rate, config, partition, total);
+            let output = numerical_callback(&input, rate, config, partition, total);
+            for (actual, expected) in output.iter().zip(&owner) {
+                assert_eq!(
+                    actual.iter().copied().map(f32::to_bits).collect::<Vec<_>>(),
+                    expected
+                        .iter()
+                        .copied()
+                        .map(f32::to_bits)
+                        .collect::<Vec<_>>()
+                );
+                assert!(
+                    actual
+                        .iter()
+                        .all(|v| v.is_finite() && v.abs() <= f32::from(config.ceiling()))
+                );
+                assert!(actual[..64 + latency].iter().all(|v| *v == 0.0));
+                assert!(actual[input[0].len() + latency..].iter().all(|v| *v == 0.0));
+            }
+            assert_eq!(
+                output[1]
+                    .iter()
+                    .copied()
+                    .map(f32::to_bits)
+                    .collect::<Vec<_>>(),
+                output[0]
+                    .iter()
+                    .map(|v| (v * 0.5).to_bits())
+                    .collect::<Vec<_>>()
+            );
+            let quiet = &output[0][64 + latency..20_064 + latency];
+            assert!(quiet.windows(2).all(|pair| pair[1] >= pair[0]));
+            let final_gain = quiet.last().copied().expect("quiet recovery") / 0.25;
+            assert!(final_gain > 0.99 && final_gain <= 1.0);
+            println!(
+                "sanitization recovery: poison_bits={} partition={partition} L={latency} quiet_frames=20000 final_gain={final_gain}",
+                poison.to_bits()
+            );
         }
     }
 }
