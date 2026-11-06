@@ -115,14 +115,17 @@ mod limiter {
         let latency = config.latency_frames(rate);
         if latency > 0 {
             let mut checked = (*input).clone();
-            for _ in 0..latency.div_ceil(4 * frames) + 1 {
+            let mut heard = [Vec::new(), Vec::new()];
+            for _ in 0..(latency + 128).div_ceil(4 * frames) + 1 {
                 checked.clone_from(input);
                 for block in &mut checked {
                     let [left, right] = &mut block.planes;
                     limiter.process_planar(&mut [left, right]);
+                    heard[0].extend_from_slice(left);
+                    heard[1].extend_from_slice(right);
                 }
             }
-            admit_cycle(&checked, config);
+            admit_audio(&heard, config);
         }
         group.bench_function(BenchmarkId::new("owner", frames), |b| {
             b.iter_batched_ref(
@@ -196,9 +199,9 @@ mod limiter {
         let mut right = vec![0.0; frames];
         let latency = config.latency_frames(rate);
         if latency > 0 {
-            let mut checked = (*input).clone();
-            for _ in 0..latency.div_ceil(4 * frames) + 1 {
-                for (block, heard) in input.iter().zip(&mut checked) {
+            let mut heard = [Vec::new(), Vec::new()];
+            for _ in 0..(latency + 128).div_ceil(4 * frames) + 1 {
+                for block in input {
                     info.in_silence_mask = block.silence;
                     processor.process(
                         &info,
@@ -208,11 +211,11 @@ mod limiter {
                         },
                         &mut extra,
                     );
-                    heard.planes[0].copy_from_slice(&left);
-                    heard.planes[1].copy_from_slice(&right);
+                    heard[0].extend_from_slice(&left);
+                    heard[1].extend_from_slice(&right);
                 }
             }
-            admit_cycle(&checked, config);
+            admit_audio(&heard, config);
         }
         group.bench_function(BenchmarkId::new("callback", frames), |b| {
             b.iter(|| {
@@ -353,34 +356,24 @@ mod limiter {
         });
     }
 
-    fn admit_cycle(input: &[Block; 4], config: LimiterConfig) {
-        let samples: Vec<_> = input
-            .iter()
-            .flat_map(|block| block.planes[0].iter().copied())
-            .collect();
+    fn admit_audio(heard: &[Vec<f32>; 2], config: LimiterConfig) {
+        let [left, right] = heard;
+        assert!(left.len() > config.latency_frames(NonZeroU32::new(48_000).expect("rate")) + 64);
         assert!(
-            samples.iter().any(|value| *value != 0.0),
-            "primed cycle must carry delayed audio"
+            left.iter().any(|value| *value != 0.0),
+            "primed stream must carry delayed audio"
         );
         assert!(
-            samples
-                .iter()
+            left.iter()
                 .all(|value| value.is_finite() && value.abs() <= f32::from(config.ceiling()))
         );
-        for block in input {
-            assert_eq!(
-                block.planes[1]
-                    .iter()
-                    .copied()
-                    .map(f32::to_bits)
-                    .collect::<Vec<_>>(),
-                block.planes[0]
-                    .iter()
-                    .map(|value| (value * 0.5).to_bits())
-                    .collect::<Vec<_>>()
-            );
-        }
-        assert_true_peak(&samples, config);
+        assert_eq!(
+            right.iter().copied().map(f32::to_bits).collect::<Vec<_>>(),
+            left.iter()
+                .map(|value| (value * 0.5).to_bits())
+                .collect::<Vec<_>>()
+        );
+        assert_true_peak(left, config);
     }
 
     fn highest_rate() -> NonZeroU32 {
@@ -394,7 +387,7 @@ mod limiter {
         let over_db = 20.0 * (peak / ceiling).log10();
         assert!(
             over_db <= 0.1,
-            "reconstructed peak exceeds ceiling by {over_db} dB"
+            "reconstructed peak exceeds ceiling by {over_db} dB; samples={samples:?}"
         );
         println!(
             "configured true-peak admission: frames={} over_ceiling_db={over_db:.9}",
