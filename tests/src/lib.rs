@@ -67,6 +67,11 @@ pub mod hls_spec;
 pub mod hls_test_helpers;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub mod hls_url;
+#[cfg(all(
+    feature = "all",
+    not(any(target_arch = "wasm32", target_os = "android"))
+))]
+pub mod limiter_numerical;
 #[cfg(feature = "all")]
 pub mod log_filter;
 #[cfg(any(

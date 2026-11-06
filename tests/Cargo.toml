@@ -213,6 +213,7 @@ kithara = { workspace = true, default-features = false, optional = true, feature
 kithara = { workspace = true, default-features = false, optional = true }
 kithara-dsp = { workspace = true }
 kithara-encode = { workspace = true, default-features = false, optional = true }
+kithara-fixture-media = { workspace = true }
 kithara-record = { workspace = true, features = ["assets"], optional = true }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["encoded", "hls", "hls-inputs", "signal"] }
 
@@ -279,7 +280,6 @@ kithara = { workspace = true, features = ["download", "android"] }
 [dev-dependencies]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-kithara-fixture-media = { workspace = true }
 kithara-render = { workspace = true }
 kithara-test-dylib = { workspace = true }
 
