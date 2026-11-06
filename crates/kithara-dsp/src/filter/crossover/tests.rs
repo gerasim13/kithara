@@ -434,3 +434,22 @@ fn weighted_prefix_retains_tails_and_only_advances_processed_frames(#[case] shap
     assert_eq!(reference.sum(&mut expected, &gains), 4);
     assert_eq!(probe.map(f32::to_bits), expected.map(f32::to_bits));
 }
+
+#[kithara::test]
+fn butterworth_lp_dc_gain_is_unity() {
+    let coeffs = super::coefficients(Type::LowPass, hz(250.0), hz(44100.0)).expect("valid design");
+    let dc_gain = (coeffs.b0 + coeffs.b1 + coeffs.b2) / (1.0 + coeffs.a1 + coeffs.a2);
+    assert!((dc_gain - 1.0).abs() < 0.001);
+}
+
+#[kithara::test]
+fn coefficient_factory_errors_and_nonfinite_results_are_not_identity() {
+    assert!(matches!(
+        super::coefficients(Type::LowPass, hz(24_000.0), hz(48_000.0)),
+        Err(FilterError::Parameters)
+    ));
+    assert!(matches!(
+        super::coefficients(Type::PeakingEQ(f32::NAN), hz(250.0), hz(48_000.0)),
+        Err(FilterError::Parameters)
+    ));
+}
