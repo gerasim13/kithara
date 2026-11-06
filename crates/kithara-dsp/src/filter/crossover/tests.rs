@@ -519,3 +519,21 @@ fn retirement_threshold_bit_patterns_keep_the_original_band_history() {
         }
     }
 }
+
+#[kithara::test]
+fn identity_recombination_keeps_absolute_gains_across_partial_tiles() {
+    let mut filter = crossover(&[], 48_000.0);
+    let mut samples = [1.0_f32; 257];
+    let gains = (0_u16..257).map(f32::from).collect::<Vec<_>>();
+
+    assert_eq!(
+        filter.sum(&mut samples, std::slice::from_ref(&gains)),
+        samples.len()
+    );
+    assert!(
+        samples
+            .iter()
+            .zip(&gains)
+            .all(|(sample, gain)| sample.to_bits() == gain.to_bits())
+    );
+}
