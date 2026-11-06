@@ -97,14 +97,14 @@ impl Original {
                 high = self.high[index].process(high);
             }
             let mut allpass_start = 0;
-            for index in 0..self.low.len() {
+            for (index, output) in bands.iter_mut().take(self.low.len()).enumerate() {
                 let mut band = self.scratch[index];
                 let allpass_end = allpass_start + self.low.len().saturating_sub(index + 1);
                 for section in &mut self.allpass[allpass_start..allpass_end] {
                     band = section.run(band);
                 }
                 allpass_start = allpass_end;
-                bands[index][frame] = band;
+                output[frame] = band;
             }
             bands[self.low.len()][frame] = high;
         }
