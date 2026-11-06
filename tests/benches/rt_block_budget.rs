@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::{
+    env,
     hint::black_box,
     num::{NonZeroU32, NonZeroUsize},
     task::{Context, Waker},
@@ -19,7 +20,7 @@ use firewheel::{
 };
 use kithara::{
     audio::{AudioConfig, mock::TestPcmReader},
-    effects::{LimiterConfig, node::LimiterNode},
+    effects::{LimiterConfig, LookaheadMs, node::LimiterNode},
     file::{File, FileConfig, FileSrc},
     platform::{
         sync::Arc,
@@ -154,7 +155,7 @@ struct BenchMixer {
 }
 
 #[kithara_test_utils::kithara::hang_watchdog]
-async fn processor(count: usize, lane: Lane) -> BenchMixer {
+async fn processor(count: usize, lane: Lane, limiter_config: LimiterConfig) -> BenchMixer {
     let config = DeckMixerConfig::default();
     let (mut control, inbox) = scoped_channel(
         ScopedConfig::builder()
@@ -273,7 +274,7 @@ async fn processor(count: usize, lane: Lane) -> BenchMixer {
         ..StreamInfo::default()
     };
     let mut state = None;
-    let limiter = LimiterNode::new(LimiterConfig::default(), shape.sample_rate, pools)
+    let limiter = LimiterNode::new(limiter_config, non_zero(768_000, "Host rate bound"), pools)
         .construct_processor(
             &EmptyConfig,
             ConstructProcessorContext::new(NodeID::DANGLING, &stream, &mut state),
@@ -392,9 +393,9 @@ fn every_slot_fading(mixer: &mut BenchMixer) -> bool {
         .all(|slot| slot.gain > 0.0 && slot.gain < 1.0)
 }
 
-fn measure(tracks: usize, lane: Lane) -> Measurement {
+fn measure(tracks: usize, lane: Lane, config: LimiterConfig) -> Measurement {
     let runtime = tokio::runtime::Runtime::new().expect("bench runtime");
-    let mut processor = runtime.block_on(processor(tracks, lane));
+    let mut processor = runtime.block_on(processor(tracks, lane, config));
     let _runtime = runtime.enter();
 
     let frames = block_frames();
@@ -478,6 +479,18 @@ fn cell(elapsed: Duration, budget: Duration) -> String {
 }
 
 fn main() {
+    let lookahead = match env::var("KITHARA_BENCH_LOOKAHEAD_MS") {
+        Ok(value) => LookaheadMs::try_from(value.parse::<f32>().expect("numeric bench lookahead"))
+            .expect("bench lookahead in 0..=20 ms"),
+        Err(env::VarError::NotPresent) => LookaheadMs::DEFAULT,
+        Err(error) => panic!("invalid bench lookahead: {error}"),
+    };
+    let config = LimiterConfig::builder().lookahead_ms(lookahead).build();
+    println!(
+        "limiter lookahead: {} ms, {} frames, reserve at 768000 Hz",
+        f32::from(lookahead),
+        config.latency_frames(non_zero(consts::SAMPLE_RATE, "sample rate"))
+    );
     let budget = block_budget();
     println!(
         "DeckMixer -> master LimiterNode callback budget: {:.3} ms ({} frames @ {} Hz, {} ch)",
@@ -500,7 +513,7 @@ fn main() {
         .into_iter()
         .flat_map(|lane| consts::TRACK_COUNTS.map(|count| (lane, count)))
     {
-        let measurement = measure(count, lane);
+        let measurement = measure(count, lane, config);
         println!(
             "{:>16}  {:>7}  {:>22}  {:>22}  {:>22}",
             measurement.lane.label(),

@@ -11,25 +11,41 @@ use criterion::{
     BatchSize, BenchmarkId, Criterion, SamplingMode, Throughput, criterion_group, criterion_main,
 };
 use kithara::{
+    abr::{AbrEvent, AbrReason},
     analysis::{
         AnalysisDemand, AnalysisFile, AnalysisFileSpec, AnalysisProgress, AnalysisToken,
         AnalysisWorker, AnalysisWorkerConfig, AnalyzerBuilder, BeatAnalysisConfig,
     },
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioRead, ReadOutcome},
+    audio::{AudioConfig, AudioRead, AudioSession, ReadOutcome},
     effects::{LimiterConfig, PeakLimiter},
+    events::EventBus,
     file::{File, FileConfig},
+    hls::{AbrMode, Hls, HlsConfig, HlsEvent},
     platform::{
         time::Duration,
-        tokio::runtime::{Builder, Runtime},
+        tokio::{
+            runtime::{Builder, Runtime},
+            task::spawn,
+        },
     },
     play::{PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend},
     signal::{AudioChunk, AudioChunkInfo, AudioSpec},
+    stream::{AudioCodec, ContainerFormat, MediaInfo},
     stretch::{ElasticConfig, ElasticEngine, ElasticRequest, StretchKind, build_engine},
+    sync::SpeedCurve,
     warp::{Warp, WarpConfig, WarpRenderer},
 };
-use kithara_integration_tests::bufpool_ext::{Pools, TestPools, pools};
-use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
+use kithara_integration_tests::{
+    CreatedHls, HlsFixtureBuilder, TestServerHelper,
+    bufpool_ext::{Pools, TestPools, pools},
+    event::TestEvent,
+    hls_fixture::create_test_downloader,
+    reads::{blocking_audio, read_until_samples},
+    waits::wait_for_event,
+};
+use kithara_test_fixtures::{assets::signal_mp3_track_sine440_187s, hls_fixtures::hls_saw_6};
+use kithara_test_utils::{test::setup_tracing, wait_until};
 use num_traits::ToPrimitive;
 use tempfile::TempDir;
 
@@ -40,7 +56,9 @@ mod limiter {
     };
 
     use audioadapter_buffers::direct::InterleavedSlice;
-    use criterion::{BatchSize, BenchmarkGroup, BenchmarkId, Criterion, measurement::WallTime};
+    use criterion::{
+        BatchSize, BenchmarkGroup, BenchmarkId, Criterion, Throughput, measurement::WallTime,
+    };
     use firewheel::{
         ActivateInfo, FirewheelConfig, FirewheelContext, StreamInfo,
         backend::BackendProcessInfo,
@@ -56,9 +74,10 @@ mod limiter {
         nodes::volume::VolumeNode,
     };
     use kithara::{
-        effects::{LimiterConfig, PeakLimiter, node::LimiterNode},
+        effects::{LimiterConfig, LookaheadMs, PeakLimiter, node::LimiterNode},
         platform::time::Duration,
     };
+    use kithara_fixture_media::reconstruction::reconstructed_peak;
     use kithara_integration_tests::bufpool_ext::pools;
 
     #[derive(Clone)]
@@ -78,13 +97,18 @@ mod limiter {
         })
     }
 
-    fn owner(group: &mut BenchmarkGroup<'_, WallTime>, frames: usize, input: &[Block; 4]) {
+    fn owner(
+        group: &mut BenchmarkGroup<'_, WallTime>,
+        frames: usize,
+        input: &[Block; 4],
+        config: LimiterConfig,
+    ) {
         let rate = NonZeroU32::new(48_000).expect("sample rate");
         let mut limiter = PeakLimiter::new(
             rate,
-            rate,
+            highest_rate(),
             NonZeroUsize::new(2).expect("stereo"),
-            LimiterConfig::default(),
+            config,
             &pools(),
         )
         .expect("limiter config");
@@ -125,7 +149,12 @@ mod limiter {
         }
     }
 
-    fn callback(group: &mut BenchmarkGroup<'_, WallTime>, frames: usize, input: &[Block; 4]) {
+    fn callback(
+        group: &mut BenchmarkGroup<'_, WallTime>,
+        frames: usize,
+        input: &[Block; 4],
+        config: LimiterConfig,
+    ) {
         let rate = NonZeroU32::new(48_000).expect("sample rate");
         let stream = StreamInfo {
             sample_rate: rate,
@@ -135,7 +164,7 @@ mod limiter {
                 .expect("nonempty block"),
             ..StreamInfo::default()
         };
-        let node = LimiterNode::new(LimiterConfig::default(), rate, pools());
+        let node = LimiterNode::new(config, highest_rate(), pools());
         let mut custom_state = None;
         let mut processor = node
             .construct_processor(
@@ -171,7 +200,7 @@ mod limiter {
         });
     }
 
-    fn graph(group: &mut BenchmarkGroup<'_, WallTime>) {
+    fn graph(group: &mut BenchmarkGroup<'_, WallTime>, config: LimiterConfig) {
         const FRAMES: usize = 128;
         let rate = NonZeroU32::new(48_000).expect("sample rate");
 
@@ -180,10 +209,7 @@ mod limiter {
             ..FirewheelConfig::default()
         });
         let limiter = context
-            .add_node(
-                LimiterNode::new(LimiterConfig::default(), rate, pools()),
-                None,
-            )
+            .add_node(LimiterNode::new(config, highest_rate(), pools()), None)
             .expect("graph limiter");
         let volume = context
             .add_node(VolumeNode::from_linear(1.0), None)
@@ -224,6 +250,16 @@ mod limiter {
             dropped_frames: 0,
             process_to_playback_delay: None,
         };
+        let latency = config.latency_frames(rate);
+        let mut reference = PeakLimiter::new(
+            rate,
+            highest_rate(),
+            NonZeroUsize::new(2).expect("stereo"),
+            config,
+            &pools(),
+        )
+        .expect("reference limiter");
+        let mut heard = Vec::new();
         for block in &input {
             output.fill(f32::NAN);
             processor.process(
@@ -232,11 +268,43 @@ mod limiter {
                 process_info.clone(),
             );
             assert!(output.iter().all(|sample| sample.is_finite()));
-            if block[0] == 0.0 {
-                assert!(output.iter().all(|sample| *sample == 0.0));
+            if latency == 0 {
+                if block[0] == 0.0 {
+                    assert!(output.iter().all(|sample| *sample == 0.0));
+                } else {
+                    assert!(output.iter().any(|sample| *sample != 0.0));
+                }
             } else {
-                assert!(output.iter().any(|sample| *sample != 0.0));
+                let (mut left, mut right): (Vec<_>, Vec<_>) = block
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|frame| (frame[0], frame[1]))
+                    .unzip();
+                reference.process_planar(&mut [&mut left, &mut right]);
+                let expected: Vec<_> = left
+                    .iter()
+                    .zip(&right)
+                    .flat_map(|(&l, &r)| [l, r])
+                    .collect();
+                assert_eq!(
+                    output.map(f32::to_bits).as_slice(),
+                    expected
+                        .iter()
+                        .copied()
+                        .map(f32::to_bits)
+                        .collect::<Vec<_>>()
+                );
+                heard.extend(output.as_chunks::<2>().0.iter().map(|frame| frame[0]));
             }
+        }
+        if latency > 0 {
+            assert!(heard[..latency].iter().all(|sample| *sample == 0.0));
+            assert!(heard[latency..].iter().any(|sample| *sample != 0.0));
+            assert_true_peak(&heard, config);
+            group.throughput(Throughput::Elements(
+                u64::try_from(4 * FRAMES).expect("frames"),
+            ));
         }
         group.bench_function(BenchmarkId::new("graph_unity", FRAMES), |b| {
             b.iter(|| {
@@ -253,15 +321,165 @@ mod limiter {
         });
     }
 
+    fn highest_rate() -> NonZeroU32 {
+        // Match the Host's once-reserved 768 kHz session bound.
+        NonZeroU32::new(768_000).expect("Host rate bound")
+    }
+
+    fn assert_true_peak(samples: &[f32], config: LimiterConfig) {
+        let peak = reconstructed_peak(samples);
+        let ceiling = f32::from(config.ceiling());
+        let over_db = 20.0 * (peak / ceiling).log10();
+        assert!(
+            over_db <= 0.1,
+            "reconstructed peak exceeds ceiling by {over_db} dB"
+        );
+    }
+
+    fn reset_and_render(limiter: &mut PeakLimiter, input: &mut [Block]) {
+        limiter.reset();
+        for block in input {
+            let [left, right] = &mut block.planes;
+            limiter.process_planar(&mut [left, right]);
+        }
+    }
+
+    fn finite(group: &mut BenchmarkGroup<'_, WallTime>, config: LimiterConfig) {
+        const FRAMES: usize = 128;
+        const CONTENT_BLOCKS: usize = 4;
+        let rate = NonZeroU32::new(48_000).expect("sample rate");
+        let latency = config.latency_frames(rate);
+        let blocks = CONTENT_BLOCKS + latency.div_ceil(FRAMES) + 1;
+        let mut input = vec![
+            Block {
+                planes: [vec![0.0; FRAMES], vec![0.0; FRAMES]],
+                silence: SilenceMask::new_all_silent(2),
+            };
+            blocks
+        ];
+        let last = &mut input[CONTENT_BLOCKS - 1];
+        last.planes[0][FRAMES - 1] = 1.96;
+        last.planes[1][FRAMES - 1] = 0.98;
+        last.silence = SilenceMask::default();
+        let mut limiter = PeakLimiter::new(
+            rate,
+            highest_rate(),
+            NonZeroUsize::new(2).expect("stereo"),
+            config,
+            &pools(),
+        )
+        .expect("finite limiter");
+        let (mut left, mut right) = ([4.0; FRAMES], [2.0; FRAMES]);
+        limiter.process_planar(&mut [&mut left, &mut right]);
+        let mut checked = input.clone();
+        reset_and_render(&mut limiter, &mut checked);
+        let left: Vec<_> = checked
+            .iter()
+            .flat_map(|block| block.planes[0].iter().copied())
+            .collect();
+        let right: Vec<_> = checked
+            .iter()
+            .flat_map(|block| block.planes[1].iter().copied())
+            .collect();
+        let sounding: Vec<_> = left
+            .iter()
+            .enumerate()
+            .filter(|(_, value)| **value != 0.0)
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(sounding, [CONTENT_BLOCKS * FRAMES - 1 + latency]);
+        assert!(
+            left.iter()
+                .all(|value| value.abs() <= f32::from(config.ceiling()))
+        );
+        assert_eq!(
+            right.iter().copied().map(f32::to_bits).collect::<Vec<_>>(),
+            left.iter()
+                .map(|value| (value * 0.5).to_bits())
+                .collect::<Vec<_>>()
+        );
+        assert_true_peak(&left, config);
+        let zero = LimiterConfig::builder()
+            .ceiling(config.ceiling())
+            .release_ms(config.release_ms())
+            .build();
+        let mut direct = PeakLimiter::new(
+            rate,
+            highest_rate(),
+            NonZeroUsize::new(2).expect("stereo"),
+            zero,
+            &pools(),
+        )
+        .expect("zero-lookahead numerical reference");
+        let mut direct_input = input.clone();
+        reset_and_render(&mut direct, &mut direct_input);
+        let direct: Vec<_> = direct_input
+            .iter()
+            .flat_map(|block| block.planes[0].iter().copied())
+            .collect();
+        let error: f64 = direct
+            .iter()
+            .take(CONTENT_BLOCKS * FRAMES)
+            .zip(left.iter().skip(latency))
+            .map(|(&direct, &delayed)| (f64::from(direct) - f64::from(delayed)).powi(2))
+            .sum();
+        let rmse = (error
+            / f64::from(u32::try_from(CONTENT_BLOCKS * FRAMES).expect("content frames")))
+        .sqrt();
+        println!(
+            "same-source finite numerical delta: aligned_rmse={rmse:.17e} delayed_bits={} zero_bits={}",
+            left[sounding[0]].to_bits(),
+            direct[CONTENT_BLOCKS * FRAMES - 1].to_bits()
+        );
+        println!(
+            "configured lookahead admission: rate=48000 max_rate=768000 L={latency} content={} output={} final_frame={}",
+            CONTENT_BLOCKS * FRAMES,
+            left.len(),
+            sounding[0]
+        );
+        group.throughput(Throughput::Elements(
+            u64::try_from(blocks * FRAMES).expect("frames"),
+        ));
+        group.bench_function(BenchmarkId::new("finite_reset_drain", FRAMES), |b| {
+            b.iter_batched_ref(
+                || input.clone(),
+                |input| {
+                    reset_and_render(&mut limiter, input);
+                    black_box(input);
+                },
+                BatchSize::SmallInput,
+            );
+        });
+    }
+
     pub(super) fn bench(c: &mut Criterion) {
         let mut group = c.benchmark_group("limiter_lifecycle");
         group.sample_size(20);
         for frames in [1, 7, 128, 1024] {
             let input = blocks(frames);
-            owner(&mut group, frames, &input);
-            callback(&mut group, frames, &input);
+            owner(&mut group, frames, &input, LimiterConfig::default());
+            callback(&mut group, frames, &input, LimiterConfig::default());
         }
-        graph(&mut group);
+        graph(&mut group, LimiterConfig::default());
+        group.finish();
+
+        let config = LimiterConfig::builder()
+            .lookahead_ms(LookaheadMs::try_from(5.0).expect("5 ms lookahead"))
+            .build();
+        let mut group = c.benchmark_group("limiter_lookahead");
+        group.sample_size(20);
+        group.warm_up_time(Duration::from_secs(1));
+        group.measurement_time(Duration::from_secs(3));
+        for frames in [1, 7, 128, 1024] {
+            let input = blocks(frames);
+            group.throughput(Throughput::Elements(
+                u64::try_from(4 * frames).expect("frames"),
+            ));
+            owner(&mut group, frames, &input, config);
+            callback(&mut group, frames, &input, config);
+        }
+        graph(&mut group, config);
+        finite(&mut group, config);
         group.finish();
     }
 }
@@ -745,6 +963,218 @@ fn bench_stretch_process(c: &mut Criterion) {
     group.finish();
 }
 
+async fn quality_switch(helper: &TestServerHelper, server: &CreatedHls) -> usize {
+    let gate = helper.register_segment_gate(server.token(), 0, 2);
+    let pools = pools();
+    let bus = EventBus::new(8192);
+    let mut events = bus.subscribe::<TestEvent>();
+    let stream = HlsConfig::for_url(server.master_url())
+        .downloader(create_test_downloader())
+        .store(
+            AssetStore::builder(pools.clone())
+                .backend(StorageBackend::Memory)
+                .cache_capacity(NonZeroUsize::new(16).expect("fixture resources"))
+                .build(),
+        )
+        .pools(pools.clone())
+        .events(bus.clone())
+        .initial_abr_mode(AbrMode::manual(0))
+        .look_ahead_bytes(600_000)
+        .build();
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(stream)
+        .media_info(
+            MediaInfo::builder()
+                .codec(AudioCodec::Pcm)
+                .container(ContainerFormat::Wav)
+                .build(),
+        )
+        .events(bus)
+        .build();
+    let config = kithara::play::TrackConfig::for_audio(config)
+        .block_on_underrun(true)
+        .build();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("HLS audio");
+    let (audio, warmup) = blocking_audio(audio, |audio| read_until_samples(audio, 8192)).await;
+    assert!(warmup > 0, "V0 must produce audio before the command");
+    wait_until(Duration::from_secs(20), "V0 gated request", || {
+        gate.requested() > 0
+    })
+    .await
+    .expect("V0 must reach the gate before the command");
+    audio
+        .abr_handle()
+        .expect("HLS ABR")
+        .set_mode(AbrMode::manual(1))
+        .expect("quality target");
+    let read = spawn(blocking_audio(audio, |audio| {
+        let mut buf = [0.0; 8192];
+        let mut total = 0;
+        for _ in 0..consts::DECODE_READ_LIMIT {
+            match audio.read(&mut buf).expect("HLS read") {
+                ReadOutcome::Frames { count, .. } => total += count.get(),
+                ReadOutcome::Pending { .. } => {}
+                ReadOutcome::Eof { .. } => return (total, true),
+            }
+        }
+        (total, false)
+    }));
+    let mut applied = false;
+    wait_for_event(
+        &mut events,
+        "quality switch before EOF",
+        |event| {
+            if matches!(event, TestEvent::Hls(HlsEvent::SegmentReadStart { variant: 1, segment_index: 2, .. })) {
+                gate.release();
+            }
+            applied |= matches!(event, TestEvent::Abr(AbrEvent::VariantApplied { from, to, reason }) if from.get() == 0 && to.get() == 1 && *reason == AbrReason::ManualOverride);
+            applied
+        },
+        Duration::from_secs(20),
+    ).await.expect("the quality switch must apply before EOF");
+    gate.release();
+    let (_audio, (tail, eof)) = read.await.expect("HLS read joins");
+    let total = usize::try_from(warmup).expect("warmup count") + tail;
+    assert!(
+        eof && applied && total > 0,
+        "one quality switch must complete before EOF"
+    );
+    total
+}
+
+fn bench_quality_switch(c: &mut Criterion) {
+    setup_tracing();
+    let rt = make_runtime();
+    let (helper, server) = rt.block_on(async {
+        let helper = TestServerHelper::new().await;
+        let (init, pcm) = hls_saw_6();
+        let server = helper
+            .create_hls(
+                HlsFixtureBuilder::new()
+                    .variant_count(2)
+                    .segments_per_variant(6)
+                    .segment_size(200_000)
+                    .segment_duration_secs(50_000.0 / 44_100.0)
+                    .custom_data_per_variant(vec![pcm.into(); 2])
+                    .init_data_per_variant(vec![init.into(); 2])
+                    .codecs("wav".to_owned())
+                    .variant_bandwidths(vec![5_000_000, 1_000_000]),
+            )
+            .await
+            .expect("quality-switch fixture");
+        (helper, server)
+    });
+    let mut group = c.benchmark_group("audit_quality_switch");
+    group.sampling_mode(SamplingMode::Flat);
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(4));
+    group.bench_function("manual_hls_join", |b| {
+        b.iter(|| black_box(rt.block_on(quality_switch(&helper, &server))));
+    });
+    group.finish();
+}
+
+fn bench_warp_transition(c: &mut Criterion) {
+    let pools = pools();
+    let pcm = make_pcm(65_536);
+    let spec = make_chunk(&pools, &pcm[..2]).spec();
+    let mut group = c.benchmark_group("audit_warp_transition");
+    group.sampling_mode(SamplingMode::Flat);
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(4));
+    group.bench_function("mapped_and_replacement", |b| {
+        b.iter_batched(
+            || {
+                Warp::new(
+                    (),
+                    &WarpConfig::builder()
+                        .speed(0.5)
+                        .keylock(true)
+                        .backend(StretchKind::Signalsmith)
+                        .build(),
+                )
+                .renderer(spec, pools.clone())
+            },
+            |mut renderer| {
+                let mut source = 0;
+                let mut produced = 0;
+                for block in 0..12 {
+                    if block == 4 {
+                        renderer.set_keylock(false);
+                    }
+                    if block == 8 {
+                        renderer.set_keylock(true);
+                    }
+                    renderer.prepare(spec);
+                    renderer
+                        .prepare_engine_latency(spec)
+                        .expect("transition service");
+                    let meta = AudioChunkInfo {
+                        spec,
+                        frame_offset: source,
+                        ..AudioChunkInfo::default()
+                    };
+                    let frames = renderer
+                        .prepare_source_window(meta, 65_536, 256)
+                        .expect("mapped window")
+                        .get();
+                    let mut input = make_chunk(&pools, &pcm[..frames * consts::CHANNELS]);
+                    input.meta = AudioChunkInfo {
+                        frames: u32::try_from(frames).expect("window size"),
+                        ..meta
+                    };
+                    let output = renderer
+                        .render_quantum(input)
+                        .continue_value()
+                        .expect("prepared quantum")
+                        .expect("mapped output");
+                    produced += output.frames();
+                    source += u64::try_from(frames).expect("source advance");
+                    black_box(output);
+                }
+                drop(renderer);
+                let mut replacement = Warp::new(
+                    (),
+                    &WarpConfig::builder()
+                        .speed(0.5)
+                        .keylock(true)
+                        .backend(StretchKind::Signalsmith)
+                        .build(),
+                )
+                .renderer(spec, pools.clone());
+                black_box(
+                    replacement
+                        .render(make_chunk(&pools, &pcm[..8192]))
+                        .continue_value()
+                        .expect("unprepared source"),
+                );
+                replacement.prepare(spec);
+                replacement.set_keylock(false);
+                replacement
+                    .set_speed(SpeedCurve::Constant(1.0), 1)
+                    .expect("unity replacement rate");
+                replacement
+                    .prepare_engine_latency(spec)
+                    .expect("replacement service");
+                let mut input = make_chunk(&pools, &pcm[8192..8320]);
+                input.meta.frame_offset = 4096;
+                let output = replacement
+                    .render(input)
+                    .continue_value()
+                    .expect("replacement input")
+                    .expect("replacement output");
+                black_box((produced, output));
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    group.finish();
+}
+
 fn bench_limiter_detector(c: &mut Criterion) {
     let mut group = c.benchmark_group("limiter_detector");
     group.sample_size(20);
@@ -928,6 +1358,8 @@ fn bench_source_window(c: &mut Criterion) {
 }
 criterion_group!(
     benches,
+    bench_quality_switch,
+    bench_warp_transition,
     bench_gapless_trim,
     bench_analysis_worker,
     bench_stretch_prepare,

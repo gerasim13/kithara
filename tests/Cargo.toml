@@ -279,6 +279,7 @@ kithara = { workspace = true, features = ["download", "android"] }
 [dev-dependencies]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+kithara-fixture-media = { workspace = true }
 kithara-render = { workspace = true }
 kithara-test-dylib = { workspace = true }
 
