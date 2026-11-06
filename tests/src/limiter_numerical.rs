@@ -28,17 +28,17 @@ pub fn check() {
     let cases: [(&str, &str, &str); 3] = [
         (
             "intersample",
-            include_str!("intersample.f32le.hex"),
+            include_str!("limiter_numerical/intersample.f32le.hex"),
             "fa0f255d8dc2c88f98752c6b8ed4fdc4226dc6c37e94447b975202cffa939831",
         ),
         (
             "sine",
-            include_str!("sine.f32le.hex"),
+            include_str!("limiter_numerical/sine.f32le.hex"),
             "309ec16a4a2dee3011992c2495a109bd2c1b6611f56cf499f544b33910503ae6",
         ),
         (
             "one_channel_transient",
-            include_str!("one_channel_transient.f32le.hex"),
+            include_str!("limiter_numerical/one_channel_transient.f32le.hex"),
             "9d23f66ecefade5e4973e82f4c501e96f41d2a66e2a9bacb55d9763d3ca31d75",
         ),
     ];
