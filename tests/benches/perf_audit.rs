@@ -512,15 +512,17 @@ mod limiter {
     }
 
     pub(super) fn bench(c: &mut Criterion) {
-        let mut group = c.benchmark_group("limiter_lifecycle");
-        group.sample_size(20);
-        for frames in [1, 7, 128, 1024] {
-            let input = blocks(frames);
-            owner(&mut group, frames, &input, LimiterConfig::default());
-            callback(&mut group, frames, &input, LimiterConfig::default());
+        {
+            let mut group = c.benchmark_group("limiter_lifecycle");
+            group.sample_size(20);
+            for frames in [1, 7, 128, 1024] {
+                let input = blocks(frames);
+                owner(&mut group, frames, &input, LimiterConfig::default());
+                callback(&mut group, frames, &input, LimiterConfig::default());
+            }
+            graph(&mut group, LimiterConfig::default());
+            group.finish();
         }
-        graph(&mut group, LimiterConfig::default());
-        group.finish();
 
         let config = LimiterConfig::builder()
             .lookahead_ms(LookaheadMs::try_from(5.0).expect("5 ms lookahead"))
