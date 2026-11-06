@@ -112,6 +112,18 @@ mod limiter {
             &pools(),
         )
         .expect("limiter config");
+        let latency = config.latency_frames(rate);
+        if latency > 0 {
+            let mut checked = (*input).clone();
+            for _ in 0..latency.div_ceil(4 * frames) + 1 {
+                checked.clone_from(input);
+                for block in &mut checked {
+                    let [left, right] = &mut block.planes;
+                    limiter.process_planar(&mut [left, right]);
+                }
+            }
+            admit_cycle(&checked, config);
+        }
         group.bench_function(BenchmarkId::new("owner", frames), |b| {
             b.iter_batched_ref(
                 || (*input).clone(),
@@ -182,6 +194,26 @@ mod limiter {
         let mut info = info(frames, rate);
         let mut left = vec![0.0; frames];
         let mut right = vec![0.0; frames];
+        let latency = config.latency_frames(rate);
+        if latency > 0 {
+            let mut checked = (*input).clone();
+            for _ in 0..latency.div_ceil(4 * frames) + 1 {
+                for (block, heard) in input.iter().zip(&mut checked) {
+                    info.in_silence_mask = block.silence;
+                    processor.process(
+                        &info,
+                        ProcBuffers {
+                            inputs: &[&block.planes[0], &block.planes[1]],
+                            outputs: &mut [&mut left, &mut right],
+                        },
+                        &mut extra,
+                    );
+                    heard.planes[0].copy_from_slice(&left);
+                    heard.planes[1].copy_from_slice(&right);
+                }
+            }
+            admit_cycle(&checked, config);
+        }
         group.bench_function(BenchmarkId::new("callback", frames), |b| {
             b.iter(|| {
                 for block in input {
@@ -321,6 +353,36 @@ mod limiter {
         });
     }
 
+    fn admit_cycle(input: &[Block; 4], config: LimiterConfig) {
+        let samples: Vec<_> = input
+            .iter()
+            .flat_map(|block| block.planes[0].iter().copied())
+            .collect();
+        assert!(
+            samples.iter().any(|value| *value != 0.0),
+            "primed cycle must carry delayed audio"
+        );
+        assert!(
+            samples
+                .iter()
+                .all(|value| value.is_finite() && value.abs() <= f32::from(config.ceiling()))
+        );
+        for block in input {
+            assert_eq!(
+                block.planes[1]
+                    .iter()
+                    .copied()
+                    .map(f32::to_bits)
+                    .collect::<Vec<_>>(),
+                block.planes[0]
+                    .iter()
+                    .map(|value| (value * 0.5).to_bits())
+                    .collect::<Vec<_>>()
+            );
+        }
+        assert_true_peak(&samples, config);
+    }
+
     fn highest_rate() -> NonZeroU32 {
         // Match the Host's once-reserved 768 kHz session bound.
         NonZeroU32::new(768_000).expect("Host rate bound")
@@ -333,6 +395,10 @@ mod limiter {
         assert!(
             over_db <= 0.1,
             "reconstructed peak exceeds ceiling by {over_db} dB"
+        );
+        println!(
+            "configured true-peak admission: frames={} over_ceiling_db={over_db:.9}",
+            samples.len()
         );
     }
 
