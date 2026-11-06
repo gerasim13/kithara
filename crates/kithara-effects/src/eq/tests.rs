@@ -115,9 +115,8 @@ fn rejected_initial_layout_returns_ownership_and_keeps_the_sounding_layout() {
     let mut reference = StereoEq::with_layout(&config, rate, layout(3)).expect("valid reference");
     let incoming = layout(10);
     let pointer = std::ptr::from_ref(incoming.as_ref());
-    let (error, returned) = match StereoEq::with_layout(&config, rate, incoming) {
-        Err(refusal) => refusal,
-        Ok(_) => panic!("high bands exceed new Nyquist"),
+    let Err((error, returned)) = StereoEq::with_layout(&config, rate, incoming) else {
+        panic!("high bands exceed new Nyquist");
     };
     assert_eq!(error, FilterError::Parameters);
     assert_eq!(std::ptr::from_ref(returned.as_ref()), pointer);
