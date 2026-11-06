@@ -1414,17 +1414,23 @@ fn bench_source_window(c: &mut Criterion) {
     }
     group.finish();
 }
-criterion_group!(
-    benches,
-    bench_quality_switch,
-    bench_warp_transition,
-    bench_gapless_trim,
-    bench_analysis_worker,
-    bench_stretch_prepare,
-    bench_stretch_backends,
-    bench_stretch_process,
-    limiter::bench,
-    bench_limiter_detector,
-    bench_source_window
-);
+fn bench_audit(c: &mut Criterion) {
+    if let Some(scope) = std::env::var_os("KITHARA_PERF_AUDIT_SCOPE") {
+        assert_eq!(scope, "limiter-lifecycle", "unknown perf audit scope");
+        limiter::bench(c);
+        return;
+    }
+    bench_quality_switch(c);
+    bench_warp_transition(c);
+    bench_gapless_trim(c);
+    bench_analysis_worker(c);
+    bench_stretch_prepare(c);
+    bench_stretch_backends(c);
+    bench_stretch_process(c);
+    limiter::bench(c);
+    bench_limiter_detector(c);
+    bench_source_window(c);
+}
+
+criterion_group!(benches, bench_audit);
 criterion_main!(benches);
