@@ -290,6 +290,7 @@ fn frame_100224_direction_probe_precedes_actual_join_completion() {
     );
     assert!(blender.is_steady());
     let progress = trace.events_of("audio_join_processed");
+    drop(trace);
     assert_eq!(progress.len(), 2);
     let completed = progress.last().expect("owner completion");
     assert_eq!(completed.field("source_start"), Some(101_376));
