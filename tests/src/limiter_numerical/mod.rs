@@ -143,6 +143,11 @@ fn check_sanitization() {
                     .collect::<Vec<_>>()
             );
             let quiet = &output[0][64 + latency..20_064 + latency];
+            if poison.is_infinite() && partition == 128 {
+                assert!(quiet[0] < 0.25);
+            } else {
+                assert_eq!(quiet[0].to_bits(), 0.25_f32.to_bits());
+            }
             assert!(quiet.windows(2).all(|pair| pair[1] >= pair[0]));
             let final_gain = quiet.last().copied().expect("quiet recovery") / 0.25;
             assert!(final_gain > 0.99 && final_gain <= 1.0);
