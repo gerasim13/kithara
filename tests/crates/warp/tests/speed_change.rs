@@ -417,4 +417,6 @@ async fn a_speed_change_keeps_every_beat_on_the_source_it_opened(
             >= BEATS_PER_BAR,
         "{deck}: a bar sounds at the last speed: onsets {frames:?}",
     );
+    drop(evidence);
+    drop(trace);
 }
