@@ -15,7 +15,7 @@ use kithara::{
     warp::{StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
-    audio_artifact::{AudioArtifactTap, artifact_label},
+    audio_artifact::{AudioArtifactTap, DeckSnapshot, artifact_label, block_evidence},
     bufpool_ext::{TestPools, pools},
     disk_asset_store, kithara,
     offline::{OfflinePlayer, OfflinePlayerOptions},
@@ -73,6 +73,8 @@ struct Take {
     underruns: u64,
     /// Sources the deck opened from the load to its last block.
     opened: usize,
+    blocks: Vec<(usize, u64, DeckSnapshot)>,
+    probe_start: usize,
 }
 
 fn session() -> HostConfig<TestPools> {
@@ -158,8 +160,12 @@ async fn playing_deck(
 /// lane's, not the machine's.
 #[kithara::flash(true)]
 #[kithara_test_utils::kithara::hang_watchdog]
-async fn play(temp_dir: &TestTempDir, backend: StretchKind, keylock: bool) -> Take {
-    let trace = usdt_trace::scope();
+async fn play(
+    temp_dir: &TestTempDir,
+    backend: StretchKind,
+    keylock: bool,
+    trace: &usdt_trace::Scope,
+) -> Take {
     let (harness, queue) = playing_deck(temp_dir, backend, keylock).await;
     let mut master = harness
         .host()
@@ -180,6 +186,11 @@ async fn play(temp_dir: &TestTempDir, backend: StretchKind, keylock: bool) -> Ta
     let period = Duration::from_secs_f64(
         BLOCK_FRAMES.to_f64().expect("block fits f64") / f64::from(SAMPLE_RATE),
     );
+    let probe_start = usdt_trace::recorded().0.len();
+    let mut blocks = Vec::with_capacity(TOTAL_BLOCKS.checked_add(1).expect("capture anchor"));
+    if !keylock {
+        blocks.push((0, harness.host().position(), harness.deck_snapshot()));
+    }
     let mut warmed = None;
     for block in 0..TOTAL_BLOCKS {
         hang_tick!();
@@ -198,6 +209,13 @@ async fn play(temp_dir: &TestTempDir, backend: StretchKind, keylock: bool) -> Ta
         }
         let started = Instant::now();
         let output = harness.render(BLOCK_FRAMES).await;
+        if !keylock {
+            let captured = blocks
+                .len()
+                .checked_mul(BLOCK_FRAMES)
+                .expect("bounded capture");
+            blocks.push((captured, harness.host().position(), harness.deck_snapshot()));
+        }
         if let Some(recording) = recording.as_mut() {
             recording.push(&output);
         }
@@ -205,7 +223,6 @@ async fn play(temp_dir: &TestTempDir, backend: StretchKind, keylock: bool) -> Ta
         hang_reset!();
     }
     let opened = trace.events_of("source_opened").len();
-    drop(trace);
     let underruns = harness
         .metrics()
         .underruns()
@@ -223,6 +240,8 @@ async fn play(temp_dir: &TestTempDir, backend: StretchKind, keylock: bool) -> Ta
         master,
         underruns,
         opened,
+        blocks,
+        probe_start,
     }
 }
 
@@ -352,7 +371,8 @@ async fn a_speed_change_keeps_every_beat_on_the_source_it_opened(
     #[case] backend: StretchKind,
     #[case] keylock: bool,
 ) {
-    let take = play(&temp_dir, backend, keylock).await;
+    let trace = usdt_trace::scope();
+    let take = play(&temp_dir, backend, keylock, &trace).await;
     let onsets = onsets(&take.master);
     let deck = if keylock {
         format!("{backend} keylock")
@@ -360,9 +380,28 @@ async fn a_speed_change_keeps_every_beat_on_the_source_it_opened(
         format!("{backend} varispeed")
     };
 
+    let mut evidence = (!keylock).then(|| {
+        let mut tap = AudioArtifactTap::in_hang_dir(&artifact_label(), SAMPLE_RATE, 2)
+            .expect("required varispeed evidence");
+        tap.record_probe_evidence(take.probe_start);
+        tap.push(&take.master);
+        tap.evidence(
+            "capture",
+            serde_json::json!({
+                "probe_start": take.probe_start,
+                "blocks": take.blocks.iter().map(|(frame, cursor, snapshot)|
+                    block_evidence(*frame, *cursor, snapshot)).collect::<Vec<_>>(),
+                "onsets": onsets.iter().map(|onset| onset.frame).collect::<Vec<_>>(),
+            }),
+        );
+        tap
+    });
     assert_eq!(take.opened, 1, "{deck}: a speed change opens no source");
     assert_eq!(take.underruns, 0, "{deck}: the ring ran dry");
     let failures = beat_failures(&onsets);
+    if let Some(tap) = evidence.as_mut() {
+        tap.evidence("beat_failures", serde_json::json!(&failures));
+    }
     let frames: Vec<usize> = onsets.iter().map(|onset| onset.frame).collect();
     assert!(
         failures.is_empty(),

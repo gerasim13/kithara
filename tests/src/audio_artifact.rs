@@ -15,6 +15,7 @@ use kithara::{
 };
 use kithara_encode::EncodeConfig;
 use kithara_record::{RecordingConfig, RecordingCore, assets::AssetPartSink};
+pub use kithara_render::bridge::DeckSnapshot;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -61,6 +62,60 @@ struct Marker {
 }
 
 impl AudioArtifactTap {
+    /// Write required diagnostics beside the already-uploaded hang dumps.
+    pub fn in_hang_dir(case: &str, sample_rate: u32, channels: u16) -> io::Result<Self> {
+        let root = env::var_os("KITHARA_HANG_DUMP_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(env::temp_dir);
+        let mut tap = Self::over(AudioArtifactSet::new(&root, case, sample_rate, channels)?)?;
+        tap.evidence(
+            "nextest",
+            serde_json::json!({
+                "run_id": env::var("NEXTEST_RUN_ID").ok(),
+                "attempt_id": env::var("NEXTEST_ATTEMPT_ID").ok(),
+                "attempt": env::var("NEXTEST_ATTEMPT").ok(),
+                "binary_id": env::var("NEXTEST_BINARY_ID").ok(),
+            }),
+        );
+        Ok(tap)
+    }
+
+    /// Preserve the live recorder's complete bounded history, including overflow status.
+    pub fn record_probe_evidence(&mut self, capture_start: usize) {
+        let (probes, truncated) = usdt_trace::recorded();
+        let origin = probes.iter().map(|probe| probe.wall_time).min();
+        let anchor = probes.get(capture_start..).and_then(|tail| {
+            tail.iter().find(|probe| {
+                probe.probe == "render" && matches!(
+                    (probe.field("output_base"), probe.field("range_start"), probe.field("range_end")),
+                    (Some(base), Some(start), Some(end)) if base != u64::MAX && end > start)
+            })
+        });
+        let anchor = anchor.map(|probe| probe.fields().collect::<BTreeMap<_, _>>());
+        let mut fired = BTreeMap::new();
+        for probe in &probes {
+            fired
+                .entry(probe.probe)
+                .or_insert_with(|| usdt_trace::count(probe.probe));
+        }
+        let events: Vec<_> = probes.iter().map(|probe| serde_json::json!({
+            "probe": probe.probe, "target": probe.target,
+            "file": probe.file, "line": probe.line, "thread": format!("{:?}", probe.thread),
+            "elapsed_ns": origin.map(|origin| probe.wall_time.duration_since(origin).as_nanos()),
+            "fields": probe.fields().collect::<BTreeMap<_, _>>(),
+        })).collect();
+        self.evidence(
+            "probe_history",
+            serde_json::json!({
+                "events": events, "truncated": truncated, "empty": probes.is_empty(),
+                "capture_start_index": capture_start, "session_output_anchor": anchor,
+                "fired_per_probe": fired,
+                "cap_per_probe": kithara_test_utils::test::usdt::MAX_EVENTS,
+                "time_axis": "monotonic nanoseconds from earliest retained scoped probe",
+            }),
+        );
+    }
+
     /// Build a tap only when `KITHARA_AUDIO_ARTIFACT_DIR` is set.
     pub fn from_env(case: &str, sample_rate: u32, channels: u16) -> io::Result<Option<Self>> {
         let Some(set) = AudioArtifactSet::from_env(case, sample_rate, channels)? else {
@@ -142,6 +197,33 @@ impl AudioArtifactTap {
     pub fn underrun_ledger(&self) -> UnderrunLedger {
         UnderrunLedger::from_probes(&usdt_trace::events())
     }
+}
+
+/// Capture indices and the separately observed offline/session/source coordinates.
+pub fn block_evidence(capture_frames: usize, output_cursor: u64, snapshot: &DeckSnapshot) -> Value {
+    let slots: Vec<_> = snapshot
+        .slots
+        .iter()
+        .map(|slot| {
+            serde_json::json!({
+                "binding": format!("{:?}", slot.binding),
+                "item": slot.binding.map(|binding| binding.item().as_u64()),
+                "state": format!("{:?}", slot.state),
+                "session_frame": slot.mark.map(|mark| i64::from(mark.session)),
+                "lane_frame": slot.mark.map(|mark| mark.lane.frame),
+                "segment": slot.mark.map(|mark| mark.lane.segment.get()),
+                "source": slot.source.map(|source| serde_json::json!({
+                    "variant": source.variant_index, "source_revision": source.source_revision,
+                    "render_revision": source.render_revision, "lane_frame": source.lane_frame,
+                    "segment": source.segment.get(), "frame_offset": source.frame_offset,
+                    "sample_rate": source.spec.sample_rate.get(), "channels": source.spec.channels,
+                    "geometry": source.source_geometry().map(<[u64; 24]>::from),
+                })),
+            })
+        })
+        .collect();
+    serde_json::json!({ "capture_frames": capture_frames,
+        "offline_output_cursor": output_cursor, "slots": slots })
 }
 
 impl Drop for AudioArtifactTap {
@@ -448,4 +530,55 @@ fn validate_artifact_name(name: &str) -> io::Result<()> {
     }
     validate_label(stem)?;
     validate_label(extension)
+}
+
+#[cfg(test)]
+mod evidence_tests {
+    use kithara_test_utils::{TestTempDir, kithara, temp_dir};
+
+    use super::*;
+
+    fn produce(_scope: &usdt_trace::Scope) -> [f32; 2] {
+        tracing::event!(target: "evidence_probe", tracing::Level::TRACE,
+            probe = "capture_identity", item = 11u64, variant = 2u64, source_revision = 3u64);
+        tracing::event!(target: "evidence_probe", tracing::Level::TRACE,
+            probe = "render", track_id = 11u64, output_base = 9_000u64,
+            range_start = 0u64, range_end = 1u64);
+        [0.25, -0.25]
+    }
+
+    #[kithara::test]
+    fn artifact_keeps_identity_after_capture_returns(temp_dir: TestTempDir) {
+        let scope = usdt_trace::scope();
+        let pcm = produce(&scope);
+        {
+            let set =
+                AudioArtifactSet::new(temp_dir.path(), "scope", 48_000, 2).expect("artifact set");
+            let mut tap = AudioArtifactTap::over(set).expect("artifact tap");
+            tap.record_probe_evidence(0);
+            tap.push(&pcm);
+        }
+        let index = fs::read_to_string(temp_dir.path().join("index.jsonl")).expect("index");
+        let index: Value = serde_json::from_str(index.lines().next().expect("artifact entry"))
+            .expect("index JSON");
+        let manifest: Value = serde_json::from_slice(
+            &fs::read(index["manifest"].as_str().expect("manifest path")).expect("manifest"),
+        )
+        .expect("manifest JSON");
+        let history = &manifest["evidence"]["probe_history"];
+        assert_eq!(history["truncated"], false);
+        assert_eq!(history["empty"], false);
+        assert_eq!(history["session_output_anchor"]["output_base"], 9_000);
+        assert!(
+            history["events"]
+                .as_array()
+                .expect("probe history")
+                .iter()
+                .any(|event| event["probe"] == "capture_identity"
+                    && event["fields"]["item"] == 11
+                    && event["fields"]["variant"] == 2
+                    && event["fields"]["source_revision"] == 3)
+        );
+        assert_eq!(manifest["frames"], 1);
+    }
 }

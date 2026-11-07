@@ -19,6 +19,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
+    audio_artifact::{AudioArtifactTap, artifact_label, block_evidence},
     event::TestEvent,
     fixture_protocol::PcmPattern,
     hls_fixture::create_test_downloader,
@@ -26,6 +27,7 @@ use kithara_integration_tests::{
         LOCAL_LOAD_DEADLINE, OfflinePlayer, OfflinePlayerOptions, append_source_loaded,
         linked::{LinkObservation, LinkReceiptOrigin, ObservedFactory},
     },
+    usdt_trace,
     waits::wait_for_loader_done_event,
 };
 use kithara_render::bridge::{DeckSnapshot, SlotSnapshot, SlotState};
@@ -388,11 +390,25 @@ async fn natural_eof_advance_with_late_variant_switch_flac(
     #[future(awt)] multivariant_tracks: (TestServerHelper, [Url; 2]),
     temp_dir: TestTempDir,
 ) {
+    let _trace = usdt_trace::scope();
     let (_server, sources) = multivariant_tracks;
     let setup = setup_multivariant_flac_queue(&sources, &temp_dir).await;
-
+    let probe_start = usdt_trace::recorded().0.len();
+    let mut blocks = Vec::with_capacity(BLOCK_BUDGET.checked_add(1).expect("capture anchor"));
     let (rendered, expected_a_frames, switch_issue_frame, committed_variant) =
-        render_until_b_with_late_variant_switch(&setup.queue, &setup.harness).await;
+        render_until_b_with_late_variant_switch(&setup.queue, &setup.harness, &mut blocks).await;
+    let mut evidence = AudioArtifactTap::in_hang_dir(&artifact_label(), SAMPLE_RATE, CHANNELS)
+        .expect("required FLAC boundary evidence");
+    evidence.record_probe_evidence(probe_start);
+    evidence.push(&rendered);
+    evidence.evidence(
+        "capture",
+        serde_json::json!({
+            "probe_start": probe_start, "switch_capture_frame": switch_issue_frame,
+            "blocks": blocks.iter().map(|(frame, cursor, snapshot)|
+                block_evidence(*frame, *cursor, snapshot)).collect::<Vec<_>>(),
+        }),
+    );
     assert_provenance_headroom(&rendered, "FLAC late variant switch");
     let left_raw = deinterleave_left(&rendered, usize::from(CHANNELS));
     let left = normalized_left(&left_raw, setup.queue.current_index());
@@ -1610,9 +1626,11 @@ async fn render_until_b_with_postroll(
 async fn render_until_b_with_late_variant_switch(
     queue: &QueueControl<TestPools>,
     harness: &OfflinePlayer,
+    blocks: &mut Vec<(usize, u64, DeckSnapshot)>,
 ) -> (Vec<f32>, usize, usize, Option<usize>) {
     let block_duration = render_block_duration(SAMPLE_RATE);
     let mut progress = RenderProgress::new();
+    blocks.push((0, harness.host().position(), harness.deck_snapshot()));
     let mut events = queue.subscribe();
     let mut expected_a_frames: Option<usize> = None;
     let mut switch_issue_frame: Option<usize> = None;
@@ -1627,6 +1645,11 @@ async fn render_until_b_with_late_variant_switch(
         let _ = harness.run(queue, QueueControl::tick).await;
         let block = harness.render(BLOCK_FRAMES).await;
         progress.push_block(&block, ASCENDING_TOL, Some(0));
+        blocks.push((
+            progress.rendered_frames(),
+            harness.host().position(),
+            harness.deck_snapshot(),
+        ));
 
         if expected_a_frames.is_none()
             && let Some(duration) = queue.duration_seconds()
