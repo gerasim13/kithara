@@ -64,9 +64,7 @@ struct Marker {
 impl AudioArtifactTap {
     /// Write required diagnostics beside the already-uploaded hang dumps.
     pub fn in_hang_dir(case: &str, sample_rate: u32, channels: u16) -> io::Result<Self> {
-        let root = env::var_os("KITHARA_HANG_DUMP_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(env::temp_dir);
+        let root = env::var_os("KITHARA_HANG_DUMP_DIR").map_or_else(env::temp_dir, PathBuf::from);
         let mut tap = Self::over(AudioArtifactSet::new(&root, case, sample_rate, channels)?)?;
         tap.evidence(
             "nextest",
