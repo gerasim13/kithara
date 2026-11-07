@@ -853,8 +853,13 @@ pub async fn run_no_sync_passthrough(
     ] {
         if let Some(sample) = first_sample_mismatch(pcm, &baseline.pcm) {
             failures.push(format!(
-                "{label}: PCM differs from direct playback at sample {sample} (frame {})",
+                "{label}: PCM differs from direct playback at sample {sample} (frame {}); \
+                 lengths={}/{}; bits={:?}/{:?}",
                 sample / channels,
+                pcm.len(),
+                baseline.pcm.len(),
+                pcm.get(sample).map(|sample| sample.to_bits()),
+                baseline.pcm.get(sample).map(|sample| sample.to_bits()),
             ));
         }
     }
