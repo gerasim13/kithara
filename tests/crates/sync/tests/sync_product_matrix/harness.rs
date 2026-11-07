@@ -27,6 +27,27 @@ enum CaptureMode {
     Paced,
 }
 
+#[cfg(target_os = "android")]
+fn take_capture_queue_events(
+    receiver: &mut kithara::events::EventReceiver<kithara::queue::QueueEvent>,
+) -> Vec<String> {
+    use kithara::platform::tokio::sync::broadcast::error::TryRecvError;
+
+    let mut events = Vec::new();
+    loop {
+        match receiver.try_recv() {
+            Ok(envelope) => events.push(format!("{envelope:?}")),
+            Err(TryRecvError::Lagged(count)) => events.push(format!("Lagged({count})")),
+            Err(TryRecvError::Closed) => {
+                events.push("Closed".to_owned());
+                break;
+            }
+            Err(TryRecvError::Empty) => break,
+        }
+    }
+    events
+}
+
 pub(crate) struct ProductHarness {
     pub(crate) decks: Vec<LinkedQueueHandle<TestPools>>,
     pub(crate) failures: Vec<String>,
@@ -42,6 +63,11 @@ pub(crate) struct ProductHarness {
     trajectory: TempoTrajectory,
     operation_grid: Option<kithara::warp::BeatGridSnapshot>,
     capture_marks: Vec<(SessionFrame, TrackId, SlotSnapshot)>,
+    #[cfg(target_os = "android")]
+    capture_queue_events: Vec<(
+        kithara::host::DeckId,
+        kithara::events::EventReceiver<kithara::queue::QueueEvent>,
+    )>,
     host_grids: Vec<(SessionFrame, kithara::warp::BeatGridSnapshot)>,
     decoded: Vec<Arc<Mutex<super::control::DecodedRecorder>>>,
     source_uris: Vec<String>,
@@ -602,7 +628,14 @@ impl ProductHarness {
             decoded.push(reference);
             hang_reset!();
         }
+        #[cfg(target_os = "android")]
+        let capture_queue_events = decks
+            .iter()
+            .map(|deck| (deck.id(), deck.subscribe::<kithara::queue::QueueEvent>()))
+            .collect();
         let mut harness = Self {
+            #[cfg(target_os = "android")]
+            capture_queue_events,
             decks,
             failures: Vec::new(),
             block_frames,
@@ -1800,12 +1833,21 @@ impl ProductHarness {
                         "item": u64::from(item), "start_seq": seq.get(), "start_applied": at,
                         "declick_frames": declick, "stable_at": stable_at,
                         "consumed_at": i64::from(mark.session), "segment": info.segment.get(), "slot_gain": slot.gain,
+                        "timeline": observation.timeline,
                     }))
                 })
             }).collect();
-            if let Some(_ready) = ready {
+            if let Some(ready) = ready {
                 #[cfg(not(target_os = "android"))]
-                self.master_tap.evidence(event, serde_json::json!(_ready));
+                self.master_tap.evidence(event, serde_json::json!(ready));
+                #[cfg(target_os = "android")]
+                eprintln!(
+                    "SYNC_CAPTURE_READY case={} provider={:?} event={event} output_frame={} decks={}",
+                    case.id,
+                    self.provider,
+                    self.output_frames,
+                    serde_json::json!(ready),
+                );
                 hang_reset!();
                 return;
             }
@@ -2016,6 +2058,26 @@ impl ProductHarness {
             .collect();
         #[cfg(not(target_os = "android"))]
         self.mark("capture start");
+        #[cfg(target_os = "android")]
+        let capture_entry = self
+            .decks
+            .iter()
+            .zip(self.capture_queue_events.iter_mut())
+            .enumerate()
+            .map(|(index, (deck, (event_deck, receiver)))| {
+                let events = take_capture_queue_events(receiver);
+                deck.observe(|observation| {
+                    serde_json::json!({
+                        "deck_index": index, "deck": u64::from(deck.id()),
+                        "event_deck": u64::from(*event_deck),
+                        "selected_item": deck.current().map(|entry| u64::from(entry.id)),
+                        "tracks_with_media_duration": format!("{:?}", observation.tracks),
+                        "consumed_source_coordinates": format!("{:?}", observation.consumed),
+                        "events_before_capture": events,
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
         let mut pcm = Vec::with_capacity(capture_frames * usize::from(CHANNELS));
         while pcm.len() < capture_frames * usize::from(CHANNELS) {
             let remaining_frames =
@@ -2032,7 +2094,40 @@ impl ProductHarness {
                     .map(|deck| {
                         let item = deck
                             .current()
-                            .expect("capture has a selected Playing item")
+                            .unwrap_or_else(|| {
+                                #[cfg(target_os = "android")]
+                                {
+                                    let events = self.capture_queue_events.iter_mut()
+                                        .filter(|(id, _)| *id == deck.id())
+                                        .flat_map(|(_, receiver)| take_capture_queue_events(receiver))
+                                        .collect::<Vec<_>>();
+                                    let state = deck.observe(|observation| serde_json::json!({
+                                        "tracks_with_media_duration": format!("{:?}", observation.tracks),
+                                        "consumed_source_coordinates": format!("{:?}", observation.consumed),
+                                        "timeline": observation.timeline,
+                                    }));
+                                    eprintln!("CAPTURE_SELECTION_LOST {}", serde_json::json!({
+                                        "case": case.id, "provider": format!("{:?}", self.provider),
+                                        "entry_output_frame": i64::from(observed_frame),
+                                        "output_frame": self.output_frames,
+                                        "capture_requested_frames": capture_frames,
+                                        "capture_collected_frames": pcm.len() / usize::from(CHANNELS),
+                                        "capture_remaining_frames": remaining_frames,
+                                        "missing_deck": u64::from(deck.id()),
+                                        "entry": capture_entry, "current_state": state,
+                                        "queue_events_after_entry": events,
+                                    }));
+                                }
+                                panic!(
+                                    "{}: capture lost its selected Playing item; deck={}, output_frame={}, captured_frames={}, expected_frames={}, consumed={:?}",
+                                    case.id,
+                                    u64::from(deck.id()),
+                                    self.output_frames,
+                                    pcm.len() / usize::from(CHANNELS),
+                                    capture_frames,
+                                    deck.observe(|observation| observation.consumed.clone()),
+                                )
+                            })
                             .id;
                         deck.observe(|observation| {
                             let (_, slot) = observation
