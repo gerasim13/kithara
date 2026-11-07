@@ -2012,7 +2012,15 @@ fn assert_transport(
         "nonblocking source playback has no underrun/fault: {:?}",
         capture.faults
     );
-    assert_eq!(capture.faded.len(), 4, "four real outgoing crossfades");
+    assert_eq!(
+        capture.faded.len(),
+        4,
+        "four real outgoing crossfades; starts={:?}; fades={:?}; faded={:?}; ended={:?}",
+        capture.starts,
+        capture.fades,
+        capture.faded,
+        capture.ended
+    );
     match kind {
         MusicCase::Natural => {
             assert_eq!(capture.ended.len(), 1, "last source reaches natural end");
