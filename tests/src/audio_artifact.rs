@@ -556,6 +556,7 @@ mod evidence_tests {
             tap.record_probe_evidence(0);
             tap.push(&pcm);
         }
+        drop(scope);
         let index = fs::read_to_string(temp_dir.path().join("index.jsonl")).expect("index");
         let index: Value = serde_json::from_str(index.lines().next().expect("artifact entry"))
             .expect("index JSON");
