@@ -1,16 +1,24 @@
+use std::{error::Error, fmt};
+
 use firewheel::{
     channel_config::{ChannelConfig, ChannelCount},
     diff::{Diff, Patch, PatchError},
     event::ParamData,
     node::{
         AudioNode, AudioNodeInfo, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig,
-        NodeError,
+        NodeError, NodeID,
     },
 };
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::sync::{Arc, Mutex};
+use ringbuf::{
+    HeapCons, HeapRb,
+    traits::{Consumer, Split},
+};
 
-use super::processor::{DeckMixer, OfflineDeck, OfflineProcessor, PlayerProcessor, StreamShape};
+use super::processor::{
+    DeckMixer, OfflineDeck, OfflineProcessor, PreparedDeck, ProcessorParts, StreamShape,
+};
 use crate::bridge::{MixerInputs, SessionInbox};
 
 /// A deck node whose processor borrows its commands from the Host's session store.
@@ -19,7 +27,7 @@ use crate::bridge::{MixerInputs, SessionInbox};
 pub struct PlayerNode<S, E: SessionInbox> {
     pub(crate) active: bool,
     #[diff(skip)]
-    inputs: Arc<Mutex<Option<ProcessorInputs<E>>>>,
+    inputs: Arc<Mutex<FactoryInputs<E>>>,
     #[diff(skip)]
     pools: PoolRegion<S>,
 }
@@ -48,28 +56,37 @@ impl<S, E: SessionInbox> Patch for PlayerNode<S, E> {
 
 struct ProcessorInputs<E: SessionInbox> {
     mixer: MixerInputs,
-    offline: Option<OfflineProcessor<E>>,
+    processor: OfflineProcessor<E>,
+    prepared: Option<PreparedDeck>,
+}
+
+struct FactoryInputs<E: SessionInbox> {
+    initial: Option<ProcessorInputs<E>>,
+    returned: HeapCons<ProcessorParts<E>>,
 }
 
 impl<S, E: SessionInbox> PlayerNode<S, E> {
-    pub fn new(inputs: MixerInputs, pools: PoolRegion<S>) -> Self {
-        Self::with_inputs(
-            ProcessorInputs {
-                mixer: inputs,
-                offline: None,
-            },
-            pools,
-        )
+    /// Creates a native node whose mixer returns to its owner when the stream stops.
+    pub fn native(inputs: MixerInputs, pools: PoolRegion<S>) -> (Self, OfflineDeck<E>) {
+        Self::owned(inputs, pools, true)
     }
 
     /// Creates an offline node whose mixer belongs to the session between graph turns.
     pub fn offline(inputs: MixerInputs, pools: PoolRegion<S>) -> (Self, OfflineDeck<E>) {
-        let (owner, processor) = OfflineDeck::channel(inputs.scope);
+        Self::owned(inputs, pools, false)
+    }
+
+    fn owned(inputs: MixerInputs, pools: PoolRegion<S>, native: bool) -> (Self, OfflineDeck<E>) {
+        let (owner, mut processor) = OfflineDeck::channel(inputs.scope);
+        if native {
+            processor.native();
+        }
         (
             Self::with_inputs(
                 ProcessorInputs {
                     mixer: inputs,
-                    offline: Some(processor),
+                    processor,
+                    prepared: None,
                 },
                 pools,
             ),
@@ -78,10 +95,16 @@ impl<S, E: SessionInbox> PlayerNode<S, E> {
     }
 
     fn with_inputs(inputs: ProcessorInputs<E>, pools: PoolRegion<S>) -> Self {
+        let (recycle, returned) = HeapRb::new(1).split();
+        let mut inputs = inputs;
+        inputs.processor.recycle_to(recycle);
         Self {
             pools,
             active: true,
-            inputs: Arc::new(Mutex::new(Some(inputs))),
+            inputs: Arc::new(Mutex::new(FactoryInputs {
+                initial: Some(inputs),
+                returned,
+            })),
         }
     }
 }
@@ -89,6 +112,81 @@ impl<S, E: SessionInbox> PlayerNode<S, E> {
 #[derive(Debug, thiserror::Error)]
 #[error("deck processor inputs have already been taken")]
 struct ProcessorInputsTaken;
+
+#[derive(Debug, thiserror::Error)]
+#[error("deck resources were not prepared for the actual stream geometry")]
+struct StreamNotPrepared;
+
+/// The actual graph node and typed cause of a constructor preparation refusal.
+#[derive(Debug)]
+pub struct PlayerNodePreparationError {
+    pub node: NodeID,
+    pub error: NodeError,
+}
+
+impl fmt::Display for PlayerNodePreparationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "deck node {:?} preparation failed: {}",
+            self.node, self.error
+        )
+    }
+}
+
+impl Error for PlayerNodePreparationError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(self.error.0.as_ref())
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("the deck node is absent from this graph generation")]
+struct NodeUnavailable;
+
+impl<S, E: SessionInbox> PlayerNode<S, E>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    /// Prepares a registered node without entering Firewheel's consuming compile.
+    ///
+    /// # Errors
+    /// Preserves the actual node identity and typed preparation error.
+    pub fn prepare_at(
+        context: &firewheel::FirewheelContext,
+        node: NodeID,
+        shape: StreamShape,
+    ) -> Result<(), PlayerNodePreparationError> {
+        let prepare = || {
+            let player = context
+                .node_state::<Self>(node)
+                .ok_or_else(|| NodeError(Box::new(NodeUnavailable)))?;
+            player.prepare_stream(shape)
+        };
+        prepare().map_err(|error| PlayerNodePreparationError { node, error })
+    }
+
+    /// Prepares the complete constructor before the graph takes any unique inputs.
+    ///
+    /// # Errors
+    /// Returns the typed pool, design, handoff or ownership refusal.
+    pub fn prepare_stream(&self, shape: StreamShape) -> Result<(), NodeError> {
+        let mut guard = self.inputs.lock();
+        let inputs = guard
+            .initial
+            .as_mut()
+            .ok_or_else(|| NodeError(Box::new(ProcessorInputsTaken)))?;
+        inputs.prepared = None;
+        let prepared = DeckMixer::<E>::prepare(&inputs.mixer, shape, &self.pools)
+            .map_err(|error| NodeError(Box::new(error)))?;
+        inputs
+            .processor
+            .check_install()
+            .map_err(|error| NodeError(Box::new(error)))?;
+        inputs.prepared = Some(prepared);
+        Ok(())
+    }
+}
 
 impl<S, E: SessionInbox> AudioNode for PlayerNode<S, E>
 where
@@ -103,28 +201,45 @@ where
     ) -> Result<impl AudioNodeProcessor, NodeError> {
         let shape = StreamShape::new(cx.stream_info.max_block_frames, cx.stream_info.sample_rate);
         let mut guard = self.inputs.lock();
+        if guard.initial.is_none() {
+            let parts = guard
+                .returned
+                .try_pop()
+                .ok_or_else(|| NodeError(Box::new(ProcessorInputsTaken)))?;
+            let (recycle, returned) = HeapRb::new(1).split();
+            guard.returned = returned;
+            drop(guard);
+            return Ok(OfflineProcessor::from_parts(parts, recycle));
+        }
         let borrowed = guard
+            .initial
             .as_ref()
             .ok_or_else(|| NodeError(Box::new(ProcessorInputsTaken)))?;
-        let prepared = DeckMixer::<E>::prepare(&borrowed.mixer, shape, &self.pools)
-            .map_err(|error| NodeError(Box::new(error)))?;
-        if let Some(processor) = &borrowed.offline {
-            processor
-                .check_install()
-                .map_err(|error| NodeError(Box::new(error)))?;
+        if !borrowed
+            .prepared
+            .as_ref()
+            .is_some_and(|prepared| prepared.shape == shape)
+        {
+            return Err(NodeError(Box::new(StreamNotPrepared)));
         }
+        borrowed
+            .processor
+            .check_install()
+            .map_err(|error| NodeError(Box::new(error)))?;
+        let prepared = guard
+            .initial
+            .as_mut()
+            .and_then(|inputs| inputs.prepared.take())
+            .ok_or_else(|| NodeError(Box::new(StreamNotPrepared)))?;
         let inputs = guard
+            .initial
             .take()
             .ok_or_else(|| NodeError(Box::new(ProcessorInputsTaken)))?;
         drop(guard);
         let mixer = Box::new(DeckMixer::<E>::assemble(inputs.mixer, prepared));
-        match inputs.offline {
-            Some(mut processor) => {
-                processor.install(mixer);
-                Ok(PlayerProcessor::Offline(processor))
-            }
-            None => Ok(PlayerProcessor::Native(mixer)),
-        }
+        let mut processor = inputs.processor;
+        processor.install(mixer);
+        Ok(processor)
     }
 
     fn info(&self, _config: &Self::Configuration) -> Result<AudioNodeInfo, NodeError> {
@@ -166,6 +281,7 @@ mod tests {
         DeckEnds,
         ScopedSender<DeckProtocol, DeckProtocol>,
         TestInbox,
+        OfflineDeck<TestInbox>,
     );
 
     fn make_node() -> NodeFixture {
@@ -181,12 +297,13 @@ mod tests {
         );
         let scope = sender.open(config.slots().get()).expect("deck scope");
         let (ends, inputs) = scope_channels(scope, config);
-        (
-            PlayerNode::new(inputs, pools()),
-            ends,
-            sender,
-            TestInbox(inbox),
-        )
+        let (node, owner) = PlayerNode::native(inputs, pools());
+        node.prepare_stream(StreamShape::new(
+            std::num::NonZeroU32::new(128).expect("block"),
+            std::num::NonZeroU32::new(44_100).expect("rate"),
+        ))
+        .expect("fixture constructor preparation");
+        (node, ends, sender, TestInbox(inbox), owner)
     }
 
     fn cold_stream(rate: u32) -> firewheel::ActivateInfo {
@@ -201,15 +318,37 @@ mod tests {
         }
     }
 
+    fn stop(
+        context: &firewheel::FirewheelContext,
+        mut processor: firewheel::processor::FirewheelProcessor,
+    ) {
+        use audioadapter_buffers::direct::InterleavedSlice;
+        use firewheel::{backend::BackendProcessInfo, node::StreamStatus};
+        processor.process(
+            &InterleavedSlice::new(&[] as &[f32], 0, 0).expect("empty inputs"),
+            &mut InterleavedSlice::new_mut(&mut [], 2, 0).expect("empty output"),
+            BackendProcessInfo {
+                frames: 0,
+                process_timestamp: context.audio_clock_instant(),
+                duration_since_stream_start: kithara_platform::time::Duration::ZERO,
+                input_stream_status: StreamStatus::empty(),
+                output_stream_status: StreamStatus::empty(),
+                dropped_frames: 0,
+                process_to_playback_delay: None,
+            },
+        );
+        drop(processor);
+    }
+
     #[kithara::test]
     fn player_node_defaults_active() {
-        let (node, _ends, _sender, _inbox) = make_node();
+        let (node, _ends, _sender, _inbox, _owner) = make_node();
         assert!(node.active);
     }
 
     #[kithara::test]
     fn player_node_info_has_stereo_output() {
-        let (node, _ends, _sender, _inbox) = make_node();
+        let (node, _ends, _sender, _inbox, _owner) = make_node();
         let info = node.info(&EmptyConfig);
         let _ = info;
     }
@@ -219,7 +358,7 @@ mod tests {
     #[case(DeckPart::Stop { slot: Slot::new(0), fade: Fade::Declick })]
     #[case(DeckPart::Adopt { slot: Slot::new(0), segment: kithara_signal::SegmentId::FIRST })]
     fn player_node_with_inputs(#[case] part: DeckPart) {
-        let (node, ends, mut sender, mut inbox) = make_node();
+        let (node, ends, mut sender, mut inbox, _owner) = make_node();
         assert!(node.active);
 
         sender
@@ -238,6 +377,7 @@ mod tests {
         let received = node
             .inputs
             .lock()
+            .initial
             .as_mut()
             .map(|inputs| {
                 inbox
@@ -256,7 +396,7 @@ mod tests {
 
     #[kithara::test]
     fn player_node_snapshot_starts_with_empty_slots() {
-        let (_node, mut ends, _sender, _inbox) = make_node();
+        let (_node, mut ends, _sender, _inbox, _owner) = make_node();
         let snapshot = ends.snapshot.read();
         assert_eq!(
             snapshot.slots.len(),
@@ -274,18 +414,16 @@ mod tests {
     #[case::pool(false)]
     #[case::filter(true)]
     fn cold_refusal_retains_inputs_and_scope_snapshot(#[case] invalid_design: bool) {
-        use firewheel::{
-            FirewheelContext,
-            error::{ActivateError, CompileGraphError},
-        };
+        use firewheel::FirewheelContext;
         use kithara_bufpool::PoolError;
         use kithara_dsp::filter::FilterError;
         use kithara_effects::eq::EqError;
 
         const BUDGET: usize = 1024 * 1024;
-        let (mut node, mut ends, _sender, _inbox) = make_node();
+        let (mut node, mut ends, _sender, _inbox, _owner) = make_node();
         let initial = ends.snapshot.read().clone();
-        let pointer = std::ptr::from_ref(node.inputs.lock().as_ref().expect("owned inputs"));
+        let pointer =
+            std::ptr::from_ref(node.inputs.lock().initial.as_ref().expect("owned inputs"));
         node.pools = crate::test_pools::pools_with_budget(BUDGET);
         let held = (!invalid_design).then(|| {
             node.pools
@@ -297,17 +435,15 @@ mod tests {
             .add_node(node.clone(), None)
             .expect("cold deck node");
         let refused = cold_stream(if invalid_design { 12_000 } else { 44_100 });
-        let error = context
-            .activate(refused)
-            .err()
-            .expect("controlled cold refusal");
-        let ActivateError::GraphCompileError(CompileGraphError::ProcessorConstructionFailed {
+        let PlayerNodePreparationError {
             node: failed,
             error,
-        }) = error
-        else {
-            panic!("the cold factory preserves its typed error");
-        };
+        } = PlayerNode::<TestPools, TestInbox>::prepare_at(
+            &context,
+            id,
+            StreamShape::new(refused.max_block_frames, refused.sample_rate),
+        )
+        .expect_err("controlled cold refusal");
         assert_eq!(failed, id);
         let error = error
             .0
@@ -328,18 +464,30 @@ mod tests {
             !invalid_design
         );
         assert_eq!(
-            std::ptr::from_ref(node.inputs.lock().as_ref().expect("same owned inputs")),
+            std::ptr::from_ref(
+                node.inputs
+                    .lock()
+                    .initial
+                    .as_ref()
+                    .expect("same owned inputs")
+            ),
             pointer
         );
         assert_eq!(*ends.snapshot.read(), initial);
         drop(held);
         let admitted = cold_stream(48_000);
+        PlayerNode::<TestPools, TestInbox>::prepare_at(
+            &context,
+            id,
+            StreamShape::new(admitted.max_block_frames, admitted.sample_rate),
+        )
+        .expect("valid owner preparation");
         let processor = context
             .activate(admitted)
             .expect("valid retry uses the same inputs");
-        assert!(node.inputs.lock().is_none());
+        assert!(node.inputs.lock().initial.is_none());
         assert_eq!(*ends.snapshot.read(), initial);
-        drop(processor);
+        stop(&context, processor);
         assert_eq!(
             *ends.snapshot.read(),
             initial,
@@ -349,86 +497,86 @@ mod tests {
 
     #[kithara::test]
     fn later_factory_refusal_and_unrendered_stream_preserve_scope_snapshot() {
-        use std::{
-            num::NonZeroU32,
-            sync::atomic::{AtomicBool, Ordering},
-        };
+        use std::num::NonZeroU32;
 
         use audioadapter_buffers::direct::InterleavedSlice;
-        use firewheel::{
-            FirewheelContext,
-            backend::BackendProcessInfo,
-            error::{ActivateError, CompileGraphError},
-            node::StreamStatus,
-        };
+        use firewheel::{FirewheelContext, backend::BackendProcessInfo, node::StreamStatus};
         use kithara_platform::time::Duration;
         use kithara_signal::{OutputContext, SessionEpoch};
         use kithara_warp::RenderContext;
+        type Refusal = kithara_effects::eq::EqError;
 
-        #[derive(Debug, thiserror::Error)]
-        #[error("controlled later factory refusal")]
-        struct Refusal;
-
-        struct LaterNode(Arc<AtomicBool>);
-        struct LaterProcessor;
-        impl AudioNodeProcessor for LaterProcessor {}
-        impl AudioNode for LaterNode {
-            type Configuration = EmptyConfig;
-
-            fn info(&self, _: &EmptyConfig) -> Result<AudioNodeInfo, NodeError> {
-                Ok(AudioNodeInfo::new())
-            }
-
-            fn construct_processor(
-                &self,
-                _: &EmptyConfig,
-                _: ConstructProcessorContext,
-            ) -> Result<impl AudioNodeProcessor, NodeError> {
-                if self.0.load(Ordering::SeqCst) {
-                    Err(NodeError(Box::new(Refusal)))
-                } else {
-                    Ok(LaterProcessor)
-                }
-            }
-        }
-
-        let (node, mut ends, _sender, mut inbox) = make_node();
+        let (node, mut ends, _sender, mut inbox, mut owner) = make_node();
         let initial = ends.snapshot.read().clone();
-        let refused = Arc::new(AtomicBool::new(true));
         let mut context = FirewheelContext::new(FirewheelConfig::default());
-        let id = context.add_node(node.clone(), None).expect("deck node");
-        context
-            .connect(id, context.graph_out_node_id(), &[(0, 0), (1, 1)], true)
-            .expect("stereo graph route");
-        let later = context
-            .add_node(LaterNode(refused.clone()), None)
-            .expect("later factory");
         let store = context.proc_store_mut().expect("cold processor store");
         inbox.0.drain();
         assert!(store.insert(inbox).is_ok(), "session inbox slot is vacant");
         crate::rt::install_render_context(store).expect("render context slot");
-        let error = context
+        let running = context
             .activate(cold_stream(44_100))
-            .err()
-            .expect("later factory refuses");
-        let ActivateError::GraphCompileError(CompileGraphError::ProcessorConstructionFailed {
+            .expect("actual empty output");
+        let id = context.add_node(node.clone(), None).expect("deck node");
+        context
+            .connect(id, context.graph_out_node_id(), &[(0, 0), (1, 1)], true)
+            .expect("stereo graph route");
+        context
+            .update()
+            .expect("first actual factory succeeds before later refusal");
+        let (mut later_node, _later_ends, _later_sender, _later_inbox, mut later_owner) =
+            make_node();
+        const BUDGET: usize = 1024 * 1024;
+        later_node.pools = crate::test_pools::pools_with_budget(BUDGET);
+        let held = later_node
+            .pools
+            .get_with_len::<f32>(BUDGET / 4)
+            .expect("controlled later pool pressure");
+        let later = context
+            .add_node(later_node.clone(), None)
+            .expect("later real deck");
+        let attempted = cold_stream(44_100);
+        let PlayerNodePreparationError {
             node: failed,
             error,
-        }) = error
-        else {
-            panic!("initial factory error preserves its typed payload and node");
-        };
+        } = PlayerNode::<TestPools, TestInbox>::prepare_at(
+            &context,
+            later,
+            StreamShape::new(attempted.max_block_frames, attempted.sample_rate),
+        )
+        .expect_err("later owner refuses before consuming compile");
         assert_eq!(failed, later);
         assert!(error.0.is::<Refusal>());
-        assert!(node.inputs.lock().is_none(), "the first factory succeeded");
+        assert!(matches!(
+            error.0.downcast_ref::<Refusal>(),
+            Some(Refusal::Pool(_))
+        ));
+        assert!(
+            node.inputs.lock().initial.is_none(),
+            "the first factory succeeded"
+        );
         assert_eq!(*ends.snapshot.read(), initial);
-
-        refused.store(false, Ordering::SeqCst);
+        drop(held);
+        stop(&context, running);
+        let admitted = cold_stream(48_000);
+        owner.reserve_stream().expect("returned first owner");
+        owner
+            .prepare_stream(StreamShape::new(
+                admitted.max_block_frames,
+                admitted.sample_rate,
+            ))
+            .expect("first owner's actual rate");
+        PlayerNode::<TestPools, TestInbox>::prepare_at(
+            &context,
+            later,
+            StreamShape::new(admitted.max_block_frames, admitted.sample_rate),
+        )
+        .expect("later owner prepares");
         let processor = context
-            .activate(cold_stream(48_000))
+            .activate(admitted)
             .expect("retained deck prepares actual rate");
+        owner.resume_stream().expect("reserved first handoff");
         assert_eq!(*ends.snapshot.read(), initial);
-        drop(processor);
+        stop(&context, processor);
         assert_eq!(
             *ends.snapshot.read(),
             initial,
@@ -451,9 +599,18 @@ mod tests {
             .expect("linear render context"),
         )
         .expect("published callback context");
+        for owner in [&mut owner, &mut later_owner] {
+            owner.reserve_stream().expect("cold reservation");
+            owner
+                .prepare_stream(StreamShape::new(admitted.max_block_frames, rate))
+                .expect("matching preparation");
+        }
         let mut processor = context
             .activate(cold_stream(rate.get()))
             .expect("same geometry retries prepare anew");
+        for owner in [&mut owner, &mut later_owner] {
+            owner.resume_stream().expect("reserved native handoff");
+        }
         let input = InterleavedSlice::new(&[] as &[f32], 0, 0).expect("empty inputs");
         let mut samples = [f32::NAN; 256];
         processor.process(
@@ -489,7 +646,7 @@ mod tests {
         use kithara_signal::{OutputContext, SessionEpoch};
         use kithara_warp::RenderContext;
 
-        let (node, mut ends, _sender, inbox) = make_node();
+        let (node, mut ends, _sender, inbox, _owner) = make_node();
         let mut context = FirewheelContext::new(FirewheelConfig::default());
         let id = context.add_node(node, None).expect("deck node");
         context
@@ -535,13 +692,13 @@ mod tests {
             );
             assert_eq!(samples, [0.0; 256]);
         }
-        drop(processor);
+        stop(&context, processor);
         let before = ends.snapshot.read().clone();
         context.remove_node(id).expect("retire exact generation");
         let processor = context
             .activate(cold_stream(12_000))
             .expect("a retired EQ is not a participant in new stream admission");
         assert_eq!(*ends.snapshot.read(), before);
-        drop(processor);
+        stop(&context, processor);
     }
 }

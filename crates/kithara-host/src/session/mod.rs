@@ -3,6 +3,7 @@
 pub(crate) mod decks;
 pub(crate) mod dispatch;
 pub(crate) mod graph;
+pub(crate) mod processor;
 pub(crate) mod protocol;
 pub(crate) mod queue;
 pub(crate) mod state;

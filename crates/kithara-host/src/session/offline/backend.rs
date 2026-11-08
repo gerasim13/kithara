@@ -2,16 +2,14 @@ use std::num::NonZeroU32;
 
 use audioadapter_buffers::direct::InterleavedSlice;
 use bevy_platform::time::Instant;
-use firewheel::{
-    ActivateInfo, FirewheelContext, backend::BackendProcessInfo, node::StreamStatus,
-    processor::FirewheelProcessor,
-};
+use firewheel::{ActivateInfo, FirewheelContext, backend::BackendProcessInfo, node::StreamStatus};
 use kithara_config::Config;
 use kithara_platform::time::Duration;
 use kithara_signal::SessionFrame;
 
 use super::{OfflineSessionError, task::consts::CHANNELS};
 use crate::session::{
+    processor::SessionProcessor,
     state::DeckNode,
     transport::{OfflineInbox, TransportState},
 };
@@ -41,7 +39,7 @@ impl Default for BackendConfig {
 /// whatever pace it likes instead of a sound card setting it.
 pub(crate) struct OfflineStream {
     inbox: Option<OfflineInbox>,
-    processor: Box<FirewheelProcessor>,
+    processor: Box<SessionProcessor>,
     sample_rate: NonZeroU32,
 }
 
@@ -76,7 +74,7 @@ impl OfflineStream {
                 quantum,
                 &mut output[cursor * CHANNELS..(cursor + quantum) * CHANNELS],
             )?;
-            for deck in decks.iter_mut().filter_map(|deck| deck.offline.as_mut()) {
+            for deck in decks.iter_mut().map(|deck| &mut deck.owner) {
                 deck.end_render()
                     .map_err(|error| OfflineSessionError::Graph(error.to_string()))?;
             }
@@ -99,14 +97,18 @@ impl OfflineStream {
             inbox
                 .drain()
                 .map_err(|error| OfflineSessionError::Graph(error.to_string()))?;
-            for deck in decks.iter_mut().filter_map(|deck| deck.offline.as_mut()) {
+            for deck in decks.iter_mut().map(|deck| &mut deck.owner) {
                 quantum = quantum.min(
                     deck.prepare(inbox, start, quantum, self.sample_rate)
                         .map_err(|error| OfflineSessionError::Graph(error.to_string()))?,
                 );
             }
         }
-        for deck in decks.iter_mut().filter_map(|deck| deck.offline.as_mut()) {
+        for deck in decks.iter_mut().map(|deck| &mut deck.owner) {
+            deck.reserve_render(quantum)
+                .map_err(|error| OfflineSessionError::Graph(error.to_string()))?;
+        }
+        for deck in decks.iter_mut().map(|deck| &mut deck.owner) {
             deck.begin_render(quantum)
                 .map_err(|error| OfflineSessionError::Graph(error.to_string()))?;
         }
@@ -133,9 +135,7 @@ impl OfflineStream {
             dropped_frames: 0,
             process_to_playback_delay: None,
         };
-        let input = InterleavedSlice::new(&[] as &[f32], 0, 0)
-            .map_err(|error| OfflineSessionError::Graph(error.to_string()))?;
-        let mut output = InterleavedSlice::new_mut(output, CHANNELS, frames)
+        InterleavedSlice::new_mut(output, CHANNELS, frames)
             .map_err(|error| OfflineSessionError::Graph(error.to_string()))?;
         if frames != 0
             && let Some(inbox) = &mut self.inbox
@@ -144,7 +144,7 @@ impl OfflineStream {
                 .begin_render(frames)
                 .map_err(|error| OfflineSessionError::Graph(error.to_string()))?;
         }
-        self.processor.process(&input, &mut output, process_info);
+        self.processor.process(output, process_info);
         if frames != 0
             && let Some(inbox) = &mut self.inbox
         {
@@ -176,11 +176,13 @@ impl OfflineStream {
                 firewheel::error::ActivateError::AlreadyActive.to_string(),
             ));
         }
+        cx.cycle_detected()
+            .map_err(|error| OfflineSessionError::Graph(error.to_string()))?;
         let shape = kithara_render::rt::StreamShape::new(config.block_frames, config.sample_rate);
         for deck in decks
             .iter_mut()
             .filter(|deck| cx.node_info(deck.node).is_some())
-            .filter_map(|deck| deck.offline.as_mut())
+            .map(|deck| &mut deck.owner)
         {
             deck.prepare_stream(shape)
                 .map_err(|error| OfflineSessionError::Graph(error.to_string()))?;
@@ -205,13 +207,13 @@ impl OfflineStream {
         for deck in decks
             .iter_mut()
             .filter(|deck| cx.node_info(deck.node).is_some())
-            .filter_map(|deck| deck.offline.as_mut())
+            .map(|deck| &mut deck.owner)
         {
             deck.commit_stream();
         }
         Ok(Self {
             inbox,
-            processor: Box::new(processor),
+            processor: Box::new(SessionProcessor::new(processor, CHANNELS)),
             sample_rate: config.sample_rate,
         })
     }
@@ -239,10 +241,7 @@ mod tests {
         let Some(SessionStream::Offline(stream)) = &mut session.stream else {
             panic!("fixture offline stream");
         };
-        let deck = session.deck_nodes[0]
-            .offline
-            .as_mut()
-            .expect("offline endpoint");
+        let deck = &mut session.deck_nodes[0].owner;
         assert!(matches!(
             deck.begin_render(32),
             Err(OfflineDeckError::InvalidFrames)

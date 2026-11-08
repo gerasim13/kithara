@@ -75,12 +75,13 @@ pub(crate) fn prepare_route_restart<T, S>(
     state.reserved_session_grid = Some(target);
 
     if was_running {
+        state.stream = None;
+        #[cfg(target_arch = "wasm32")]
         state
             .ctx
             .as_mut()
             .ok_or(SessionError::NoContext)?
             .request_deactivate();
-        state.stream = None;
     }
     state.publish_root();
     finish_route_restart(state, target)

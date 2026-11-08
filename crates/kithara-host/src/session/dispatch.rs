@@ -138,6 +138,9 @@ pub(crate) fn tick_session<T, S>(state: &mut SessionState<T, S>) -> Result<(), S
     if let Some(Err(err)) = update {
         return Err(update_failed(&err));
     }
+    state
+        .retired_decks
+        .retain_mut(|deck| !deck.owner.reclaim_stopped());
     if stream_died(state) {
         return restart_dead_stream(state);
     }

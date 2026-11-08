@@ -25,8 +25,8 @@ where
     });
     let inbox: Arc<dyn DeckInbox> = client.clone();
     spawn_named("host-deck-session", move || {
-        let start = move |ctx: &mut FirewheelContext, rate: u32, _decks: &mut [DeckNode]| {
-            start_stream_cpal(ctx, rate, output_block_frames).map(|backend| {
+        let start = move |ctx: &mut FirewheelContext, rate: u32, decks: &mut [DeckNode]| {
+            start_stream_cpal(ctx, rate, output_block_frames, decks).map(|backend| {
                 SessionStream::Realtime {
                     _backend: Box::new(backend),
                 }
@@ -54,8 +54,47 @@ fn start_stream_cpal(
     ctx: &mut FirewheelContext,
     sample_rate: u32,
     output_block_frames: Option<NonZeroU32>,
-) -> Result<CpalStream, String> {
+    decks: &mut [DeckNode],
+) -> Result<NativeStream, String> {
     debug!(sample_rate, "starting cpal stream");
-    CpalStream::new(ctx, cpal_config(sample_rate, output_block_frames))
-        .map_err(|error| error.to_string())
+    let device = AcquiredOutput::new(cpal_config(sample_rate, output_block_frames))?.open()?;
+    device.reserve_processor()?;
+    ctx.cycle_detected().map_err(|error| error.to_string())?;
+    if ctx.is_active() {
+        return Err(firewheel::error::ActivateError::AlreadyActive.to_string());
+    }
+    let shape =
+        kithara_render::rt::StreamShape::new(device.info.max_block_frames, device.info.sample_rate);
+    for deck in decks
+        .iter_mut()
+        .filter(|deck| ctx.node_info(deck.node).is_some())
+    {
+        deck.owner
+            .reserve_stream()
+            .map_err(|error| error.to_string())?;
+    }
+    for deck in decks
+        .iter_mut()
+        .filter(|deck| ctx.node_info(deck.node).is_some())
+    {
+        deck.owner
+            .prepare_stream(shape)
+            .map_err(|error| error.to_string())?;
+    }
+    let processor = ctx
+        .activate(device.info)
+        .map_err(|error| error.to_string())?;
+    for deck in decks
+        .iter_mut()
+        .filter(|deck| ctx.node_info(deck.node).is_some())
+    {
+        if let Err(error) = deck.owner.resume_stream() {
+            drop(crate::session::processor::SessionProcessor::new(
+                processor,
+                device.channels,
+            ));
+            return Err(error.to_string());
+        }
+    }
+    device.start(processor)
 }

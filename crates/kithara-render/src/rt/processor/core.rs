@@ -69,7 +69,7 @@ pub(in crate::rt) struct Deck {
 pub(in crate::rt) struct StreamCapacityExceeded;
 
 pub(in crate::rt) struct PreparedDeck {
-    shape: StreamShape,
+    pub(in crate::rt) shape: StreamShape,
     scratch: [SampleBuffer; crate::consts::MIN_STEREO],
     tracks: TrackSlots,
     armed: Vec<Option<Armed>>,
@@ -584,13 +584,6 @@ impl Deck {
 }
 
 impl<E: SessionInbox> AudioNodeProcessor for DeckMixer<E> {
-    fn prepare_new_stream(&mut self, stream_info: &StreamInfo) -> Result<(), NodeError> {
-        self.prepare_stream(StreamShape::new(
-            stream_info.max_block_frames,
-            stream_info.sample_rate,
-        ))
-    }
-
     fn new_stream(&mut self, _stream_info: &StreamInfo, _context: &mut ProcStreamCtx) {
         self.commit_stream();
     }

@@ -36,18 +36,24 @@ where
         .ok_or(SessionError::NoContext)?;
     let ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
     #[cfg(feature = "offline")]
-    let (player, offline) = if matches!(state.stream, Some(super::state::SessionStream::Offline(_)))
-    {
-        let (player, offline) = PlayerNode::<S, TransportState>::offline(inputs, pools);
-        (player, Some(offline))
+    let (player, owner) = if matches!(state.stream, Some(super::state::SessionStream::Offline(_))) {
+        PlayerNode::<S, TransportState>::offline(inputs, pools)
     } else {
-        (PlayerNode::<S, TransportState>::new(inputs, pools), None)
+        PlayerNode::<S, TransportState>::native(inputs, pools)
     };
     #[cfg(not(feature = "offline"))]
-    let player = PlayerNode::<S, TransportState>::new(inputs, pools);
+    let (player, owner) = PlayerNode::<S, TransportState>::native(inputs, pools);
+    let info = ctx.stream_info().ok_or(SessionError::NoContext)?;
+    let shape = kithara_render::rt::StreamShape::new(info.max_block_frames, info.sample_rate);
     let node = add_graph_node(ctx, player)?;
-    let installed =
-        connect_stereo(ctx, node, master, "connect deck mixer to master").and_then(|()| {
+    let installed = PlayerNode::<S, TransportState>::prepare_at(ctx, node, shape)
+        .map_err(|error| SessionError::Graph(error.to_string()))
+        .and_then(|()| connect_stereo(ctx, node, master, "connect deck mixer to master"))
+        .and_then(|()| {
+            ctx.cycle_detected()
+                .map_err(|error| SessionError::Graph(error.to_string()))
+        })
+        .and_then(|()| {
             ctx.update()
                 .map_err(|error| SessionError::Graph(format!("{error:?}")))
         });
@@ -55,14 +61,19 @@ where
         if let Err(remove_error) = ctx.remove_node(node) {
             warn!(?remove_error, "failed to remove the rejected deck node");
         }
+        state.retired_decks.push(DeckNode {
+            id,
+            node,
+            bus,
+            owner,
+        });
         return Err(error);
     }
     state.deck_nodes.push(DeckNode {
         id,
         node,
         bus,
-        #[cfg(feature = "offline")]
-        offline,
+        owner,
     });
     Ok(())
 }
@@ -81,7 +92,7 @@ pub(crate) fn remove_deck<T, S>(
     let ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
     ctx.remove_node(node)
         .map_err(|error| SessionError::Graph(format!("remove deck mixer failed: {error}")))?;
-    state.deck_nodes.remove(index);
+    state.retired_decks.push(state.deck_nodes.remove(index));
     if let Err(error) = ctx.update() {
         warn!(?error, "graph update after deck retirement failed");
     }
@@ -119,12 +130,13 @@ pub(crate) fn idle<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionEr
         .publish_unavailable(stamp, axis.sample_rate(), generation.epoch());
     state.reserved_session_grid = Some(generation);
     state.iteration_clock = None;
+    state.stream = None;
+    #[cfg(target_arch = "wasm32")]
     state
         .ctx
         .as_mut()
         .ok_or(SessionError::NoContext)?
         .request_deactivate();
-    state.stream = None;
     state.stream_needs_restart = false;
     state.publish_root();
     Ok(())

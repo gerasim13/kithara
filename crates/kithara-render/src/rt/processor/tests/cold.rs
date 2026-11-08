@@ -86,9 +86,10 @@ fn refused_attempt_preserves_state_across_matching_successful_lifecycle(
     };
     actual.mixer.stream_stopped(&mut context);
     reference.mixer.stream_stopped(&mut context);
-    let result = actual
-        .mixer
-        .prepare_new_stream(&stream(attempted_rate, attempted_block));
+    let result = actual.mixer.prepare_stream(StreamShape::new(
+        NonZeroU32::new(attempted_block).expect("attempted block"),
+        NonZeroU32::new(attempted_rate).expect("attempted rate"),
+    ));
     if later_owner_refuses {
         result.expect("this owner prepares, but the transaction never commits");
     } else {
@@ -122,7 +123,7 @@ fn refused_attempt_preserves_state_across_matching_successful_lifecycle(
     for mixer in [&mut actual, &mut reference] {
         mixer
             .mixer
-            .prepare_new_stream(&old)
+            .prepare_stream(StreamShape::new(old.max_block_frames, old.sample_rate))
             .expect("matching successful old-format start");
         mixer.mixer.new_stream(&old, &mut context);
     }

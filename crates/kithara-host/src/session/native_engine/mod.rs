@@ -8,13 +8,11 @@ use std::{
     task::{Wake, Waker},
 };
 
-use backend::cpal_config;
+pub(crate) use backend::NativeStream;
+use backend::{AcquiredOutput, cpal_config};
 pub(crate) use engine::{EngineMsg, SessionClient};
 use engine::{SessionWake, engine_thread};
-use firewheel::{
-    FirewheelContext,
-    cpal::{CpalConfig, CpalStream},
-};
+use firewheel::FirewheelContext;
 use kithara_bufpool::HasPool;
 use kithara_command::{Live, Ticket, mailbox};
 use kithara_platform::{

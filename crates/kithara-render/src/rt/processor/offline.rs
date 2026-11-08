@@ -1,11 +1,7 @@
 use std::num::NonZeroU32;
 
-use firewheel::{
-    StreamInfo,
-    node::{
-        AudioNodeProcessor, NodeError, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx,
-        ProcessStatus,
-    },
+use firewheel::node::{
+    AudioNodeProcessor, NodeError, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
 };
 use kithara_command::ScopeId;
 use kithara_signal::SessionFrame;
@@ -18,7 +14,7 @@ use ringbuf::{
 use super::{DeckMixer, StreamShape};
 use crate::bridge::SessionInbox;
 
-/// Sole owner of an offline mixer between complete graph turns.
+/// Owns a stopped native mixer or an offline mixer between graph turns.
 pub struct OfflineDeck<E: SessionInbox> {
     scope: ScopeId,
     mixer: Option<Box<DeckMixer<E>>>,
@@ -44,9 +40,15 @@ pub enum OfflineDeckError {
 
 pub(in crate::rt) struct OfflineProcessor<E: SessionInbox> {
     mixer: Option<Box<DeckMixer<E>>>,
+    parts: Option<ProcessorParts<E>>,
+    recycle: Option<HeapProd<ProcessorParts<E>>>,
+    remaining: usize,
+}
+
+pub(in crate::rt) struct ProcessorParts<E: SessionInbox> {
     to_owner: HeapProd<Box<DeckMixer<E>>>,
     from_owner: HeapCons<(Box<DeckMixer<E>>, usize)>,
-    remaining: usize,
+    native: bool,
 }
 
 impl<E: SessionInbox> OfflineDeck<E> {
@@ -63,8 +65,12 @@ impl<E: SessionInbox> OfflineDeck<E> {
             },
             OfflineProcessor {
                 mixer: None,
-                to_owner,
-                from_owner,
+                parts: Some(ProcessorParts {
+                    to_owner,
+                    from_owner,
+                    native: false,
+                }),
+                recycle: None,
                 remaining: 0,
             },
         )
@@ -75,8 +81,34 @@ impl<E: SessionInbox> OfflineDeck<E> {
     /// # Errors
     /// Returns the typed design or capacity refusal without changing sounding state.
     pub fn prepare_stream(&mut self, shape: StreamShape) -> Result<(), NodeError> {
+        self.prepared = None;
         for mixer in self.mixer.iter_mut().chain(self.from_processor.iter_mut()) {
             mixer.prepare_stream(shape)?;
+        }
+        Ok(())
+    }
+
+    /// Reserves the native handoff before committing a stopped stream.
+    ///
+    /// # Errors
+    /// Returns an ownership refusal while the previous processor still holds the mixer.
+    pub fn reserve_stream(&mut self) -> Result<(), OfflineDeckError> {
+        self.acquire()?;
+        if self.to_processor.is_full() {
+            return Err(OfflineDeckError::TurnInFlight);
+        }
+        Ok(())
+    }
+
+    /// Returns a prepared native mixer to its stopped processor.
+    ///
+    /// # Errors
+    /// A full channel retains the owned mixer for another admitted start.
+    pub fn resume_stream(&mut self) -> Result<(), OfflineDeckError> {
+        let mixer = self.mixer.take().ok_or(OfflineDeckError::MissingMixer)?;
+        if let Err((mixer, _)) = self.to_processor.try_push((mixer, 0)) {
+            self.mixer = Some(mixer);
+            return Err(OfflineDeckError::TurnInFlight);
         }
         Ok(())
     }
@@ -115,17 +147,32 @@ impl<E: SessionInbox> OfflineDeck<E> {
         Ok(frames)
     }
 
-    /// Transfer the prepared mixer for exactly `frames` graph frames.
+    /// Reserves a complete offline turn before any deck transfers its payload.
     ///
     /// # Errors
-    /// Returns an error while the processor still owns the previous turn.
-    pub fn begin_render(&mut self, frames: usize) -> Result<(), OfflineDeckError> {
+    /// Returns invalid-frame, ownership or channel pressure before changing ownership.
+    pub fn reserve_render(&self, frames: usize) -> Result<(), OfflineDeckError> {
         if !self
             .prepared
             .is_some_and(|prepared| frames > 0 && frames <= prepared)
         {
             return Err(OfflineDeckError::InvalidFrames);
         }
+        if self.mixer.is_none() {
+            return Err(OfflineDeckError::MissingMixer);
+        }
+        if self.to_processor.is_full() {
+            return Err(OfflineDeckError::TurnInFlight);
+        }
+        Ok(())
+    }
+
+    /// Transfers the reserved mixer for exactly `frames` graph frames.
+    ///
+    /// # Errors
+    /// Retains the payload if the prepared turn or its reservation is unavailable.
+    pub fn begin_render(&mut self, frames: usize) -> Result<(), OfflineDeckError> {
+        self.reserve_render(frames)?;
         let mixer = self.mixer.take().ok_or(OfflineDeckError::MissingMixer)?;
         if let Err((mixer, _)) = self.to_processor.try_push((mixer, frames)) {
             self.mixer = Some(mixer);
@@ -153,11 +200,45 @@ impl<E: SessionInbox> OfflineDeck<E> {
         }
         Ok(())
     }
+
+    /// Reclaims a retired processor's payload once its final schedule releases it.
+    pub fn reclaim_stopped(&mut self) -> bool {
+        self.acquire().is_ok() || !self.to_processor.read_is_held()
+    }
 }
 
 impl<E: SessionInbox> OfflineProcessor<E> {
+    pub(in crate::rt) fn recycle_to(&mut self, recycle: HeapProd<ProcessorParts<E>>) {
+        self.recycle = Some(recycle);
+    }
+
+    pub(in crate::rt) fn from_parts(
+        parts: ProcessorParts<E>,
+        recycle: HeapProd<ProcessorParts<E>>,
+    ) -> Self {
+        Self {
+            mixer: None,
+            parts: Some(parts),
+            recycle: Some(recycle),
+            remaining: 0,
+        }
+    }
+
+    pub(in crate::rt) fn native(&mut self) {
+        self.parts
+            .as_mut()
+            .expect("processor endpoints are owned until drop")
+            .native = true;
+    }
+
     pub(in crate::rt) fn check_install(&self) -> Result<(), OfflineDeckError> {
-        if self.to_owner.is_full() {
+        if self
+            .parts
+            .as_ref()
+            .expect("processor endpoints are owned until drop")
+            .to_owner
+            .is_full()
+        {
             return Err(OfflineDeckError::TurnInFlight);
         }
         Ok(())
@@ -165,32 +246,41 @@ impl<E: SessionInbox> OfflineProcessor<E> {
 
     /// The sole producer checked capacity before taking the constructor's inputs.
     pub(in crate::rt) fn install(&mut self, mixer: Box<DeckMixer<E>>) {
+        let parts = self
+            .parts
+            .as_mut()
+            .expect("processor endpoints are owned until drop");
+        if parts.native {
+            self.mixer = Some(mixer);
+            return;
+        }
         assert!(
-            self.to_owner.try_push(mixer).is_ok(),
+            parts.to_owner.try_push(mixer).is_ok(),
             "reserved cold mixer handoff"
         );
+    }
+
+    fn return_stopped(&mut self) {
+        let parts = self
+            .parts
+            .as_mut()
+            .expect("processor endpoints are owned until drop");
+        if self.mixer.is_none()
+            && let Some((mixer, _)) = parts.from_owner.try_pop()
+        {
+            self.mixer = Some(mixer);
+        }
+        if let Some(mixer) = self.mixer.take()
+            && let Err(mixer) = parts.to_owner.try_push(mixer)
+        {
+            self.mixer = Some(mixer);
+        }
     }
 }
 
 impl<E: SessionInbox> AudioNodeProcessor for OfflineProcessor<E> {
-    fn prepare_new_stream(&mut self, info: &StreamInfo) -> Result<(), NodeError> {
-        let shape = StreamShape::new(info.max_block_frames, info.sample_rate);
-        if let Some(mixer) = self.mixer.as_mut() {
-            mixer.prepare_stream(shape)?;
-        }
-        for (mixer, _) in self.from_owner.iter_mut() {
-            mixer.prepare_stream(shape)?;
-        }
-        Ok(())
-    }
-
-    fn new_stream(&mut self, _info: &StreamInfo, _context: &mut ProcStreamCtx) {
-        if let Some(mixer) = self.mixer.as_mut() {
-            mixer.commit_stream();
-        }
-        for (mixer, _) in self.from_owner.iter_mut() {
-            mixer.commit_stream();
-        }
+    fn stream_stopped(&mut self, _context: &mut ProcStreamCtx) {
+        self.return_stopped();
     }
 
     #[kithara::rtsan_forbid_blocking]
@@ -200,9 +290,14 @@ impl<E: SessionInbox> AudioNodeProcessor for OfflineProcessor<E> {
         buffers: ProcBuffers,
         extra: &mut ProcExtra,
     ) -> ProcessStatus {
+        let parts = self
+            .parts
+            .as_mut()
+            .expect("processor endpoints are owned until drop");
         if self.mixer.is_none()
-            && let Some((mixer, frames)) = self.from_owner.try_pop()
+            && let Some((mut mixer, frames)) = parts.from_owner.try_pop()
         {
+            mixer.commit_stream();
             self.mixer = Some(mixer);
             self.remaining = frames;
         }
@@ -212,6 +307,9 @@ impl<E: SessionInbox> AudioNodeProcessor for OfflineProcessor<E> {
                 .try_error("offline session did not supply its mixer");
             return ProcessStatus::ClearAllOutputs;
         };
+        if parts.native {
+            return mixer.process(info, buffers, extra);
+        }
         let Some(remaining) = self.remaining.checked_sub(info.frames) else {
             let _ = extra
                 .logger
@@ -222,7 +320,7 @@ impl<E: SessionInbox> AudioNodeProcessor for OfflineProcessor<E> {
         self.remaining = remaining;
         if remaining == 0
             && let Some(mixer) = self.mixer.take()
-            && let Err(mixer) = self.to_owner.try_push(mixer)
+            && let Err(mixer) = parts.to_owner.try_push(mixer)
         {
             self.mixer = Some(mixer);
             let _ = extra
@@ -230,6 +328,22 @@ impl<E: SessionInbox> AudioNodeProcessor for OfflineProcessor<E> {
                 .try_error("offline session did not reclaim its mixer");
         }
         status
+    }
+}
+
+impl<E: SessionInbox> Drop for OfflineProcessor<E> {
+    fn drop(&mut self) {
+        self.return_stopped();
+        // One unique mixer crosses this pair of single-slot channels.
+        assert!(self.mixer.is_none(), "stopped mixer return was reserved");
+        if let Some(mut recycle) = self.recycle.take()
+            && let Some(parts) = self.parts.take()
+        {
+            assert!(
+                recycle.try_push(parts).is_ok(),
+                "one returned factory owns the endpoint reservation"
+            );
+        }
     }
 }
 
@@ -245,6 +359,49 @@ mod tests {
         mock::PacketRing,
         rt::track::{PcmConsumer, PlayerResource},
     };
+
+    #[kithara::test]
+    #[case::processor_owned(false)]
+    #[case::queued_resume(true)]
+    fn a_native_stop_returns_one_mixer_without_a_render_roundtrip(#[case] queued: bool) {
+        use firewheel::{
+            log::{RealtimeLoggerConfig, realtime_logger},
+            node::{ProcStore, ProcStreamCtx},
+        };
+
+        use super::*;
+
+        let (fixture, mut ends) = mixer();
+        let initial = ends.deck.snapshot.read().clone();
+        let (mut owner, mut processor) = OfflineDeck::channel(fixture.mixer.scope);
+        processor.native();
+        processor.check_install().expect("reserved native handoff");
+        processor.install(Box::new(fixture.mixer));
+        assert!(
+            !owner.reclaim_stopped(),
+            "running processor retains its mixer"
+        );
+        let mut store = ProcStore::with_capacity(1);
+        let (mut logger, _events) = realtime_logger(RealtimeLoggerConfig::default());
+        let mut context = ProcStreamCtx {
+            store: &mut store,
+            logger: &mut logger,
+        };
+        processor.stream_stopped(&mut context);
+        owner.reserve_stream().expect("stopped mixer returned");
+        if queued {
+            owner.resume_stream().expect("native resume reservation");
+        }
+        drop(processor);
+        assert!(
+            owner.reclaim_stopped(),
+            "retirement returns an unrendered payload"
+        );
+        assert_eq!(*ends.deck.snapshot.read(), initial);
+        assert!(owner.from_processor.is_empty());
+        assert!(owner.to_processor.is_empty());
+        assert!(owner.mixer.is_some());
+    }
 
     #[kithara::test]
     fn nonblocking_preparation_leaves_commands_for_the_graph() {
@@ -321,6 +478,9 @@ mod tests {
                 .map(|mixer| mixer.deck.sample_rate)
                 .or_else(|| {
                     processor
+                        .parts
+                        .as_ref()
+                        .expect("processor endpoints")
                         .from_owner
                         .iter()
                         .next()
@@ -343,6 +503,9 @@ mod tests {
         }
         if location >= 3 {
             let (mixer, frames) = processor
+                .parts
+                .as_mut()
+                .expect("processor endpoints")
                 .from_owner
                 .try_pop()
                 .expect("graph acquires its mixer");
@@ -356,46 +519,35 @@ mod tests {
             max_block_frames: NonZeroU32::new(512).expect("prepared capacity"),
             ..StreamInfo::default()
         };
+        let mut store = ProcStore::with_capacity(1);
+        let (mut logger, _events) = realtime_logger(RealtimeLoggerConfig::default());
+        if location >= 2 {
+            processor.stream_stopped(&mut ProcStreamCtx {
+                store: &mut store,
+                logger: &mut logger,
+            });
+        }
         let refused = descriptor(NonZeroU32::new(12_000).expect("refused rate"));
-        let error = if location < 2 {
-            owner.prepare_stream(StreamShape::new(
+        let error = owner
+            .prepare_stream(StreamShape::new(
                 refused.max_block_frames,
                 refused.sample_rate,
             ))
-        } else {
-            processor.prepare_new_stream(&refused)
-        }
-        .expect_err("the same EQ refusal reaches every owning location");
+            .expect_err("the same EQ refusal reaches every owning location");
         assert!(matches!(
             error.0.downcast_ref::<EqError>(),
             Some(EqError::Filter(FilterError::Parameters))
         ));
         assert_eq!(rate(&owner, &processor), initial);
         let admitted = descriptor(NonZeroU32::new(48_000).expect("admitted rate"));
-        if location < 2 {
-            owner
-                .prepare_stream(StreamShape::new(
-                    admitted.max_block_frames,
-                    admitted.sample_rate,
-                ))
-                .expect("prepare");
-        } else {
-            processor.prepare_new_stream(&admitted).expect("prepare");
-        }
+        owner
+            .prepare_stream(StreamShape::new(
+                admitted.max_block_frames,
+                admitted.sample_rate,
+            ))
+            .expect("prepare");
         assert_eq!(rate(&owner, &processor), initial);
-        let mut store = ProcStore::with_capacity(1);
-        let (mut logger, _events) = realtime_logger(RealtimeLoggerConfig::default());
-        if location < 2 {
-            owner.commit_stream();
-        } else {
-            processor.new_stream(
-                &admitted,
-                &mut ProcStreamCtx {
-                    store: &mut store,
-                    logger: &mut logger,
-                },
-            );
-        }
+        owner.commit_stream();
         assert_eq!(rate(&owner, &processor), admitted.sample_rate);
     }
 }

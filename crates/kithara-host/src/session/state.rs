@@ -197,7 +197,7 @@ impl RootView {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) type DeviceBackend = Box<firewheel::cpal::CpalStream>;
+pub(crate) type DeviceBackend = Box<super::native_engine::NativeStream>;
 #[cfg(target_arch = "wasm32")]
 pub(crate) type DeviceBackend = firewheel_web_audio::WebAudioBackend;
 
@@ -213,8 +213,7 @@ pub(crate) struct DeckNode {
     pub(crate) id: DeckId,
     pub(crate) node: NodeID,
     pub(crate) bus: Option<EventBus>,
-    #[cfg(feature = "offline")]
-    pub(crate) offline: Option<kithara_render::rt::OfflineDeck<super::transport::TransportState>>,
+    pub(crate) owner: kithara_render::rt::OfflineDeck<super::transport::TransportState>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -231,6 +230,7 @@ pub(crate) struct SessionState<T, S> {
     pub(crate) delivery_delay: Option<Duration>,
     /// Graph node identities; deck state remains with the deck's owner.
     pub(crate) deck_nodes: Vec<DeckNode>,
+    pub(crate) retired_decks: Vec<DeckNode>,
     pub(crate) channel_config: ScopedConfig,
     marker: std::marker::PhantomData<fn() -> S>,
     pub(crate) root: HostRoot,
@@ -319,6 +319,7 @@ impl<T, S> SessionState<T, S> {
             iteration_clock: None,
             delivery_delay: None,
             deck_nodes: Vec::new(),
+            retired_decks: Vec::new(),
             marker: std::marker::PhantomData,
         };
         state.publish_root();
