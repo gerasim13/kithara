@@ -357,12 +357,10 @@ fn a_tempo_staged_in_the_pass_of_a_rate_change_lands_on_the_new_axis_and_its_map
             HostSettingsChange::Tempo(tempo),
             HostSettingsChange::SampleRate(rate),
         ] {
-            assert!(
-                state
-                    .owner
-                    .apply(HostCommand::Configure(change, When::Next))
-                    .is_ok()
-            );
+            let result = state
+                .owner
+                .apply(HostCommand::Configure(change, When::Next));
+            assert!(result.is_ok(), "staged change: {result:?}");
         }
         state.owner.pass();
     });

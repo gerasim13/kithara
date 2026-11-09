@@ -138,13 +138,11 @@ pub(super) fn remove(state: &mut TestState, grid_id: BeatGridId) {
 /// Asks the session for `rate` from the next block on.
 pub(super) fn configure_sample_rate(state: &mut TestState, rate: u32) {
     let rate = NonZeroU32::new(rate).expect("a fixture rate is not zero");
-    assert!(matches!(
-        ask(
-            state,
-            HostCommand::Configure(HostSettingsChange::SampleRate(rate), When::Next)
-        ),
-        Ok(())
-    ));
+    let result = ask(
+        state,
+        HostCommand::Configure(HostSettingsChange::SampleRate(rate), When::Next),
+    );
+    assert!(matches!(result, Ok(())), "rate change: {result:?}");
 }
 
 /// Moves the session's output to a new platform route.
