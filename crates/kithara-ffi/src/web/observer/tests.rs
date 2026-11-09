@@ -232,13 +232,15 @@ async fn surface_dependent_commands_share_owner_order_before_publication() {
         .map(|item| num_traits::cast(item.queue_id().as_u64()).expect("safe id"))
         .collect();
     assert_eq!(ids, [first, tail]);
+    let recorded = events.lock();
     assert!(
-        events
-            .lock()
+        recorded
             .iter()
             .all(|event| !matches!(event, FfiPlayerEvent::Error { .. })),
-        "known pending command targets must reach owner validation in order"
+        "known pending command targets must reach owner validation in order: {:?}",
+        &*recorded
     );
+    drop(recorded);
 }
 
 fn caller_item(url: &str) -> Arc<AudioPlayerItem> {
