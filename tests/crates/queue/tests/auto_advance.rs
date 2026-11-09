@@ -332,19 +332,30 @@ async fn repeat_all_natural_advance_wraps_last_track_to_first() {
             mode: kithara::queue::QueueRepeatMode::All,
         })
     ));
+    let mut rendered_blocks = 0;
+    let mut last_observed = None;
+    let mut last_tick = None;
+    let mut broke_on_first = false;
     for _ in 0..MAX_BLOCKS {
         hang_tick!(format!(
             "repeat-all waits for track {first:?}; current={:?}",
             queue.current_index()
         ));
-        let _ = harness.run(&queue, QueueControl::tick).await;
+        last_tick = Some(harness.run(&queue, QueueControl::tick).await);
         let _ = harness.render(BLOCK_FRAMES).await;
-        if queue.current().is_some_and(|entry| entry.id == first) {
+        rendered_blocks += 1;
+        last_observed = queue.current().map(|entry| entry.id);
+        if last_observed == Some(first) {
+            broke_on_first = true;
             hang_reset!();
             break;
         }
     }
-    assert_eq!(queue.current().map(|entry| entry.id), Some(first));
+    assert_eq!(
+        queue.current().map(|entry| entry.id),
+        Some(first),
+        "repeat-all final observation: blocks={rendered_blocks}/{MAX_BLOCKS}, broke_on_first={broke_on_first}, last_observed={last_observed:?}, last_tick={last_tick:?}"
+    );
     drop(queue);
     harness.close().await;
 }
