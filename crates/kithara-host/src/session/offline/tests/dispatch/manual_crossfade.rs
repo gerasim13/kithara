@@ -19,7 +19,7 @@ use num_traits::ToPrimitive;
 use ringbuf::{HeapCons, traits::Consumer};
 
 use super::*;
-use crate::{HostSettings, MetronomeConfig};
+use crate::{HostSettings, MetronomeConfig, session::queue::HostPart};
 
 struct ManualDeck {
     tracks: [PlayerImpl<TestPools>; 2],
@@ -208,6 +208,7 @@ struct ManualRecording {
     reference_output: Vec<f32>,
     clock: u64,
     applied: usize,
+    metronome_enabled_at: Option<SessionFrame>,
 }
 
 fn manual_four_second_batch() {
@@ -604,6 +605,7 @@ impl ManualHosts {
         let mut rendered = Vec::new();
         let mut reference_output = Vec::new();
         let mut applied = 0;
+        let mut metronome_enabled_at = None;
         while clock < end {
             self.state.owner.begin_pass();
             self.state
@@ -663,6 +665,17 @@ impl ManualHosts {
                         applied += 1;
                     }
                     ScopedReceipt::Root(receipt) => {
+                        if receipt.batch().commands.iter().any(|part| {
+                            matches!(
+                                part,
+                                HostPart::Settings(HostSettingsChange::Metronome(
+                                    MetronomeConfigChange::Enabled(true)
+                                ))
+                            )
+                        }) && let Outcome::Applied { at, .. } = receipt.outcome()
+                        {
+                            metronome_enabled_at = Some(*at);
+                        }
                         crate::session::queue::settle_receipt(
                             &mut self.state,
                             &receipt,
@@ -694,6 +707,7 @@ impl ManualHosts {
             reference_output,
             clock,
             applied,
+            metronome_enabled_at,
         }
     }
 
@@ -790,7 +804,10 @@ impl ManualHosts {
                     .iter()
                     .zip(&master[offset + 2..offset + 512])
                     .any(|(output, master)| (output - master).abs() > 0.01),
-                "the real metronome sounds at mapped beat {ordinal}"
+                "the real metronome sounds at mapped beat {ordinal}: capture={start}..{clock}, expected={expected}, enable_applied={:?}, sample_window={}..{}",
+                recording.metronome_enabled_at,
+                offset + 2,
+                offset + 512
             );
         }
         grid
