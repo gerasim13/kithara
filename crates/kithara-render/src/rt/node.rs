@@ -166,6 +166,31 @@ where
         prepare().map_err(|error| PlayerNodePreparationError { node, error })
     }
 
+    /// Prepares a deferred initial factory, or identifies its retained session owner.
+    ///
+    /// # Errors
+    /// Returns the actual node identity and preparation cause without consuming its inputs.
+    pub fn prepare_if_initial(
+        context: &firewheel::FirewheelContext,
+        node: NodeID,
+        shape: StreamShape,
+    ) -> Result<bool, PlayerNodePreparationError> {
+        let player =
+            context
+                .node_state::<Self>(node)
+                .ok_or_else(|| PlayerNodePreparationError {
+                    node,
+                    error: NodeError(Box::new(NodeUnavailable)),
+                })?;
+        let initial = player.inputs.lock().initial.is_some();
+        if initial {
+            player
+                .prepare_stream(shape)
+                .map_err(|error| PlayerNodePreparationError { node, error })?;
+        }
+        Ok(initial)
+    }
+
     /// Prepares the complete constructor before the graph takes any unique inputs.
     ///
     /// # Errors

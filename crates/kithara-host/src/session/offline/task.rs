@@ -21,6 +21,7 @@ use crate::{
     HostCore, HostOwner, HostSettings,
     rt::SessionOutput,
     session::{
+        context::SessionGraph,
         decks::{DeckInbox, DeckMsg},
         dispatch::OwnerPosts,
         protocol::HostMailbox,
@@ -175,9 +176,10 @@ where
     let client = Arc::new(OfflineSessionClient::new(postbox, cmd_tx, route.clone()));
     let inbox: Arc<dyn DeckInbox> = client.clone();
     let factory = move |_| {
-        let start = move |ctx: &mut firewheel::FirewheelContext,
+        let start = move |ctx: &mut SessionGraph,
                           rate: u32,
-                          decks: &mut [crate::session::state::DeckNode]| {
+                          decks: &mut [crate::session::state::DeckNode],
+                          _previous| {
             let rate = NonZeroU32::new(rate)
                 .ok_or_else(|| "offline sample rate must be non-zero".to_owned())?;
             let backend = BackendConfig::builder()

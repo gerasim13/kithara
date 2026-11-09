@@ -1,19 +1,23 @@
+use audioadapter::{Adapter, AdapterMut};
 use audioadapter_buffers::direct::InterleavedSlice;
 use bevy_platform::time::Instant;
 use firewheel::{backend::BackendProcessInfo, node::StreamStatus, processor::FirewheelProcessor};
 use kithara_platform::time::Duration;
+use ringbuf::{HeapCons, traits::Consumer};
 
 /// Settles queued schedules at the old geometry before returning the actual processor.
 pub(crate) struct SessionProcessor {
-    processor: FirewheelProcessor,
+    processor: Option<FirewheelProcessor>,
+    stop: HeapCons<()>,
     channels: usize,
     last: BackendProcessInfo,
 }
 
 impl SessionProcessor {
-    pub(crate) fn new(processor: FirewheelProcessor, channels: usize) -> Self {
+    pub(crate) fn new(processor: FirewheelProcessor, channels: usize, stop: HeapCons<()>) -> Self {
         Self {
-            processor,
+            processor: Some(processor),
+            stop,
             channels,
             last: BackendProcessInfo {
                 frames: 0,
@@ -27,26 +31,58 @@ impl SessionProcessor {
         }
     }
 
-    pub(crate) fn process(&mut self, output: &mut [f32], info: BackendProcessInfo) {
+    pub(crate) fn render(&mut self, output: &mut [f32], info: BackendProcessInfo) {
         // CPAL and the offline owner supply complete interleaved frames.
         let input = InterleavedSlice::new(&[] as &[f32], 0, 0)
             .expect("zero input frames have zero samples");
         let mut output = InterleavedSlice::new_mut(output, self.channels, info.frames)
             .expect("the admitted output contains complete interleaved frames");
-        self.last = info.clone();
-        self.processor.process(&input, &mut output, info);
+        self.process(&input, &mut output, info);
     }
-}
 
-impl Drop for SessionProcessor {
-    fn drop(&mut self) {
+    pub(crate) fn process(
+        &mut self,
+        input: &dyn Adapter<f32>,
+        output: &mut dyn AdapterMut<f32>,
+        info: BackendProcessInfo,
+    ) {
+        if self.stop.try_pop().is_some() {
+            self.settle();
+            self.processor.take();
+        }
+        if let Some(processor) = &mut self.processor {
+            self.last = info.clone();
+            processor.process(input, output, info);
+        } else {
+            output.fill_frames_with(0, info.frames, &0.0);
+        }
+    }
+
+    fn settle(&mut self) {
+        let Some(processor) = &mut self.processor else {
+            return;
+        };
+        let input = InterleavedSlice::new(&[] as &[f32], 0, 0).expect("zero-frame input shape");
+        let mut output =
+            InterleavedSlice::new_mut(&mut [], self.channels, 0).expect("zero-frame output shape");
         let mut stopped = self.last.clone();
         stopped.frames = 0;
         stopped.input_stream_status = StreamStatus::empty();
         stopped.output_stream_status = StreamStatus::empty();
         stopped.dropped_frames = 0;
+        processor.process(&input, &mut output, stopped);
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn is_running(&self) -> bool {
+        self.processor.is_some()
+    }
+}
+
+impl Drop for SessionProcessor {
+    fn drop(&mut self) {
         // Keep update_instant: process0 republishes the shared sample clock.
-        self.process(&mut [], stopped);
+        self.settle();
     }
 }
 
@@ -71,10 +107,11 @@ mod tests {
             input_to_output_latency_seconds: 0.0,
         };
         let processor = context.activate(shape).expect("initial graph");
-        let mut actual = SessionProcessor::new(processor, 2);
+        let (_stop, stopped) = ringbuf::traits::Split::split(ringbuf::HeapRb::new(1));
+        let mut actual = SessionProcessor::new(processor, 2, stopped);
         let mut info = actual.last.clone();
         info.frames = 4;
-        actual.process(&mut [0.0; 8], info);
+        actual.render(&mut [0.0; 8], info);
         let clock = context.heartbeat();
         let timestamp = context.audio_clock_instant();
         let node = context
@@ -90,10 +127,11 @@ mod tests {
         assert!(!context.is_active());
         shape.max_block_frames = NonZeroU32::new(64).expect("new geometry");
         let processor = context.activate(shape).expect("same context restart");
-        let mut actual = SessionProcessor::new(processor, 2);
+        let (_stop, stopped) = ringbuf::traits::Split::split(ringbuf::HeapRb::new(1));
+        let mut actual = SessionProcessor::new(processor, 2, stopped);
         let mut info = actual.last.clone();
         info.frames = 1;
-        actual.process(&mut [0.0; 2], info);
+        actual.render(&mut [0.0; 2], info);
         assert_eq!(
             context.heartbeat(),
             clock.checked_add(1).expect("one rendered frame")

@@ -4,7 +4,6 @@ use firewheel::{
         self, Device, FromSample, SampleFormat, SizedSample, StreamConfig,
         traits::{DeviceTrait, StreamTrait},
     },
-    processor::FirewheelProcessor,
 };
 use ringbuf::{
     HeapProd, HeapRb,
@@ -19,7 +18,6 @@ pub(crate) struct NativeStream {
     stream: cpal::Stream,
     install: HeapProd<SessionProcessor>,
     pub(in crate::session::native_engine) info: ActivateInfo,
-    pub(in crate::session::native_engine) channels: usize,
 }
 
 impl AcquiredOutput {
@@ -51,7 +49,6 @@ impl AcquiredOutput {
             stream,
             install,
             info: self.info,
-            channels,
         })
     }
 }
@@ -66,9 +63,8 @@ impl NativeStream {
 
     pub(in crate::session::native_engine) fn start(
         mut self,
-        processor: FirewheelProcessor,
+        processor: SessionProcessor,
     ) -> Result<Self, String> {
-        let processor = SessionProcessor::new(processor, self.channels);
         if let Err(processor) = self.install.try_push(processor) {
             drop(processor);
             return Err("native processor installation is still occupied".into());

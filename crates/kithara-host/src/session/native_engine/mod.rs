@@ -12,7 +12,6 @@ pub(crate) use backend::NativeStream;
 use backend::{AcquiredOutput, cpal_config};
 pub(crate) use engine::{EngineMsg, SessionClient};
 use engine::{SessionWake, engine_thread};
-use firewheel::FirewheelContext;
 use kithara_bufpool::HasPool;
 use kithara_command::{Live, Ticket, mailbox};
 use kithara_platform::{

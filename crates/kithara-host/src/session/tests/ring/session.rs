@@ -1,6 +1,5 @@
 use std::{any::Any, num::NonZeroU32, sync::OnceLock};
 
-use firewheel::FirewheelContext;
 use kithara_command::When;
 use kithara_events::EventBus;
 use kithara_platform::{
@@ -16,10 +15,13 @@ use super::{
     super::graph::GraphSession, MasterRing, RingBackend, RingBackendConfig, RingBackendProbe,
     RingLayout, RingReader, RingRenderError,
 };
-use crate::{HostSettingsChange, session::state::RootView};
+use crate::{
+    HostSettingsChange,
+    session::{context::SessionGraph, state::RootView},
+};
 
 type RingSetup =
-    Box<dyn FnOnce(&mut FirewheelContext) -> Result<(), RingSessionError> + Send + 'static>;
+    Box<dyn FnOnce(&mut SessionGraph) -> Result<(), RingSessionError> + Send + 'static>;
 
 #[kithara::test(native, tokio)]
 async fn ring_binding_keeps_resource_events_off_the_render_thread() {
@@ -356,7 +358,7 @@ impl ManualRingSession {
         setup: F,
     ) -> Result<Self, RingSessionError>
     where
-        F: FnOnce(&mut FirewheelContext) -> Result<(), RingSessionError> + Send + 'static,
+        F: FnOnce(&mut SessionGraph) -> Result<(), RingSessionError> + Send + 'static,
     {
         let (writer, reader) = MasterRing::open(config.block_frames, config.capacity_blocks);
         let probe = RingBackendProbe::default();

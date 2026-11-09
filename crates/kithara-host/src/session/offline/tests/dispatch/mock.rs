@@ -4,6 +4,7 @@ pub(super) use crate::mock::{
     mix_registration, occupied_slots, play_fixture, probe_owner, registration, render_block,
     test_state,
 };
+use crate::session::context::SessionGraph;
 
 #[derive(Default)]
 pub(super) struct RouteLossProbe {
@@ -79,7 +80,7 @@ impl AudioNodeProcessor for DcNode {
 pub(super) struct RouteLossError;
 
 pub(super) fn start_route_loss_stream(
-    ctx: &mut FirewheelContext,
+    ctx: &mut SessionGraph,
     sample_rate: u32,
     decks: &mut [DeckNode],
 ) -> Result<SessionStream, String> {

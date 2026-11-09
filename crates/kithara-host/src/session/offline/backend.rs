@@ -2,13 +2,14 @@ use std::num::NonZeroU32;
 
 use audioadapter_buffers::direct::InterleavedSlice;
 use bevy_platform::time::Instant;
-use firewheel::{ActivateInfo, FirewheelContext, backend::BackendProcessInfo, node::StreamStatus};
+use firewheel::{ActivateInfo, backend::BackendProcessInfo, node::StreamStatus};
 use kithara_config::Config;
 use kithara_platform::time::Duration;
 use kithara_signal::SessionFrame;
 
 use super::{OfflineSessionError, task::consts::CHANNELS};
 use crate::session::{
+    context::SessionGraph,
     processor::SessionProcessor,
     state::DeckNode,
     transport::{OfflineInbox, TransportState},
@@ -144,7 +145,7 @@ impl OfflineStream {
                 .begin_render(frames)
                 .map_err(|error| OfflineSessionError::Graph(error.to_string()))?;
         }
-        self.processor.process(output, process_info);
+        self.processor.render(output, process_info);
         if frames != 0
             && let Some(inbox) = &mut self.inbox
         {
@@ -167,7 +168,7 @@ impl OfflineStream {
     /// Activates `cx` for offline rendering and takes ownership of the
     /// processor it hands back.
     pub(in crate::session::offline) fn start(
-        cx: &mut FirewheelContext,
+        cx: &mut SessionGraph,
         config: BackendConfig,
         decks: &mut [DeckNode],
     ) -> Result<Self, OfflineSessionError> {
@@ -213,7 +214,7 @@ impl OfflineStream {
         }
         Ok(Self {
             inbox,
-            processor: Box::new(SessionProcessor::new(processor, CHANNELS)),
+            processor: Box::new(processor),
             sample_rate: config.sample_rate,
         })
     }

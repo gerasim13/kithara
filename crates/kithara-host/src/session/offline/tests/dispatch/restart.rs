@@ -2,7 +2,7 @@ use kithara_command::Rejection;
 use kithara_signal::SessionFrame;
 
 use super::*;
-use crate::HostSettled;
+use crate::{HostSettled, session::context::SessionGraph};
 
 /// One owner pass with no command; the answers it gave.
 fn pass(state: &mut TestState) -> Vec<HostSettled> {
@@ -328,7 +328,7 @@ fn two_restarts_with_a_change_between_them_leave_the_render_copy_on_the_host_set
         state
             .ctx
             .as_mut()
-            .and_then(FirewheelContext::proc_store_mut)
+            .and_then(SessionGraph::proc_store_mut)
             .and_then(|store| applied_spans(store, 1)?.last())
             .map(|(_, span)| span.settings()),
         Some(host),

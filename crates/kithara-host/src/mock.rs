@@ -5,7 +5,6 @@ pub(crate) use fixture::*;
 mod fixture {
     use std::num::NonZeroU32;
 
-    use firewheel::FirewheelContext;
     use kithara_command::{Live, When};
     use kithara_effects::LimiterConfig;
     use kithara_platform::{sync::Arc, time::Duration};
@@ -22,6 +21,7 @@ mod fixture {
         HostCommand, HostCore, HostOwner, HostSettings,
         rt::SessionOutput,
         session::{
+            context::SessionGraph,
             decks::{DeckInbox, DeckMsg},
             state::{
                 DeckNode, DeviceBackend, HostRoot, RootView, SessionBufferConfig, SessionState,
@@ -31,7 +31,7 @@ mod fixture {
     };
 
     fn session_state(
-        start: impl FnMut(&mut FirewheelContext, u32, &mut [DeckNode]) -> Result<SessionStream, String>
+        mut start: impl FnMut(&mut SessionGraph, u32, &mut [DeckNode]) -> Result<SessionStream, String>
         + Send
         + 'static,
     ) -> SessionState<DeviceBackend, TestPools> {
@@ -49,7 +49,7 @@ mod fixture {
                 .settings(settings)
                 .build()
                 .channel_config(),
-            start,
+            move |ctx, rate, decks, _previous| start(ctx, rate, decks),
         )
     }
 
@@ -95,7 +95,7 @@ mod fixture {
     }
 
     pub(crate) fn test_state(
-        start: impl FnMut(&mut FirewheelContext, u32, &mut [DeckNode]) -> Result<SessionStream, String>
+        start: impl FnMut(&mut SessionGraph, u32, &mut [DeckNode]) -> Result<SessionStream, String>
         + Send
         + 'static,
     ) -> TestState {
@@ -104,11 +104,7 @@ mod fixture {
 
     impl<D: HostedDeck<TestPools>> TestState<D> {
         pub(crate) fn new(
-            start: impl FnMut(
-                &mut FirewheelContext,
-                u32,
-                &mut [DeckNode],
-            ) -> Result<SessionStream, String>
+            start: impl FnMut(&mut SessionGraph, u32, &mut [DeckNode]) -> Result<SessionStream, String>
             + Send
             + 'static,
         ) -> Self {
@@ -165,7 +161,7 @@ mod fixture {
     }
 
     pub(crate) fn probe_owner(
-        start: impl FnMut(&mut FirewheelContext, u32, &mut [DeckNode]) -> Result<SessionStream, String>
+        start: impl FnMut(&mut SessionGraph, u32, &mut [DeckNode]) -> Result<SessionStream, String>
         + Send
         + 'static,
     ) -> (

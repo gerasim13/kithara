@@ -50,7 +50,7 @@ impl OutputCallback {
         self.processor
             .as_mut()
             .expect("the acquired stream starts only after processor installation")
-            .process(
+            .render(
                 output,
                 BackendProcessInfo {
                     frames,

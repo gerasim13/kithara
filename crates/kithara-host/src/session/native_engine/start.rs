@@ -1,5 +1,5 @@
 use super::*;
-use crate::session::state::DeckNode;
+use crate::session::{context::SessionGraph, state::DeckNode};
 
 pub(crate) fn spawn<S, O>(
     root: HostRoot,
@@ -25,7 +25,7 @@ where
     });
     let inbox: Arc<dyn DeckInbox> = client.clone();
     spawn_named("host-deck-session", move || {
-        let start = move |ctx: &mut FirewheelContext, rate: u32, decks: &mut [DeckNode]| {
+        let start = move |ctx: &mut SessionGraph, rate: u32, decks: &mut [DeckNode], _previous| {
             start_stream_cpal(ctx, rate, output_block_frames, decks).map(|backend| {
                 SessionStream::Realtime {
                     _backend: Box::new(backend),
@@ -51,7 +51,7 @@ where
 }
 
 fn start_stream_cpal(
-    ctx: &mut FirewheelContext,
+    ctx: &mut SessionGraph,
     sample_rate: u32,
     output_block_frames: Option<NonZeroU32>,
     decks: &mut [DeckNode],
@@ -89,10 +89,7 @@ fn start_stream_cpal(
         .filter(|deck| ctx.node_info(deck.node).is_some())
     {
         if let Err(error) = deck.owner.resume_stream() {
-            drop(crate::session::processor::SessionProcessor::new(
-                processor,
-                device.channels,
-            ));
+            drop(processor);
             return Err(error.to_string());
         }
     }

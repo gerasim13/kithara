@@ -4,6 +4,13 @@ use kithara_platform::time::Duration;
 
 pub(crate) const SESSION_PUMP_INTERVAL: Duration = Duration::from_millis(10);
 
+/// Web output is partitioned into the existing 128-frame graph processing quantum.
+#[cfg(target_arch = "wasm32")]
+pub(crate) const WEB_RENDER_QUANTUM: usize = 128;
+/// Stereo interleaved storage for one web processing quantum.
+#[cfg(target_arch = "wasm32")]
+pub(crate) const WEB_OUTPUT_SAMPLES: usize = 256;
+
 /// Firewheel's existing processing limit when the device chooses its callback size.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) const SESSION_OUTPUT_MAX_BLOCK_FRAMES: NonZeroU32 =

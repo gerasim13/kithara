@@ -1,5 +1,6 @@
+use crate::session::context::SessionGraph;
 pub(crate) fn start(
-    context: &mut firewheel::FirewheelContext,
+    context: &mut SessionGraph,
     sample_rate: u32,
     decks: &mut [crate::session::state::DeckNode],
 ) -> Result<crate::session::state::SessionStream, String> {

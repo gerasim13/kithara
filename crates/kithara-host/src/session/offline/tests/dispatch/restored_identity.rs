@@ -58,7 +58,7 @@ fn engine_start_stop_roundtrip() {
         state
             .ctx
             .as_ref()
-            .and_then(FirewheelContext::stream_info)
+            .and_then(|ctx| ctx.stream_info())
             .is_some()
     );
     assert_eq!(render_block(&mut state, 0).len(), 1024);

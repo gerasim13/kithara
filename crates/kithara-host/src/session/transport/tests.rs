@@ -1,7 +1,6 @@
 use std::num::NonZeroU32;
 
 use firewheel::{
-    FirewheelContext,
     clock::InstantSamples,
     dsp::{buffer::ConstSequentialBuffer, declick::DeclickValues},
     log::{RealtimeLoggerConfig, realtime_logger},
@@ -39,6 +38,7 @@ use crate::{
     consts,
     host::{HostSettings, HostSettingsChange, HostSettingsExec},
     session::{
+        context::SessionGraph,
         queue::{HostPart, HostProtocol, settle_root_receipts},
         state::{SessionState, SessionStream, ensure_ctx},
         tests::graph,
@@ -258,7 +258,7 @@ fn proc_store(state: &mut SessionState<(), TestPools>) -> &mut ProcStore {
     state
         .ctx
         .as_mut()
-        .and_then(FirewheelContext::proc_store_mut)
+        .and_then(SessionGraph::proc_store_mut)
         .expect("invariant: a context never started keeps its store")
 }
 
