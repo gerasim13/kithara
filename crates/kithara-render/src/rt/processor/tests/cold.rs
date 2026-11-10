@@ -24,6 +24,7 @@ fn stream(rate: u32, block: u32) -> StreamInfo {
 
 #[kithara::test]
 #[case::own_filter_refusal(12_000, 512, false)]
+#[case::ten_band_nyquist_refusal(22_050, 512, false)]
 #[case::later_owner_refusal(48_000, 512, true)]
 #[case::shape_refusal(44_100, 1_024, false)]
 fn refused_attempt_preserves_state_across_matching_successful_lifecycle(
