@@ -3444,3 +3444,17 @@ kinds = []
 kinds_github = ["weekly"]
 timeout_minutes = 60
 artifact = { name = "budget-junit-reqwest", path = "target/nextest/ci/junit.xml", when = "always" }
+
+[ext.ci.lanes.budget-calibration-real-followup]
+cache_group = "linux"
+github_runner = "kithara-test-real"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just", "sccache", "kache"]
+program = "just"
+steps = [{ args = ["test", "run", "-p", "kithara-sync-tests", "-p", "kithara-test-fixtures", "--flash=off", "--profile", "ci", "--retries=0", "--narrow=test(=sync_runtime_oracles::bound_sync_render_is_rtsan_clean) | test(=sync_runtime_oracles::running_sync_command_changes_audible_pcm_within_one_block) | test(=every_library_track_is_analysed_at_the_rate_it_decodes_at)"], label = "Measure three real-clock budget failures", env = { CARGO_BUILD_JOBS = "2" } }]
+role = "gate"
+kinds = []
+kinds_github = ["weekly"]
+timeout_minutes = 60
+artifact = { name = "budget-junit-real-followup", path = "target/nextest/ci/junit.xml", when = "always" }
