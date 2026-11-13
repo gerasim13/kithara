@@ -176,6 +176,7 @@ async fn play(temp_dir: &TestTempDir, backend: StretchKind, keylock: bool) -> Ta
         BLOCK_FRAMES.to_f64().expect("block fits f64") / f64::from(SAMPLE_RATE),
     );
     let mut warmed = None;
+    let mut recorded_underrun = false;
     for block in 0..TOTAL_BLOCKS {
         hang_tick!();
         if let Some((_, speed)) = CHANGES.iter().find(|(at, _)| *at == block) {
@@ -203,6 +204,20 @@ async fn play(temp_dir: &TestTempDir, backend: StretchKind, keylock: bool) -> Ta
         let output = harness.render(BLOCK_FRAMES).await;
         if let Some(recording) = recording.as_mut() {
             recording.push(&output);
+        }
+        if let Some(warmed) = warmed
+            && !recorded_underrun
+            && harness.metrics().underruns() > warmed
+        {
+            recorded_underrun = true;
+            // The terminal assertion runs after teardown; capture the first gap with live workers.
+            kithara_test_utils::hang::record_test_hang(
+                "speed-change-underrun",
+                &format!(
+                    "block={block} backend={backend} keylock={keylock} deck={:?}",
+                    harness.deck_snapshot(),
+                ),
+            );
         }
         time::sleep(period.saturating_sub(started.elapsed())).await;
         hang_reset!();
