@@ -9,6 +9,7 @@ mod envelope;
 mod fade;
 mod fir;
 mod interpolate;
+mod one_pole;
 #[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
 pub(crate) mod portable;
 mod simd;
@@ -31,6 +32,7 @@ pub(crate) use envelope::attack_release;
 pub(crate) use fade::gains;
 pub use fir::Fir;
 pub(crate) use interpolate::quadratic;
+pub(crate) use one_pole::low_pass as one_pole_low_pass;
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
 pub(crate) use portable as platform;
 pub use simd::sanitize;
