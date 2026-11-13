@@ -10,6 +10,8 @@ pub mod filter;
 mod gain_db;
 mod limiter;
 pub mod node;
+/// Ranged reverb control domains.
+pub mod reverb;
 
 pub use deck_effect::{DeckEffect, FxParamChange};
 pub use gain_db::GainDb;
