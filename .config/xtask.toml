@@ -3405,3 +3405,42 @@ scan_all_rules = [
   "perf.no-local-test-pools",
   "style.no-items-in-lib-or-mod-rs",
 ]
+
+[ext.ci.lanes.budget-calibration-derive]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just", "sccache", "kache"]
+program = "just"
+steps = [{ args = ["test", "run", "-p", "kithara-derive", "--features", "kithara-derive/config,kithara-derive/mirror,kithara-derive/ranged,kithara-derive/enum-str,kithara-derive/variants", "--flash=off", "--net-backend=none", "--profile", "ci", "--retries=0"], label = "Missing budget measurements: derive", env = { CARGO_BUILD_JOBS = "2" } }]
+role = "gate"
+kinds = []
+kinds_github = ["weekly"]
+timeout_minutes = 60
+artifact = { name = "budget-junit-derive", path = "target/nextest/ci/junit.xml", when = "always" }
+
+[ext.ci.lanes.budget-calibration-fixtures]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just", "sccache", "kache"]
+program = "just"
+steps = [{ args = ["test", "run", "-p", "kithara-test-fixtures", "--features", "kithara-test-fixtures/all", "--test", "store_contract", "--flash=off", "--net-backend=none", "--profile", "ci", "--retries=0"], label = "Missing budget measurements: fixtures", env = { CARGO_BUILD_JOBS = "2" } }]
+role = "gate"
+kinds = []
+kinds_github = ["weekly"]
+timeout_minutes = 60
+artifact = { name = "budget-junit-fixtures", path = "target/nextest/ci/junit.xml", when = "always" }
+
+[ext.ci.lanes.budget-calibration-reqwest]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just", "sccache", "kache"]
+program = "just"
+steps = [{ args = ["test", "run", "-p", "kithara-net", "--flash=off", "--net-backend=reqwest", "--profile", "ci", "--retries=0"], label = "Missing budget measurements: reqwest", env = { CARGO_BUILD_JOBS = "2" } }]
+role = "gate"
+kinds = []
+kinds_github = ["weekly"]
+timeout_minutes = 60
+artifact = { name = "budget-junit-reqwest", path = "target/nextest/ci/junit.xml", when = "always" }
