@@ -1298,14 +1298,19 @@ async fn decoder_file_seek_multiple(
     }
 }
 
-/// A Symphonia seek after EOF lands and decodes.
-#[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
+/// A seek after the decoder ran to the end of the file lands and decodes.
 #[kithara::test(tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
-#[case(
-    SignalAsset::PROFILE_M4A_ALAC_44100_2CH_16BIT,
-    DecoderBackend::Symphonia
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(
+        SignalAsset::PROFILE_M4A_ALAC_44100_2CH_16BIT,
+        DecoderBackend::Symphonia
+    )
 )]
-#[case(SignalAsset::PROFILE_M4A_AAC_44100_2CH, DecoderBackend::Symphonia)]
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(SignalAsset::PROFILE_M4A_AAC_44100_2CH, DecoderBackend::Symphonia)
+)]
 async fn a_seek_after_the_decoder_reached_eof_decodes_again(
     #[case] asset: SignalAsset,
     temp_dir: TestTempDir,

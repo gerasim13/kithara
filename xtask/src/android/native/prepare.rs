@@ -372,7 +372,6 @@ fn art_session_environment(directory: &str, device_url: &str) -> BTreeMap<String
         ),
         ("KITHARA_FIXTURE_ORIGIN".into(), device_url.to_owned()),
         ("KITHARA_TEST_SERVER_URL".into(), device_url.to_owned()),
-        ("KITHARA_TEST_CLOCK_MEASUREMENT".into(), "1".into()),
         ("TMPDIR".into(), directory.to_owned()),
     ])
 }
@@ -485,11 +484,6 @@ mod tests {
         assert_eq!(
             env.get("KITHARA_TEST_SERVER_URL"),
             env.get("KITHARA_FIXTURE_ORIGIN")
-        );
-        assert_eq!(
-            env.get("KITHARA_TEST_CLOCK_MEASUREMENT")
-                .map(String::as_str),
-            Some("1")
         );
         assert_eq!(
             env.get("TMPDIR").map(String::as_str),

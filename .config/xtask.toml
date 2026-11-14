@@ -153,6 +153,8 @@ lockbud_exclude = [
   "kithara-integration-tests",
   "kithara-play-tests",
   "kithara-queue-tests",
+  "kithara-queue-network-tests",
+  "kithara-queue-zvuk-tests",
   "kithara-stream-tests",
   "kithara-sync-tests",
   "kithara-warp-tests",
@@ -607,6 +609,8 @@ features = []
 [test.required]
 packages = [
   "kithara-queue-tests",
+  "kithara-queue-network-tests",
+  "kithara-queue-zvuk-tests",
   "kithara-hls-tests",
   "kithara-sync-tests",
   "kithara-play-tests",
@@ -694,6 +698,8 @@ cargo.packages = [
   "kithara-play-tests",
   "kithara-queue",
   "kithara-queue-tests",
+  "kithara-queue-network-tests",
+  "kithara-queue-zvuk-tests",
 ]
 cargo.profile = "test-release"
 
@@ -748,6 +754,8 @@ cargo.packages = [
   "kithara-play-tests",
   "kithara-queue",
   "kithara-queue-tests",
+  "kithara-queue-network-tests",
+  "kithara-queue-zvuk-tests",
   "kithara-record",
   "kithara-render",
   "kithara-resampler",
@@ -804,6 +812,8 @@ cargo.packages = [
   "kithara-integration-tests",
   "kithara-play-tests",
   "kithara-queue-tests",
+  "kithara-queue-network-tests",
+  "kithara-queue-zvuk-tests",
   "kithara-stream-tests",
   "kithara-warp-tests",
   "kithara-sync-tests",
@@ -932,7 +942,12 @@ cargo.packages = ["kithara-play", "kithara-play-tests"]
 cargo.profile = "test-release"
 
 [test.lanes.queue]
-cargo.packages = ["kithara-queue", "kithara-queue-tests"]
+cargo.packages = [
+  "kithara-queue",
+  "kithara-queue-tests",
+  "kithara-queue-network-tests",
+  "kithara-queue-zvuk-tests",
+]
 cargo.profile = "test-release"
 
 [test.lanes.storage]
@@ -1095,12 +1110,17 @@ default_flash = false
 # rather than a gate job.
 
 [test.lanes.network]
-cargo.packages = ["kithara-play-tests", "kithara-queue-tests"]
+cargo.packages = [
+  "kithara-play-tests",
+  "kithara-queue-network-tests",
+  "kithara-queue-zvuk-tests",
+]
 cargo.profile = "test-release"
 cargo.tests = ["network"]
 default_features = [
   "kithara-play-tests/network",
-  "kithara-queue-tests/network",
+  "kithara-queue-network-tests/network",
+  "kithara-queue-zvuk-tests/network",
   "kithara/resample-rubato",
 ]
 default_flash = false
@@ -1110,12 +1130,17 @@ default_flash = false
 # device. No CI job runs this and none should — a runner that fails here reports
 # the fence around itself, not the code. `just test run --lane=network-manual`.
 [test.lanes.network-manual]
-cargo.packages = ["kithara-play-tests", "kithara-queue-tests"]
+cargo.packages = [
+  "kithara-play-tests",
+  "kithara-queue-network-tests",
+  "kithara-queue-zvuk-tests",
+]
 cargo.profile = "test-release"
 cargo.tests = ["network_manual"]
 default_features = [
   "kithara-play-tests/network-manual",
-  "kithara-queue-tests/network-manual",
+  "kithara-queue-network-tests/network-manual",
+  "kithara-queue-zvuk-tests/network-manual",
   "kithara/resample-rubato",
 ]
 default_flash = false
@@ -1315,8 +1340,15 @@ pr_review_line_limit = 5000
 "kithara-ui::gallery::tests::the_hosted_toggles_keep_their_descriptor_backed_controls" = "kithara-ui-gallery::gallery::tests::hosted_page_claims_toggles"
 "kithara-ui::gallery::tests::the_hosted_knobs_keep_their_descriptor_backed_controls" = "kithara-ui-gallery::gallery::tests::hosted_page_claims_knobs"
 "kithara-ui::gallery::tests::the_hosted_meters_keep_their_descriptor_backed_controls" = "kithara-ui-gallery::gallery::tests::hosted_page_claims_meters"
-"kithara-queue-tests::network::prod_network::user_sim_prod_drm_seek_immediately_after_loaded" = "kithara-queue-tests::network::prod_network::user_sim_prod_drm_seek_immediately_after_loaded_high"
-"kithara-queue-tests::network::prod_network::user_sim_prod_drm_auto_abr_upswitch_then_seek_burst" = "kithara-queue-tests::network::prod_network::user_sim_prod_drm_auto_abr_upswitch_then_seek_burst_main"
+"kithara-queue-tests::network::prod_network::user_sim_prod_drm_seek_immediately_after_loaded" = "kithara-queue-zvuk-tests::network::prod_network::user_sim_prod_drm_seek_immediately_after_loaded_high"
+"kithara-queue-tests::network::prod_network::user_sim_prod_drm_auto_abr_upswitch_then_seek_burst" = "kithara-queue-zvuk-tests::network::prod_network::user_sim_prod_drm_auto_abr_upswitch_then_seek_burst_main"
+"kithara-queue-tests::queue::zvuk_cipher_check::" = "kithara-queue-zvuk-tests::queue_zvuk::zvuk_cipher_check::"
+"kithara-queue-tests::network::prod_network::" = "kithara-queue-zvuk-tests::network::prod_network::"
+"kithara-queue-tests::network::zvuk_" = "kithara-queue-zvuk-tests::network::zvuk_"
+"kithara-queue-tests::network::false_eof_rapid_scrub::" = "kithara-queue-network-tests::network::false_eof_rapid_scrub::"
+"kithara-queue-tests::network::real_playlist::" = "kithara-queue-network-tests::network::real_playlist::"
+"kithara-queue-tests::network_manual::cold_seek_cpal::" = "kithara-queue-network-tests::network_manual::cold_seek_cpal::"
+"kithara-queue-tests::network_manual::zvuk_" = "kithara-queue-zvuk-tests::network_manual::zvuk_"
 "kithara-integration-tests::suite_stress::kithara_play::hls_seek_middle_stress_long::" = "kithara-integration-tests::suite_stress::hls_seek_middle_stress_long::"
 "suite_stress::kithara_play::hls_seek_middle_stress_long::" = "kithara-integration-tests::suite_stress::hls_seek_middle_stress_long::"
 "suite_light::kithara_play::sync_fixture_census::" = "kithara-sync-tests::sync::sync_fixture_census::"
@@ -2983,6 +3015,34 @@ new_crate_interval_secs = 610
 http_timeout_secs = 20
 user_agent = "kithara-xtask-publish (zvuk_ai@prosoftware.io)"
 
+[ext.ci.lanes.release-app]
+cache_group = "host"
+label = "macOS application"
+os = "macos"
+tools = [
+  "cargo",
+  "just",
+  "security",
+  "codesign",
+  "lipo",
+  "otool",
+  "strip",
+  "sips",
+  "iconutil",
+  "ditto",
+]
+program = "just"
+steps = [
+  { args = [
+    "release",
+    "app",
+  ], label = "Signed universal macOS application" },
+]
+role = "release"
+kinds = ["nightly", "release"]
+kinds_github = []
+timeout_minutes = 180
+
 [ext.release]
 # Release flow: the `release:*` CI jobs build every artifact, and
 # `release:publish` tags, publishes and deploys them (`just ci run
@@ -2998,7 +3058,12 @@ gitlab_package = "kithara"
 nightly_tag = "nightly"
 core_asset = "KitharaFFIInternal.xcframework.zip"
 merged_asset = "Kithara.xcframework.zip"
-platform_assets = ["kithara.aar", "kithara-okhttp.aar"]
+platform_assets = [
+  "kithara.aar",
+  "kithara-okhttp.aar",
+  "Kithara-macos-universal.zip",
+  "Kithara-macos-universal.zip.sha256",
+]
 http_timeout_secs = 60
 upload_timeout_secs = 600
 # WebAssembly channel: trunk dist (`just platform wasm build`) zipped and served
@@ -3406,72 +3471,19 @@ scan_all_rules = [
   "style.no-items-in-lib-or-mod-rs",
 ]
 
-[ext.ci.lanes.budget-calibration-derive]
-cache_group = "linux"
-label = "Linux"
-os = "linux"
-tools = ["cargo", "just", "sccache", "kache"]
-program = "just"
-steps = [{ args = ["test", "run", "-p", "kithara-derive", "--features", "kithara-derive/config,kithara-derive/mirror,kithara-derive/ranged,kithara-derive/enum-str,kithara-derive/variants", "--flash=off", "--net-backend=none", "--profile", "ci", "--retries=0"], label = "Missing budget measurements: derive", env = { CARGO_BUILD_JOBS = "2" } }]
-role = "gate"
-kinds = []
-kinds_github = ["weekly"]
-timeout_minutes = 60
-artifact = { name = "budget-junit-derive", path = "target/nextest/ci/junit.xml", when = "always" }
-
-[ext.ci.lanes.budget-calibration-fixtures]
-cache_group = "linux"
-label = "Linux"
-os = "linux"
-tools = ["cargo", "just", "sccache", "kache"]
-program = "just"
-steps = [{ args = ["test", "run", "-p", "kithara-test-fixtures", "--features", "kithara-test-fixtures/all", "--test", "store_contract", "--flash=off", "--net-backend=none", "--profile", "ci", "--retries=0"], label = "Missing budget measurements: fixtures", env = { CARGO_BUILD_JOBS = "2" } }]
-role = "gate"
-kinds = []
-kinds_github = ["weekly"]
-timeout_minutes = 60
-artifact = { name = "budget-junit-fixtures", path = "target/nextest/ci/junit.xml", when = "always" }
-
-[ext.ci.lanes.budget-calibration-reqwest]
-cache_group = "linux"
-label = "Linux"
-os = "linux"
-tools = ["cargo", "just", "sccache", "kache"]
-program = "just"
-steps = [{ args = ["test", "run", "-p", "kithara-net", "--flash=off", "--net-backend=reqwest", "--profile", "ci", "--retries=0"], label = "Missing budget measurements: reqwest", env = { CARGO_BUILD_JOBS = "2" } }]
-role = "gate"
-kinds = []
-kinds_github = ["weekly"]
-timeout_minutes = 60
-artifact = { name = "budget-junit-reqwest", path = "target/nextest/ci/junit.xml", when = "always" }
-
-[ext.ci.lanes.budget-calibration-real-followup]
-cache_group = "linux"
-github_runner = "kithara-test-real"
-label = "Linux"
-os = "linux"
-tools = ["cargo", "just", "sccache", "kache"]
-program = "just"
-steps = [{ args = ["test", "run", "-p", "kithara-sync-tests", "-p", "kithara-test-fixtures", "--flash=off", "--profile", "ci", "--retries=0", "--narrow=test(=sync_runtime_oracles::bound_sync_render_is_rtsan_clean) | test(=sync_runtime_oracles::running_sync_command_changes_audible_pcm_within_one_block) | test(=every_library_track_is_analysed_at_the_rate_it_decodes_at)"], label = "Measure three real-clock budget failures", env = { CARGO_BUILD_JOBS = "2" } }]
-role = "gate"
-kinds = []
-kinds_github = ["weekly"]
-timeout_minutes = 60
-artifact = { name = "budget-junit-real-followup", path = "target/nextest/ci/junit.xml", when = "always" }
-
-[ext.ci.lanes.budget-calibration-flash-followup]
+[ext.ci.lanes.budget-calibration-flash-load-timeouts]
 cache_group = "linux"
 github_runner = "kithara-test-simulated"
 label = "Linux"
 os = "linux"
 tools = ["cargo", "just", "sccache", "kache"]
 program = "just"
-steps = [{ args = ["test", "run", "-p", "kithara-integration-tests", "-p", "kithara-queue-tests", "--flash=on", "--load=on", "--profile", "ci", "--retries=0", "--narrow=test(=thread_budget::thread_budget_single_hls_pipeline) | test(=thread_budget::thread_budget_three_tracks_shared_worker) | test(=waveform_shared_download::waveform_and_player_share_one_get) | test(=full_playthrough_census::an_encoded_queue_serves_every_track_whole_profile_mp3_libmp3lame_48000_2ch_crossfade)"], label = "Measure four Flash workloads under CPU contention", env = { CARGO_BUILD_JOBS = "2" } }]
+steps = [{ args = ["test", "run", "-p", "kithara-app", "-p", "kithara-analysis-tests", "-p", "kithara-audio", "--flash=on", "--no-block=on", "--load=on", "--profile", "ci", "--retries=0", "--test-threads=3", "--narrow=(binary_id(=kithara-analysis-tests::analysis) & test(analysis_offer_is_realtime_safe::offering_a_decoded_range_neither_blocks_nor_allocates_)) | (binary_id(=kithara-app) & (test(=engine::owner::tests::a_rung_picked_on_a_deck_without_a_ladder_publishes_the_ladder_mode) | test(=engine::owner::tests::a_seek_lands_on_the_duration_the_queue_knows_before_the_next_tick) | test(=engine::command::tests::a_gain_for_a_replaced_band_layout_is_rejected_and_echoed))) | (binary_id(=kithara-audio) & test(=pipeline::source::tests::rebuild::route::rebuild_factory_panic_fails_track_without_hang))"], label = "Measure seven unchanged main test bodies under flash load", env = { CARGO_BUILD_JOBS = "2" } }]
 role = "gate"
 kinds = []
 kinds_github = ["weekly"]
 timeout_minutes = 60
-artifact = { name = "budget-junit-flash-followup", path = "target/nextest/ci/junit.xml", when = "always" }
+artifact = { name = "budget-junit-flash-load-timeouts", path = "target/nextest/ci/junit.xml", when = "always" }
 
 [ext.ci.lanes.budget-calibration-real-load-timeouts]
 cache_group = "linux"
@@ -3480,7 +3492,7 @@ label = "Linux"
 os = "linux"
 tools = ["cargo", "just", "sccache", "kache"]
 program = "just"
-steps = [{ args = ["test", "run", "-p", "kithara-audio", "--flash=off", "--load=on", "--profile", "ci", "--retries=0", "--test-threads=1", "--narrow=binary_id(=kithara-audio) & test(=pipeline::source::tests::rebuild::route::rebuild_factory_panic_fails_track_without_hang)"], label = "Measure original decoder-panic body under real-clock load", env = { CARGO_BUILD_JOBS = "2" } }]
+steps = [{ args = ["test", "run", "-p", "kithara-app", "-p", "kithara-analysis-tests", "-p", "kithara-audio", "--flash=off", "--load=on", "--profile", "ci", "--retries=0", "--test-threads=3", "--narrow=(binary_id(=kithara-analysis-tests::analysis) & test(analysis_offer_is_realtime_safe::offering_a_decoded_range_neither_blocks_nor_allocates_)) | (binary_id(=kithara-app) & (test(=engine::owner::tests::a_rung_picked_on_a_deck_without_a_ladder_publishes_the_ladder_mode) | test(=engine::owner::tests::a_seek_lands_on_the_duration_the_queue_knows_before_the_next_tick) | test(=engine::command::tests::a_gain_for_a_replaced_band_layout_is_rejected_and_echoed))) | (binary_id(=kithara-audio) & test(=pipeline::source::tests::rebuild::route::rebuild_factory_panic_fails_track_without_hang))"], label = "Measure seven unchanged main test bodies under real load", env = { CARGO_BUILD_JOBS = "2" } }]
 role = "gate"
 kinds = []
 kinds_github = ["weekly"]
