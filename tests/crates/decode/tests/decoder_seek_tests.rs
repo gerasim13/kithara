@@ -244,7 +244,7 @@ async fn decoder_file_reads_samples(#[case] asset: SignalAsset, temp_dir: TestTe
 /// Covers three zero-warmup scenarios: seek to 0, seek forward (2s), seek
 /// to 0 again. The backward-seek case (which needs a warmup prelude) is a
 /// separate test.
-#[kithara::test(tokio, browser, hang_timeout_secs(1))]
+#[kithara::test(tokio, browser, hang_timeout_secs(1), timeout(Short))]
 #[case(SignalAsset::MP3_TRACK_SINE440_187S, Duration::from_secs(0))]
 #[case(SignalAsset::MP3_TRACK_SINE440_187S, Duration::from_secs(2))]
 #[cfg_attr(

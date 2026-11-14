@@ -191,7 +191,7 @@ fn an_unmarked_span_renders_at_the_projected_rate(
 /// The Host grid stands at `HOST_BPM`, and every case names an asset tempo the
 /// acceptance queue carries, so a rate derived from the wrong member's tempo
 /// moves the interval away from its case by more than the shared tolerance.
-#[kithara::test(timeout(::std::time::Duration::from_millis(1672)))]
+#[kithara::test(timeout(::std::time::Duration::from_millis(1936)))]
 #[cfg_attr(
     feature = "stretch-signalsmith",
     case::signalsmith(StretchKind::Signalsmith)

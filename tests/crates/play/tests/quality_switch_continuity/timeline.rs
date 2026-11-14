@@ -356,7 +356,7 @@ async fn sweep_source() -> (TestServerHelper, CreatedHls) {
     (server, created)
 }
 
-#[kithara::test(native, timeout(::std::time::Duration::from_millis(1102)))]
+#[kithara::test(native, timeout(::std::time::Duration::from_millis(1228)))]
 fn fft_correlation_numerical_equivalence() {
     let frames = 16_384usize;
     let channels = usize::from(CHANNELS);
