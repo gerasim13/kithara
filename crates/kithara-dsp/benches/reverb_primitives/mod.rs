@@ -160,24 +160,26 @@ fn one_pole<const CHANNELS: usize>(c: &mut Criterion) {
                     .collect::<Vec<_>>()
             );
             assert_eq!(state.map(f32::to_bits), expected_state.map(f32::to_bits));
+            state.fill(0.0);
             group.bench_function(BenchmarkId::new(name, frames), |b| {
                 b.iter_batched_ref(
-                    || (template.clone(), [0.0; CHANNELS]),
-                    |(planes, state)| {
-                        let mut slices = planes.each_mut().map(|p| Some(p.as_mut_slice()));
-                        dispatch!(level, s => backend::one_pole::low_pass_kernel(s, 0.2, state, &mut slices, frames));
-                        black_box((planes, state));
+                    || template.clone(),
+                    |planes| {
+                        let mut slices = black_box(&mut *planes).each_mut().map(|p| Some(p.as_mut_slice()));
+                        dispatch!(level, s => backend::one_pole::low_pass_kernel(s, 0.2, &mut state, &mut slices, frames));
+                        black_box((planes, &state));
                     },
                     BatchSize::NumIterations(64),
                 );
             });
         }
+        let mut scalar_state = [0.0; CHANNELS];
         group.bench_function(BenchmarkId::new("scalar", frames), |b| {
             b.iter_batched_ref(
-                || (template.clone(), [0.0; CHANNELS]),
-                |(planes, state)| {
-                    scalar_pole(planes, state);
-                    black_box((planes, state));
+                || template.clone(),
+                |planes| {
+                    scalar_pole(black_box(&mut *planes), &mut scalar_state);
+                    black_box((planes, &scalar_state));
                 },
                 BatchSize::NumIterations(64),
             );
