@@ -2,7 +2,10 @@
 
 use std::num::NonZeroU32;
 
-use kithara_effects::reverb::{Damping, Decay, Reverb, ReverbConfig, ReverbError, Width};
+use kithara_effects::{
+    FxParamChange,
+    reverb::{Damping, Decay, Reverb, ReverbConfig, ReverbError, Width},
+};
 use kithara_test_utils::{bufpool::pools, kithara};
 use num_traits::ToPrimitive;
 
@@ -423,4 +426,309 @@ fn declared_tail_frames(rate: NonZeroU32, decay: Decay) -> usize {
         .expect("fixture geometry fits usize")
         + longest
         + diffusion * rounds
+}
+
+fn advance_reverb(reverb: &mut Reverb, mut frames: usize, sample: f32) -> [f32; 2] {
+    let input = [sample; 512];
+    let mut left = [0.0; 512];
+    let mut right = left;
+    let mut last = [0.0; 2];
+    while frames > 0 {
+        let count = frames.min(input.len());
+        let input = input.get(..count).expect("bounded fixture span");
+        reverb
+            .process(
+                [input, input],
+                [
+                    left.get_mut(..count).expect("left span"),
+                    right.get_mut(..count).expect("right span"),
+                ],
+            )
+            .expect("equal fixture spans");
+        let index = count.wrapping_sub(1);
+        last = [
+            *left.get(index).expect("nonempty span"),
+            *right.get(index).expect("nonempty span"),
+        ];
+        frames = frames.wrapping_sub(count);
+    }
+    last
+}
+
+#[kithara::test]
+#[case(Decay::MAX, Decay::MIN)]
+#[case(Decay::MIN, Decay::MAX)]
+fn decay_change_rearms_active_history_from_the_command_frame(
+    #[case] from: Decay,
+    #[case] to: Decay,
+) {
+    let rate = NonZeroU32::new(8000).unwrap();
+    let config = ReverbConfig::builder().decay(from).build();
+    let mut actual = Reverb::new(rate, config, &pools()).unwrap();
+    let mut unchanged = Reverb::new(rate, config, &pools()).unwrap();
+    let warm = (4.0 * f64::from(from) * f64::from(rate.get()))
+        .ceil()
+        .to_usize()
+        .unwrap();
+    let age = (0.9 * f64::from(from) * f64::from(rate.get()))
+        .ceil()
+        .to_usize()
+        .unwrap();
+    for reverb in [&mut actual, &mut unchanged] {
+        advance_reverb(reverb, warm, 1.0);
+        advance_reverb(reverb, age, 0.0);
+        assert!(!reverb.tail_exhausted());
+    }
+    actual
+        .set(FxParamChange {
+            index: 0,
+            value: f64::from(to),
+        })
+        .unwrap();
+    actual.process([&[], &[]], [&mut [], &mut []]).unwrap();
+    let first = advance_reverb(&mut actual, 1, 0.0);
+    let reference = advance_reverb(&mut unchanged, 1, 0.0);
+    assert!(
+        reference.iter().any(|sample| sample.abs() > 1e-6),
+        "the fixture has an audible tail at the command"
+    );
+    assert_eq!(
+        first.map(f32::to_bits),
+        reference.map(f32::to_bits),
+        "the command preserves the stored signal"
+    );
+    let bound = declared_tail_frames(rate, to);
+    let checkpoint = if to > from {
+        declared_tail_frames(rate, from).min(bound - 1)
+    } else {
+        0
+    };
+    let at_checkpoint = advance_reverb(&mut actual, checkpoint, 0.0);
+    if to > from {
+        assert!(
+            at_checkpoint.iter().any(|sample| sample.abs() > 1e-6),
+            "the new feedback retains signal beyond the old bound"
+        );
+    }
+    assert!(
+        !actual.tail_exhausted(),
+        "lengthening cannot retire at the old bound"
+    );
+    advance_reverb(&mut actual, bound - 1 - checkpoint, 0.0);
+    assert!(
+        !actual.tail_exhausted(),
+        "the command frame is the new bound origin"
+    );
+    let last = advance_reverb(&mut actual, 1, 0.0);
+    assert!(actual.tail_exhausted());
+    assert!(last.iter().all(|sample| sample.abs() <= 1e-6));
+    assert_eq!(advance_reverb(&mut actual, 512, 0.0), [0.0; 2]);
+}
+
+#[kithara::test]
+fn decay_change_does_not_revive_an_exhausted_tail() {
+    let rate = NonZeroU32::new(8000).unwrap();
+    let mut reverb = Reverb::new(
+        rate,
+        ReverbConfig::builder().decay(Decay::MIN).build(),
+        &pools(),
+    )
+    .unwrap();
+    advance_reverb(&mut reverb, 512, 1.0);
+    advance_reverb(&mut reverb, declared_tail_frames(rate, Decay::MIN), 0.0);
+    assert!(reverb.tail_exhausted());
+    reverb
+        .set(FxParamChange {
+            index: 0,
+            value: f64::from(Decay::MAX),
+        })
+        .unwrap();
+    assert!(reverb.tail_exhausted());
+    assert_eq!(advance_reverb(&mut reverb, 512, 0.0), [0.0; 2]);
+    assert!(reverb.tail_exhausted());
+}
+
+#[kithara::test]
+fn identical_decay_keeps_the_original_retirement_frame() {
+    let rate = NonZeroU32::new(8000).unwrap();
+    let config = ReverbConfig::builder().decay(Decay::MIN).build();
+    let mut actual = Reverb::new(rate, config, &pools()).unwrap();
+    let mut unchanged = Reverb::new(rate, config, &pools()).unwrap();
+    for reverb in [&mut actual, &mut unchanged] {
+        advance_reverb(reverb, 512, 1.0);
+    }
+    actual
+        .set(FxParamChange {
+            index: 0,
+            value: f64::from(Decay::MIN),
+        })
+        .unwrap();
+    let bound = declared_tail_frames(rate, Decay::MIN);
+    for reverb in [&mut actual, &mut unchanged] {
+        advance_reverb(reverb, bound - 1, 0.0);
+        assert!(!reverb.tail_exhausted());
+    }
+    assert_eq!(
+        advance_reverb(&mut actual, 1, 0.0).map(f32::to_bits),
+        advance_reverb(&mut unchanged, 1, 0.0).map(f32::to_bits)
+    );
+    assert!(actual.tail_exhausted());
+    assert!(unchanged.tail_exhausted());
+}
+
+#[kithara::test]
+fn indexed_parameters_match_prepared_values_and_refuse_without_changing_history() {
+    let config = ReverbConfig::builder()
+        .decay(Decay::MAX)
+        .damping(Damping::MAX)
+        .width(Width::MIN)
+        .build();
+    let mut actual = Reverb::new(RATE, ReverbConfig::default(), &pools()).unwrap();
+    let mut expected = Reverb::new(RATE, config, &pools()).unwrap();
+    for (index, value) in [
+        f64::from(Decay::MAX),
+        f64::from(Damping::MAX),
+        f64::from(Width::MIN),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        actual.set(FxParamChange { index, value }).unwrap();
+    }
+    let input = [0.25_f32; 8192];
+    let mut output = [vec![0.0_f32; 8192], vec![0.0_f32; 8192]];
+    let mut reference = output.clone();
+    let [left, right] = &mut output;
+    actual
+        .process([&input, &[-0.125_f32; 8192]], [left, right])
+        .unwrap();
+    let [left, right] = &mut reference;
+    expected
+        .process([&input, &[-0.125_f32; 8192]], [left, right])
+        .unwrap();
+    assert_eq!(
+        output
+            .iter()
+            .flatten()
+            .map(|x| x.to_bits())
+            .collect::<Vec<_>>(),
+        reference
+            .iter()
+            .flatten()
+            .map(|x| x.to_bits())
+            .collect::<Vec<_>>()
+    );
+    for (index, value) in [
+        (3, 0.0),
+        (usize::MAX, 0.0),
+        (0, f64::from(Decay::MIN).next_down()),
+        (1, f64::from(Damping::MAX).next_up()),
+        (2, f64::NAN),
+        (0, f64::INFINITY),
+    ] {
+        assert!(actual.set(FxParamChange { index, value }).is_err());
+    }
+    let silence = [0.0_f32; 8192];
+    let [left, right] = &mut output;
+    actual.process([&silence, &silence], [left, right]).unwrap();
+    let [left, right] = &mut reference;
+    expected
+        .process([&silence, &silence], [left, right])
+        .unwrap();
+    assert_eq!(
+        output
+            .iter()
+            .flatten()
+            .map(|x| x.to_bits())
+            .collect::<Vec<_>>(),
+        reference
+            .iter()
+            .flatten()
+            .map(|x| x.to_bits())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[kithara::test]
+fn parameter_commands_keep_partition_bits_at_their_frames() {
+    let input: Vec<f32> = [0.25, -0.125, 0.0, 0.5]
+        .into_iter()
+        .cycle()
+        .take(4096)
+        .collect();
+    let commands = [
+        (
+            257,
+            FxParamChange {
+                index: 0,
+                value: f64::from(Decay::MAX),
+            },
+        ),
+        (
+            769,
+            FxParamChange {
+                index: 1,
+                value: f64::from(Damping::MAX),
+            },
+        ),
+        (
+            1541,
+            FxParamChange {
+                index: 2,
+                value: f64::from(Width::MIN),
+            },
+        ),
+        (
+            2049,
+            FxParamChange {
+                index: 0,
+                value: f64::from(Decay::MIN),
+            },
+        ),
+    ];
+    let render = |partition: &[usize]| {
+        let mut reverb = Reverb::new(RATE, ReverbConfig::default(), &pools()).unwrap();
+        let mut output = [vec![0.0_f32; input.len()], vec![0.0_f32; input.len()]];
+        let mut start = 0;
+        let mut command = 0;
+        for count in partition.iter().copied().cycle() {
+            if let Some((frame, value)) = commands.get(command).filter(|(frame, _)| *frame == start)
+            {
+                assert_eq!(*frame, start);
+                reverb.set(*value).unwrap();
+                command += 1;
+            }
+            let boundary = commands
+                .get(command)
+                .map_or(input.len(), |(frame, _)| *frame);
+            let end = start.saturating_add(count).min(boundary).min(input.len());
+            let [left, right] = &mut output;
+            reverb
+                .process(
+                    [&input[start..end], &input[start..end]],
+                    [&mut left[start..end], &mut right[start..end]],
+                )
+                .unwrap();
+            start = end;
+            if start == input.len() {
+                break;
+            }
+        }
+        assert_eq!(command, commands.len());
+        output
+    };
+    let whole = render(&[4096]);
+    let partitioned = render(&[0, 1, 31, 257, 3, 513]);
+    assert_eq!(
+        whole
+            .iter()
+            .flatten()
+            .map(|x| x.to_bits())
+            .collect::<Vec<_>>(),
+        partitioned
+            .iter()
+            .flatten()
+            .map(|x| x.to_bits())
+            .collect::<Vec<_>>()
+    );
 }

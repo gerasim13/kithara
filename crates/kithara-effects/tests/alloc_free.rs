@@ -24,8 +24,30 @@ fn reverb_process_reset_and_tail_retirement_never_allocate() {
     let mut left = [0.0_f32; 4096];
     let mut right = left;
     assert_no_alloc(|| {
+        for (index, value) in [
+            (0, f64::from(Decay::MAX)),
+            (1, f64::from(kithara_effects::reverb::Damping::MAX)),
+            (2, f64::from(Width::MIN)),
+            (0, f64::from(Decay::MIN)),
+        ] {
+            reverb
+                .set(kithara_effects::FxParamChange { index, value })
+                .unwrap();
+        }
         reverb
             .process([&[1.0], &[-0.5]], [&mut left[..1], &mut right[..1]])
+            .unwrap();
+        reverb
+            .set(kithara_effects::FxParamChange {
+                index: 0,
+                value: f64::from(Decay::MAX),
+            })
+            .unwrap();
+        reverb
+            .set(kithara_effects::FxParamChange {
+                index: 0,
+                value: f64::from(Decay::MIN),
+            })
             .unwrap();
         reverb
             .process([&silence, &silence], [&mut left, &mut right])

@@ -132,3 +132,44 @@ fn low_pass_shape_refusal_keeps_all_samples_and_history() {
         assert_eq!(actual.to_bits(), expected.to_bits());
     }
 }
+
+#[kithara::test]
+fn low_pass_retune_preserves_history_and_refuses_bad_coefficients() {
+    let mut filter = OnePoleLowPass::<2>::new(0.75).unwrap();
+    let mut control = OnePoleLowPass::<2>::new(0.75).unwrap();
+    let mut warm = [vec![1.0_f32; 13], vec![-0.5_f32; 13]];
+    let mut expected_warm = warm.clone();
+    filter.process(&mut warm, 0..13).unwrap();
+    control.process(&mut expected_warm, 0..13).unwrap();
+    for invalid in [f32::NAN, f32::INFINITY, -0.1, 1.0] {
+        assert_eq!(filter.retune(invalid), Err(FilterError::Parameters));
+    }
+    let mut first = [[0.0_f32; 1]; 2];
+    let mut unchanged = first;
+    filter
+        .process(&mut first.each_mut().map(<[f32; 1]>::as_mut_slice), 0..1)
+        .unwrap();
+    control
+        .process(
+            &mut unchanged.each_mut().map(<[f32; 1]>::as_mut_slice),
+            0..1,
+        )
+        .unwrap();
+    assert_eq!(
+        first.map(|p| p.map(f32::to_bits)),
+        unchanged.map(|p| p.map(f32::to_bits))
+    );
+    filter.retune(0.25).unwrap();
+    let mut tail = [[0.0_f32; 17]; 2];
+    filter
+        .process(&mut tail.each_mut().map(<[f32; 17]>::as_mut_slice), 0..17)
+        .unwrap();
+    for (tail, last) in tail.iter().zip(first) {
+        let mut state = f64::from(last[0]);
+        for sample in tail {
+            state *= 0.25;
+            assert!((f64::from(*sample) - state).abs() <= 1e-6);
+        }
+    }
+    assert!(tail[0][0] > 0.0);
+}

@@ -22,6 +22,7 @@ fn one_pole_process_and_reset_never_allocate() {
     let mut planes: [Vec<f32>; 8] = std::array::from_fn(|_| vec![0.25; 513]);
     assert_no_alloc(|| {
         for frames in [0, 1, 7, 255, 256, 257, 513] {
+            filter.retune(0.4).unwrap();
             filter.process(&mut planes, 0..frames).unwrap();
         }
         filter.reset();
