@@ -18,6 +18,7 @@ const SCRATCH: usize = 128;
 const REFERENCE_RATE: f64 = 44_100.0;
 const STEREO_SPREAD: u32 = 13;
 const DIFFUSION: f32 = 0.5;
+const TAIL_THRESHOLD: f64 = 1e-6;
 
 /// Why a reverb could not be prepared or a buffer shape was refused.
 #[derive(Debug, thiserror::Error)]
@@ -52,6 +53,7 @@ struct Bank {
     damping: OnePoleLowPass<COMBS>,
     shortest: NonZeroUsize,
     longest_comb: NonZeroUsize,
+    diffuser_tail: u64,
 }
 
 impl Bank {
@@ -88,9 +90,23 @@ impl Bank {
             });
         }
         let mut diffusers = Vec::with_capacity(DIFFUSER_LENGTHS.len());
+        let rounds = (TAIL_THRESHOLD.ln() / f64::from(DIFFUSION).ln())
+            .ceil()
+            .to_u64()
+            .and_then(|rounds| rounds.checked_add(1))
+            .ok_or(ReverbError::Geometry(rate))?;
+        let mut diffuser_tail = 0_u64;
         for reference in DIFFUSER_LENGTHS {
             let length = frames(rate, reference, channel)?;
             shortest = shortest.min(length);
+            let contribution = length
+                .get()
+                .to_u64()
+                .and_then(|length| length.checked_mul(rounds))
+                .ok_or(ReverbError::Geometry(rate))?;
+            diffuser_tail = diffuser_tail
+                .checked_add(contribution)
+                .ok_or(ReverbError::Geometry(rate))?;
             let line = DelayLine::new(NonZeroUsize::MIN, length, pools)?;
             diffusers.push(DelayDiffuser::new(line, DIFFUSION)?);
         }
@@ -104,6 +120,7 @@ impl Bank {
             damping: OnePoleLowPass::new(coefficient)?,
             shortest,
             longest_comb,
+            diffuser_tail,
         })
     }
 
@@ -171,11 +188,14 @@ impl Reverb {
             .get()
             .to_u64()
             .ok_or(ReverbError::Geometry(rate))?;
+        let diffuser_tail = left.diffuser_tail.max(right.diffuser_tail);
         let tail_bound = (2.0 * f64::from(config.decay()) * f64::from(rate.get()))
             .ceil()
             .to_u64()
             .ok_or(ReverbError::Geometry(rate))?
-            .saturating_add(longest);
+            .checked_add(longest)
+            .and_then(|frames| frames.checked_add(diffuser_tail))
+            .ok_or(ReverbError::Geometry(rate))?;
         Ok(Self {
             banks: [left, right],
             width: f64::from(config.width())

@@ -88,16 +88,7 @@ fn exhausted_tail_stays_exactly_silent_and_keeps_its_declared_boundary() {
         .process([&[1.0], &[-0.5]], [&mut left, &mut right])
         .unwrap();
     assert!(!reverb.tail_exhausted());
-    // Declared 44.1 kHz layout: longest comb 1617 frames plus 13 stereo frames.
-    let longest = (1630.0 * f64::from(rate.get()) / 44_100.0)
-        .round()
-        .to_usize()
-        .unwrap();
-    let bound = (2.0 * f64::from(Decay::MIN) * f64::from(rate.get()))
-        .ceil()
-        .to_usize()
-        .unwrap()
-        + longest;
+    let bound = declared_tail_frames(rate, Decay::MIN);
     let silence = vec![0.0_f32; bound - 1];
     let mut left = silence.clone();
     let mut right = silence.clone();
@@ -335,4 +326,88 @@ fn unrepresentable_rate_is_refused_without_clamping() {
         matches!(Reverb::new(NonZeroU32::MIN, ReverbConfig::default(), &pools()),
         Err(ReverbError::Geometry(rate)) if rate == NonZeroU32::MIN)
     );
+}
+
+#[kithara::test]
+fn maximum_decay_undamped_boundary_step_is_below_retirement_threshold() {
+    let mut maximum = 0.0_f32;
+    for rate in [8000, 48000] {
+        let rate = NonZeroU32::new(rate).unwrap();
+        let config = ReverbConfig::builder()
+            .decay(Decay::MAX)
+            .damping(Damping::MIN)
+            .width(Width::MAX)
+            .build();
+        let full_scale = [1.0_f32; 512];
+        let silence = [0.0_f32; 512];
+        let bound = declared_tail_frames(rate, Decay::MAX);
+        let dc_frames = (4.0 * f64::from(Decay::MAX) * f64::from(rate.get()))
+            .ceil()
+            .to_usize()
+            .unwrap();
+        for excitation in [1, dc_frames] {
+            let mut reverb = Reverb::new(rate, config, &pools()).unwrap();
+            let mut left = [0.0_f32; 512];
+            let mut right = left;
+            let mut remaining = excitation;
+            while remaining > 0 {
+                let count = remaining.min(512);
+                reverb
+                    .process(
+                        [&full_scale[..count], &full_scale[..count]],
+                        [&mut left[..count], &mut right[..count]],
+                    )
+                    .unwrap();
+                remaining -= count;
+            }
+            let mut remaining = bound - 1;
+            while remaining > 0 {
+                let count = remaining.min(512);
+                reverb
+                    .process(
+                        [&silence[..count], &silence[..count]],
+                        [&mut left[..count], &mut right[..count]],
+                    )
+                    .unwrap();
+                remaining -= count;
+            }
+            assert!(!reverb.tail_exhausted());
+            reverb
+                .process(
+                    [&silence[..1], &silence[..1]],
+                    [&mut left[..1], &mut right[..1]],
+                )
+                .unwrap();
+            assert!(reverb.tail_exhausted());
+            let peak = left[0].abs().max(right[0].abs());
+            eprintln!(
+                "boundary rate={} excitation_frames={excitation} decay={:?} damping={:?} width={:?} peak={peak:.12e}",
+                rate.get(),
+                Decay::MAX,
+                Damping::MIN,
+                Width::MAX
+            );
+            maximum = maximum.max(peak);
+        }
+    }
+    assert!(
+        maximum <= 1e-6,
+        "maximum pre-retirement step {maximum:.12e}"
+    );
+}
+
+fn declared_tail_frames(rate: NonZeroU32, decay: Decay) -> usize {
+    let rate = f64::from(rate.get());
+    let longest = (1630.0 * rate / 44_100.0).round().to_usize().unwrap();
+    let diffusion: usize = [31, 47, 73, 101]
+        .into_iter()
+        .map(|length| {
+            (f64::from(length + 13) * rate / 44_100.0)
+                .round()
+                .to_usize()
+                .unwrap()
+        })
+        .sum();
+    let rounds = (1e-6_f64.ln() / 0.5_f64.ln()).ceil().to_usize().unwrap() + 1;
+    (2.0 * f64::from(decay) * rate).ceil().to_usize().unwrap() + longest + diffusion * rounds
 }
