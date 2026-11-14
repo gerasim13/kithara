@@ -325,7 +325,7 @@ async fn a_held_track_preempts_a_background_run(tone_mp3: String, rhythm_a_mp3: 
     host.close().await;
 }
 
-#[kithara::test(native, tokio)]
+#[kithara::test(native, tokio, timeout(Short))]
 async fn a_background_track_waits_for_a_held_one(
     tone_mp3: String,
     rhythm_a_mp3: String,

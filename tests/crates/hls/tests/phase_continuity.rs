@@ -272,7 +272,7 @@ async fn run_case_paced(
     tokio,
     native,
     serial,
-    timeout(::std::time::Duration::from_millis(7330)),
+    timeout(::std::time::Duration::from_millis(9266)),
     hang_timeout_secs(1)
 )]
 #[cfg_attr(

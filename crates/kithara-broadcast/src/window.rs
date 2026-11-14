@@ -287,7 +287,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false), timeout(Short))]
     fn the_target_duration_is_the_configured_one_whatever_the_window_holds() {
         let mut window = window();
         let empty = window.snapshot();

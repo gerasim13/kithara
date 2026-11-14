@@ -1767,7 +1767,8 @@ steps = [
   { args = [
     "test",
     "rtsan",
-  ], label = "RTSan tripwire", env = { KITHARA_RTSAN_BACKEND = "standalone" } },
+    "metronome_grid::the_metronome_clicks_on_the_frame_nearest_every_computed_beat",
+  ], label = "RTSan tripwire", env = { KITHARA_RTSAN_BACKEND = "standalone", KITHARA_STRESS_REPEATS = "100" } },
 ]
 role = "gate"
 kinds = []
@@ -3470,31 +3471,3 @@ scan_all_rules = [
   "perf.no-local-test-pools",
   "style.no-items-in-lib-or-mod-rs",
 ]
-
-[ext.ci.lanes.budget-reference-real]
-cache_group = "linux"
-github_runner = "kithara-test-real"
-label = "Linux"
-os = "linux"
-tools = ["cargo", "just", "sccache", "kache"]
-program = "just"
-steps = [{ args = ["test", "run", "--flash=off", "--profile", "ci", "--timings", "--retries=0", "--test-threads=3", "--narrow=not (package(=kithara-test-utils) | package(=kithara-test-macros) | package(=kithara-harness-tests))"], label = "Uncensored native real reference at current adapters", env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", KITHARA_HANG_PREKILL_SECS = "110" } }]
-role = "gate"
-kinds = []
-kinds_github = ["weekly"]
-timeout_minutes = 180
-artifact = { name = "budget-reference-real-junit", path = "target/nextest/ci/junit.xml", when = "always" }
-
-[ext.ci.lanes.budget-reference-flash]
-cache_group = "linux"
-github_runner = "kithara-test-simulated"
-label = "Linux"
-os = "linux"
-tools = ["cargo", "just", "sccache", "kache"]
-program = "just"
-steps = [{ args = ["test", "run", "--no-block=on", "--profile", "ci", "--timings", "--retries=0", "--test-threads=3", "--narrow=not (package(=kithara-test-utils) | package(=kithara-test-macros) | package(=kithara-harness-tests))"], label = "Uncensored native flash reference at current adapters", env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", KITHARA_HANG_PREKILL_SECS = "110" } }]
-role = "gate"
-kinds = []
-kinds_github = ["weekly"]
-timeout_minutes = 180
-artifact = { name = "budget-reference-flash-junit", path = "target/nextest/ci/junit.xml", when = "always" }

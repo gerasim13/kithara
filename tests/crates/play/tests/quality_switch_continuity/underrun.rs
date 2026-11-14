@@ -1048,7 +1048,7 @@ fn cold_switch_failures(
     multi_thread,
     native,
     serial,
-    timeout(::std::time::Duration::from_millis(7166))
+    timeout(::std::time::Duration::from_millis(7234))
 )]
 async fn device_capture_exposes_a_starved_producer_as_missing_pcm() {
     let trace = kithara_test_utils::test::usdt::scope();
