@@ -13,7 +13,7 @@ pub mod node;
 /// Ranged reverb control domains.
 pub mod reverb;
 
-pub use deck_effect::{DeckEffect, FxParamChange};
+pub use deck_effect::{DeckEffect, FxParamChange, FxParamDescriptor, FxParamMapping, FxParamUnit};
 pub use gain_db::GainDb;
 #[cfg(test)]
 pub(crate) use kithara_test_utils::bufpool as test_pools;
