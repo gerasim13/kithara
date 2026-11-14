@@ -8,7 +8,7 @@ pub(crate) fn interpolate(shape: Progression, positions: &mut [f64], endpoints: 
     dispatch!(Level::new(), simd => kernel(simd, shape, positions, endpoints));
 }
 
-pub(super) fn kernel<S: Simd>(
+pub(in crate::backend) fn kernel<S: Simd>(
     simd: S,
     shape: Progression,
     positions: &mut [f64],

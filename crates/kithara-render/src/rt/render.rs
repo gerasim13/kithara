@@ -289,62 +289,6 @@ impl RenderPass {
             })
     }
 
-    pub(crate) const fn fx_units(&self) -> usize {
-        self.units.len()
-    }
-
-    /// Whether `unit` holds an effect that takes `change`.
-    pub(crate) fn accepts_fx(&self, unit: usize, change: FxParamChange) -> bool {
-        self.units
-            .get(unit)
-            .and_then(|unit| unit.effect.as_ref())
-            .is_some_and(|effect| effect.accepts(&change))
-    }
-
-    /// Apply `change` to its unit, tuning an installed effect to the deck's
-    /// `sample_rate`, and answer what goes back in the receipt.
-    pub(crate) fn change_fx(
-        &mut self,
-        change: DeckFxChange,
-        sample_rate: NonZeroU32,
-    ) -> Option<DeckPart> {
-        let Some(unit) = self.units.get_mut(change.unit()) else {
-            return Some(DeckPart::Fx(change));
-        };
-        let taken = match change {
-            DeckFxChange::Install {
-                unit: index,
-                mut effect,
-            } => {
-                effect.update_sample_rate(sample_rate);
-                (index, unit.effect.replace(effect))
-            }
-            DeckFxChange::Clear { unit: index } => (index, unit.effect.take()),
-            DeckFxChange::Power { on, .. } => {
-                if on
-                    && !unit.on
-                    && let Some(effect) = &mut unit.effect
-                {
-                    effect.reset();
-                }
-                unit.on = on;
-                return Some(DeckPart::Fx(change));
-            }
-            DeckFxChange::Mix { value, .. } => {
-                unit.mix.set_value(f32::from(value));
-                return Some(DeckPart::Fx(change));
-            }
-            DeckFxChange::Param { change: param, .. } => {
-                if let Some(effect) = &mut unit.effect {
-                    effect.set(param);
-                }
-                return Some(DeckPart::Fx(change));
-            }
-        };
-        let (unit, effect) = taken;
-        effect.map(|effect| DeckPart::Returned(Returned::Fx { unit, effect }))
-    }
-
     delegate::delegate! {
         to self.eq {
             #[call(read_gains)]
@@ -447,6 +391,80 @@ impl RenderPass {
         }
         self.output.set_value(target);
         self.output_owners = owners;
+    }
+}
+
+impl RenderPass {
+    pub(crate) const fn fx_units(&self) -> usize {
+        self.units.len()
+    }
+
+    /// Check a parameter against the effect after preceding installs and clears.
+    pub(crate) fn accepts_fx(
+        &self,
+        unit: usize,
+        change: FxParamChange,
+        preceding: &[DeckPart],
+    ) -> bool {
+        let current = self.units.get(unit).and_then(|unit| unit.effect.as_deref());
+        preceding
+            .iter()
+            .rev()
+            .find_map(|part| match part {
+                DeckPart::Fx(DeckFxChange::Install {
+                    unit: target,
+                    effect,
+                }) if *target == unit => Some(Some(effect.as_ref())),
+                DeckPart::Fx(DeckFxChange::Clear { unit: target }) if *target == unit => Some(None),
+                _ => None,
+            })
+            .unwrap_or(current)
+            .and_then(|effect| effect.parameters().get(change.index))
+            .is_some_and(|descriptor| descriptor.contains(change.value))
+    }
+
+    /// Apply `change` to its unit, tuning an installed effect to the deck's
+    /// `sample_rate`, and answer what goes back in the receipt.
+    pub(crate) fn change_fx(
+        &mut self,
+        change: DeckFxChange,
+        sample_rate: NonZeroU32,
+    ) -> Option<DeckPart> {
+        let Some(unit) = self.units.get_mut(change.unit()) else {
+            return Some(DeckPart::Fx(change));
+        };
+        let taken = match change {
+            DeckFxChange::Install {
+                unit: index,
+                mut effect,
+            } => {
+                effect.update_sample_rate(sample_rate);
+                (index, unit.effect.replace(effect))
+            }
+            DeckFxChange::Clear { unit: index } => (index, unit.effect.take()),
+            DeckFxChange::Power { on, .. } => {
+                if on
+                    && !unit.on
+                    && let Some(effect) = &mut unit.effect
+                {
+                    effect.reset();
+                }
+                unit.on = on;
+                return Some(DeckPart::Fx(change));
+            }
+            DeckFxChange::Mix { value, .. } => {
+                unit.mix.set_value(f32::from(value));
+                return Some(DeckPart::Fx(change));
+            }
+            DeckFxChange::Param { change: param, .. } => {
+                if let Some(effect) = &mut unit.effect {
+                    effect.set(param);
+                }
+                return Some(DeckPart::Fx(change));
+            }
+        };
+        let (unit, effect) = taken;
+        effect.map(|effect| DeckPart::Returned(Returned::Fx { unit, effect }))
     }
 }
 
@@ -582,6 +600,7 @@ fn native_values(
 #[cfg(test)]
 mod tests {
     use kithara_dsp::param::DEFAULT_SMOOTH_SECONDS;
+    use kithara_effects::FxParamDescriptor;
     use kithara_platform::{
         sync::{Arc, Mutex},
         time::Duration,
@@ -686,8 +705,8 @@ mod tests {
             }
         }
 
-        fn accepts(&self, _: &FxParamChange) -> bool {
-            false
+        fn parameters(&self) -> &[FxParamDescriptor] {
+            &[]
         }
 
         fn set(&mut self, _: FxParamChange) {}
