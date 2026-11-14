@@ -6,6 +6,9 @@ use std::{
 use fearless_simd::{Level, dispatch, prelude::*};
 use num_traits::AsPrimitive;
 
+mod block;
+pub(super) use block::{padded, store, vector};
+
 /// Replaces `NaN`, ±infinity, subnormals and −0.0 with `+0.0` in place; every
 /// other value keeps its bits.
 pub fn sanitize(samples: &mut [f32]) {
@@ -193,44 +196,12 @@ pub(super) fn blocks<S: Simd>(len: usize, mut f: impl FnMut(usize, usize)) {
     }
 }
 
-/// The vector holding `block`, zero-padded when it is shorter than the lanes.
-#[inline(always)]
-pub(super) fn vector<S: Simd>(simd: S, block: &[f32]) -> S::f32s {
-    if block.len() == S::f32s::LEN {
-        S::f32s::from_slice(simd, block)
-    } else {
-        padded(simd, block)
-    }
-}
-
-/// Writes the first `block.len()` lanes of `value` into `block`.
-#[inline(always)]
-pub(super) fn store<S: Simd>(value: S::f32s, block: &mut [f32]) {
-    if block.len() == S::f32s::LEN {
-        value.store_slice(block);
-    } else {
-        for (slot, lane) in block.iter_mut().zip(value.as_slice()) {
-            *slot = *lane;
-        }
-    }
-}
-
 /// `x` where `MIN_POSITIVE <= |x| <= MAX`, `+0.0` elsewhere; `NaN` fails both tests.
 #[inline(always)]
 fn sanitized<S: Simd>(x: S::f32s, smallest: S::f32s, largest: S::f32s, zero: S::f32s) -> S::f32s {
     let magnitude = x.abs();
     let normal = magnitude.simd_ge(smallest).select(x, zero);
     magnitude.simd_le(largest).select(normal, zero)
-}
-
-/// A vector holding `tail` in its first lanes and `+0.0` in the rest.
-#[inline(always)]
-pub(super) fn padded<S: Simd>(simd: S, tail: &[f32]) -> S::f32s {
-    let mut vector = S::f32s::splat(simd, 0.0);
-    for (slot, sample) in vector.as_mut_slice().iter_mut().zip(tail) {
-        *slot = *sample;
-    }
-    vector
 }
 
 pub(crate) fn crossfade_linear(

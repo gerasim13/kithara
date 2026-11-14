@@ -1,8 +1,7 @@
-use std::ops::Mul;
+use fearless_simd::{Level, dispatch};
 
-use fearless_simd::{Level, dispatch, prelude::*};
-
-use super::simd::{store, vector};
+mod kernel;
+use kernel::low_pass_kernel;
 
 pub(crate) fn low_pass<const CHANNELS: usize>(
     coefficient: f32,
@@ -11,45 +10,6 @@ pub(crate) fn low_pass<const CHANNELS: usize>(
     frames: usize,
 ) -> usize {
     dispatch!(Level::new(), simd => low_pass_kernel(simd, coefficient, state, planes, frames))
-}
-
-#[inline(always)]
-fn low_pass_kernel<S: Simd, const CHANNELS: usize>(
-    simd: S,
-    coefficient: f32,
-    state: &mut [f32; CHANNELS],
-    planes: &mut [Option<&mut [f32]>; CHANNELS],
-    frames: usize,
-) -> usize {
-    let feedback = S::f32s::splat(simd, coefficient);
-    let feedforward = S::f32s::splat(simd, 1.0 - coefficient);
-    let mut channels = planes
-        .each_mut()
-        .map(|plane| plane.as_deref_mut().unwrap_or_default().iter_mut());
-    for _ in 0..frames {
-        let mut samples = channels.each_mut().map(Iterator::next);
-        for (samples, memory) in samples
-            .chunks_mut(S::f32s::LEN)
-            .zip(state.chunks_mut(S::f32s::LEN))
-        {
-            let previous = vector(simd, memory);
-            let input = S::f32s::from_fn(simd, |lane| {
-                samples
-                    .get(lane)
-                    .and_then(Option::as_deref)
-                    .copied()
-                    .unwrap_or(0.0)
-            });
-            let output = previous.mul_add_precise(feedback, input.mul(feedforward));
-            store::<S>(output, memory);
-            for (sample, output) in samples.iter_mut().zip(output.as_slice()) {
-                if let Some(sample) = sample {
-                    **sample = *output;
-                }
-            }
-        }
-    }
-    frames
 }
 
 #[cfg(test)]

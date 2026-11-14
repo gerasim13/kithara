@@ -7,16 +7,21 @@ fn verify<const CHANNELS: usize>() {
     let input: [Vec<f32>; CHANNELS] = std::array::from_fn(|channel| {
         (0..1025)
             .map(|frame| {
-                let value = i16::try_from((frame + channel * 7) % 47).unwrap() - 23;
+                let value =
+                    i16::try_from((frame + channel * 7) % 47).expect("remainder fits i16") - 23;
                 f32::from(value) / 64.0
             })
             .collect()
     });
     for coefficient in [0.0_f32, 0.2, 0.875, 0.9999] {
-        let mut whole = OnePoleLowPass::<CHANNELS>::new(coefficient).unwrap();
-        let mut split = OnePoleLowPass::<CHANNELS>::new(coefficient).unwrap();
+        let mut whole =
+            OnePoleLowPass::<CHANNELS>::new(coefficient).expect("fixture coefficient is admitted");
+        let mut split =
+            OnePoleLowPass::<CHANNELS>::new(coefficient).expect("fixture coefficient is admitted");
         let mut actual = input.clone();
-        whole.process(&mut actual, 2..1023).unwrap();
+        whole
+            .process(&mut actual, 2..1023)
+            .expect("fixture planes cover range");
         // Independent f64 state, with no production chunk/lane layout.
         for (channel, (actual, input)) in actual.iter().zip(&input).enumerate() {
             let mut state = 0.0_f64;
@@ -38,7 +43,9 @@ fn verify<const CHANNELS: usize>() {
         let mut start = 2;
         for count in [0, 1, 3, 257, 7].into_iter().cycle() {
             let end = (start + count).min(1023);
-            split.process(&mut partitioned, start..end).unwrap();
+            split
+                .process(&mut partitioned, start..end)
+                .expect("fixture partition fits");
             start = end;
             if start == 1023 {
                 break;
@@ -49,7 +56,9 @@ fn verify<const CHANNELS: usize>() {
         }
         split.reset();
         let mut reset = input.clone();
-        split.process(&mut reset, 2..1023).unwrap();
+        split
+            .process(&mut reset, 2..1023)
+            .expect("reset planes cover range");
         for (actual, expected) in reset.iter().flatten().zip(actual.iter().flatten()) {
             assert_eq!(actual.to_bits(), expected.to_bits());
         }

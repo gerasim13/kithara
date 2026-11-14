@@ -10,15 +10,7 @@ use kithara_dsp::{
 use num_traits::ToPrimitive;
 
 use super::ReverbConfig;
-
-const COMB_LENGTHS: [u32; 8] = [1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617];
-const DIFFUSER_LENGTHS: [u32; 4] = [31, 47, 73, 101];
-const COMBS: usize = COMB_LENGTHS.len();
-const SCRATCH: usize = 128;
-const REFERENCE_RATE: f64 = 44_100.0;
-const STEREO_SPREAD: u32 = 13;
-const DIFFUSION: f32 = 0.5;
-const TAIL_THRESHOLD: f64 = 1e-6;
+use crate::consts;
 
 /// Why a reverb could not be prepared or a buffer shape was refused.
 #[derive(Debug, thiserror::Error)]
@@ -50,7 +42,7 @@ struct Comb {
 struct Bank {
     combs: Vec<Comb>,
     diffusers: Vec<DelayDiffuser<1>>,
-    damping: OnePoleLowPass<COMBS>,
+    damping: OnePoleLowPass<{ consts::REVERB_COMBS }>,
     shortest: NonZeroUsize,
     longest_comb: NonZeroUsize,
     diffuser_tail: u64,
@@ -63,10 +55,11 @@ impl Bank {
         config: ReverbConfig,
         pools: &PoolRegion<S>,
     ) -> Result<Self, ReverbError> {
-        let mut shortest = NonZeroUsize::MIN.saturating_add(SCRATCH.saturating_sub(1));
+        let mut shortest =
+            NonZeroUsize::MIN.saturating_add(consts::REVERB_SCRATCH.saturating_sub(1));
         let mut longest_comb = NonZeroUsize::MIN;
-        let mut combs = Vec::with_capacity(COMBS);
-        for reference in COMB_LENGTHS {
+        let mut combs: Vec<Comb> = Vec::with_capacity(consts::REVERB_COMBS);
+        for reference in consts::REVERB_COMB_LENGTHS {
             let length = frames(rate, reference, channel)?;
             shortest = shortest.min(length);
             longest_comb = longest_comb.max(length);
@@ -80,8 +73,10 @@ impl Bank {
             if !(0.0..1.0).contains(&feedback) {
                 return Err(FilterError::Parameters.into());
             }
-            let input_gain =
-                (1.0 - feedback) / COMBS.to_f32().ok_or(ReverbError::Geometry(rate))?;
+            let input_gain = (1.0 - feedback)
+                / consts::REVERB_COMBS
+                    .to_f32()
+                    .ok_or(ReverbError::Geometry(rate))?;
             combs.push(Comb {
                 line,
                 tap,
@@ -89,14 +84,16 @@ impl Bank {
                 input_gain,
             });
         }
-        let mut diffusers = Vec::with_capacity(DIFFUSER_LENGTHS.len());
-        let rounds = (TAIL_THRESHOLD.ln() / f64::from(DIFFUSION).ln())
-            .ceil()
-            .to_u64()
-            .and_then(|rounds| rounds.checked_add(1))
-            .ok_or(ReverbError::Geometry(rate))?;
+        let mut diffusers: Vec<DelayDiffuser<1>> =
+            Vec::with_capacity(consts::REVERB_DIFFUSER_LENGTHS.len());
+        let rounds = (consts::REVERB_TAIL_THRESHOLD.ln()
+            / f64::from(consts::REVERB_DIFFUSION).ln())
+        .ceil()
+        .to_u64()
+        .and_then(|rounds| rounds.checked_add(1))
+        .ok_or(ReverbError::Geometry(rate))?;
         let mut diffuser_tail = 0_u64;
-        for reference in DIFFUSER_LENGTHS {
+        for reference in consts::REVERB_DIFFUSER_LENGTHS {
             let length = frames(rate, reference, channel)?;
             shortest = shortest.min(length);
             let contribution = length
@@ -108,7 +105,7 @@ impl Bank {
                 .checked_add(contribution)
                 .ok_or(ReverbError::Geometry(rate))?;
             let line = DelayLine::new(NonZeroUsize::MIN, length, pools)?;
-            diffusers.push(DelayDiffuser::new(line, DIFFUSION)?);
+            diffusers.push(DelayDiffuser::new(line, consts::REVERB_DIFFUSION)?);
         }
         // The normalized control never reaches a frozen damping pole.
         let coefficient = (0.4 * f64::from(config.damping()))
@@ -126,14 +123,16 @@ impl Bank {
 
     fn process_span(&mut self, input: &[f32], output: &mut [f32]) -> Result<(), ReverbError> {
         let len = input.len();
-        let mut history = [[0.0_f32; SCRATCH]; COMBS];
+        let mut history = [[0.0_f32; consts::REVERB_SCRATCH]; consts::REVERB_COMBS];
         output.fill(0.0);
         for (comb, history) in self.combs.iter().zip(&mut history) {
             let history = history.get_mut(..len).ok_or(ReverbError::Shape)?;
             comb.line.read(0, comb.tap, history)?;
             add(history, output);
         }
-        let mut planes = history.each_mut().map(<[f32; SCRATCH]>::as_mut_slice);
+        let mut planes = history
+            .each_mut()
+            .map(<[f32; consts::REVERB_SCRATCH]>::as_mut_slice);
         self.damping.process(&mut planes, 0..len)?;
         for (comb, history) in self.combs.iter_mut().zip(&mut history) {
             let history = history.get_mut(..len).ok_or(ReverbError::Shape)?;
@@ -293,11 +292,15 @@ impl Reverb {
 }
 
 fn frames(rate: NonZeroU32, reference: u32, channel: usize) -> Result<NonZeroUsize, ReverbError> {
-    let spread = if channel == 0 { 0 } else { STEREO_SPREAD };
+    let spread = if channel == 0 {
+        0
+    } else {
+        consts::REVERB_STEREO_SPREAD
+    };
     let reference = reference
         .checked_add(spread)
         .ok_or(ReverbError::Geometry(rate))?;
-    (f64::from(reference) * f64::from(rate.get()) / REFERENCE_RATE)
+    (f64::from(reference) * f64::from(rate.get()) / consts::REVERB_REFERENCE_RATE)
         .round()
         .to_usize()
         .and_then(NonZeroUsize::new)
@@ -309,7 +312,7 @@ fn mix_width(wet: [&mut [f32]; 2], width: f32, span: NonZeroUsize) -> Result<(),
         return Ok(());
     }
     let [left, right] = wet;
-    let mut mid = [0.0_f32; SCRATCH];
+    let mut mid = [0.0_f32; consts::REVERB_SCRATCH];
     let toward_mid = 1.0 - width;
     for (left, right) in left
         .chunks_mut(span.get())

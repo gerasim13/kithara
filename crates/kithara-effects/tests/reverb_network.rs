@@ -189,17 +189,18 @@ fn scalar_network(input: [&[f32]; 2], rate: u32, config: ReverbConfig) -> [Vec<f
             ((f64::from(length + spread) * f64::from(rate)) / 44_100.0)
                 .round()
                 .to_usize()
-                .unwrap()
+                .expect("fixture geometry fits usize")
         });
         let diffuser_lengths = [31, 47, 73, 101].map(|length| {
             ((f64::from(length + spread) * f64::from(rate)) / 44_100.0)
                 .round()
                 .to_usize()
-                .unwrap()
+                .expect("fixture geometry fits usize")
         });
         let gains = comb_lengths.map(|length| {
             10.0_f64.powf(
-                -3.0 * length.to_f64().unwrap() / (f64::from(rate) * f64::from(config.decay())),
+                -3.0 * length.to_f64().expect("fixture delay fits f64")
+                    / (f64::from(rate) * f64::from(config.decay())),
             )
         });
         let mut combs: [Vec<f64>; 8] = std::array::from_fn(|_| Vec::new());
@@ -344,7 +345,7 @@ fn maximum_decay_undamped_boundary_step_is_below_retirement_threshold() {
         let dc_frames = (4.0 * f64::from(Decay::MAX) * f64::from(rate.get()))
             .ceil()
             .to_usize()
-            .unwrap();
+            .expect("fixture geometry fits usize");
         for excitation in [1, dc_frames] {
             let mut reverb = Reverb::new(rate, config, &pools()).unwrap();
             let mut left = [0.0_f32; 512];
@@ -398,16 +399,28 @@ fn maximum_decay_undamped_boundary_step_is_below_retirement_threshold() {
 
 fn declared_tail_frames(rate: NonZeroU32, decay: Decay) -> usize {
     let rate = f64::from(rate.get());
-    let longest = (1630.0 * rate / 44_100.0).round().to_usize().unwrap();
+    let longest = (1630.0 * rate / 44_100.0)
+        .round()
+        .to_usize()
+        .expect("fixture geometry fits usize");
     let diffusion: usize = [31, 47, 73, 101]
         .into_iter()
         .map(|length| {
             (f64::from(length + 13) * rate / 44_100.0)
                 .round()
                 .to_usize()
-                .unwrap()
+                .expect("fixture geometry fits usize")
         })
         .sum();
-    let rounds = (1e-6_f64.ln() / 0.5_f64.ln()).ceil().to_usize().unwrap() + 1;
-    (2.0 * f64::from(decay) * rate).ceil().to_usize().unwrap() + longest + diffusion * rounds
+    let rounds = (1e-6_f64.ln() / 0.5_f64.ln())
+        .ceil()
+        .to_usize()
+        .expect("fixture geometry fits usize")
+        + 1;
+    (2.0 * f64::from(decay) * rate)
+        .ceil()
+        .to_usize()
+        .expect("fixture geometry fits usize")
+        + longest
+        + diffusion * rounds
 }

@@ -6,6 +6,10 @@ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_m
 use kithara_dsp::delay::DelayLine;
 use kithara_test_utils::bufpool::pools;
 
+#[path = "support/mod.rs"]
+mod backend;
+mod reverb_primitives;
+
 mod consts {
     /// Short slap and long throw on the integer path, and the long throw on
     /// the fractional chord path, at 48 kHz in frames.
@@ -56,5 +60,5 @@ fn feedback(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, feedback);
+criterion_group!(benches, feedback, reverb_primitives::benchmarks);
 criterion_main!(benches);
