@@ -76,7 +76,7 @@ fn scalar_gain_matches_ieee_multiplication_at_every_level() {
     }
 }
 
-type Diffuse = fn(&mut [f32], &mut [f32], f32, &mut [f32]) -> usize;
+type Diffuse = fn(&mut [f32], &[f32], f32, &mut [f32]) -> usize;
 type DelayBlend = fn(&[f32], &[f32], f32, &mut [f32]) -> usize;
 
 fn delay_kernels() -> [(&'static str, Diffuse, DelayBlend); 3] {
@@ -121,10 +121,10 @@ fn delay_diffusion_native_and_fallback_keep_bits_across_partitions() {
                 .take(frames)
                 .collect();
             let mut whole = input.clone();
-            let mut whole_history = history.clone();
+            let whole_history = history.clone();
             let mut writes = vec![0.0; frames];
             assert_eq!(
-                diffuse(&mut whole, &mut whole_history, 0.731, &mut writes),
+                diffuse(&mut whole, &whole_history, 0.731, &mut writes),
                 frames
             );
             let expected: Vec<_> = history.iter().zip(&input).map(|(d, x)| d - x).collect();
@@ -134,10 +134,10 @@ fn delay_diffusion_native_and_fallback_keep_bits_across_partitions() {
                 .map(|(d, x)| d.mul_add(0.731, *x))
                 .collect();
             assert_delay_bits(name, &whole, &expected);
-            assert_delay_bits(name, &whole_history, &expected);
+            assert_delay_bits(name, &whole_history, &history);
             assert_delay_bits(name, &writes, &expected_writes);
             let mut split = input;
-            let mut split_history = history;
+            let split_history = history;
             let mut split_writes = vec![0.0; frames];
             let mut start = 0_usize;
             for count in [0, 1, 3, 127, 2, 257].into_iter().cycle() {
@@ -145,7 +145,7 @@ fn delay_diffusion_native_and_fallback_keep_bits_across_partitions() {
                 assert_eq!(
                     diffuse(
                         split.get_mut(start..end).unwrap(),
-                        split_history.get_mut(start..end).unwrap(),
+                        split_history.get(start..end).unwrap(),
                         0.731,
                         split_writes.get_mut(start..end).unwrap()
                     ),
