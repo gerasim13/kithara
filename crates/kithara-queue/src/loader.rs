@@ -349,7 +349,7 @@ mod tests {
             ResourceSrc::parse("https://example.com/a.mp3").expect("valid url"),
         )
         .store(supplied_store.clone())
-        .preferred_peak_bitrate(321.0)
+        .discriminator("caller-source")
         .build();
         let returned = loader
             .build_config(
@@ -358,10 +358,7 @@ mod tests {
                 &mock::output(None).get(),
             )
             .expect("build_config should succeed");
-        assert!(
-            (returned.preferred_peak_bitrate() - 321.0).abs() < f64::EPSILON,
-            "caller-set fields must be preserved"
-        );
+        assert_eq!(returned.discriminator(), Some("caller-source"));
         assert!(returned.store().is_same(&supplied_store));
         assert!(!returned.store().is_same(&loader.store));
     }

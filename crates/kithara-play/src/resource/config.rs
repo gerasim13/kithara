@@ -139,8 +139,7 @@ where
     /// default.
     #[config(skip = "transferred to the render lane's packet rings")]
     pub(crate) audio_buffer_chunks: Option<NonZeroUsize>,
-    /// Explicit playback worker. Player preparation fills this field; direct
-    /// Resource callers must configure it themselves.
+    /// Playback worker installed by player preparation before lane admission.
     #[config(skip = "transferred to the playback worker")]
     pub(crate) worker: Option<PlayWorker<S>>,
     /// Resident Warp resources and live temporal controls. Not a document
@@ -153,15 +152,6 @@ where
     /// document key.
     #[config(value, builder(default))]
     pub(crate) block_on_underrun: bool,
-    /// Requested peak-bitrate ceiling in bits per second, held for an ABR
-    /// reader that does not exist yet. `resource/build.rs` forwards this to
-    /// neither branch, so no value here changes variant selection today, and
-    /// the one caller of [`ResourceConfig::preferred_peak_bitrate`] is a test
-    /// asserting the value survives `Loader::build_config`. Not a document key
-    /// for exactly that reason: a document knob the binary ignores is worse
-    /// than no knob. Make it one when the ABR wiring lands.
-    #[config(value, builder(default = 0.0))]
-    pub(crate) preferred_peak_bitrate: f64,
 }
 
 #[cfg(test)]
@@ -283,26 +273,22 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn config_bus_propagates_to_hls_config() {
-        let worker = worker();
         let config: ResourceConfig<TestPools> =
             ResourceConfig::for_src(valid_src("https://example.com/live.m3u8"))
                 .downloader(downloader())
                 .store(store())
                 .events(EventBus::new(32))
                 .build();
-        let audio_config = config.build_hls_config(&worker, None).unwrap();
+        let audio_config = config.build_hls_config(pools(), None).unwrap();
         assert!(kithara_hls::Hls::<TestPools>::event_bus(audio_config.stream()).is_some());
     }
 
     #[kithara::test(native, tokio)]
-    async fn direct_resources_wake_the_worker_off_rt() {
+    async fn direct_resources_publish_decoder_events_without_a_play_worker() {
         use axum::{Router, routing::get};
-        use kithara_audio::{Audio, DecoderChangeCause, DecoderEvent};
-        use kithara_platform::sync::Arc;
-        use kithara_stream::mock::NoopWorkerWake;
+        use kithara_audio::{DecoderChangeCause, DecoderEvent};
         use kithara_test_utils::{TestHttpServer, TestTempDir};
 
-        let worker = worker();
         let dir = TestTempDir::new();
         let path = dir.path().join("direct.wav");
         std::fs::write(
@@ -317,13 +303,9 @@ mod tests {
                 .store(store())
                 .events(file_bus)
                 .build();
-        let _file = Audio::prepare(
-            file.build_file_config(None),
-            Arc::new(NoopWorkerWake),
-            pools(),
-        )
-        .await
-        .expect("direct file builds");
+        let _file = crate::Resource::open(file, kithara_worker::Wake::default(), pools())
+            .await
+            .expect("direct file builds");
         assert!(matches!(
             file_events
                 .try_recv()
@@ -356,14 +338,9 @@ mod tests {
                 .events(hls_bus)
                 .hint("wav")
                 .build();
-        let _hls = Audio::prepare(
-            hls.build_hls_config(&worker, None)
-                .expect("valid HLS config"),
-            Arc::new(NoopWorkerWake),
-            pools(),
-        )
-        .await
-        .expect("direct HLS builds");
+        let _hls = crate::Resource::open(hls, kithara_worker::Wake::default(), pools())
+            .await
+            .expect("direct HLS builds");
         assert!(matches!(
             hls_events.try_recv().expect("build publishes inline").event,
             DecoderEvent::DecoderChanged {
@@ -403,7 +380,6 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn config_explicit_resampler_backend_propagates_to_hls_config() {
-        let worker = worker();
         let decoder = AudioDecoderConfig::builder()
             .resampler(
                 DecoderResamplerSettings::builder()
@@ -417,7 +393,7 @@ mod tests {
                 .store(store())
                 .decoder(decoder)
                 .build();
-        let audio_config = config.build_hls_config(&worker, None).unwrap();
+        let audio_config = config.build_hls_config(pools(), None).unwrap();
 
         assert_eq!(
             audio_config
@@ -464,12 +440,6 @@ mod tests {
     }
 
     #[kithara::test]
-    fn config_bitrate_fields_default_zero() {
-        let config = test_config("https://example.com/live.m3u8").unwrap();
-        assert!((config.preferred_peak_bitrate - 0.0).abs() < f64::EPSILON);
-    }
-
-    #[kithara::test]
     fn config_worker_default_none() {
         let config = test_config("https://example.com/song.mp3").unwrap();
         assert!(config.worker.is_none());
@@ -511,7 +481,6 @@ mod tests {
     fn defaults_match_the_documented_values() {
         let config = test_config("https://example.com/song.mp3").expect("valid config");
 
-        assert!((config.preferred_peak_bitrate - 0.0).abs() < f64::EPSILON);
         assert!(!config.block_on_underrun);
         assert!(config.host_sample_rate.is_none());
         assert!(

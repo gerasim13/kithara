@@ -1,5 +1,5 @@
 use kithara_audio::{AudioConfig, AudioObserver, ResamplerBackend};
-use kithara_bufpool::HasPool;
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_decode::DecodeError;
 use kithara_file::{FileConfig, FileSrc};
 use kithara_hls::HlsConfig;
@@ -8,7 +8,6 @@ use kithara_stream::StreamType;
 use url::Url;
 
 use super::{ResourceConfig, ResourceSrc};
-use crate::PlayWorker;
 
 fn derive_remote_file_hint(url: &Url) -> Option<String> {
     url.path_segments()
@@ -73,10 +72,9 @@ where
     /// Build an `AudioConfig<Hls<S>>` from this resource configuration.
     pub(crate) fn build_hls_config(
         self,
-        worker: &PlayWorker<S>,
+        pools: PoolRegion<S>,
         observer: Option<Box<dyn AudioObserver>>,
     ) -> Result<AudioConfig<kithara_hls::Hls<S>, B>, DecodeError> {
-        let pools = worker.pools().clone();
         let url = match self.src {
             ResourceSrc::Url(ref url) => url.clone(),
             ResourceSrc::Path(_) => {
@@ -139,14 +137,9 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use crate::{
-        PlayWorker, PlayWorkerConfig,
         resource::{ResourceConfig, ResourceSrc},
         test_pools::{TestPools, pools},
     };
-
-    fn worker() -> PlayWorker<TestPools> {
-        PlayWorker::new(PlayWorkerConfig::builder(pools()).build())
-    }
 
     fn config(source: &str) -> ResourceConfig<TestPools> {
         ResourceConfig::for_src(ResourceSrc::parse(source).expect("valid test source"))
@@ -176,7 +169,7 @@ mod tests {
         config.hls.download_batch_size = Some(6);
 
         let built = config
-            .build_hls_config(&worker(), None)
+            .build_hls_config(pools(), None)
             .expect("valid HLS config");
 
         assert_eq!(built.stream().values().download_batch_size, 6);
@@ -317,7 +310,7 @@ mod tests {
 
         let audio = config
             .clone()
-            .build_hls_config(&worker(), None)
+            .build_hls_config(pools(), None)
             .expect("valid HLS config");
         let built = config.build_track_config(audio);
 
@@ -347,7 +340,7 @@ mod tests {
 
         let audio = config
             .clone()
-            .build_hls_config(&worker(), None)
+            .build_hls_config(pools(), None)
             .expect("valid HLS config");
         let built = config.build_track_config(audio);
 
@@ -366,7 +359,7 @@ mod tests {
 
         let audio = config
             .clone()
-            .build_hls_config(&worker(), None)
+            .build_hls_config(pools(), None)
             .expect("valid HLS config");
         let built = config.build_track_config(audio);
 

@@ -38,7 +38,9 @@ where
             Either::Left(config.build_track_config(audio))
         }
         SourceType::HlsStream(_) => {
-            let audio = config.clone().build_hls_config(&worker, None)?;
+            let audio = config
+                .clone()
+                .build_hls_config(worker.pools().clone(), None)?;
             Either::Right(config.build_track_config(audio))
         }
     };

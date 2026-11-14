@@ -11,7 +11,7 @@ use kithara_audio::{
     Audio, AudioObserver, AudioReadError, AudioReader, ChunkOutcome, ReadOutcome, ResamplerBackend,
     SeekOutcome,
 };
-use kithara_bufpool::HasPool;
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_command::{Inbox, Sender};
 use kithara_decode::{DecodeError, TrackMetadata};
 use kithara_events::{EventBus, EventReceiver, EventSet};
@@ -44,6 +44,7 @@ impl Resource {
     pub async fn open<S, B>(
         config: ResourceConfig<S, B>,
         wake: kithara_worker::Wake,
+        pools: PoolRegion<S>,
     ) -> Result<Self, DecodeError>
     where
         B: Default + ResamplerBackend,
@@ -51,10 +52,6 @@ impl Resource {
     {
         let src: Arc<str> = Arc::from(config.src.to_string());
         let source_type = SourceType::detect(&config.src)?;
-        let worker = config.worker.clone().ok_or(DecodeError::InvalidData {
-            detail: "ResourceConfig requires an explicit PlayWorker",
-        })?;
-        let pools = worker.pools().clone();
         let wake: Arc<dyn kithara_stream::WorkerWake> =
             Arc::new(kithara_render::StreamWake::new(wake));
         Ok(match source_type {
@@ -63,7 +60,7 @@ impl Resource {
                 Some(src),
             ),
             SourceType::HlsStream(_) => Self::from_reader(
-                Audio::prepare(config.build_hls_config(&worker, None)?, wake, pools).await?,
+                Audio::prepare(config.build_hls_config(pools.clone(), None)?, wake, pools).await?,
                 Some(src),
             ),
         })
@@ -275,7 +272,9 @@ where
                 )
             }
             SourceType::HlsStream(_) => {
-                let audio = config.clone().build_hls_config(&worker, Some(observer))?;
+                let audio = config
+                    .clone()
+                    .build_hls_config(worker.pools().clone(), Some(observer))?;
                 let track = config.build_track_config(audio);
                 let (opened, lane, latency) = worker.load(track, position, start, inbox).await?;
                 (
@@ -443,22 +442,28 @@ mod tests {
 
     #[kithara::test(tokio)]
     #[kithara::hang_watchdog(ctx = String)]
-    async fn a_direct_resource_decodes_to_the_end_without_the_play_dispatcher() {
+    #[case::without_worker(false)]
+    #[case::cancelled_worker(true)]
+    async fn a_direct_resource_decodes_to_the_end_without_a_play_worker(#[case] with_worker: bool) {
         let dir = TestTempDir::new();
         let path = dir.path().join("direct.wav");
         std::fs::write(&path, assets::fixed_constant_wav_cd_half_4096().bytes())
             .expect("float WAV");
-        let cancel = CancelToken::root();
-        cancel.cancel();
-        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).cancel(cancel).build());
-        let config: ResourceConfig<TestPools> = ResourceConfig::for_src(ResourceSrc::Path(path))
-            .store(
-                AssetStore::builder(pools())
-                    .backend(StorageBackend::Memory)
-                    .build(),
-            )
-            .worker(worker)
-            .build();
+        let mut config: ResourceConfig<TestPools> =
+            ResourceConfig::for_src(ResourceSrc::Path(path))
+                .store(
+                    AssetStore::builder(pools())
+                        .backend(StorageBackend::Memory)
+                        .build(),
+                )
+                .build();
+        if with_worker {
+            let cancel = CancelToken::root();
+            cancel.cancel();
+            config.worker = Some(PlayWorker::new(
+                PlayWorkerConfig::builder(pools()).cancel(cancel).build(),
+            ));
+        }
         let wake = kithara_worker::Wake::default();
         let resource = {
             // WHY: The fixture's disk open must consume real time before the watchdog expires.
@@ -466,7 +471,7 @@ mod tests {
             hang_tick!("direct resource awaits its source open".to_owned());
             kithara_platform::time::timeout(
                 __hang_detector.remaining(),
-                Resource::open(config, wake.clone()),
+                Resource::open(config, wake.clone(), pools()),
             )
             .await
             .expect("direct reader opens within the watchdog budget")
