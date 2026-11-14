@@ -164,6 +164,7 @@ pub struct LaneAudio<T, S> {
     block_on_underrun: bool,
     sender: Sender<LaneProtocol>,
     pcm: PcmReceiver,
+    playhead: kithara::platform::sync::Arc<dyn kithara::stream::PlayheadRead>,
     metadata: TrackMetadata,
     abr: Option<AbrHandle>,
     bus: EventBus,
@@ -300,6 +301,7 @@ where
             block_on_underrun,
             sender,
             pcm: loaded.opened.receiver,
+            playhead: loaded.opened.playhead,
             metadata: loaded.opened.metadata,
             abr: loaded.opened.abr,
             bus,
@@ -490,6 +492,9 @@ impl<T, S> AudioRead for LaneAudio<T, S> {
             fn spec(&self) -> AudioSpec;
             fn position(&self) -> Duration;
             fn decoded_frontier(&self) -> Duration;
+        }
+        to self.playhead {
+            #[call(cached)]
             fn cached_span(&self) -> Duration;
         }
     }
@@ -671,7 +676,7 @@ impl<T, S> AudioSession for LaneAudio<T, S> {
     }
 
     delegate::delegate! {
-        to self.pcm {
+        to self.playhead {
             fn duration(&self) -> Option<Duration>;
         }
     }

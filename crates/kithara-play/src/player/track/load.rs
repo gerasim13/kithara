@@ -116,7 +116,12 @@ impl<S> PlayerImpl<S> {
         out: &mut Outbox<'_, S>,
     ) -> Settled {
         self.lane.loaded(loaded.lane);
-        let OpenedTrack { pcm, abr, metadata } = loaded.opened;
+        let OpenedTrack {
+            pcm,
+            playhead,
+            abr,
+            metadata,
+        } = loaded.opened;
         self.abr = abr;
         self.metadata = metadata;
         if self.lane.retiring() {
@@ -126,6 +131,7 @@ impl<S> PlayerImpl<S> {
             }
             return Settled::Pending;
         }
+        self.playhead = Some(playhead);
         self.engine_latency = loaded.engine_latency;
         if self.segment.id == SegmentId::FIRST {
             self.segment.ready = true;

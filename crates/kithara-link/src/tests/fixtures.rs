@@ -702,6 +702,7 @@ pub(super) fn ordinary() -> (ScriptedTrack, Control) {
             speed: 1.0,
             position: Position::ZERO,
             duration: None,
+            cached: Position::ZERO,
             abr: None,
             metadata: TrackMetadata::default(),
             mark: None,

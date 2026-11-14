@@ -300,6 +300,7 @@ pub(crate) fn synthetic_loaded(
     let pcm = Box::new(PlayerResource::new(receiver, src.into()));
     let opened = kithara_play::OpenedTrack {
         pcm,
+        playhead: packets.playhead(),
         abr: None,
         metadata: kithara_decode::TrackMetadata::default(),
     };

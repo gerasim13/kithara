@@ -127,6 +127,8 @@ pub struct TrackSnapshot {
     pub position: Position,
     /// End of the track on the same media clock as its grid and cues.
     pub duration: Option<Duration>,
+    /// Source-cached coverage, independent of the rendered PCM frontier.
+    pub cached: Duration,
     pub abr: Option<AbrHandle>,
     pub metadata: TrackMetadata,
     pub mark: Option<SlotMark>,
@@ -149,6 +151,7 @@ impl std::fmt::Debug for TrackSnapshot {
             .field("speed", &self.speed)
             .field("position", &self.position)
             .field("duration", &self.duration)
+            .field("cached", &self.cached)
             .field("abr", &self.abr.is_some())
             .field("metadata", &self.metadata)
             .field("mark", &self.mark)

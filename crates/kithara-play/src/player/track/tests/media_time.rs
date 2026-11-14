@@ -1,3 +1,5 @@
+use kithara_stream::PlayheadRead;
+
 use super::*;
 
 #[cfg(any(
@@ -503,7 +505,7 @@ fn public_media_extent_uses_the_same_basis_as_public_position(
     pcm.meta.media_origin = Some(Duration::from_millis(576));
     packets.push(kithara_render::PcmPacket::Chunk(Box::new(pcm)));
     let receiver = packets.receiver.take().expect("prepared source receiver");
-    assert_eq!(receiver.duration(), Some(Duration::from_secs(2)));
+    assert_eq!(packets.playhead().duration(), Some(Duration::from_secs(2)));
     let source = receiver.next_chunk_info().expect("immutable source packet");
     let mut rig = rig();
     let output = mock::output(None).get();
@@ -578,7 +580,7 @@ fn public_media_extent_uses_the_same_basis_as_public_position(
             Some(Duration::from_millis(expected_ms))
         );
     }
-    assert_eq!(receiver.duration(), Some(Duration::from_secs(2)));
+    assert_eq!(packets.playhead().duration(), Some(Duration::from_secs(2)));
 }
 
 #[kithara::test]

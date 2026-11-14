@@ -1,6 +1,33 @@
+use kithara_platform::sync::Arc;
+use kithara_signal::SegmentId;
 use kithara_test_utils::kithara;
 
 use super::*;
+
+#[kithara::test]
+fn pcm_endpoint_does_not_retain_source_observation() {
+    let spec = AudioSpec::new(2, std::num::NonZeroU32::new(48_000).expect("rate"));
+    let mut source = PacketRing::new(spec, Duration::from_secs(1), 4);
+    let playhead = Arc::downgrade(&source.playhead);
+    source.push(PcmPacket::Chunk(Box::new(chunk(
+        spec,
+        SegmentId::FIRST,
+        0,
+        0,
+        &[0.25; 16],
+    ))));
+    let mut pcm = source.receiver.take().expect("prepared PCM");
+    assert!(pcm.next_chunk_info().is_some());
+    drop(source);
+    assert!(
+        playhead.upgrade().is_none(),
+        "live PCM must not retain source observation after its owner exits"
+    );
+    assert!(
+        matches!(pcm.pop(), Some(PcmPacket::Chunk(chunk)) if chunk.frames() == 8),
+        "admitted PCM survives independently of the source observer"
+    );
+}
 
 #[kithara::test]
 fn producer_drop_releases_ownership_before_the_final_deferred_wake() {

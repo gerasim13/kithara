@@ -475,7 +475,9 @@ where
             return PlaybackView::default();
         };
         PlaybackView {
-            buffered: snapshot.slot.map(|slot| slot.frontier.max(slot.cached)),
+            buffered: snapshot
+                .slot
+                .map(|slot| slot.frontier.max(track.cached.as_secs_f64())),
             duration: track.duration.map(|duration| duration.as_secs_f64()),
             position: Some(track.position.as_secs_f64()),
             playing: !snapshot.deck.suspended
@@ -514,10 +516,10 @@ mod tests {
         let mut snapshot = (*queue.view.read()).clone();
         let mut track = player.snapshot();
         track.duration = Some(Duration::from_secs(200));
+        track.cached = Duration::from_secs_f64(cached);
         snapshot.track = Some(track);
         snapshot.slot = Some(SlotSnapshot {
             frontier,
-            cached,
             ..SlotSnapshot::default()
         });
         queue.view.publish(snapshot);

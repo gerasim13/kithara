@@ -389,7 +389,6 @@ fn slot_snapshot(
         position,
         source: track.source_info(),
         frontier: track.decoded_frontier().max(position),
-        cached: track.cached_span(),
         gain: track.gain(),
     }
 }

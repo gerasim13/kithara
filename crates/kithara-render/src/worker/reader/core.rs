@@ -7,7 +7,7 @@ use kithara_platform::{
     time::Duration,
 };
 use kithara_signal::AudioSpec;
-use kithara_stream::{PlayheadRead, WorkerWake};
+use kithara_stream::WorkerWake;
 use kithara_test_utils::kithara;
 use ringbuf::{
     HeapCons, HeapProd, HeapRb,
@@ -85,7 +85,6 @@ pub struct PcmReceiver {
     pub(super) ready: Option<Arc<ThreadGate>>,
     pub(super) wake: StreamWake,
     pub(super) spec: AudioSpec,
-    pub(super) playhead: Arc<dyn PlayheadRead>,
     pub(super) position: Duration,
     pub(super) frontier: Duration,
 }
@@ -112,7 +111,6 @@ impl PcmReceiver {
                 ready: ready.clone(),
                 wake,
                 spec: audio.spec(),
-                playhead: audio.playhead_read(),
                 position,
                 frontier: position,
             },
@@ -134,13 +132,6 @@ impl PcmReceiver {
     }
 
     delegate::delegate! {
-        to self.playhead {
-            #[must_use]
-            pub fn duration(&self) -> Option<Duration>;
-            #[must_use]
-            #[call(cached)]
-            pub fn cached_span(&self) -> Duration;
-        }
         to self {
             /// Raw coordinate of track-media zero from the next immutable PCM packet.
             #[must_use]
@@ -174,20 +165,6 @@ impl PcmReceiver {
     #[must_use]
     pub const fn position(&self) -> Duration {
         self.position
-    }
-
-    pub(crate) fn frames_until_eof(&self, lane: crate::LaneFrame) -> Option<usize> {
-        let PcmPacket::Chunk(chunk) = self.forward.last()? else {
-            return None;
-        };
-        if !chunk.meta.end_of_track || chunk.meta.segment != lane.segment {
-            return None;
-        }
-        let end = chunk
-            .meta
-            .lane_frame
-            .checked_add(u64::try_from(chunk.frames()).ok()?)?;
-        usize::try_from(end.checked_sub(lane.frame)?).ok()
     }
 
     #[must_use]
@@ -300,7 +277,6 @@ impl fmt::Debug for PcmReceiver {
         formatter
             .debug_struct("PcmReceiver")
             .field("spec", &self.spec)
-            .field("duration", &self.duration())
             .field("position", &self.position)
             .finish_non_exhaustive()
     }

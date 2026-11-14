@@ -168,6 +168,10 @@ impl<S> Player<S> for PlayerImpl<S> {
                 .unwrap_or_else(|_| self.settings.config().speed()),
             position: self.position,
             duration: self.extent.duration,
+            cached: self
+                .playhead
+                .as_ref()
+                .map_or(Position::ZERO, |playhead| playhead.cached()),
             abr: self.abr.clone(),
             metadata: self.metadata.clone(),
             mark: self.mark,

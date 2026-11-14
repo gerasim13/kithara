@@ -5,6 +5,7 @@ use std::num::NonZeroU32;
 use kithara_audio::{AudioReadError, AudioSource, Fetch, SeekOutcome, TrackStep, WaitingReason};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioSpec, SegmentId};
+use kithara_stream::PlayheadRead;
 use kithara_test_fixtures::integration_fixtures::constant_half;
 use kithara_test_utils::kithara;
 use kithara_worker::Task;
@@ -58,8 +59,17 @@ fn make_player_resource(input: &'static [u8], seconds: f64) -> (PlayerResource, 
 
 #[kithara::test(tokio)]
 async fn duration_reflects_underlying_reader(constant_half: &'static [u8]) {
-    let (pr, _packets) = make_player_resource(constant_half, 1.0);
-    assert!((pr.duration() - 1.0).abs() < 0.01);
+    let (_pr, packets) = make_player_resource(constant_half, 1.0);
+    assert!(
+        (packets
+            .playhead()
+            .duration()
+            .expect("source duration")
+            .as_secs_f64()
+            - 1.0)
+            .abs()
+            < 0.01
+    );
 }
 
 #[kithara::test(tokio)]

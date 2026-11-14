@@ -292,6 +292,7 @@ where
 /// The owner-facing receiver and source facts returned by a dispatcher load.
 pub struct OpenedTrack {
     pub pcm: Box<PlayerResource>,
+    pub playhead: Arc<dyn kithara_stream::PlayheadRead>,
     pub abr: Option<kithara_abr::AbrHandle>,
     pub metadata: TrackMetadata,
 }
@@ -309,11 +310,17 @@ impl OpenedTrack {
     pub(super) fn new(opened: OpenedPcm, src: Arc<str>) -> Self {
         let OpenedPcm {
             receiver,
+            playhead,
             metadata,
             abr,
         } = opened;
         let pcm = Box::new(PlayerResource::new(receiver, src));
-        Self { pcm, abr, metadata }
+        Self {
+            pcm,
+            playhead,
+            abr,
+            metadata,
+        }
     }
 }
 
@@ -412,6 +419,7 @@ mod tests {
         let opened = OpenedTrack::new(
             OpenedPcm {
                 receiver: ring.receiver.take().expect("PCM receiver"),
+                playhead: ring.playhead(),
                 metadata,
                 abr: None,
             },

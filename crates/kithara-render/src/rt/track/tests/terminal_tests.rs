@@ -522,26 +522,22 @@ fn decoder_node_distinguishes_failed_from_eof_on_the_wire() {
 
 #[kithara::test]
 fn consumer_phase_terminal() {
-    use super::super::TrackReadOutcome;
+    assert_eq!(ReadOutcome::Full { frames: 1 }.ended_at(&(3..4)), None);
     assert_eq!(
-        TrackReadOutcome::Full {
-            position: 0.0,
-            frames: 1,
-            duration: 1.0,
-            frames_until_eof: None
-        }
-        .ended_at(&(3..4)),
-        None
+        ReadOutcome::Partial { frames: 2 }.ended_at(&(3..7)),
+        Some(5)
     );
     let (receiver, _producer) = terminal_ring(false, spec());
     let mut reader = resource(receiver);
     assert_eq!(observe(&mut reader), None);
     reader.select_segment(SegmentId::FIRST.next());
     assert_eq!(observe(&mut reader), None);
-    assert_eq!(TrackReadOutcome::Eof.ended_at(&(3..4)), Some(3));
+    assert_eq!(ReadOutcome::Eof.ended_at(&(3..4)), Some(3));
     assert_eq!(
-        TrackReadOutcome::Failed(PlaybackFault::Source(TrackFailureKind::SourceCancelled))
-            .ended_at(&(3..4)),
+        ReadOutcome::Failed(FailureSource::Producer {
+            failure: TrackFailureKind::SourceCancelled
+        })
+        .ended_at(&(3..4)),
         Some(3)
     );
 }
@@ -628,8 +624,5 @@ fn read_returns_failed_not_eof_on_decoder_error() {
             panic!("decoder Err must surface as Failed, not Full silence: {result:?}")
         }
     }
-    assert!(
-        !reader.eof,
-        "frames_until_eof must NOT report an EOF after a decode failure"
-    );
+    assert!(!reader.eof, "a decode failure must not become EOF");
 }

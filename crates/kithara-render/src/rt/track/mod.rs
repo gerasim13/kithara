@@ -14,7 +14,6 @@ pub use core::PlayerTrack;
 
 pub use feeder::{PlayerResource, ReadOutcome};
 pub(crate) use read::TrackBuffers;
-pub use read::TrackReadOutcome;
 pub use sink::RtSink;
 
 #[cfg(test)]

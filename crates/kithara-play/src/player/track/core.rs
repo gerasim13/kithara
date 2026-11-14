@@ -5,11 +5,13 @@ use kithara_command::{Live, Seq, Target, When};
 use kithara_config::ConfigOwner;
 use kithara_decode::TrackMetadata;
 use kithara_events::TrackId;
+use kithara_platform::sync::Arc;
 use kithara_render::{
     LaneCommand, LaneFrame, LaneProtocol, ServiceClass,
     bridge::{DeckPart, Fade, Slot, SlotMark, TrackClock},
 };
 use kithara_signal::{AudioChunkInfo, FrameCount, SegmentId, SessionFrame};
+use kithara_stream::PlayheadRead;
 use kithara_sync::SpeedCurve;
 
 use super::{
@@ -53,6 +55,7 @@ pub struct PlayerImpl<S> {
     pub(super) source_basis: Option<AudioChunkInfo>,
     pub(super) observed_source: Option<AudioChunkInfo>,
     pub(super) extent: Extent,
+    pub(super) playhead: Option<Arc<dyn PlayheadRead>>,
     pub(super) abr: Option<AbrHandle>,
     pub(super) metadata: TrackMetadata,
     pub(super) marker: PhantomData<fn() -> S>,
@@ -90,6 +93,7 @@ impl<S> PlayerImpl<S> {
             source_basis: None,
             observed_source: None,
             extent: Extent::default(),
+            playhead: None,
             abr: None,
             metadata: TrackMetadata::default(),
             marker: PhantomData,
@@ -108,6 +112,7 @@ impl<S> PlayerImpl<S> {
         self.settle_lane();
         self.settings.abandon();
         self.lane.retire();
+        self.playhead = None;
         self.lane_commands.clear();
         self.segment.ready = false;
         self.source_basis = None;

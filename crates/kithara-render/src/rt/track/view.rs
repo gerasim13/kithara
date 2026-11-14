@@ -11,14 +11,6 @@ impl PlayerResource {
         }
     }
 
-    #[must_use]
-    pub fn duration(&self) -> f64 {
-        self.receiver
-            .get()
-            .duration()
-            .map_or(0.0, |duration| duration.as_secs_f64())
-    }
-
     /// Immutable next-producer metadata, independent of the consumed raw mark.
     #[must_use]
     pub fn next_chunk_info(&self) -> Option<AudioChunkInfo> {
@@ -28,11 +20,6 @@ impl PlayerResource {
     #[must_use]
     pub fn decoded_frontier(&self) -> f64 {
         self.receiver.get().decoded_frontier().as_secs_f64()
-    }
-
-    #[must_use]
-    pub fn cached_span(&self) -> f64 {
-        self.receiver.get().cached_span().as_secs_f64()
     }
 
     pub(super) fn segment(&self) -> SegmentId {
@@ -50,12 +37,5 @@ impl PlayerResource {
             }
             PcmPacket::Chunk(_) | PcmPacket::Failed { .. } => None,
         }
-    }
-
-    pub(super) fn frames_until_eof(&self) -> Option<usize> {
-        if self.eof {
-            return Some(0);
-        }
-        self.receiver.get().frames_until_eof(self.lane)
     }
 }

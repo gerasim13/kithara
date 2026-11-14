@@ -13,7 +13,7 @@ use ringbuf::{
     traits::{Consumer, Split},
 };
 
-use super::super::{PlayerResource, PlayerTrack, RtSink, TrackBuffers, TrackReadOutcome};
+use super::super::{PlayerResource, PlayerTrack, ReadOutcome, RtSink, TrackBuffers};
 use crate::{
     bridge::{DeckEvent, Fade, RtMetrics, Slot},
     mock::pcm_fixture::{PcmFixture, chunk},
@@ -84,7 +84,7 @@ fn offline_preparation_waits_for_the_lane_instead_of_underrunning() {
         &mut sink,
         None,
     );
-    assert!(matches!(outcome, TrackReadOutcome::Full { frames: 2, .. }));
+    assert!(matches!(outcome, ReadOutcome::Full { frames: 2, .. }));
     assert_eq!(trace.events_of("pcm_wait_started").len(), prepared_waits);
     assert_eq!(left, [0.7, 0.8]);
     assert_eq!(right, left);
@@ -157,7 +157,7 @@ async fn underrun_edges_emit_once_per_starvation_window() {
                 &mut sink,
                 None,
             ),
-            TrackReadOutcome::Full { frames: 0, .. }
+            ReadOutcome::Full { frames: 0, .. }
         ));
     }
     assert_eq!(metrics.snapshot().underruns(), 1);
@@ -191,7 +191,7 @@ async fn underrun_edges_emit_once_per_starvation_window() {
             &mut sink,
             None,
         ),
-        TrackReadOutcome::Full { frames: 2, .. }
+        ReadOutcome::Full { frames: 2, .. }
     ));
     assert!(
         matches!(receiver.try_pop(), Some(DeckEvent::UnderrunEnded { slot, item, at, frames: 4, position: None, recovered: true }) if slot == Slot::new(0) && item == track.item_id && at == start)
@@ -211,7 +211,7 @@ async fn underrun_edges_emit_once_per_starvation_window() {
             &mut sink,
             None,
         ),
-        TrackReadOutcome::Full { frames: 0, .. }
+        ReadOutcome::Full { frames: 0, .. }
     ));
     assert!(matches!(
         receiver.try_pop(),
@@ -250,10 +250,7 @@ async fn a_graph_read_does_not_wait_for_an_offline_lane() {
     let mut left = [99.0; 2];
     let mut right = [99.0; 2];
     let outcome = resource.read(None, &mut [&mut left, &mut right], 0..2, &mut 16);
-    assert!(matches!(
-        outcome,
-        crate::rt::track::ReadOutcome::Full { frames: 0 }
-    ));
+    assert!(matches!(outcome, ReadOutcome::Full { frames: 0 }));
     assert_eq!(left, [0.0; 2]);
     assert_eq!(right, left);
     assert!(trace.events_of("pcm_wait_started").is_empty());

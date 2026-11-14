@@ -41,6 +41,17 @@ pub enum ReadOutcome {
     Failed(FailureSource),
 }
 
+impl ReadOutcome {
+    #[must_use]
+    pub const fn ended_at(&self, range: &Range<usize>) -> Option<usize> {
+        match self {
+            Self::Full { .. } => None,
+            Self::Partial { frames } => Some(range.start.saturating_add(*frames)),
+            Self::Eof | Self::Failed(_) => Some(range.start),
+        }
+    }
+}
+
 impl PlayerResource {
     /// Wraps a prepared packet receiver without calling its source.
     #[must_use]

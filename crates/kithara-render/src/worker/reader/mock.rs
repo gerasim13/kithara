@@ -154,7 +154,6 @@ impl PacketRing {
                 playing: playing_tx,
                 ready: ready.clone(),
                 wake,
-                playhead: playhead.clone(),
                 position: Duration::ZERO,
                 frontier: Duration::ZERO,
             }),
@@ -174,6 +173,11 @@ impl PacketRing {
 
     pub(in crate::worker) fn into_ends(mut self) -> (PcmReceiver, PcmProducer) {
         (self.receiver.take().expect("receiver"), self.producer)
+    }
+
+    #[must_use]
+    pub fn playhead(&self) -> Arc<PlayheadState> {
+        self.playhead.clone()
     }
 
     pub fn playing(&mut self) -> bool {
@@ -290,7 +294,6 @@ pub(in crate::worker) fn packet_fixture(
             reverse: returned,
             ready: ready.clone(),
             wake: StreamWake::new(dispatcher.wake_handle()),
-            playhead: Arc::new(PlayheadState::new()),
             position: Duration::ZERO,
             frontier: Duration::ZERO,
         },
@@ -330,15 +333,8 @@ pub fn wait_for_packet(receiver: &PcmReceiver) {
         format!(
             "{stage}: waited={waited:?}, gate_before={gate_before}, gate_after={gate_after}, \
              packet_ready={packet_ready}, producer_held={producer_held}, \
-             next_chunk={next_chunk:?}, position={:?}, frontier={:?}, spec={:?}, \
-             playhead_position={:?}, decoded_frontier={:?}, cached={:?}, duration={:?}",
-            receiver.position,
-            receiver.frontier,
-            receiver.spec,
-            receiver.playhead.position(),
-            receiver.playhead.decoded_frontier(),
-            receiver.playhead.cached(),
-            receiver.playhead.duration(),
+             next_chunk={next_chunk:?}, position={:?}, frontier={:?}, spec={:?}",
+            receiver.position, receiver.frontier, receiver.spec,
         )
     };
     let mut waited = None;

@@ -253,6 +253,7 @@ where
             );
             let opened = OpenedPcm {
                 receiver,
+                playhead: audio.playhead_read(),
                 metadata: audio.metadata().clone(),
                 abr: audio.abr_handle(),
             };

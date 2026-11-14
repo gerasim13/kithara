@@ -9,7 +9,7 @@ use ringbuf::{
     traits::{Consumer, Split},
 };
 
-use super::super::{PlayerResource, PlayerTrack, RtSink, TrackBuffers, TrackReadOutcome};
+use super::super::{PlayerResource, PlayerTrack, ReadOutcome, RtSink, TrackBuffers};
 use crate::{
     bridge::{DeckEvent, Fade, RtMetrics, Slot, TrackClock},
     mock::pcm_fixture::{PcmFixture, chunk},
@@ -69,7 +69,7 @@ impl Rig {
     }
 
     /// Renders one block and returns what the track played into its bus.
-    fn block(&mut self) -> (TrackReadOutcome, [f32; BLOCK]) {
+    fn block(&mut self) -> (ReadOutcome, [f32; BLOCK]) {
         let (mut producer, mut consumer) = HeapRb::<DeckEvent>::new(8).split();
         let mut left = [0.0; BLOCK];
         let mut right = [0.0; BLOCK];
@@ -102,7 +102,7 @@ impl Rig {
         for _ in 0..blocks {
             assert!(matches!(
                 self.block().0,
-                TrackReadOutcome::Full { frames: 0, .. }
+                ReadOutcome::Full { frames: 0, .. }
             ));
         }
     }
@@ -130,7 +130,7 @@ async fn a_session_time_track_drops_the_frames_its_dropout_missed() {
 
     let (outcome, played) = rig.block();
 
-    assert!(matches!(outcome, TrackReadOutcome::Full { frames: 2, .. }));
+    assert!(matches!(outcome, ReadOutcome::Full { frames: 2, .. }));
     assert_eq!(
         played,
         [0.5, 0.6],
@@ -147,7 +147,7 @@ async fn a_media_time_track_resumes_on_the_frame_it_stopped_on() {
 
     let (outcome, played) = rig.block();
 
-    assert!(matches!(outcome, TrackReadOutcome::Full { frames: 2, .. }));
+    assert!(matches!(outcome, ReadOutcome::Full { frames: 2, .. }));
     assert_eq!(played, [0.1, 0.2]);
     assert_eq!(rig.underrun_ends(), [(4, true)]);
 }
@@ -160,7 +160,7 @@ async fn pcm_short_of_the_debt_is_dropped_and_the_rest_stays_owed() {
 
     let (outcome, played) = rig.block();
 
-    assert!(matches!(outcome, TrackReadOutcome::Full { frames: 0, .. }));
+    assert!(matches!(outcome, ReadOutcome::Full { frames: 0, .. }));
     assert_eq!(played, [0.0; BLOCK]);
     assert!(
         rig.underrun_ends().is_empty(),

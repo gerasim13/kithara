@@ -13,34 +13,6 @@ pub(crate) struct TrackBuffers<'block, 'scratch, 'bus> {
     pub(crate) bus: &'block mut [&'bus mut [f32]],
 }
 
-/// Result of an exact packet-backed render range.
-#[derive(Debug)]
-pub enum TrackReadOutcome {
-    Full {
-        position: f64,
-        frames: usize,
-        duration: f64,
-        frames_until_eof: Option<usize>,
-    },
-    Partial {
-        frames: usize,
-        duration: f64,
-    },
-    Eof,
-    Failed(PlaybackFault),
-}
-
-impl TrackReadOutcome {
-    #[must_use]
-    pub const fn ended_at(&self, range: &Range<usize>) -> Option<usize> {
-        match self {
-            Self::Full { .. } => None,
-            Self::Partial { frames, .. } => Some(range.start.saturating_add(*frames)),
-            Self::Eof | Self::Failed(_) => Some(range.start),
-        }
-    }
-}
-
 impl PlayerTrack {
     pub(crate) fn poll_end(
         &mut self,
@@ -99,18 +71,13 @@ impl PlayerTrack {
         budget: &mut usize,
         sink: &mut RtSink<'_>,
         curve: Option<&ParameterCurve>,
-    ) -> TrackReadOutcome {
+    ) -> ReadOutcome {
         let TrackBuffers { scratch, bus } = buffers;
         if self.state == SlotState::Ended {
-            return TrackReadOutcome::Eof;
+            return ReadOutcome::Eof;
         }
         if self.state != SlotState::Playing || self.gate.is_shut() {
-            return TrackReadOutcome::Full {
-                position: self.position(),
-                frames: 0,
-                duration: self.duration(),
-                frames_until_eof: None,
-            };
+            return ReadOutcome::Full { frames: 0 };
         }
         let valid =
             context.is_some_and(|context| context.for_output_range(range.clone()).is_some());
@@ -122,12 +89,7 @@ impl PlayerTrack {
                 range_start = range.start,
                 range_end = range.end
             );
-            return TrackReadOutcome::Full {
-                position: self.position(),
-                frames: 0,
-                duration: self.duration(),
-                frames_until_eof: None,
-            };
+            return ReadOutcome::Full { frames: 0 };
         }
         let limit = if self.fade.is_fading_out() {
             usize::try_from(self.fade.remaining())
@@ -149,10 +111,7 @@ impl PlayerTrack {
         };
         let frames = match outcome {
             ReadOutcome::Full { frames } | ReadOutcome::Partial { frames } => frames,
-            ReadOutcome::Eof => return TrackReadOutcome::Eof,
-            ReadOutcome::Failed(kind) => {
-                return TrackReadOutcome::Failed(PlaybackFault::Source(kind.into()));
-            }
+            ReadOutcome::Eof | ReadOutcome::Failed(_) => return outcome,
         };
         if frames > 0 {
             self.end_underrun(range.start, recovery_position, true, sink);
@@ -165,34 +124,20 @@ impl PlayerTrack {
         if matches!(outcome, ReadOutcome::Full { .. }) {
             self.record_missing_frames(range.start, frames, limit, sink);
         }
-        match outcome {
-            ReadOutcome::Partial { .. } => TrackReadOutcome::Partial {
-                frames,
-                duration: self.duration(),
-            },
-            ReadOutcome::Full { .. } => TrackReadOutcome::Full {
-                position: self.position(),
-                frames,
-                duration: self.duration(),
-                frames_until_eof: self.resource.frames_until_eof(),
-            },
-            ReadOutcome::Eof | ReadOutcome::Failed(_) => unreachable!(),
-        }
+        outcome
     }
 
     /// Drops the lane frames a session-time dropout missed before any plays;
     /// a debt PCM cannot cover yet keeps the track silent.
-    fn pay_owed(&mut self, budget: &mut usize) -> Option<TrackReadOutcome> {
+    fn pay_owed(&mut self, budget: &mut usize) -> Option<ReadOutcome> {
         let owed = usize::try_from(self.owed()).unwrap_or(usize::MAX);
         if owed == 0 {
             return None;
         }
-        let dropped = match self.resource.discard(owed, budget) {
+        let outcome = self.resource.discard(owed, budget);
+        let dropped = match outcome {
             ReadOutcome::Full { frames } | ReadOutcome::Partial { frames } => frames,
-            ReadOutcome::Eof => return Some(TrackReadOutcome::Eof),
-            ReadOutcome::Failed(kind) => {
-                return Some(TrackReadOutcome::Failed(PlaybackFault::Source(kind.into())));
-            }
+            ReadOutcome::Eof | ReadOutcome::Failed(_) => return Some(outcome),
         };
         self.paid = self
             .paid

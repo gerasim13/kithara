@@ -94,8 +94,6 @@ impl PlayerTrack {
         to self.resource {
             pub(in crate::rt) fn waits_offline(&self) -> bool;
             #[must_use]
-            pub fn duration(&self) -> f64;
-            #[must_use]
             pub(crate) fn source_info(&self) -> Option<kithara_signal::AudioChunkInfo>;
             #[must_use]
             pub fn visible_origin(&self) -> Option<Duration>;
@@ -103,8 +101,6 @@ impl PlayerTrack {
             pub fn media_origin(&self) -> Option<Duration>;
             #[must_use]
             pub fn decoded_frontier(&self) -> f64;
-            #[must_use]
-            pub fn cached_span(&self) -> f64;
             #[must_use]
             pub fn src(&self) -> &Arc<str>;
             #[must_use]

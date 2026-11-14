@@ -40,6 +40,7 @@ impl TrackFactory<TestPools> for SnapshotFactory {
                 speed: 1.0,
                 position: Duration::ZERO,
                 duration: None,
+                cached: Duration::ZERO,
                 abr: None,
                 metadata: TrackMetadata::default(),
                 mark: None,

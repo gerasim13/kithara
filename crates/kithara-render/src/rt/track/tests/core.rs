@@ -1,6 +1,7 @@
 pub(super) use std::num::NonZeroU32;
 
 pub(super) use kithara_signal::{AudioSpec, FrameCount, SampleCount, SourceSpan};
+use kithara_stream::PlayheadRead;
 pub(super) use kithara_test_utils::kithara;
 
 use super::*;
@@ -273,7 +274,13 @@ fn producer_ahead_geometry_does_not_replace_a_historical_buffered_mark(
             .position,
         Duration::from_millis(old_origin + 501)
     );
-    assert_eq!(resource.duration(), 0.952);
+    assert_eq!(
+        ring.playhead()
+            .duration()
+            .expect("visible source duration")
+            .as_secs_f64(),
+        0.952
+    );
     let mut left = [0.0; 4];
     let mut right = [0.0; 4];
     resource.read(None, &mut [&mut left, &mut right], 0..4, &mut budget);
@@ -290,5 +297,11 @@ fn producer_ahead_geometry_does_not_replace_a_historical_buffered_mark(
         resource.visible_origin(),
         Some(Duration::from_millis(new_origin))
     );
-    assert_eq!(resource.duration(), 0.952);
+    assert_eq!(
+        ring.playhead()
+            .duration()
+            .expect("visible source duration")
+            .as_secs_f64(),
+        0.952
+    );
 }
