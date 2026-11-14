@@ -20,13 +20,20 @@ impl<const CHANNELS: usize> OnePoleLowPass<CHANNELS> {
         if CHANNELS == 0 {
             return Err(FilterError::Shape);
         }
-        if !(0.0..1.0).contains(&coefficient) {
-            return Err(FilterError::Parameters);
-        }
         Ok(Self {
-            coefficient,
+            coefficient: checked_coefficient(coefficient)?,
             state: [0.0; CHANNELS],
         })
+    }
+
+    /// Changes the coefficient for the next frame, preserving every channel's state.
+    ///
+    /// # Errors
+    /// [`FilterError::Parameters`] unless `coefficient` is finite and in
+    /// `0..1`; refusal leaves the coefficient and channel histories unchanged.
+    pub fn retune(&mut self, coefficient: f32) -> Result<(), FilterError> {
+        self.coefficient = checked_coefficient(coefficient)?;
+        Ok(())
     }
 
     /// Filters `range` in place, without allocating or reassociating audio time.
@@ -59,5 +66,13 @@ impl<const CHANNELS: usize> OnePoleLowPass<CHANNELS> {
     /// Clears the history of every channel, preserving the coefficient.
     pub fn reset(&mut self) {
         self.state.fill(0.0);
+    }
+}
+
+fn checked_coefficient(coefficient: f32) -> Result<f32, FilterError> {
+    if (0.0..1.0).contains(&coefficient) {
+        Ok(coefficient)
+    } else {
+        Err(FilterError::Parameters)
     }
 }
