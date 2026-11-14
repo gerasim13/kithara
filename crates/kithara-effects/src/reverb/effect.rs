@@ -2,7 +2,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_dsp::{
-    add, affine,
+    add,
     delay::{DelayDiffuser, DelayError, DelayLine, DiffuserError, Tap},
     filter::{FilterError, OnePoleLowPass},
     scale_add, scale_in_place,
@@ -30,6 +30,8 @@ pub enum ReverbError {
     Shape,
     #[error("reverb parameter {index} rejects value {value}")]
     Parameter { index: usize, value: f64 },
+    #[error("reverb parameter bounds do not form valid native domains")]
+    ParameterDomain,
 }
 
 #[derive(Debug)]
@@ -166,12 +168,13 @@ impl Reverb {
     ///
     /// # Errors
     /// Refuses unrepresentable geometry, unavailable pool storage or a failed
-    /// DSP design; no partially prepared network is returned.
+    /// DSP design or native parameter domain; no partially prepared network is returned.
     pub fn new<S: HasPool<f32>>(
         rate: NonZeroU32,
         config: ReverbConfig,
         pools: &PoolRegion<S>,
     ) -> Result<Self, ReverbError> {
+        let parameters = parameter_domains()?;
         let left = Bank::new(rate, 0, config, pools)?;
         let right = Bank::new(rate, 1, config, pools)?;
         let span = left.shortest.min(right.shortest);
@@ -181,7 +184,7 @@ impl Reverb {
             banks,
             rate,
             decay: config.decay(),
-            parameters: parameter_domains(),
+            parameters,
             width: f64::from(config.width())
                 .to_f32()
                 .ok_or(ReverbError::Geometry(rate))?,
@@ -307,7 +310,7 @@ impl Reverb {
             {
                 bank.process_span(input, output)?;
             }
-            mix_width(output, self.width, self.span)?;
+            mix_width(output, self.width)?;
             // A Decay command's origin is its first processed frame, like an input event.
             let event = last.or_else(|| self.is_decay_epoch_pending.then_some(0));
             self.is_decay_epoch_pending = false;
@@ -344,8 +347,8 @@ impl Reverb {
     }
 }
 
-fn parameter_domains() -> [FxParamDescriptor; 3] {
-    [
+fn parameter_domains() -> Result<[FxParamDescriptor; 3], ReverbError> {
+    let domains = [
         (
             f64::from(Decay::MIN)..=f64::from(Decay::MAX),
             FxParamUnit::Seconds,
@@ -362,15 +365,15 @@ fn parameter_domains() -> [FxParamDescriptor; 3] {
             FxParamMapping::Linear,
         ),
     ]
-    .map(|(range, unit, mapping)| {
-        FxParamDescriptor::checked(range, unit, Some(mapping)).expect(
-            "invariant: finite ordered Ranged bounds and positive RT60 form continuous domains",
-        )
-    })
+    .map(|(range, unit, mapping)| FxParamDescriptor::checked(range, unit, Some(mapping)));
+    let [Some(decay), Some(damping), Some(width)] = domains else {
+        return Err(ReverbError::ParameterDomain);
+    };
+    Ok([decay, damping, width])
 }
 
 fn damping_coefficient(damping: Damping) -> Option<f32> {
-    (0.4 * f64::from(damping)).to_f32()
+    (consts::REVERB_DAMPING_SCALE * f64::from(damping)).to_f32()
 }
 
 fn comb_gains(rate: NonZeroU32, frames: usize, decay: Decay) -> Result<(f32, f32), ReverbError> {
@@ -398,7 +401,7 @@ fn tail_frames(rate: NonZeroU32, decay: Decay, banks: &[Bank; 2]) -> Result<u64,
         .to_u64()
         .ok_or(ReverbError::Geometry(rate))?;
     let diffusion = left.diffuser_tail.max(right.diffuser_tail);
-    (2.0 * f64::from(decay) * f64::from(rate.get()))
+    (consts::REVERB_TAIL_RT60_MULTIPLIER * f64::from(decay) * f64::from(rate.get()))
         .ceil()
         .to_u64()
         .and_then(|frames| frames.checked_add(longest))
@@ -422,30 +425,25 @@ fn frames(rate: NonZeroU32, reference: u32, channel: usize) -> Result<NonZeroUsi
         .ok_or(ReverbError::Geometry(rate))
 }
 
-fn mix_width(wet: [&mut [f32]; 2], width: f32, span: NonZeroUsize) -> Result<(), ReverbError> {
+fn mix_width(wet: [&mut [f32]; 2], width: f32) -> Result<(), ReverbError> {
     if width == 1.0 {
         return Ok(());
     }
     let [left, right] = wet;
     let mut mid = [0.0_f32; consts::REVERB_SCRATCH];
     let toward_mid = 1.0 - width;
-    for (left, right) in left
-        .chunks_mut(span.get())
-        .zip(right.chunks_mut(span.get()))
-    {
-        let mid = mid.get_mut(..left.len()).ok_or(ReverbError::Shape)?;
-        mid.copy_from_slice(left);
-        add(right, mid);
-        scale_in_place(mid, 0.5);
-        if width == 0.0 {
-            left.copy_from_slice(mid);
-            right.copy_from_slice(mid);
-            continue;
-        }
-        affine(left, width, 0.0);
-        scale_add(mid, toward_mid, left);
-        affine(right, width, 0.0);
-        scale_add(mid, toward_mid, right);
+    let mid = mid.get_mut(..left.len()).ok_or(ReverbError::Shape)?;
+    mid.copy_from_slice(left);
+    add(right, mid);
+    scale_in_place(mid, 0.5);
+    if width == 0.0 {
+        left.copy_from_slice(mid);
+        right.copy_from_slice(mid);
+        return Ok(());
     }
+    scale_in_place(left, width);
+    scale_add(mid, toward_mid, left);
+    scale_in_place(right, width);
+    scale_add(mid, toward_mid, right);
     Ok(())
 }

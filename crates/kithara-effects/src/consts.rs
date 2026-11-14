@@ -72,4 +72,6 @@ pub(crate) const REVERB_SCRATCH: usize = 128;
 pub(crate) const REVERB_REFERENCE_RATE: f64 = 44_100.0;
 pub(crate) const REVERB_STEREO_SPREAD: u32 = 13;
 pub(crate) const REVERB_DIFFUSION: f32 = 0.5;
+pub(crate) const REVERB_DAMPING_SCALE: f64 = 0.4;
+pub(crate) const REVERB_TAIL_RT60_MULTIPLIER: f64 = 2.0;
 pub(crate) const REVERB_TAIL_THRESHOLD: f64 = 1e-6;

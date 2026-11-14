@@ -10,7 +10,7 @@ pub mod filter;
 mod gain_db;
 mod limiter;
 pub mod node;
-/// Ranged reverb control domains.
+/// Prepared stereo reverb and its ranged controls.
 pub mod reverb;
 
 pub use deck_effect::{DeckEffect, FxParamChange, FxParamDescriptor, FxParamMapping, FxParamUnit};
