@@ -1,6 +1,6 @@
 # kithara-hls-tests
 
-Tests for HLS playlist loading, byte-range reads and stream seeking.
+Tests for HLS streaming and playback through the public facade.
 
 Run this package's tests with `just test run --lane=hls --narrow='package(kithara-hls-tests)'`.
 
