@@ -9,8 +9,8 @@ use kithara_dsp::{
 };
 use num_traits::ToPrimitive;
 
-use super::ReverbConfig;
-use crate::consts;
+use super::{Damping, Decay, ReverbConfig, Width};
+use crate::{FxParamChange, FxParamDescriptor, FxParamMapping, FxParamUnit, consts};
 
 /// Why a reverb could not be prepared or a buffer shape was refused.
 #[derive(Debug, thiserror::Error)]
@@ -28,6 +28,8 @@ pub enum ReverbError {
     Geometry(NonZeroU32),
     #[error("reverb input and wet output must have the same stereo frame count")]
     Shape,
+    #[error("reverb parameter {index} rejects value {value}")]
+    Parameter { index: usize, value: f64 },
 }
 
 #[derive(Debug)]
@@ -64,19 +66,8 @@ impl Bank {
             shortest = shortest.min(length);
             longest_comb = longest_comb.max(length);
             let line = DelayLine::new(NonZeroUsize::MIN, length, pools)?;
-            let length = length.get().to_f64().ok_or(ReverbError::Geometry(rate))?;
-            let tap = line.tap(length)?;
-            let feedback = 10.0_f64
-                .powf(-3.0 * length / (f64::from(rate.get()) * f64::from(config.decay())))
-                .to_f32()
-                .ok_or(ReverbError::Geometry(rate))?;
-            if !(0.0..1.0).contains(&feedback) {
-                return Err(FilterError::Parameters.into());
-            }
-            let input_gain = (1.0 - feedback)
-                / consts::REVERB_COMBS
-                    .to_f32()
-                    .ok_or(ReverbError::Geometry(rate))?;
+            let tap = line.tap(length.get().to_f64().ok_or(ReverbError::Geometry(rate))?)?;
+            let (feedback, input_gain) = comb_gains(rate, length.get(), config.decay())?;
             combs.push(Comb {
                 line,
                 tap,
@@ -108,9 +99,8 @@ impl Bank {
             diffusers.push(DelayDiffuser::new(line, consts::REVERB_DIFFUSION)?);
         }
         // The normalized control never reaches a frozen damping pole.
-        let coefficient = (0.4 * f64::from(config.damping()))
-            .to_f32()
-            .ok_or(ReverbError::Geometry(rate))?;
+        let coefficient =
+            damping_coefficient(config.damping()).ok_or(ReverbError::Geometry(rate))?;
         Ok(Self {
             combs,
             diffusers,
@@ -161,10 +151,14 @@ impl Bank {
 #[derive(Debug)]
 pub struct Reverb {
     banks: [Bank; 2],
+    rate: NonZeroU32,
+    decay: Decay,
+    parameters: [FxParamDescriptor; 3],
     width: f32,
     span: NonZeroUsize,
     tail_bound: u64,
-    silent_frames: u64,
+    tail_age: u64,
+    is_decay_epoch_pending: bool,
 }
 
 impl Reverb {
@@ -181,29 +175,81 @@ impl Reverb {
         let left = Bank::new(rate, 0, config, pools)?;
         let right = Bank::new(rate, 1, config, pools)?;
         let span = left.shortest.min(right.shortest);
-        let longest = left
-            .longest_comb
-            .max(right.longest_comb)
-            .get()
-            .to_u64()
-            .ok_or(ReverbError::Geometry(rate))?;
-        let diffuser_tail = left.diffuser_tail.max(right.diffuser_tail);
-        let tail_bound = (2.0 * f64::from(config.decay()) * f64::from(rate.get()))
-            .ceil()
-            .to_u64()
-            .ok_or(ReverbError::Geometry(rate))?
-            .checked_add(longest)
-            .and_then(|frames| frames.checked_add(diffuser_tail))
-            .ok_or(ReverbError::Geometry(rate))?;
+        let banks = [left, right];
+        let tail_bound = tail_frames(rate, config.decay(), &banks)?;
         Ok(Self {
-            banks: [left, right],
+            banks,
+            rate,
+            decay: config.decay(),
+            parameters: parameter_domains(),
             width: f64::from(config.width())
                 .to_f32()
                 .ok_or(ReverbError::Geometry(rate))?,
             span,
             tail_bound,
-            silent_frames: tail_bound,
+            tail_age: tail_bound,
+            is_decay_epoch_pending: false,
         })
+    }
+
+    /// Prepared native domains in decay, damping and width order.
+    #[must_use]
+    pub fn parameters(&self) -> &[FxParamDescriptor] {
+        &self.parameters
+    }
+
+    /// Applies a native parameter from the next frame, retaining section histories.
+    ///
+    /// # Errors
+    /// Refuses undeclared indices, values outside their ranged domains or a
+    /// failed coefficient design without changing the running configuration.
+    pub fn set(&mut self, change: FxParamChange) -> Result<(), ReverbError> {
+        let invalid = || ReverbError::Parameter {
+            index: change.index,
+            value: change.value,
+        };
+        match change.index {
+            0 => self.set_decay(Decay::checked(change.value).ok_or_else(invalid)?),
+            1 => {
+                let damping = Damping::checked(change.value).ok_or_else(invalid)?;
+                let coefficient = damping_coefficient(damping).ok_or_else(invalid)?;
+                for bank in &mut self.banks {
+                    bank.damping.retune(coefficient)?;
+                }
+                Ok(())
+            }
+            2 => {
+                let width = Width::checked(change.value).ok_or_else(invalid)?;
+                self.width = f64::from(width).to_f32().ok_or_else(invalid)?;
+                Ok(())
+            }
+            _ => Err(invalid()),
+        }
+    }
+
+    fn set_decay(&mut self, decay: Decay) -> Result<(), ReverbError> {
+        if decay == self.decay {
+            return Ok(());
+        }
+        let mut coefficients = [[(0.0, 0.0); consts::REVERB_COMBS]; 2];
+        for (bank, coefficients) in self.banks.iter().zip(&mut coefficients) {
+            for (comb, coefficients) in bank.combs.iter().zip(coefficients) {
+                *coefficients = comb_gains(self.rate, comb.tap.whole(), decay)?;
+            }
+        }
+        let bound = tail_frames(self.rate, decay, &self.banks)?;
+        let active = !self.tail_exhausted();
+        for (bank, coefficients) in self.banks.iter_mut().zip(coefficients) {
+            for (comb, (feedback, input_gain)) in bank.combs.iter_mut().zip(coefficients) {
+                comb.feedback = feedback;
+                comb.input_gain = input_gain;
+            }
+        }
+        self.decay = decay;
+        self.tail_bound = bound;
+        self.tail_age = if active { 0 } else { bound };
+        self.is_decay_epoch_pending = active;
+        Ok(())
     }
 
     /// Writes the stereo wet signal, retaining history across arbitrary partitions.
@@ -225,7 +271,10 @@ impl Reverb {
             let active = !self.tail_exhausted();
             let mut count = self.span.get().min(frames.wrapping_sub(cursor));
             if active {
-                let remaining = self.tail_bound.wrapping_sub(self.silent_frames);
+                let remaining = self
+                    .tail_bound
+                    .wrapping_sub(self.tail_age)
+                    .saturating_add(u64::from(self.is_decay_epoch_pending));
                 count = remaining
                     .min(count.to_u64().ok_or(ReverbError::Shape)?)
                     .to_usize()
@@ -259,14 +308,17 @@ impl Reverb {
                 bank.process_span(input, output)?;
             }
             mix_width(output, self.width, self.span)?;
-            let silent = last
+            // A Decay command's origin is its first processed frame, like an input event.
+            let event = last.or_else(|| self.is_decay_epoch_pending.then_some(0));
+            self.is_decay_epoch_pending = false;
+            let silent = event
                 .map_or(count, |frame| count.wrapping_sub(frame).wrapping_sub(1))
                 .to_u64()
                 .ok_or(ReverbError::Shape)?;
-            self.silent_frames = if last.is_some() {
+            self.tail_age = if event.is_some() {
                 silent
             } else {
-                self.silent_frames.saturating_add(silent)
+                self.tail_age.saturating_add(silent)
             };
             if self.tail_exhausted() {
                 self.reset();
@@ -281,14 +333,77 @@ impl Reverb {
         for bank in &mut self.banks {
             bank.reset();
         }
-        self.silent_frames = self.tail_bound;
+        self.tail_age = self.tail_bound;
+        self.is_decay_epoch_pending = false;
     }
 
-    /// Whether the declared finite tail interval has elapsed since the last input.
+    /// Whether the bound since the latest input or active Decay change has elapsed.
     #[must_use]
     pub fn tail_exhausted(&self) -> bool {
-        self.silent_frames >= self.tail_bound
+        self.tail_age >= self.tail_bound
     }
+}
+
+fn parameter_domains() -> [FxParamDescriptor; 3] {
+    [
+        (
+            f64::from(Decay::MIN)..=f64::from(Decay::MAX),
+            FxParamUnit::Seconds,
+            FxParamMapping::Log,
+        ),
+        (
+            f64::from(Damping::MIN)..=f64::from(Damping::MAX),
+            FxParamUnit::Ratio,
+            FxParamMapping::Linear,
+        ),
+        (
+            f64::from(Width::MIN)..=f64::from(Width::MAX),
+            FxParamUnit::Ratio,
+            FxParamMapping::Linear,
+        ),
+    ]
+    .map(|(range, unit, mapping)| {
+        FxParamDescriptor::checked(range, unit, Some(mapping)).expect(
+            "invariant: finite ordered Ranged bounds and positive RT60 form continuous domains",
+        )
+    })
+}
+
+fn damping_coefficient(damping: Damping) -> Option<f32> {
+    (0.4 * f64::from(damping)).to_f32()
+}
+
+fn comb_gains(rate: NonZeroU32, frames: usize, decay: Decay) -> Result<(f32, f32), ReverbError> {
+    let frames = frames.to_f64().ok_or(ReverbError::Geometry(rate))?;
+    let feedback = 10.0_f64
+        .powf(-3.0 * frames / (f64::from(rate.get()) * f64::from(decay)))
+        .to_f32()
+        .ok_or(ReverbError::Geometry(rate))?;
+    if !(0.0..1.0).contains(&feedback) {
+        return Err(FilterError::Parameters.into());
+    }
+    let input_gain = (1.0 - feedback)
+        / consts::REVERB_COMBS
+            .to_f32()
+            .ok_or(ReverbError::Geometry(rate))?;
+    Ok((feedback, input_gain))
+}
+
+fn tail_frames(rate: NonZeroU32, decay: Decay, banks: &[Bank; 2]) -> Result<u64, ReverbError> {
+    let [left, right] = banks;
+    let longest = left
+        .longest_comb
+        .max(right.longest_comb)
+        .get()
+        .to_u64()
+        .ok_or(ReverbError::Geometry(rate))?;
+    let diffusion = left.diffuser_tail.max(right.diffuser_tail);
+    (2.0 * f64::from(decay) * f64::from(rate.get()))
+        .ceil()
+        .to_u64()
+        .and_then(|frames| frames.checked_add(longest))
+        .and_then(|frames| frames.checked_add(diffusion))
+        .ok_or(ReverbError::Geometry(rate))
 }
 
 fn frames(rate: NonZeroU32, reference: u32, channel: usize) -> Result<NonZeroUsize, ReverbError> {
