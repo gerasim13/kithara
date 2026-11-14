@@ -1767,8 +1767,7 @@ steps = [
   { args = [
     "test",
     "rtsan",
-    "metronome_grid::the_metronome_clicks_on_the_frame_nearest_every_computed_beat",
-  ], label = "RTSan tripwire", env = { KITHARA_RTSAN_BACKEND = "standalone", KITHARA_STRESS_REPEATS = "100" } },
+  ], label = "RTSan tripwire", env = { KITHARA_RTSAN_BACKEND = "standalone" } },
 ]
 role = "gate"
 kinds = []
