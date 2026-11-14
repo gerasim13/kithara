@@ -120,8 +120,8 @@ async fn a_segment_entry_keeps_its_native_curve_and_waits_for_native_readiness(
     assert_eq!(track.entry(bound), None);
     assert_ne!(
         track
-            .lane_history
-            .commands
+            .lane_commands
+            .operations()
             .last()
             .expect("segment command")
             .segment,
@@ -206,8 +206,8 @@ fn a_current_preparation_refusal_outlives_its_command_record(#[case] host_rate: 
         },
     );
     let seq = track
-        .lane_history
-        .commands
+        .lane_commands
+        .operations()
         .last()
         .expect("source preparation")
         .seq;
@@ -225,8 +225,8 @@ fn a_current_preparation_refusal_outlives_its_command_record(#[case] host_rate: 
     assert!(!matches!(track.status, TrackStatus::Failed { .. }));
     assert!(
         track
-            .lane_history
-            .commands
+            .lane_commands
+            .operations()
             .iter()
             .all(|operation| operation.seq != seq)
     );
@@ -319,8 +319,8 @@ async fn assert_preparation_refusal(host_rate: bool, initial: TrackStatus, reser
     command_at_zero(&mut track, &mut rig, TrackCommand::Play { at: When::Next });
     assert_eq!(track.play, Some(When::Next));
     let prepared = track
-        .lane_history
-        .commands
+        .lane_commands
+        .operations()
         .last()
         .expect("native preparation")
         .seq;
@@ -393,8 +393,8 @@ fn assert_obsolete_preparation_refusal(host_rate: bool) {
     );
     let obsolete_segment = track.segment.id;
     let obsolete = track
-        .lane_history
-        .commands
+        .lane_commands
+        .operations()
         .last()
         .expect("first preparation")
         .seq;
@@ -411,8 +411,8 @@ fn assert_obsolete_preparation_refusal(host_rate: bool) {
     );
     let current = track.segment.id;
     let replacement = track
-        .lane_history
-        .commands
+        .lane_commands
+        .operations()
         .last()
         .expect("replacement preparation")
         .seq;
@@ -420,8 +420,8 @@ fn assert_obsolete_preparation_refusal(host_rate: bool) {
     assert_ne!(obsolete_segment, current);
     assert!(
         track
-            .lane_history
-            .commands
+            .lane_commands
+            .operations()
             .iter()
             .all(|operation| matches!(operation.command,
         LaneCommand::Segment { id, .. } | LaneCommand::SetHostRate { id, .. }
@@ -674,7 +674,7 @@ async fn assert_failed_replacement_keeps_incumbent(
         )
         .expect("native source preparation");
     // Model the pending source verdict without issuing another deck adoption.
-    newcomer.segment = newcomer.segment.with_request(source);
+    newcomer.select_segment(newcomer.segment.with_request(source));
     inbox.drain();
     let due = inbox
         .next_due(LaneFrame { segment, frame: 0 }, 1)
@@ -817,7 +817,7 @@ async fn assert_terminal_adoption_refusal(cancelled: bool, outdated: bool) {
                 assert_eq!(track.status(), TrackStatus::Released);
                 assert!(!track.attached());
             }
-            let lane_count = track.lane_history.commands.len();
+            let lane_count = track.lane_commands.operations().len();
             in_pass(&mut rig, frame(192), |out| {
                 track.settle(
                     TrackReceipt::Deck {
@@ -831,10 +831,10 @@ async fn assert_terminal_adoption_refusal(cancelled: bool, outdated: bool) {
             assert!(track.adoptions.inflight.is_empty());
             assert_eq!(track.adoptions.newest_epoch, None);
             assert_eq!(track.segment.id, segment);
-            assert_eq!(track.lane_history.commands.len(), lane_count);
+            assert_eq!(track.lane_commands.operations().len(), lane_count);
             in_pass(&mut rig, frame(256), |out| track.tick(frame(256), out));
             assert_eq!(track.segment.id, segment);
-            assert_eq!(track.lane_history.commands.len(), lane_count);
+            assert_eq!(track.lane_commands.operations().len(), lane_count);
             assert_eq!(track.adoptions.newest_epoch, None);
             if release_before_receipt {
                 assert_eq!(track.status(), TrackStatus::Released);
@@ -951,7 +951,7 @@ fn a_replay_entry_waits_for_native_adoption_after_lane_readiness() {
         .expect("adoption pending")
     );
     assert_eq!(
-        track.lane_history.commands.len(),
+        track.lane_commands.operations().len(),
         1,
         "lane readiness cannot reopen the replay again"
     );
@@ -964,7 +964,7 @@ fn a_replay_entry_waits_for_native_adoption_after_lane_readiness() {
         .expect("adopted replay")
     );
     assert_eq!(track.prepared_speed(), Some(&curve));
-    assert_eq!(track.lane_history.commands.len(), 1);
+    assert_eq!(track.lane_commands.operations().len(), 1);
 }
 
 #[kithara::test]
@@ -1249,13 +1249,13 @@ fn an_alignment_uses_one_credit_and_settles_every_part(#[case] applied: bool) {
     assert!(inbox.next_due(at, 1).is_none());
     track.settle_lane();
     assert_eq!(
-        track.lane_history.commands.len(),
+        track.lane_commands.operations().len(),
         if applied { 2 } else { 0 }
     );
     assert!(
         track
-            .lane_history
-            .commands
+            .lane_commands
+            .operations()
             .iter()
             .all(|operation| operation.seq == seq && operation.applied)
     );

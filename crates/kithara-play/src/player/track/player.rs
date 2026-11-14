@@ -175,8 +175,8 @@ impl<S> Player<S> for PlayerImpl<S> {
             ring_depth: self.geometry.ring_depth,
             lane_room: self.lane.available(),
             pending_lane: self
-                .lane_history
-                .commands
+                .lane_commands
+                .operations()
                 .iter()
                 .any(|operation| !operation.applied)
                 || self
@@ -354,12 +354,14 @@ impl<S> PlayerImpl<S> {
         )?;
         self.issued_segment = segment;
         let seq = out.deferred(vec![DeckPart::Adopt { slot, segment }])?;
-        self.segment = Segment::issued(
-            segment,
-            Some(Position::ZERO),
-            self.settings.projected().speed(),
-        )
-        .with_request(lane_seq);
+        self.select_segment(
+            Segment::issued(
+                segment,
+                Some(Position::ZERO),
+                self.settings.projected().speed(),
+            )
+            .with_request(lane_seq),
+        );
         self.playback_commands.clear();
         self.repeat = true;
         self.adoptions.inflight.push(Adoption {

@@ -123,11 +123,11 @@ fn speed_projection_tracks_frame_segment_and_initial_rate() {
         position: Duration::from_micros(20),
     });
     assert_consumed_speed_twice(&track, 1.625);
-    track.segment = Segment::issued(
+    track.select_segment(Segment::issued(
         track.segment.id.next(),
         track.segment.origin,
         track.segment.speed,
-    );
+    ));
     track.mark.as_mut().expect("consumed mark").lane.segment = track.segment.id;
     assert_consumed_speed_twice(&track, 1.25);
     track.segment.speed = 1.5;
@@ -199,7 +199,7 @@ fn consumed_speed_preserves_the_origin_needed_by_each_curve(
         )
         .expect("accepted before rejection");
     track
-        .lane_history
+        .lane_commands
         .retain(|operation| operation.seq != rejected);
     track.status = TrackStatus::Playing { since: frame(0) };
     track.mark = Some(SlotMark {
@@ -288,7 +288,7 @@ fn consumed_speed_matches_the_full_piecewise_schedule() {
                 )
                 .expect("scheduled curve");
             if index % 5 == 0 {
-                track.lane_history.retain(|operation| operation.seq != seq);
+                track.lane_commands.retain(|operation| operation.seq != seq);
             } else {
                 schedule.push((at, seq, curve));
             }

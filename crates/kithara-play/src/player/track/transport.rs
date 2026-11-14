@@ -151,15 +151,16 @@ impl<S> PlayerImpl<S> {
         if resume.lane.segment != self.segment.id {
             return None;
         }
-        self.lane_history
-            .commands
+        self.lane_commands
+            .operations()
             .iter()
-            .find(|operation| match operation.when {
+            .filter(|operation| match operation.when {
                 When::At(frame) => {
                     frame.segment == resume.lane.segment && frame.frame > resume.lane.frame
                 }
                 When::Next | When::Deferred => operation.segment == resume.lane.segment,
             })
+            .min_by_key(|operation| (operation.seq, operation.ordinal))
             .map(|operation| (resume, operation))
     }
 
@@ -296,7 +297,7 @@ impl<S> PlayerImpl<S> {
                 .loading
                 .as_ref()
                 .is_none_or(|loading| loading.speed.is_none())
-            && !self.lane_history.commands.iter().any(|operation| {
+            && !self.lane_commands.operations().iter().any(|operation| {
                 !operation.applied
                     && match operation.command {
                         LaneCommand::SetSpeed(_) => operation.segment == self.segment.id,
@@ -305,8 +306,8 @@ impl<S> PlayerImpl<S> {
                     }
             })
             && self
-                .lane_history
-                .commands
+                .lane_commands
+                .operations()
                 .iter()
                 .filter(|operation| {
                     operation.applied
@@ -316,7 +317,7 @@ impl<S> PlayerImpl<S> {
                             _ => false,
                         }
                 })
-                .max_by_key(|operation| (operation.when, operation.seq))
+                .max_by_key(|operation| (operation.when, operation.seq, operation.ordinal))
                 .is_none_or(|operation| {
                     matches!(
                         operation.command,

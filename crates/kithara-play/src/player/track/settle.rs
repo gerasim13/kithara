@@ -70,8 +70,10 @@ impl<S> PlayerImpl<S> {
         if rate.is_none() {
             self.settings.track(seq, When::Next, change);
         }
-        self.segment = Segment::issued(segment, origin, starting_speed.unwrap_or(final_speed))
-            .with_request(seq);
+        self.select_segment(
+            Segment::issued(segment, origin, starting_speed.unwrap_or(final_speed))
+                .with_request(seq),
+        );
         self.observed_source = None;
         self.mark = None;
         self.resume = None;
@@ -212,8 +214,9 @@ impl<S> PlayerImpl<S> {
                         });
                     }
                 };
-                self.segment =
-                    Segment::issued(segment, Some(position), self.segment.speed).with_request(seq);
+                self.select_segment(
+                    Segment::issued(segment, Some(position), self.segment.speed).with_request(seq),
+                );
                 self.observed_source = None;
             }
             self.repeat = false;
@@ -393,23 +396,21 @@ impl<S> PlayerImpl<S> {
 
     fn apply_lane(&mut self, seq: Seq, at: LaneFrame, data: &LaneApplied) {
         self.segment.answer_request(seq, Ok(()));
-        let operations = self.lane_history.answered(seq);
-        for operation in operations {
+        let operations = self.lane_commands.applied(seq, at, self.segment.id);
+        for (requested_when, operation) in operations {
             tracing::debug!(
                 item = u64::from(self.item),
                 seq = seq.get(),
                 actual_apply_segment = at.segment.get(),
                 actual_apply_frame = at.frame,
                 current_segment = self.segment.id.get(),
-                requested_when = ?operation.when,
+                requested_when = ?requested_when,
                 paused_resume = ?self.resume,
                 mark = ?self.mark,
                 ready_segment = ?data.ready,
                 command = ?operation.command,
                 "lane command settled"
             );
-            operation.when = When::At(at);
-            operation.applied = true;
             if let LaneCommand::Segment { id, from, .. } = operation.command
                 && data.ready == Some(id)
                 && id == self.segment.id
@@ -442,7 +443,7 @@ impl<S> PlayerImpl<S> {
                 Outcome::Rejected(reason) => {
                     if accepting {
                         self.segment.answer_request(seq, Err(*reason));
-                        self.lane_history.retain(|operation| operation.seq != seq);
+                        self.lane_commands.retain(|operation| operation.seq != seq);
                     }
                     warn!(?reason, "lane command was rejected");
                     Settled::Rejected {
@@ -451,14 +452,14 @@ impl<S> PlayerImpl<S> {
                     }
                 }
             };
-            self.lane_history.receipts.push_back(settled);
+            self.lane_commands.receipts.push_back(settled);
         }
         if !accepting {
             return;
         }
         let current = self.segment.id;
         let adoptions = &self.adoptions;
-        self.lane_history.retain(|operation| {
+        self.lane_commands.retain(|operation| {
             if !operation.applied {
                 return true;
             }

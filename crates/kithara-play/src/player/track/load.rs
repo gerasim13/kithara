@@ -11,7 +11,6 @@ use super::{
     super::outbox::{Outbox, Settled, rejection},
     core::PlayerImpl,
     seat::{Attaching, Seat},
-    segment::Segment,
     state::*,
 };
 use crate::{OpenedTrack, PlayError, ResourceLoad};
@@ -26,7 +25,7 @@ impl<S> PlayerImpl<S> {
         if self.status != TrackStatus::Idle {
             return Err(PlayError::Internal("a track loads once".into()));
         }
-        if !matches!(self.lane, Lane::None) || !self.lane_history.receipts.is_empty() {
+        if !matches!(self.lane, Lane::None) || !self.lane_commands.receipts.is_empty() {
             return Err(PlayError::NotReady);
         }
         if out.dispatcher_available() == 0 {
@@ -47,11 +46,9 @@ impl<S> PlayerImpl<S> {
             inbox,
         })?;
         self.lane = Lane::Opening(lane);
-        self.segment = Segment::issued(SegmentId::FIRST, None, self.settings.config().speed());
-        self.issued_segment = SegmentId::FIRST;
+        self.reset_segments();
         self.mark = None;
         self.resume = None;
-        *self.projected_end.borrow_mut() = None;
         self.geometry = geometry;
         self.position = position;
         self.source_basis = None;
@@ -92,9 +89,7 @@ impl<S> PlayerImpl<S> {
                 self.loading = None;
                 self.close_lane_admission();
                 self.finish_lane();
-                self.segment =
-                    Segment::issued(SegmentId::FIRST, None, self.settings.config().speed());
-                self.issued_segment = SegmentId::FIRST;
+                self.reset_segments();
                 if self.status != TrackStatus::Released {
                     self.status = TrackStatus::Idle;
                 }
