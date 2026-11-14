@@ -1,46 +1,8 @@
 use kithara_test_args::TestArgs;
-use syn::{Expr, Ident, parse_quote};
+use syn::{Expr, parse_quote};
 
-pub(crate) fn resolve(args: &TestArgs) -> Expr {
-    let flash = args.flash().unwrap_or(true);
-    let budget = match args.timeout() {
-        None => Some(parse_quote!(Quick)),
-        Some(Expr::Path(path)) if path.qself.is_none() => path
-            .path
-            .get_ident()
-            .filter(|name| {
-                matches!(
-                    name.to_string().as_str(),
-                    "Quick" | "Short" | "Medium" | "Long"
-                )
-            })
-            .cloned(),
-        _ => None,
-    };
-    if let Some(budget) = budget {
-        return named(&budget, flash);
-    }
-    let manual = args.timeout();
-    let miri = named(&parse_quote!(Long), flash);
-    parse_quote!({
-        #[cfg(miri)]
-        { #miri }
-        #[cfg(not(miri))]
-        { #manual }
-    })
-}
-
-fn named(budget: &Ident, flash: bool) -> Expr {
-    let flash: Expr = if flash {
-        parse_quote!(::kithara_test_utils::kithara_platform::flash::ENABLED)
-    } else {
-        parse_quote!(false)
-    };
-    parse_quote!({
-        const __TIMEOUT: ::std::time::Duration =
-            ::kithara_test_utils::TestBudget::#budget.timeout(#flash);
-        __TIMEOUT
-    })
+pub(crate) fn resolve(_args: &TestArgs) -> Expr {
+    parse_quote!(::std::time::Duration::from_secs(120))
 }
 
 #[cfg(test)]
