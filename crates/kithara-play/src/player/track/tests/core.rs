@@ -191,8 +191,19 @@ pub(super) fn track(slot: Slot) -> Track {
 
 /// The seat of a track the deck attached in `slot` on frame 0.
 pub(super) fn seated(slot: Slot) -> Seat {
+    let (mut sender, _inbox) = channel::<DeckProtocol>(ChannelConfig::builder().build());
+    let seq = sender
+        .send(
+            When::Next,
+            Batch {
+                basis: Vec::new(),
+                commands: Vec::new(),
+            },
+        )
+        .expect("fixture attachment sequence");
     Seat::Attached {
         slot,
+        seq,
         at: frame(0),
         releasing: false,
     }
@@ -218,6 +229,20 @@ pub(super) fn item() -> ResourceLoad<TestPools> {
 
 pub(super) fn lane() -> (Sender<LaneProtocol>, Inbox<LaneProtocol>) {
     channel(ChannelConfig::builder().build())
+}
+
+pub(super) fn replace_lane_sender(lane: &mut Lane, sender: Sender<LaneProtocol>) {
+    match lane {
+        Lane::None => *lane = Lane::Opening(sender),
+        Lane::Opening(current)
+        | Lane::Registered {
+            sender: current, ..
+        }
+        | Lane::RetiringOpen(current)
+        | Lane::Retiring {
+            sender: current, ..
+        } => *current = sender,
+    }
 }
 
 pub(super) fn answer_next(rig: &mut Rig, answer: Result<(), DeckRefusal>) -> Receipt<DeckProtocol> {
@@ -271,7 +296,7 @@ pub(super) fn answer_track(
 pub(super) fn prepared_track() -> (Track, Inbox<LaneProtocol>) {
     let (sender, inbox) = lane();
     let mut track = track(A);
-    track.lane = Some(sender);
+    replace_lane_sender(&mut track.lane, sender);
     track.status = TrackStatus::Loaded;
     track.seat = seated(A);
     track.segment.ready = true;
@@ -644,8 +669,8 @@ async fn an_installed_lane_the_owner_refuses_is_dropped_and_reported_cancelled()
         .expect("release answer");
     rig.with_outbox(|out| track.settle(TrackReceipt::Loaded(receipt), out))
         .expect("live scope");
-    assert!(track.lane.is_none());
-    assert!(track.registration.lane().is_none());
+    assert!(track.lane.sender().is_none());
+    assert!(track.lane.resident().is_none());
     rig.with_outbox(|out| track.tick(frame(0), out))
         .expect("live scope");
     assert!(matches!(
@@ -713,11 +738,11 @@ async fn installed_free_receipt_is_consumed_once(#[case] foreign: u8) {
         0 => batch.basis = vec![(B, None)],
         2 => batch.basis = vec![(A, Some(other_seq))],
         3 => {
-            track.segment = Segment::issued(
+            track.select_segment(Segment::issued(
                 track.segment.id.next(),
                 track.segment.origin,
                 track.segment.speed,
-            );
+            ));
         }
         _ => {}
     }
@@ -782,7 +807,7 @@ async fn installed_free_receipt_is_consumed_once(#[case] foreign: u8) {
     assert_eq!(track.snapshot().speed, before.speed);
     assert_eq!(track.playback_commands.len(), 1);
     batch.basis = original_basis;
-    track.segment = original_segment;
+    track.select_segment(original_segment);
     assert!(
         matches!(rig.with_outbox(|out| track.settle(TrackReceipt::Deck {
         seq, outcome: &outcome, batch: &mut batch,
@@ -1216,7 +1241,7 @@ async fn player_phase_kind_exhaustive() {
     rig.with_outbox(|out| track.settle(TrackReceipt::Loaded(receipt), out))
         .expect("live scope");
     let (sender, mut inbox) = lane();
-    track.lane = Some(sender);
+    replace_lane_sender(&mut track.lane, sender);
     let mut receipts = rig.block(frame(0), 0.0);
     settle(&mut track, &mut rig, &mut receipts);
     assert_eq!(track.snapshot().status, TrackStatus::Loaded);
@@ -1383,7 +1408,7 @@ fn a_relocation_is_refused_off_the_applied_lane(#[case] invalid: u8) {
     assert_eq!(track.snapshot().speed, before.speed);
     assert_eq!(track.snapshot().status, before.status);
     assert_eq!(track.snapshot().mark, before.mark);
-    assert!(track.lane_history.commands.is_empty());
+    assert!(track.lane_commands.operations().is_empty());
     assert!(track.playback_commands.is_empty());
 }
 
@@ -1413,7 +1438,7 @@ fn an_audible_member_under_a_map_the_group_never_applied_is_refused() {
     assert_eq!(track.snapshot().mark, before.mark);
     assert_eq!(track.snapshot().status, before.status);
     assert!(lane_commands(&mut inbox).is_empty());
-    assert!(track.lane_history.commands.is_empty());
+    assert!(track.lane_commands.operations().is_empty());
     assert!(track.playback_commands.is_empty());
     rig.deck.ring.publish().expect("publish empty scope");
     rig.deck.inbox.drain();
@@ -1454,7 +1479,7 @@ fn worker_handoff_geometry_derives_source_output_and_beat_together() {
             u64::try_from(at).expect("forward session frame")
         );
         assert_eq!(
-            session_at(track.mark.expect("applied mark"), lane),
+            track.mark.expect("applied mark").session_at(lane),
             Some(frame(at))
         );
         assert_eq!(position.as_secs_f64() * 2.0, beat);
@@ -1466,7 +1491,7 @@ fn worker_handoff_geometry_derives_source_output_and_beat_together() {
     );
     assert_eq!(track.snapshot().position, Position::ZERO);
     assert!(lane_commands(&mut inbox).is_empty());
-    assert!(track.lane_history.commands.is_empty());
+    assert!(track.lane_commands.operations().is_empty());
     assert!(track.playback_commands.is_empty());
 }
 
@@ -1516,7 +1541,7 @@ fn a_staged_preparation_needs_an_owner_and_a_stageable_load(#[case] refusal: u8)
     assert_eq!(track.snapshot().speed, before.speed);
     assert_eq!(track.snapshot().mark, before.mark);
     assert!(track.loading.is_none());
-    assert!(track.lane.is_none());
+    assert!(track.lane.sender().is_none());
     rig.deck.opens.drain();
     assert!(rig.deck.opens.next_due((), 1).is_none());
     rig.deck.ring.publish().expect("publish empty scope");
@@ -1687,7 +1712,7 @@ fn withdrawing_the_newest_epoch_unpublishes_the_seek() {
     let mut rig = rig();
     let (sender, mut inbox) = lane();
     let mut track = track(A);
-    track.lane = Some(sender);
+    replace_lane_sender(&mut track.lane, sender);
     track.status = TrackStatus::Loaded;
     track.seat = seated(A);
     let before = track.snapshot();
@@ -1787,7 +1812,7 @@ fn withdrawing_an_overtaken_epoch_leaves_the_newer_seek_published() {
     let mut rig = rig();
     let (sender, _inbox) = lane();
     let mut track = track(A);
-    track.lane = Some(sender);
+    replace_lane_sender(&mut track.lane, sender);
     track.status = TrackStatus::Loaded;
     track.seat = seated(A);
     for seconds in [1, 2] {
@@ -1840,7 +1865,7 @@ fn an_epoch_adopted_before_it_is_published_reports_the_audio_thread() {
     let mut rig = rig();
     let (sender, _inbox) = lane();
     let mut track = track(A);
-    track.lane = Some(sender);
+    replace_lane_sender(&mut track.lane, sender);
     track.status = TrackStatus::Loaded;
     track.seat = seated(A);
     let output = mock::output(None).get();
@@ -2055,7 +2080,7 @@ pub(super) async fn loaded_with_item(
         .expect("the load reached the dispatcher");
     rig.with_outbox(|out| track.settle(TrackReceipt::Loaded(receipt), out))
         .expect("live deck scope");
-    track.lane = Some(sender);
+    replace_lane_sender(&mut track.lane, sender);
     let mut receipts = rig.block(frame(0), 0.0);
     settle(&mut track, rig, &mut receipts);
     assert_eq!(track.snapshot().status, TrackStatus::Loaded);
@@ -2133,7 +2158,7 @@ fn a_cued_subfloor_speed_reaches_the_lane_at_the_floor(#[case] speed: f32) {
     let mut rig = rig();
     let (sender, mut inbox) = lane();
     let mut track = track(A);
-    track.lane = Some(sender);
+    replace_lane_sender(&mut track.lane, sender);
     rig.with_outbox(|out| track.cue(Position::ZERO, SpeedCurve::Constant(speed), out))
         .expect("live deck scope")
         .expect("finite cue speed is admitted");
@@ -2156,7 +2181,7 @@ fn a_speed_curve_clamps_every_finite_subfloor_point(#[case] speed: SpeedCurve) {
     let mut rig = rig();
     let (sender, mut inbox) = lane();
     let mut track = track(A);
-    track.lane = Some(sender);
+    replace_lane_sender(&mut track.lane, sender);
     track.status = TrackStatus::Playing { since: frame(0) };
     rig.with_outbox(|out| {
         track.apply(
@@ -2872,6 +2897,20 @@ async fn an_evicting_track_takes_the_slot_over_on_its_frame() {
             since: frame(1_024)
         }
     );
+    assert!(matches!(
+        settle(&mut new, &mut rig, &mut receipts).as_slice(),
+        [Settled::Pending]
+    ));
+    assert_eq!(
+        new.snapshot().status,
+        TrackStatus::Playing {
+            since: frame(1_024)
+        }
+    );
+    assert!(
+        new.lane.sender().is_some(),
+        "replaying the attachment cannot retire its new consumer"
+    );
 }
 
 #[kithara::test]
@@ -3352,7 +3391,7 @@ async fn a_load_the_deck_has_no_room_for_leaves_the_lane_untouched() {
     let (sender, mut inbox) = lane();
     let mut track = track(A);
     let seq = load(&mut track, &mut rig, Position::ZERO);
-    track.lane = Some(sender);
+    replace_lane_sender(&mut track.lane, sender);
     let opened = opened_fixture(&mut rig, "track").await;
     let receipt = rig.open(Ok(opened)).expect("one open");
 
@@ -3531,7 +3570,7 @@ fn full_notification_ring_retries_latest_effective_rate_once() {
             .capacity(std::num::NonZeroUsize::new(2).expect("two outstanding rates"))
             .build(),
     );
-    track.lane = Some(sender);
+    replace_lane_sender(&mut track.lane, sender);
     let first = command_at_zero(
         &mut track,
         &mut rig,
@@ -3550,17 +3589,17 @@ fn full_notification_ring_retries_latest_effective_rate_once() {
         LaneCommand::SetSpeed(SpeedCurve::Constant(latest))] if *first == 1.25 && *latest == 1.5)
     );
     assert_ne!(first, latest);
-    assert_eq!(track.lane.as_ref().expect("lane").available(), 0);
+    assert_eq!(track.lane.sender().expect("lane").available(), 0);
     assert_eq!(track.projected().speed(), 1.5);
     assert_eq!(track.snapshot().speed, 1.0);
     rig.with_outbox(|out| track.tick(frame(0), out))
         .expect("owner takes the reserved replies");
     assert_eq!(track.snapshot().speed, 1.5);
-    assert_eq!(track.lane.as_ref().expect("lane").available(), 2);
+    assert_eq!(track.lane.sender().expect("lane").available(), 2);
     assert!(
         track
             .lane
-            .as_mut()
+            .sender_mut()
             .expect("lane")
             .receipts()
             .next()
@@ -3581,7 +3620,7 @@ fn full_notification_ring_retries_latest_effective_rate_once() {
     assert!(
         track
             .lane
-            .as_mut()
+            .sender_mut()
             .expect("lane")
             .receipts()
             .next()
@@ -3713,8 +3752,8 @@ async fn an_unchanged_speed_target_still_cancels_a_ramp() {
             )
             .expect("quiet rejected preparation");
             let seq = track
-                .lane_history
-                .commands
+                .lane_commands
+                .operations()
                 .last()
                 .expect("native preparation")
                 .seq;
@@ -3739,24 +3778,22 @@ async fn an_unchanged_speed_target_still_cancels_a_ramp() {
             track.settle_lane();
             assert_eq!(track.snapshot().speed, 1.5);
             assert!(!track.segment.ready);
-            let operations = track
-                .lane_history
-                .commands
-                .iter()
-                .filter(|operation| operation.seq == seq)
-                .collect::<Vec<_>>();
-            assert_eq!(operations.len(), 2);
-            assert!(
-                operations
-                    .iter()
-                    .all(|operation| operation.verdict == Some(Err(Rejection::Unanswered)))
-            );
             assert!(
                 track
-                    .lane_history
-                    .speed_answers
+                    .lane_commands
+                    .operations()
                     .iter()
-                    .all(|(answered, _)| *answered != seq)
+                    .all(|operation| operation.seq != seq)
+            );
+            assert_eq!(
+                track.segment.request_verdict(),
+                Some(Err(Rejection::Unanswered))
+            );
+            let receipt = std::iter::from_fn(|| track.lane_receipt()).find(|receipt| {
+                matches!(receipt, Settled::Applied { seq: answered, .. } | Settled::Rejected { seq: answered, .. } if *answered == seq)
+            });
+            assert!(
+                matches!(receipt, Some(Settled::Rejected { seq: answered, reason: Rejection::Unanswered }) if answered == seq)
             );
         }
     }
@@ -3823,7 +3860,7 @@ async fn a_change_before_the_load_applies_at_once_and_starts_the_lane_there() {
     let seq = load(&mut track, &mut rig, Position::ZERO);
     track.extent.media_origin = None;
     let (sender, mut inbox) = lane();
-    track.lane = Some(sender);
+    replace_lane_sender(&mut track.lane, sender);
     let curve = SpeedCurve::Ramp {
         to: 2.0,
         frames: std::num::NonZeroU64::new(128).expect("native ramp"),
@@ -4176,6 +4213,94 @@ fn projecting_track() -> (Track, NonZeroU32) {
     (track, rate)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[kithara::test]
+#[case::snapshot(0)]
+#[case::position(1)]
+#[case::end(2)]
+fn temporal_queries_do_not_rebuild_the_admitted_plan(#[case] query: u8) {
+    let _observer = tracing::subscriber::set_default(tracing::subscriber::NoSubscriber::default());
+    let (mut track, rate) = projecting_track();
+    let (sender, _inbox) = lane();
+    replace_lane_sender(&mut track.lane, sender);
+    for (at, speed) in [(4, 2.0), (2, 1.5)] {
+        track
+            .send_lane(
+                LaneCommand::SetSpeed(SpeedCurve::Constant(speed)),
+                When::At(LaneFrame {
+                    segment: track.segment.id,
+                    frame: at,
+                }),
+            )
+            .expect("admitted temporal plan");
+    }
+    assert_eq!(track.snapshot().speed, 1.0);
+    assert_eq!(
+        track.planned(frame(8), rate).expect("planned position"),
+        (Duration::from_millis(13), 2.0)
+    );
+    assert_eq!(
+        track.planned_end(rate).expect("planned EOF"),
+        Some(frame(7))
+    );
+    track.mark = Some(SlotMark {
+        session: frame(1),
+        lane: LaneFrame {
+            segment: track.segment.id,
+            frame: 1,
+        },
+        position: Duration::from_millis(1),
+    });
+    assert_no_alloc::assert_no_alloc(|| match query {
+        0 => assert_eq!(track.snapshot().speed, 1.0),
+        1 => assert_eq!(
+            track.planned(frame(8), rate).expect("planned position"),
+            (Duration::from_millis(13), 2.0)
+        ),
+        _ => assert_eq!(
+            track.planned_end(rate).expect("planned EOF"),
+            Some(frame(7))
+        ),
+    });
+}
+
+#[kithara::test]
+#[case::overflow_first(true)]
+#[case::unknown_first(false)]
+fn temporal_plan_preserves_admission_error_order(#[case] overflow_first: bool) {
+    let (mut track, rate) = projecting_track();
+    let (sender, _inbox) = lane();
+    replace_lane_sender(&mut track.lane, sender);
+    track.geometry.declick = FrameCount::new(1);
+    let mut commands = [
+        (
+            LaneCommand::Jump { to: Duration::ZERO },
+            When::At(LaneFrame {
+                segment: track.segment.id,
+                frame: u64::MAX,
+            }),
+        ),
+        (LaneCommand::SetSpeed(SpeedCurve::Constant(2.0)), When::Next),
+    ];
+    if !overflow_first {
+        commands.reverse();
+    }
+    for (command, when) in commands {
+        track.send_lane(command, when).expect("admitted command");
+    }
+    for error in [
+        track
+            .planned(frame(8), rate)
+            .expect_err("invalid prediction"),
+        track.planned_end(rate).expect_err("invalid EOF prediction"),
+    ] {
+        assert!(matches!(
+            (overflow_first, error),
+            (true, PlayError::Untimed) | (false, PlayError::NotReady)
+        ));
+    }
+}
+
 #[kithara::test]
 fn planned_end_rechecks_marks_and_changes_with_the_accepted_plan() {
     let (mut track, rate) = projecting_track();
@@ -4220,7 +4345,7 @@ fn planned_end_rechecks_marks_and_changes_with_the_accepted_plan() {
     );
 
     let (sender, _inbox) = lane();
-    track.lane = Some(sender);
+    replace_lane_sender(&mut track.lane, sender);
     let seq = track
         .send_lane(
             LaneCommand::SetSpeed(SpeedCurve::Constant(0.5)),
@@ -4234,13 +4359,7 @@ fn planned_end_rechecks_marks_and_changes_with_the_accepted_plan() {
         track.planned_end(rate).expect("new curve"),
         Some(frame(113))
     );
-    track
-        .lane_history
-        .commands
-        .iter_mut()
-        .find(|operation| operation.seq == seq)
-        .expect("accepted speed")
-        .verdict = Some(Err(Rejection::Stale));
+    track.lane_commands.retain(|operation| operation.seq != seq);
     assert_eq!(
         track.planned_end(rate).expect("withdrawn curve"),
         Some(frame(107))
@@ -4335,7 +4454,7 @@ fn planned_end_uses_the_current_mark_after_the_source_endpoint(#[case] initially
 fn planned_end_projects_again_after_a_backward_jump_past_the_first_endpoint() {
     let (mut track, rate) = projecting_track();
     let (sender, _inbox) = lane();
-    track.lane = Some(sender);
+    replace_lane_sender(&mut track.lane, sender);
     track
         .send_lane(
             LaneCommand::Jump {
@@ -4390,7 +4509,7 @@ fn planned_end_projects_a_raw_jump_through_the_same_original_origin() {
     });
     retain_projection_source(&mut track, mock::SAMPLE_RATE);
     let (sender, _inbox) = lane();
-    track.lane = Some(sender);
+    replace_lane_sender(&mut track.lane, sender);
     let seq = track
         .send_lane(
             LaneCommand::Jump {
@@ -4404,8 +4523,8 @@ fn planned_end_projects_a_raw_jump_through_the_same_original_origin() {
         .expect("raw jump");
     assert!(
         track
-            .lane_history
-            .commands
+            .lane_commands
+            .operations()
             .iter()
             .any(|operation| operation.seq == seq)
     );
@@ -4421,16 +4540,17 @@ fn planned_end_projects_a_raw_jump_through_the_same_original_origin() {
         Some(frame(88))
     );
     track.extent.duration = Some(Duration::from_millis(1_669));
-    let operation = track
-        .lane_history
-        .commands
-        .iter_mut()
-        .find(|operation| operation.seq == seq)
-        .expect("accepted Jump");
-    operation.when = When::At(LaneFrame {
-        segment: track.segment.id,
-        frame: 40_000,
-    });
+    track
+        .lane_commands
+        .applied(
+            seq,
+            LaneFrame {
+                segment: track.segment.id,
+                frame: 40_000,
+            },
+            track.segment.id,
+        )
+        .for_each(drop);
     assert_eq!(
         track
             .planned_end(mock::SAMPLE_RATE)
@@ -4485,7 +4605,7 @@ fn planned_end_projects_a_raw_jump_through_the_same_original_origin() {
             position: basis.timestamp,
         });
         let (sender, _inbox) = lane();
-        exact.lane = Some(sender);
+        replace_lane_sender(&mut exact.lane, sender);
         exact
             .send_lane(
                 LaneCommand::Jump {

@@ -114,7 +114,7 @@ impl<S> PlayerImpl<S> {
                 item = u64::from(self.item),
                 seq = operation.seq.get(),
                 current_segment = self.segment.id.get(),
-                applied = ?operation.applied(),
+                applied = ?operation.applied,
                 requested_when = ?operation.when,
                 paused_resume = ?resume,
                 command = ?operation.command,
@@ -151,16 +151,16 @@ impl<S> PlayerImpl<S> {
         if resume.lane.segment != self.segment.id {
             return None;
         }
-        self.lane_history
-            .commands
+        self.lane_commands
+            .operations()
             .iter()
-            .filter(|operation| operation.applied() != Some(false))
-            .find(|operation| match operation.when {
+            .filter(|operation| match operation.when {
                 When::At(frame) => {
                     frame.segment == resume.lane.segment && frame.frame > resume.lane.frame
                 }
                 When::Next | When::Deferred => operation.segment == resume.lane.segment,
             })
+            .min_by_key(|operation| (operation.seq, operation.ordinal))
             .map(|operation| (resume, operation))
     }
 
@@ -264,7 +264,7 @@ impl<S> PlayerImpl<S> {
         if self.adoptions.cancelling() {
             return Err(PlayError::NotReady);
         }
-        if self.lane.is_none() {
+        if self.lane.sender().is_none() {
             if !matches!(at, When::Next) {
                 return Err(PlayError::Untimed);
             }
@@ -285,7 +285,7 @@ impl<S> PlayerImpl<S> {
             let cost = self.speed_admission(at, out)?;
             return Ok((Configuring::Send(when, change), cost));
         }
-        if self.lane.as_ref().is_none_or(|lane| lane.available() == 0) {
+        if self.lane.available() == 0 {
             return Err(PlayError::Full("lane"));
         }
         Ok((Configuring::Send(when, change), Some(0)))
@@ -297,8 +297,8 @@ impl<S> PlayerImpl<S> {
                 .loading
                 .as_ref()
                 .is_none_or(|loading| loading.speed.is_none())
-            && !self.lane_history.commands.iter().any(|operation| {
-                operation.applied().is_none()
+            && !self.lane_commands.operations().iter().any(|operation| {
+                !operation.applied
                     && match operation.command {
                         LaneCommand::SetSpeed(_) => operation.segment == self.segment.id,
                         LaneCommand::Segment { id, .. } => id == self.segment.id,
@@ -306,18 +306,18 @@ impl<S> PlayerImpl<S> {
                     }
             })
             && self
-                .lane_history
-                .commands
+                .lane_commands
+                .operations()
                 .iter()
                 .filter(|operation| {
-                    operation.applied() == Some(true)
+                    operation.applied
                         && match operation.command {
                             LaneCommand::SetSpeed(_) => operation.segment == self.segment.id,
                             LaneCommand::Segment { id, .. } => id == self.segment.id,
                             _ => false,
                         }
                 })
-                .max_by_key(|operation| (operation.when, operation.seq))
+                .max_by_key(|operation| (operation.when, operation.seq, operation.ordinal))
                 .is_none_or(|operation| {
                     matches!(
                         operation.command,
@@ -335,7 +335,7 @@ impl<S> PlayerImpl<S> {
         at: When<SessionFrame>,
         out: &Outbox<'_, S>,
     ) -> Result<Option<usize>, PlayError> {
-        if self.lane.is_none() {
+        if self.lane.sender().is_none() {
             return Err(PlayError::NotReady);
         }
         if !matches!(self.status, TrackStatus::Playing { .. }) {
@@ -355,7 +355,7 @@ impl<S> PlayerImpl<S> {
             return Ok(Some(usize::from(self.attached())));
         }
         self.lane_when(at, out)?;
-        if self.lane.as_ref().is_none_or(|lane| lane.available() == 0) {
+        if self.lane.available() == 0 {
             return Err(PlayError::Full("lane"));
         }
         Ok(Some(0))
@@ -424,12 +424,7 @@ impl<S> PlayerImpl<S> {
         {
             return Some(failure);
         }
-        let operation = self.lane_history.commands.iter().rev().find(|operation| {
-            matches!(operation.command,
-                LaneCommand::Segment { id, .. } | LaneCommand::SetHostRate { id, .. }
-                if id == self.segment.id)
-        })?;
-        match operation.verdict {
+        match self.segment.request_verdict() {
             Some(Err(Rejection::Refused(failure))) => Some(failure),
             _ => None,
         }
