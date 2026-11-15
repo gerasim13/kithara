@@ -13,11 +13,7 @@
       "--enable-features=SharedArrayBuffer",
       "--js-flags=--experimental-wasm-threads"
     ],
-    "w3c": false,
-    "perfLoggingPrefs": {
-      "enableNetwork": true,
-      "enablePage": true
-    }
+    "w3c": false
   },
   "moz:firefoxOptions": {
     "args": [
@@ -30,9 +26,5 @@
       "media.autoplay.default": 0,
       "media.volume_scale": "0.0"
     }
-  },
-  "goog:loggingPrefs": {
-    "browser": "ALL",
-    "performance": "ALL"
   }
 }
