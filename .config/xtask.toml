@@ -3472,3 +3472,27 @@ scan_all_rules = [
   "perf.no-local-test-pools",
   "style.no-items-in-lib-or-mod-rs",
 ]
+
+[test.lanes.timeout-optional-calibration]
+default_backend = "none"
+default_flash = false
+undeclared_toggles = ["flash", "no-block"]
+default_features = ["kithara-derive/mirror", "kithara-derive/ranged", "kithara-derive/enum-str", "kithara-derive/variants", "kithara-derive/patch", "kithara-test-fixtures/all"]
+cargo.packages = ["kithara-derive", "kithara-test-fixtures"]
+cargo.profile = "test-release"
+runner.nextest.ignore_default_filter = true
+
+[ext.ci.lanes.timeout-optional-calibration]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just", "sccache", "kache"]
+program = "just"
+role = "gate"
+kinds = []
+kinds_github = ["nightly"]
+timeout_minutes = 120
+steps = [
+  { args = ["test", "run", "--lane=timeout-optional-calibration", "--retries=0"], label = "Optional real clock", env = { KITHARA_TEST_CLOCK_MEASUREMENT = "1", NEXTEST_SUCCESS_OUTPUT = "immediate", CARGO_BUILD_JOBS = "2" } },
+  { args = ["test", "run", "--lane=timeout-optional-calibration", "--features=kithara-test-utils/flash,kithara-platform/flash", "--retries=0"], label = "Optional Flash clock", env = { KITHARA_TEST_CLOCK_MEASUREMENT = "1", NEXTEST_SUCCESS_OUTPUT = "immediate", CARGO_BUILD_JOBS = "2" } },
+]
