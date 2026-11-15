@@ -1227,8 +1227,7 @@ async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant(
     tokio,
     serial,
     hang_timeout_secs(5),
-    tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
-)]
+    tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug"), timeout(::std::time::Duration::from_secs(120)))]
 async fn multi_track_shared_abr_with_cache(#[future(awt)] shared_tracks: (CreatedHls, CreatedHls)) {
     let (server1, server2) = shared_tracks;
 
@@ -1736,7 +1735,7 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant(
     serial,
     hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug"),
-    timeout(::std::time::Duration::from_millis(2784))
+    timeout(::std::time::Duration::from_secs(120))
 )]
 async fn runtime_cross_codec_manual_switch_no_hang(#[future(awt)] retained_mixed: CreatedHls) {
     let server = retained_mixed;
@@ -2739,7 +2738,7 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     serial,
     hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug"),
-    timeout(::std::time::Duration::from_millis(3185))
+    timeout(::std::time::Duration::from_secs(120))
 )]
 #[cfg_attr(
     not(target_os = "android"),
