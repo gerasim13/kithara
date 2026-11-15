@@ -3471,30 +3471,27 @@ scan_all_rules = [
   "style.no-items-in-lib-or-mod-rs",
 ]
 
-[ext.ci.lanes.budget-two-case-load-real]
+[ext.ci.lanes.budget-memory-dev]
 cache_group = "linux"
-github_runner = "kithara-test-real"
 label = "Linux"
 os = "linux"
-tools = ["cargo", "just", "sccache", "kache"]
-program = "just"
+tools = ["cargo", "just"]
+program = "cargo"
 role = "gate"
 kinds = []
 kinds_github = ["weekly"]
-timeout_minutes = 90
-steps = [{ args = ["test", "run", "--profile", "ci", "--load=on", "--retries=0", "--test-threads=1", "--stress-count=100", "--narrow=(binary_id(=kithara-sync-tests::sync) & test(=sync_oracle::static_rhythmic_oracle_rejects_invalid_stems_for_the_expected_reason_missing_beat)) | (binary_id(=kithara-warp-tests::warp) & test(=region::projected::host_sync_stretches_each_asset_tempo_onto_the_host_grid_bungee))", "--flash=off"], label = "Uncensored two-case real CPU-load timing reference", env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", KITHARA_HANG_PREKILL_SECS = "110" } }]
-artifact = { name = "budget-two-case-load-real-junit", path = "target/nextest/ci/junit.xml", when = "always" }
+timeout_minutes = 30
+steps = [{ args = ["test", "-p", "kithara-audio-tests", "--test", "audio_heavy", "timestretch_maximum_output_is_allocation_free", "--", "--test-threads=1", "--nocapture"], label = "Uncensored allocation test in its canonical dev profile", env = { CARGO_BUILD_JOBS = "2", KITHARA_TEST_CLOCK_MEASUREMENT = "1", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", KITHARA_HANG_PREKILL_SECS = "110" } }]
 
-[ext.ci.lanes.budget-two-case-load-flash]
+[ext.ci.lanes.budget-boot-diagnostic-test]
 cache_group = "linux"
-github_runner = "kithara-test-simulated"
 label = "Linux"
 os = "linux"
-tools = ["cargo", "just", "sccache", "kache"]
+tools = ["cargo", "just"]
 program = "just"
 role = "gate"
 kinds = []
 kinds_github = ["weekly"]
-timeout_minutes = 90
-steps = [{ args = ["test", "run", "--profile", "ci", "--load=on", "--retries=0", "--test-threads=1", "--stress-count=100", "--narrow=(binary_id(=kithara-sync-tests::sync) & test(=sync_oracle::static_rhythmic_oracle_rejects_invalid_stems_for_the_expected_reason_missing_beat)) | (binary_id(=kithara-warp-tests::warp) & test(=region::projected::host_sync_stretches_each_asset_tempo_onto_the_host_grid_bungee))", "--flash=on", "--no-block=on"], label = "Uncensored two-case flash CPU-load timing reference", env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", KITHARA_HANG_PREKILL_SECS = "110" } }]
-artifact = { name = "budget-two-case-load-flash-junit", path = "target/nextest/ci/junit.xml", when = "always" }
+timeout_minutes = 30
+steps = [{ args = ["test", "run", "--lane=tooling", "--narrow=package(=xtask) & test(=android::device::tests::owned::boot_timeout_keeps_the_last_adb_response_and_logcat)", "--retries=0"], label = "Boot timeout diagnostic regression" }]
+artifact = { name = "boot-diagnostic-test-junit", path = "target/nextest/ci/junit.xml", when = "always" }
