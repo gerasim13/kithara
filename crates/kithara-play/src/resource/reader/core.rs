@@ -1313,15 +1313,7 @@ mod tests {
             .1;
         let (_sender, inbox) = load.lane_channel();
         let refused = load
-            .open(
-                Duration::ZERO,
-                LaneStart {
-                    speed: SpeedCurve::Constant(1.0),
-                    keylock: false,
-                    backend: StretchKind::default(),
-                },
-                inbox,
-            )
+            .open(Duration::ZERO, LaneStart::default(), inbox)
             .await
             .map(|(opened, _, _)| opened);
 
@@ -1392,15 +1384,7 @@ mod tests {
             let (sender, inbox) = load.lane_channel();
             async move {
                 let opened = load
-                    .open(
-                        Duration::ZERO,
-                        LaneStart {
-                            speed: SpeedCurve::Constant(1.0),
-                            keylock: false,
-                            backend: StretchKind::default(),
-                        },
-                        inbox,
-                    )
+                    .open(Duration::ZERO, LaneStart::default(), inbox)
                     .await
                     .map(|(opened, _, _)| opened);
                 drop(sender);
