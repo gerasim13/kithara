@@ -13,10 +13,10 @@ use kithara_test_utils::kithara;
 use kithara_worker::{Priority, Task, TickResult};
 
 use super::{
-    super::{EngineLoad, PcmPacket, reader::PcmProducer},
+    super::{EngineLoad, reader::PcmProducer},
     pending::PendingPacket,
 };
-use crate::{LoadRefusal, ServiceClass, WarpSource, dispatcher::LaneTask};
+use crate::{LoadRefusal, PcmPacket, ServiceClass, WarpSource, dispatcher::LaneTask};
 
 /// Worker-owned source, rendering, ring producer and transport publisher.
 pub struct DecoderNode<T, S> {
@@ -416,8 +416,8 @@ mod tests {
     use kithara_worker::{Task, TickResult};
 
     use crate::{
+        PcmPacket,
         mock::{node_fixture::NodeFixture, pcm_fixture::chunk},
-        worker::PcmPacket,
     };
 
     fn pop(fixture: &mut NodeFixture) -> Option<f32> {

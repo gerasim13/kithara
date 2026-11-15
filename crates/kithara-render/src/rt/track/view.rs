@@ -1,7 +1,7 @@
 use kithara_signal::{AudioChunkInfo, AudioSpec, SegmentId};
 
 use super::PlayerResource;
-use crate::worker::PcmPacket;
+use crate::PcmPacket;
 
 impl PlayerResource {
     delegate::delegate! {

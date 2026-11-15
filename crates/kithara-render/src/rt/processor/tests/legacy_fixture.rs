@@ -8,13 +8,10 @@ use num_traits::ToPrimitive;
 
 use super::{TestEnds, TestMixer, mixer_with_shape, send};
 use crate::{
-    CrossfadeSettings, PcmReceiver,
+    CrossfadeSettings, PcmPacket, PcmReceiver,
     bridge::{DeckPart, Fade, Slot},
     rt::{DeckMixerConfig, StreamShape},
-    worker::{
-        PcmPacket,
-        packet_tests::{PacketRing, chunk},
-    },
+    worker::packet_tests::{PacketRing, chunk},
 };
 
 pub(in crate::rt) const RATE: NonZeroU32 = NonZeroU32::new(44_100).expect("fixture rate");

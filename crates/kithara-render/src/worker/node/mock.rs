@@ -8,10 +8,10 @@ use kithara_warp::{Warp, WarpConfig};
 
 use super::{DecoderNode, pending::PendingPacket};
 use crate::{
-    WarpSource,
+    PcmReceiver, WarpSource,
     mock::{ScriptedSource, pcm_fixture::PcmFixture},
     test_pools::{TestPools, pools},
-    worker::{PcmReceiver, reader::PcmLead},
+    worker::reader::PcmLead,
 };
 pub(in crate::worker::node) struct NodeFixture {
     pub(in crate::worker::node) node: DecoderNode<ScriptedSource, TestPools>,
@@ -78,7 +78,7 @@ impl NodeFixture {
             lane,
         }
     }
-    pub(in crate::worker::node) fn stage(&mut self, packet: crate::worker::PcmPacket) {
+    pub(in crate::worker::node) fn stage(&mut self, packet: crate::PcmPacket) {
         assert!(self.node.pending.is_none(), "one pending owner");
         self.node.pending = Some(PendingPacket {
             packet,

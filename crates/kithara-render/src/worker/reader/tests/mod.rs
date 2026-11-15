@@ -10,5 +10,5 @@ use kithara_signal::{AudioChunk, AudioSpec};
 use ringbuf::traits::Observer;
 
 pub(in crate::worker) use self::core::packet_fixture;
-use super::packet::PcmPacket;
+use crate::PcmPacket;
 pub(crate) use crate::mock::{PacketRing, chunk};

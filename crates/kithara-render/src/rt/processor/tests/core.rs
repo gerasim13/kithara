@@ -18,14 +18,11 @@ pub(super) use num_traits::{ToPrimitive, cast};
 use super::*;
 use crate::PcmReceiver;
 pub(super) use crate::{
-    CrossfadeCurve, CrossfadeSettings,
+    CrossfadeCurve, CrossfadeSettings, PcmPacket,
     bridge::{DeckEqChange, DeckPart, DeckRefusal, Fade, FadeDir, Returned},
     rt::DeckMixerConfig,
     test_pools::pools,
-    worker::{
-        PcmPacket,
-        packet_tests::{PacketRing, chunk},
-    },
+    worker::packet_tests::{PacketRing, chunk},
 };
 
 pub(super) const BLOCK: usize = 512;

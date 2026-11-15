@@ -107,14 +107,12 @@ async fn worker_telemetry_throttles_immediate_repeats() {
     let meter = Arc::new(EngineLoad::default());
     meter.record(Duration::from_millis(5), 4_410, 44_100);
     node.engine_load = Some(Arc::clone(&meter));
-    receiver.set_position(Duration::from_millis(100));
+    let consumed = Duration::from_millis(100);
     assert_eq!(node.tick(), TickResult::Progress);
     let first = meter.snapshot();
     for _ in 0..2 {
         assert_eq!(
-            receiver
-                .decoded_frontier()
-                .saturating_sub(receiver.position()),
+            receiver.decoded_frontier().saturating_sub(consumed),
             Duration::from_millis(250)
         );
         assert_eq!(receiver.decoded_frontier(), Duration::from_millis(350));
@@ -300,13 +298,11 @@ async fn worker_observation_reads_do_not_republish_packets() {
     let meter = Arc::new(EngineLoad::default());
     meter.record(Duration::from_millis(5), 4_410, 44_100);
     node.engine_load = Some(Arc::clone(&meter));
-    receiver.set_position(Duration::from_millis(100));
+    let consumed = Duration::from_millis(100);
     assert_eq!(node.tick(), TickResult::Progress);
     for _ in 0..2 {
         assert_eq!(
-            receiver
-                .decoded_frontier()
-                .saturating_sub(receiver.position()),
+            receiver.decoded_frontier().saturating_sub(consumed),
             Duration::from_millis(250)
         );
         assert_eq!(receiver.decoded_frontier(), Duration::from_millis(350));
@@ -469,10 +465,13 @@ async fn source_end_commits_only_after_final_port_admission() {
     assert!(receiver.pop().is_some());
     assert_eq!(node.tick(), TickResult::Progress);
     assert_eq!(commits.lock().as_slice(), &[end]);
+    let queued = receiver
+        .next_chunk_info()
+        .expect("committed PCM stays queued");
+    assert_eq!(queued.frame_offset, 12_344);
     assert_eq!(
-        receiver.position(),
-        Duration::ZERO,
-        "admitting a source endpoint does not consume its PCM"
+        queued.frames, 1,
+        "committing an endpoint does not consume PCM"
     );
 }
 

@@ -98,13 +98,10 @@ mod tests {
 
     use super::*;
     use crate::{
-        CrossfadeSettings,
+        CrossfadeSettings, PcmPacket,
         bridge::Fade,
         rt::track::PlayerResource,
-        worker::{
-            PcmPacket,
-            packet_tests::{PacketRing, chunk},
-        },
+        worker::packet_tests::{PacketRing, chunk},
     };
 
     #[kithara::test]

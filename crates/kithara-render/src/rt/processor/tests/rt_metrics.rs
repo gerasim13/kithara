@@ -12,13 +12,10 @@ use super::{
     legacy_fixture::{self, Control, Resource, attach, push, render},
 };
 use crate::{
-    CrossfadeSettings,
+    CrossfadeSettings, PcmPacket,
     bridge::{DeckEvent, DeckPart, Fade, RtMetricsSnapshot, Slot, SlotState},
     rt::{DeckMixerConfig, track::PlayerTrack},
-    worker::{
-        PcmPacket,
-        packet_tests::{PacketRing, chunk},
-    },
+    worker::packet_tests::{PacketRing, chunk},
 };
 
 const SAMPLE_RATE: u32 = 48_000;

@@ -8,9 +8,9 @@ use kithara_test_utils::kithara;
 
 use super::super::{PlayerResource, ReadOutcome};
 use crate::{
+    PcmPacket,
     mock::pcm_fixture::{PcmFixture, chunk},
     test_pools::{pools, sample_buffer},
-    worker::PcmPacket,
 };
 
 #[kithara::test(native, tokio)]

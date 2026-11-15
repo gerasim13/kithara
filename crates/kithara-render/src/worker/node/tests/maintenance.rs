@@ -5,7 +5,7 @@ use kithara_audio::{AudioReadError, AudioSource, SeekOutcome};
 use kithara_platform::sync::mpsc;
 
 use super::core::*;
-use crate::worker::PcmPacket;
+use crate::PcmPacket;
 
 struct DeferredSource {
     source: ScriptedSource,

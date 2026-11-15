@@ -355,9 +355,9 @@ async fn a_prepared_delayed_final_packet_stitches_its_successor_inside_the_same_
 ) {
     use kithara_test_utils::wait_until;
 
-    use crate::worker::{
+    use crate::{
         PcmPacket,
-        packet_tests::{PacketRing, chunk},
+        worker::packet_tests::{PacketRing, chunk},
     };
 
     let (mut processor, mut control) = make_processor();

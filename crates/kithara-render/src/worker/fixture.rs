@@ -1,6 +1,7 @@
+use super::DecoderNode;
 #[cfg(test)]
-use super::PcmPacket;
-use super::{DecoderNode, PcmReceiver};
+use crate::PcmPacket;
+use crate::PcmReceiver;
 
 #[cfg(test)]
 pub(crate) fn terminal_ring(

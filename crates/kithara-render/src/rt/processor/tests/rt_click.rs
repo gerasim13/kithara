@@ -15,13 +15,10 @@ use kithara_test_utils::kithara;
 
 use super::{TestEnds, TestMixer, frame_at, mixer_with_shape, send as send_batch};
 use crate::{
-    CrossfadeSettings,
+    CrossfadeSettings, PcmPacket,
     bridge::{DeckMixSettingsChange, DeckPart, DeckProtocol, Fade, FadeDir, Returned, Slot},
     rt::{DeckMixerConfig, StreamShape, track::PlayerTrack},
-    worker::{
-        PcmPacket,
-        packet_tests::{PacketRing, chunk},
-    },
+    worker::packet_tests::{PacketRing, chunk},
 };
 const SAMPLE_RATE: u32 = 48_000;
 const BLOCK_FRAMES: usize = 128;

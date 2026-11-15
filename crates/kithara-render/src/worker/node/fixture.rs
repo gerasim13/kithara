@@ -11,7 +11,7 @@ use kithara_test_utils::bufpool::{TestPools, pools};
 use kithara_warp::{Warp, WarpConfig};
 
 use super::DecoderNode;
-use crate::{LaneProtocol, WarpSource, mock::PacketRing, worker::PcmReceiver};
+use crate::{LaneProtocol, PcmReceiver, WarpSource, mock::PacketRing};
 
 /// Creates a decoder node with the specified packet capacity and preload count.
 ///

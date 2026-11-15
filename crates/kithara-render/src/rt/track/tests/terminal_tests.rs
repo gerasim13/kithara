@@ -17,9 +17,10 @@ use ringbuf::{
 
 use super::super::{PlayerResource, PlayerTrack, ReadOutcome, RtSink};
 use crate::{
+    PcmPacket, PcmReceiver,
     bridge::{DeckEvent, Fade, PlaybackFault, RtMetrics, Slot},
     test_pools::{TestPools, pools, sample_buffer},
-    worker::{PcmPacket, PcmReceiver, terminal_node, terminal_ring},
+    worker::{terminal_node, terminal_ring},
 };
 
 fn spec() -> AudioSpec {

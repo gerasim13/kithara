@@ -12,9 +12,9 @@ use kithara_worker::Task;
 use num_traits::ToPrimitive;
 
 use super::{PlayerResource, ReadOutcome as BlockReadOutcome};
-use crate::worker::{
+use crate::{
     PcmPacket,
-    packet_tests::{PacketRing, chunk},
+    worker::packet_tests::{PacketRing, chunk},
 };
 
 fn spec() -> AudioSpec {

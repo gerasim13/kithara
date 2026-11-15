@@ -1,16 +1,10 @@
-mod core;
 mod lead;
 #[cfg(any(test, feature = "mock"))]
 pub(crate) mod mock;
-mod offline;
-mod packet;
-
-pub(in crate::worker) use core::PcmProducer;
-pub use core::PcmReceiver;
+mod producer;
 
 pub(in crate::worker) use lead::PcmLead;
-pub(crate) use offline::wait_for_packet;
-pub use packet::PcmPacket;
+pub(in crate::worker) use producer::PcmProducer;
 #[cfg(test)]
 pub(in crate::worker) use tests::packet_fixture;
 

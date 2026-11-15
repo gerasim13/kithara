@@ -14,12 +14,9 @@ use ringbuf::{
 
 use super::{tests::stop_seq, *};
 use crate::{
-    CrossfadeSettings,
+    CrossfadeSettings, PcmPacket,
     bridge::{DeckEvent, Fade, FadeDir, RtMetrics, Slot, SlotState},
-    worker::{
-        PcmPacket,
-        packet_tests::{PacketRing, chunk},
-    },
+    worker::packet_tests::{PacketRing, chunk},
 };
 
 const ITEM: Slot = Slot::new(1);

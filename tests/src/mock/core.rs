@@ -166,6 +166,7 @@ pub struct LaneAudio<T, S> {
     block_on_underrun: bool,
     sender: Sender<LaneProtocol>,
     pcm: PcmReceiver,
+    position: Duration,
     playhead: kithara::platform::sync::Arc<dyn kithara::stream::PlayheadRead>,
     metadata: TrackMetadata,
     abr: Option<AbrHandle>,
@@ -301,6 +302,7 @@ where
             block_on_underrun,
             sender,
             pcm: loaded.opened.receiver,
+            position: Duration::ZERO,
             playhead: loaded.opened.playhead,
             metadata: loaded.opened.metadata,
             abr: loaded.opened.abr,
@@ -425,7 +427,7 @@ impl<T, S> LaneAudio<T, S> {
         if !self.block_on_underrun && !self.current_segment_ready() {
             return Ok(ChunkOutcome::Pending {
                 reason: PendingReason::Buffering,
-                position: self.pcm.position(),
+                position: self.position,
             });
         }
         self.service();
@@ -437,7 +439,7 @@ impl<T, S> LaneAudio<T, S> {
         }
         if self.eof {
             return Ok(ChunkOutcome::Eof {
-                position: self.pcm.position(),
+                position: self.position,
             });
         }
         loop {
@@ -452,20 +454,20 @@ impl<T, S> LaneAudio<T, S> {
                 }
                 return Ok(ChunkOutcome::Pending {
                     reason: PendingReason::Buffering,
-                    position: self.pcm.position(),
+                    position: self.position,
                 });
             };
             hang_reset!();
             match packet {
                 PcmPacket::Chunk(chunk) if chunk.meta.segment == self.segment => {
                     if chunk.meta.end_of_track {
-                        self.pcm.set_position(chunk.meta.timestamp);
+                        self.position = chunk.meta.timestamp;
                         self.pcm
                             .recycle(PcmPacket::Chunk(chunk))
                             .expect("recycle EOF packet");
                         self.eof = true;
                         return Ok(ChunkOutcome::Eof {
-                            position: self.pcm.position(),
+                            position: self.position,
                         });
                     }
                     return Ok(ChunkOutcome::Chunk(chunk));
@@ -490,13 +492,16 @@ impl<T, S> AudioRead for LaneAudio<T, S> {
     delegate::delegate! {
         to self.pcm {
             fn spec(&self) -> AudioSpec;
-            fn position(&self) -> Duration;
             fn decoded_frontier(&self) -> Duration;
         }
         to self.playhead {
             #[call(cached)]
             fn cached_span(&self) -> Duration;
         }
+    }
+
+    fn position(&self) -> Duration {
+        self.position
     }
 
     fn next_chunk(&mut self) -> Result<ChunkOutcome, AudioReadError> {
@@ -524,39 +529,35 @@ impl<T, S> AudioRead for LaneAudio<T, S> {
             chunk.meta.frames -= skipped as u32;
             self.offset = 0;
             self.committed_segment = Some(chunk.meta.segment);
-            self.pcm.set_position(
-                chunk
-                    .meta
-                    .source_span
-                    .and_then(|span| span.position_at(u64::from(chunk.meta.frames)))
-                    .unwrap_or_else(|| {
-                        chunk.meta.timestamp
-                            + chunk
-                                .meta
-                                .spec
-                                .duration_for(u64::from(chunk.meta.frames))
-                                .expect("packet duration")
-                    }),
-            );
+            self.position = chunk
+                .meta
+                .source_span
+                .and_then(|span| span.position_at(u64::from(chunk.meta.frames)))
+                .unwrap_or_else(|| {
+                    chunk.meta.timestamp
+                        + chunk
+                            .meta
+                            .spec
+                            .duration_for(u64::from(chunk.meta.frames))
+                            .expect("packet duration")
+                });
             return Ok(ChunkOutcome::Chunk(chunk));
         }
         let outcome = self.pull()?;
         if let ChunkOutcome::Chunk(chunk) = &outcome {
             self.committed_segment = Some(chunk.meta.segment);
-            self.pcm.set_position(
-                chunk
-                    .meta
-                    .source_span
-                    .and_then(|span| span.position_at(u64::from(chunk.meta.frames)))
-                    .unwrap_or_else(|| {
-                        chunk.meta.timestamp
-                            + chunk
-                                .meta
-                                .spec
-                                .duration_for(u64::from(chunk.meta.frames))
-                                .expect("packet duration")
-                    }),
-            );
+            self.position = chunk
+                .meta
+                .source_span
+                .and_then(|span| span.position_at(u64::from(chunk.meta.frames)))
+                .unwrap_or_else(|| {
+                    chunk.meta.timestamp
+                        + chunk
+                            .meta
+                            .spec
+                            .duration_for(u64::from(chunk.meta.frames))
+                            .expect("packet duration")
+                });
         }
         Ok(outcome)
     }
@@ -580,7 +581,7 @@ impl<T, S> AudioRead for LaneAudio<T, S> {
         let Some(count) = NonZeroUsize::new(count) else {
             return Ok(ReadOutcome::Pending {
                 reason: PendingReason::Buffering,
-                position: self.pcm.position(),
+                position: self.position,
             });
         };
         let start = self.offset / channels;
@@ -605,7 +606,7 @@ impl<T, S> AudioRead for LaneAudio<T, S> {
                         .expect("packet duration")
             });
         self.committed_segment = Some(chunk.meta.segment);
-        self.pcm.set_position(position);
+        self.position = position;
         if self.offset == chunk.samples.len() {
             let chunk = self.chunk.take().expect("consumed packet");
             self.pcm

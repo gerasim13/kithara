@@ -4,9 +4,7 @@ use kithara_signal::{AudioChunkInfo, SourceSpan};
 
 use super::*;
 use crate::{
-    LoadRefusal,
-    dispatcher::LaneTask,
-    worker::{PcmReceiver, node::fixture::prepared_node_with_info},
+    LoadRefusal, PcmReceiver, dispatcher::LaneTask, worker::node::fixture::prepared_node_with_info,
 };
 
 fn entry(segment: SegmentId, lane_frame: u64, source_frame: u64, revision: u64) -> AudioChunk {

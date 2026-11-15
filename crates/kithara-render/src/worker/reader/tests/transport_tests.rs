@@ -3,10 +3,10 @@ use kithara_signal::SegmentId;
 use kithara_test_utils::kithara;
 use ringbuf::traits::Observer;
 
-use super::super::{core::PcmReceiver, wait_for_packet};
 use crate::{
+    PcmPacket, PcmReceiver,
     mock::pcm_fixture::{PcmFixture, chunk},
-    worker::PcmPacket,
+    offline::wait_for_packet,
 };
 
 fn pop_blocking(reader: &mut PcmReceiver) -> Option<PcmPacket> {

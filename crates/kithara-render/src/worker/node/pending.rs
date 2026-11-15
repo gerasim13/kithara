@@ -1,6 +1,6 @@
 use kithara_audio::SourceEnd;
 
-use super::super::PcmPacket;
+use crate::PcmPacket;
 
 pub(super) struct PendingPacket {
     pub(super) packet: PcmPacket,

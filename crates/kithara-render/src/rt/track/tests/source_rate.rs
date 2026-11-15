@@ -5,11 +5,9 @@ use kithara_signal::{AudioSpec, SegmentId, SessionFrame, SourceSpan};
 use kithara_test_utils::kithara;
 
 use crate::{
+    PcmPacket,
     rt::track::PlayerResource,
-    worker::{
-        PcmPacket,
-        packet_tests::{PacketRing, chunk},
-    },
+    worker::packet_tests::{PacketRing, chunk},
 };
 
 #[kithara::test(native)]

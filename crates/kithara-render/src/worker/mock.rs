@@ -7,11 +7,13 @@ use kithara_worker::Wake;
 use ringbuf::traits::Consumer;
 
 use super::{
-    PcmPacket, PcmReceiver,
     packet_mock::PacketRing,
     reader::{PcmLead, PcmProducer},
 };
-use crate::test_pools::{pools, sample_buffer};
+use crate::{
+    PcmPacket, PcmReceiver,
+    test_pools::{pools, sample_buffer},
+};
 
 pub(crate) struct PcmFixture {
     pub(crate) receiver: Option<PcmReceiver>,

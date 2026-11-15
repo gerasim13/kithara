@@ -6,8 +6,10 @@ use kithara_worker::{
 
 use super::transport_tests::receive_notice;
 use crate::{
+    PcmPacket,
     mock::pcm_fixture::{PcmFixture, chunk},
-    worker::{PcmPacket, reader::PcmProducer, wait_for_packet},
+    offline::wait_for_packet,
+    worker::reader::PcmProducer,
 };
 
 struct ProducerTask {

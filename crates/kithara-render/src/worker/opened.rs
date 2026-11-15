@@ -5,7 +5,7 @@ use kithara_decode::TrackMetadata;
 use kithara_platform::sync::Arc;
 use kithara_stream::PlayheadRead;
 
-use super::PcmReceiver;
+use crate::PcmReceiver;
 
 /// Off-RT load result; only the receiver transfers to the audio thread.
 pub struct OpenedPcm {

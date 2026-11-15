@@ -10,9 +10,9 @@ use ringbuf::{
 
 use super::super::{PlayerTrack, ReadOutcome, RtSink, TrackBuffers};
 use crate::{
+    PcmPacket,
     bridge::{DeckEvent, Fade, RtMetrics, Slot, TrackClock},
     mock::pcm_fixture::{PcmFixture, chunk},
-    worker::PcmPacket,
 };
 
 const BLOCK: usize = 2;

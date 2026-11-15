@@ -6,8 +6,8 @@ use kithara_test_utils::kithara;
 
 use super::super::{PlayerResource, ReadOutcome};
 use crate::{
+    PcmPacket,
     mock::pcm_fixture::{PcmFixture, chunk},
-    worker::PcmPacket,
 };
 struct RingFixture {
     resource: PlayerResource,

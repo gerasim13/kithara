@@ -13,6 +13,7 @@ mod lane;
 pub mod mock;
 mod node;
 mod offline;
+mod pcm;
 mod priority;
 pub mod rt;
 mod source;
@@ -32,10 +33,11 @@ pub(crate) use kithara_test_utils::bufpool as test_pools;
 pub use lane::{LaneApplied, LaneCommand, LaneFrame, LaneProtocol, LaneSetup};
 pub use node::{PlayerNode, PlayerNodePreparationError};
 pub use offline::OfflineDeck;
+pub use pcm::{PcmPacket, PcmReceiver};
 pub use priority::ServiceClass;
 pub use source::WarpSource;
 pub use worker::{
-    DecoderNode, EngineLoad, EngineLoadSnapshot, LoadRefusal, OpenedPcm, PcmPacket, PcmReceiver,
-    PlayWorker, PlayWorkerConfig, PlayWorkerConfigPatch, StreamWake, TrackConfig, TrackConfigPatch,
+    DecoderNode, EngineLoad, EngineLoadSnapshot, LoadRefusal, OpenedPcm, PlayWorker,
+    PlayWorkerConfig, PlayWorkerConfigPatch, StreamWake, TrackConfig, TrackConfigPatch,
     pcm_quantum,
 };

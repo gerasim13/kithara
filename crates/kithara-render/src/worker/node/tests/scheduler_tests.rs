@@ -12,9 +12,8 @@ use kithara_worker::{Dispatcher, DispatcherConfig, TaskConfig, TaskHandle, Worke
 
 use super::*;
 use crate::{
-    LaneProtocol, ServiceClass,
+    LaneProtocol, PcmPacket, ServiceClass,
     test_pools::{Pools, TestPools, pools},
-    worker::PcmPacket,
 };
 
 fn empty_chunk(pools: &Pools, frame: u64) -> AudioChunk {

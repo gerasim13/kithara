@@ -14,7 +14,7 @@ use super::{
     DeckMixerConfig, DeckPart, Fade, Slot, StreamShape, TestEnds, TestMixer, chunk,
     mixer_with_shape, send,
 };
-use crate::worker::{PcmPacket, packet_tests::PacketRing};
+use crate::{PcmPacket, worker::packet_tests::PacketRing};
 
 mod consts {
     /// Callbacks one census window covers. A mix that walked its track list per

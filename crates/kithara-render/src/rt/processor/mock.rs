@@ -16,11 +16,10 @@ use num_traits::ToPrimitive;
 
 use super::{DeckMixer, StreamShape};
 use crate::{
-    PcmReceiver,
+    PcmPacket, PcmReceiver,
     bridge::{DeckEnds, DeckPart, DeckProtocol, SessionInbox, Slot},
     mock::{PacketRing, chunk},
     rt::{DeckMixerConfig, MixerInputs, track::PlayerResource},
-    worker::PcmPacket,
 };
 
 pub type DeckReply = (Seq, Outcome<DeckProtocol>, Vec<DeckPart>);

@@ -15,10 +15,10 @@ use ringbuf::{
 
 use super::super::{PlayerResource, PlayerTrack, ReadOutcome, RtSink, TrackBuffers};
 use crate::{
+    PcmPacket,
     bridge::{DeckEvent, Fade, RtMetrics, Slot},
     mock::pcm_fixture::{PcmFixture, chunk},
     offline::prepare_track,
-    worker::PcmPacket,
 };
 
 #[kithara::test(native)]

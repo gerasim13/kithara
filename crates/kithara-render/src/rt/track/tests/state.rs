@@ -6,13 +6,10 @@ use kithara_test_utils::kithara;
 
 use super::stop_seq;
 use crate::{
-    CrossfadeSettings,
+    CrossfadeSettings, PcmPacket,
     bridge::{Fade, SlotMark, SlotState},
     rt::track::core::*,
-    worker::{
-        PcmPacket,
-        packet_tests::{PacketRing, chunk},
-    },
+    worker::packet_tests::{PacketRing, chunk},
 };
 
 #[kithara::test]

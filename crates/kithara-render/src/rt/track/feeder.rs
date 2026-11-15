@@ -11,7 +11,7 @@ use kithara_test_macros as kithara;
 use crate::{
     LaneFrame,
     bridge::SlotMark,
-    worker::{PcmPacket, PcmReceiver},
+    pcm::{PcmPacket, PcmReceiver},
 };
 
 /// Owns at most one popped packet, including a packet the reverse ring refused.
@@ -244,9 +244,6 @@ impl PlayerResource {
             }
             PcmPacket::Chunk(_) => return None,
         }
-        if let Some(position) = self.position.and_then(|point| point.position_at(0)) {
-            receiver.set_position(position);
-        }
         self.packet = receiver.pop();
         let _ = self.return_packet();
         Some(self.failed.map_or(ReadOutcome::Eof, ReadOutcome::Failed))
@@ -274,11 +271,6 @@ impl PlayerResource {
             } else {
                 false
             };
-        }
-        if self.mapped
-            && let Some(position) = self.position.and_then(|point| point.position_at(0))
-        {
-            self.receiver.set_position(position);
         }
     }
 
@@ -415,11 +407,6 @@ impl PlayerResource {
             if spent {
                 let _ = self.return_packet();
             }
-        }
-        if self.mapped
-            && let Some(position) = self.position.and_then(|point| point.position_at(0))
-        {
-            self.receiver.set_position(position);
         }
         ReadOutcome::Full { frames: written }
     }

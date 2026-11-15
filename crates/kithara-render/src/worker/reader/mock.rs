@@ -18,10 +18,10 @@ use ringbuf::{
 use triple_buffer::triple_buffer;
 
 use super::{
-    PcmPacket, PcmReceiver,
-    core::{FinalWake, PcmProducer},
     lead::PcmLead,
+    producer::{FinalWake, PcmProducer},
 };
+use crate::{PcmPacket, PcmReceiver};
 
 pub struct PacketRing {
     pub receiver: Option<PcmReceiver>,
@@ -131,7 +131,6 @@ impl PacketRing {
                 playing: playing_tx,
                 ready: ready.as_ref().map(Arc::downgrade),
                 wake,
-                position: Duration::ZERO,
                 frontier: Duration::ZERO,
             }),
             producer: PcmProducer {
@@ -271,7 +270,6 @@ pub(in crate::worker) fn packet_fixture(
             reverse: returned,
             ready: ready.as_ref().map(Arc::downgrade),
             wake: dispatcher.wake_handle(),
-            position: Duration::ZERO,
             frontier: Duration::ZERO,
         },
         PcmProducer {
@@ -310,8 +308,8 @@ pub fn wait_for_packet(receiver: &PcmReceiver) {
         format!(
             "{stage}: waited={waited:?}, gate_before={gate_before}, gate_after={gate_after}, \
              packet_ready={packet_ready}, producer_held={producer_held}, \
-             next_chunk={next_chunk:?}, position={:?}, frontier={:?}, spec={:?}",
-            receiver.position, receiver.frontier, receiver.spec,
+             next_chunk={next_chunk:?}, frontier={:?}, spec={:?}",
+            receiver.frontier, receiver.spec,
         )
     };
     let mut waited = None;
