@@ -30,6 +30,9 @@ jobs:
       # every other lane shares. `deep-ui` therefore claims no pipeline kind -
       # nothing selects it - and this is the one caller that runs it.
       - name: Run every UI test and photograph both hosts
+        env:
+          KITHARA_TEST_CLOCK_MEASUREMENT: "1"
+          NEXTEST_SUCCESS_OUTPUT: immediate
         run: just ci lane deep-ui --kind nightly
 
       - name: Upload compiler-cache evidence
