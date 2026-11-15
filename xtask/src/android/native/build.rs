@@ -541,7 +541,6 @@ fn install(
         .env("ANDROID_HOME", android_sdk_root()?)
         .arg("assembleDebug")
         .arg("--no-daemon")
-        .arg("--stacktrace")
         .arg(format!("-Pkithara.nativeTestNdk={}", ndk.display()))
         .arg(format!(
             "-Pkithara.nativeTestLibraries={}",
