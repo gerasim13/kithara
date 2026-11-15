@@ -21,7 +21,7 @@ pub mod bufpool;
 #[cfg(feature = "test")]
 pub mod cancel;
 pub mod clock;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "test", not(target_arch = "wasm32")))]
 pub mod flight;
 pub mod hang;
 #[cfg(all(feature = "http-server", not(target_arch = "wasm32")))]

@@ -148,7 +148,9 @@ struct DumpEnvelope<'a> {
     /// and `#[kithara::probe]` firings. Every dump kind carries them — the
     /// watchdog/timeout panics that follow a dump are suppressed as
     /// duplicates, so this envelope is the only carrier of that context.
+    #[cfg(feature = "test")]
     flight_events: Vec<String>,
+    #[cfg(feature = "test")]
     flight_probes: Vec<String>,
     /// One line per live OS thread. The engine dump names the thread holding a
     /// quiescence credit; this says whether that thread is spinning, parked, or
@@ -247,8 +249,11 @@ fn serialize_envelope(mut envelope: DumpEnvelope<'_>) -> serde_json::Result<Opti
 
     let encoded_bytes = payload.len();
     envelope.flash = None;
-    envelope.flight_events = Vec::new();
-    envelope.flight_probes = Vec::new();
+    #[cfg(feature = "test")]
+    {
+        envelope.flight_events = Vec::new();
+        envelope.flight_probes = Vec::new();
+    }
     envelope.threads = Vec::new();
     envelope.context = Value::String(format!(
         "[kithara context and Flash omitted: encoded_bytes={encoded_bytes}]"
@@ -367,7 +372,9 @@ pub(crate) fn write_dump<C: HangDump>(label: &str, ctx: &C, dir: Option<&Path>, 
         flash: flash_dump(&label),
         timestamp_ms: ts,
         nextest: NextestContext::capture(),
+        #[cfg(feature = "test")]
         flight_events: bounded_tail(crate::flight::tail(), consts::MAX_FLIGHT_CHANNEL_BYTES),
+        #[cfg(feature = "test")]
         flight_probes: bounded_tail(
             crate::flight::probes_tail(),
             consts::MAX_FLIGHT_CHANNEL_BYTES,

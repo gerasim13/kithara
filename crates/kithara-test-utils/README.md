@@ -86,7 +86,7 @@ emits the same probe records through `tracing`.
 
 <tr><td><code>mock</code></td><td>no</td><td>Pulls <code>unimock</code> into the dependency graph; enables real <code>kithara::mock</code> expansion</td></tr>
 
-<tr><td><code>subscriber</code></td><td>no</td><td>The test log subscriber on <code>wasm32</code>, where <code>setup_tracing</code> and its siblings exist only with it; native builds always carry it</td></tr>
+<tr><td><code>subscriber</code></td><td>no</td><td>The test log subscriber on <code>wasm32</code>, where <code>setup_tracing</code> and its siblings exist only with it; native test builds carry it through <code>test</code></td></tr>
 
 <tr><td><code>usdt</code></td><td>no</td><td>Enables USDT probe emission: native DTrace on macOS and <code>tracing</code> on other targets (otherwise no-op)</td></tr>
 
@@ -100,6 +100,9 @@ With defaults disabled, instrumentation remains available without `test`; the
 test, fixture and asset macro entrypoints are absent. Test-utils defaults
 enable `hang` and `test`. The public `kithara` facade has its own `test`
 feature for its test and fixture exports.
+
+The native flight recorder and tracing subscriber belong to `test`. Production
+hang dumps retain thread and context diagnostics without test-recorder tails.
 
 ## Integration
 

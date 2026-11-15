@@ -82,6 +82,10 @@ impl Consumer<'_> {
                     ),
                     "test serialization runtime reached production instrumentation"
                 );
+                ensure!(
+                    artifact.target.name != "tracing_subscriber",
+                    "test tracing runtime reached production instrumentation"
+                );
                 if artifact.target.name == "kithara_test_macros" {
                     ensure!(library.is_none(), "multiple instrumentation macro units");
                     library = artifact.filenames.into_iter().next();
