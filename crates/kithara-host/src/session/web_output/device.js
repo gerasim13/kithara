@@ -1,3 +1,39 @@
+const bootstrapProbe = (data) => console.info("KITHARA_BOOTSTRAP " + JSON.stringify(data));
+
+if (typeof Worker === "function" && typeof Blob === "function") {
+  const NativeBlob = Blob;
+  const NativeWorker = Worker;
+  globalThis.Blob = class extends NativeBlob {
+    constructor(parts, options) {
+      if (options?.type === "text/javascript") {
+        parts = parts.map((part) => {
+          if (typeof part !== "string" || !part.includes("let __wstWorkerId")) return part;
+          const before = part;
+          const replace = (from, to) => {
+            if (part.split(from).length !== 2) throw new Error("bootstrap probe marker mismatch: " + from);
+            part = part.replace(from, to);
+          };
+          replace("const shim = await navigator.locks.request(", "__kbStage('lock-wait');\n        const shim = await navigator.locks.request(");
+          replace("const shim = await import(url);", "__kbStage('lock-enter');\n            const shim = await import(url);\n            __kbStage('import-ready');");
+          replace("shim.initSync({ module, memory, thread_stack_size: 1048576 });", "__kbStage('wasm-init-begin');\n            shim.initSync({ module, memory, thread_stack_size: 1048576 });\n            __kbStage('wasm-init-ready');");
+          replace("// Call the entry point", "__kbStage('entry-begin');\n        // Call the entry point");
+          if (part === before) throw new Error("bootstrap probe added no stages");
+          return "const __kbStage = phase => self.postMessage({ __kithara_bootstrap: { name: __wstWorkerName, id: __wstWorkerId, phase } });\n" + part;
+        });
+      }
+      super(parts, options);
+    }
+  };
+  globalThis.Worker = class extends NativeWorker {
+    constructor(url, options) {
+      super(url, options);
+      this.addEventListener("message", ({ data }) => {
+        if (data?.__kithara_bootstrap) bootstrapProbe(data.__kithara_bootstrap);
+      });
+    }
+  };
+}
+
 export class HostDevice {
   constructor(rate, root, script, module, memory, channels) {
     this.context = new AudioContext({ sampleRate: rate });
@@ -18,13 +54,19 @@ export class HostDevice {
   get error() { return this.failure; }
 
   async initialize(root, script, module, memory, channels) {
+    bootstrapProbe({ owner: "audio", phase: "import-begin" });
     this.bindings = await import(root);
+    bootstrapProbe({ owner: "audio", phase: "import-ready" });
     const url = URL.createObjectURL(new Blob([
       `import * as bindgen from ${JSON.stringify(root)};\n`, script,
     ], { type: "text/javascript" }));
     try {
+      bootstrapProbe({ owner: "audio", phase: "lock-wait" });
       await navigator.locks.request("wasm_safe_thread:bootstrap", async () => {
+        bootstrapProbe({ owner: "audio", phase: "lock-enter" });
+        bootstrapProbe({ owner: "audio", phase: "module-begin" });
         await this.context.audioWorklet.addModule(url);
+        bootstrapProbe({ owner: "audio", phase: "module-ready" });
         if (this.closed) return;
         await new Promise((resolve, reject) => {
           this.node = new AudioWorkletNode(this.context, "KitharaOutput", {
