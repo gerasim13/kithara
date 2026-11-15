@@ -288,19 +288,12 @@ impl Debug for OpenedTrack {
 
 impl OpenedTrack {
     pub(super) fn new(opened: OpenedPcm, src: Arc<str>) -> Self {
-        let OpenedPcm {
-            receiver,
-            playhead,
-            metadata,
-            abr,
-        } = opened;
-        let pcm = Box::new(receiver);
         Self {
-            pcm,
+            pcm: Box::new(opened.receiver),
             src,
-            playhead,
-            abr,
-            metadata,
+            playhead: opened.playhead,
+            abr: opened.abr,
+            metadata: opened.metadata,
         }
     }
 }
