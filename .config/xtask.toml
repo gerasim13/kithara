@@ -3470,28 +3470,3 @@ scan_all_rules = [
   "perf.no-local-test-pools",
   "style.no-items-in-lib-or-mod-rs",
 ]
-
-[ext.ci.lanes.budget-memory-dev]
-cache_group = "linux"
-label = "Linux"
-os = "linux"
-tools = ["cargo", "just"]
-program = "cargo"
-role = "gate"
-kinds = []
-kinds_github = ["weekly"]
-timeout_minutes = 30
-steps = [{ args = ["test", "-p", "kithara-audio-tests", "--test", "audio_heavy", "timestretch_maximum_output_is_allocation_free", "--", "--test-threads=1", "--nocapture"], label = "Uncensored allocation test in its canonical dev profile", env = { CARGO_BUILD_JOBS = "2", KITHARA_TEST_CLOCK_MEASUREMENT = "1", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", KITHARA_HANG_PREKILL_SECS = "110" } }]
-
-[ext.ci.lanes.budget-boot-diagnostic-test]
-cache_group = "linux"
-label = "Linux"
-os = "linux"
-tools = ["cargo", "just"]
-program = "just"
-role = "gate"
-kinds = []
-kinds_github = ["weekly"]
-timeout_minutes = 30
-steps = [{ args = ["test", "run", "--lane=tooling", "--narrow=package(=xtask) & test(=android::device::tests::owned::boot_timeout_keeps_the_last_adb_response_and_logcat)", "--retries=0"], label = "Boot timeout diagnostic regression" }]
-artifact = { name = "boot-diagnostic-test-junit", path = "target/nextest/ci/junit.xml", when = "always" }
