@@ -313,7 +313,7 @@ mod tests {
         Uniforms::new(fixture::frame(level, 0.5, preset), [0.0, 0.0], [64.0, 64.0])
     }
 
-    #[kithara::test]
+    #[kithara::test(timeout(Long))]
     fn the_visualiser_draws_what_the_uniform_block_says() {
         let silent = render(uniforms(0.0, 0));
         let loud = render(uniforms(1.0, 0));

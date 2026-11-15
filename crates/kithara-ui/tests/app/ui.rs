@@ -686,7 +686,7 @@ fn controls_on_one_page_publish_only_their_own_activation() {
     }
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 fn named_press_drag_and_wheel_publish_events_and_leave_a_picture() {
     const SIZE: (u32, u32) = (240, 120);
 

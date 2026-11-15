@@ -1,10 +1,14 @@
 #[cfg(not(target_arch = "wasm32"))]
 use std::io::Write as _;
 
+#[cfg(target_arch = "wasm32")]
+use js_sys::{Function, Reflect, global};
 use kithara_platform::{
     flash::{self, Instant},
     time::WallInstant,
 };
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::{JsCast as _, JsValue};
 
 /// Measures the selected clock across a generated test entry.
 ///
@@ -67,10 +71,10 @@ impl Drop for ClockMeasurement {
 }
 
 #[cfg(target_arch = "wasm32")]
-#[wasm_bindgen::prelude::wasm_bindgen]
-extern "C" {
-    #[wasm_bindgen(catch, js_namespace = console, js_name = log)]
-    fn record_clock(line: &str) -> Result<(), wasm_bindgen::JsValue>;
+fn record_clock(line: &str) -> Result<(), JsValue> {
+    let console = Reflect::get(&global(), &JsValue::from_str("console"))?;
+    let log = Reflect::get(&console, &JsValue::from_str("log"))?.dyn_into::<Function>()?;
+    log.call1(&console, &JsValue::from_str(line)).map(|_| ())
 }
 
 fn clock_snapshot(on: bool) -> (bool, Instant) {

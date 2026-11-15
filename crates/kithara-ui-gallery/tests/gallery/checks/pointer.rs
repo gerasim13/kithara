@@ -142,7 +142,7 @@ impl Window {
     }
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Short))]
 fn a_secondary_press_on_another_track_only_dismisses_the_open_menu() {
     let mut window = Window::at("menu");
     // The page is photographed with the app menu standing open over it.

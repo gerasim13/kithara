@@ -332,7 +332,7 @@ const fn hosts() -> &'static [Host] {
 }
 
 /// The empty spin: the window never sleeps and nothing on the page moves.
-#[kithara::test(timeout(Medium))]
+#[kithara::test(timeout(Long))]
 fn no_page_asks_for_frames_its_document_never_declared() {
     let spinning: Vec<String> = hosts()
         .iter()

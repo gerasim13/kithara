@@ -788,7 +788,7 @@ fn a_press_inside_the_modal_reaches_its_content_and_never_closes_it() {
 /// button an engine drives publishes its own, and the wheel over the list
 /// scrolls it: the row under the list's top edge after the notches is a later
 /// row than the one standing there before. A plain and a hosted module alike.
-#[kithara::test]
+#[kithara::test(timeout(Short))]
 fn presses_and_the_wheel_inside_the_modal_reach_its_content() {
     for (holds, button) in [(Holds::Listing, false), (Holds::HostedListing, true)] {
         let resolver = holds.documents();

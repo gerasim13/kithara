@@ -14,7 +14,7 @@ features = ["subscriber", "test"]
 
 [features]
 default = ["hang", "test"]
-test = ["kithara-test-macros/test", "dep:wasm-bindgen"]
+test = ["kithara-test-macros/test", "dep:js-sys", "dep:wasm-bindgen"]
 flash = ["kithara-platform/flash"]
 hang = ["dep:serde", "dep:serde_json"]
 # Local axum HTTP server for tests (native only).
@@ -64,6 +64,7 @@ pin-project-lite = { workspace = true }
 rtsan-standalone = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, optional = true, features = ["env-filter"] }
 tracing-wasm = { workspace = true, optional = true }
 wasm-bindgen = { workspace = true, optional = true }

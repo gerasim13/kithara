@@ -78,7 +78,7 @@ fn collect_instance_decks(
     }
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Short))]
 fn four_deck_layout_instantiates_one_module_file_four_times() {
     let resolver = resolver_with(
         "four_deck.klayout.ron",

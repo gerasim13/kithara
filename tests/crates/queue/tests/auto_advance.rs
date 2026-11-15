@@ -228,7 +228,7 @@ async fn crossfade_started_requires_a_live_predecessor() {
     harness.close().await;
 }
 
-#[kithara::test(tokio, timeout(Short))]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(2000)))]
 async fn repeat_one_natural_advance_keeps_current_track() {
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()

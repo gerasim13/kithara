@@ -1788,7 +1788,7 @@ fn a_stepping_surface_keeps_its_drag_after_the_pointer_leaves_the_flow() {
     assert_step(&root.take_actions(), "demo/tempo", 4.0);
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Short))]
 fn a_stepping_surface_released_off_the_flow_is_not_still_armed() {
     let registry = fixture_registry();
     let ui = stepping_surface(&registry);
@@ -4716,7 +4716,7 @@ fn a_hand_carrying_a_track_shows_it_over_a_module_it_did_not_start_in() {
 }
 
 /// The hand lets go, and the cursor stops saying it is carrying something.
-#[kithara::test]
+#[kithara::test(timeout(Short))]
 fn the_cursor_stops_carrying_when_the_track_is_released() {
     let mut root = dragging_library_root();
     drag_a_track_onto_the_deck(&mut root);
@@ -4735,7 +4735,7 @@ fn the_cursor_stops_carrying_when_the_track_is_released() {
 }
 
 /// A window runner is handed the cursor the carrying tree asked for.
-#[kithara::test]
+#[kithara::test(timeout(Short))]
 fn taking_the_cursor_hands_over_the_shape_the_tree_asked_for() {
     let mut root = dragging_library_root();
 

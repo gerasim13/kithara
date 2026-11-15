@@ -350,7 +350,7 @@ mod tests {
     use super::*;
     use crate::hosts::vis::fixture;
 
-    #[kithara::test]
+    #[kithara::test(timeout(Short))]
     fn retained_pass_changes_only_pixels_inside_the_leaf_scissor() {
         const SIDE: u32 = 64;
         const ROW_BYTES: u32 = SIDE * 4;

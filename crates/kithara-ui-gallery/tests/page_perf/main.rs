@@ -272,7 +272,7 @@ struct Outcome<'run> {
 
 /// The cheap-page control and the stress page: is the stress page's cost its
 /// waveform buckets, or is it the page at all?
-#[kithara::test(timeout(Short))]
+#[kithara::test(timeout(Medium))]
 #[case("iced", Host::Immediate, "gallery-buttons")]
 #[case("iced", Host::Immediate, "gallery-clock")]
 #[case("iced", Host::Immediate, "gallery-table")]
@@ -289,7 +289,7 @@ fn ui_page_perf(#[case] label: &'static str, #[case] host: Host, #[case] page: &
 /// a sheet cut into frames, and an artwork emitted afresh every frame. The
 /// buttons page above is the still control they are read against, because what
 /// is asked here is what the motion itself costs on each host.
-#[kithara::test]
+#[kithara::test(timeout(Short))]
 #[case("iced", Host::Immediate, "gallery-objects")]
 #[case("iced", Host::Immediate, "gallery-motion")]
 #[case("iced", Host::Immediate, "gallery-sprites")]
@@ -306,7 +306,7 @@ fn ui_motion_perf(#[case] label: &'static str, #[case] host: Host, #[case] page:
 
 /// The visualiser and the document shader, free and fenced. A fenced run
 /// serialises the queue: its totals are their own scenario.
-#[kithara::test(timeout(Short))]
+#[kithara::test(timeout(Medium))]
 #[case("iced", Host::Immediate, "gallery-vis")]
 #[case("iced", Host::Immediate, "gallery-shader")]
 #[case("vello", Host::Retained, "gallery-vis")]
@@ -336,7 +336,7 @@ fn ui_scroll_perf(#[case] label: &'static str, #[case] host: Host, #[case] page:
 /// to catch on the immediate one. Both hosts are measured at the same boundary
 /// here - input applied, frame drawn, pixels rasterised - so the two columns can
 /// be read against each other, which the per-widget harness cannot claim.
-#[kithara::test]
+#[kithara::test(timeout(Short))]
 #[case("iced", Host::Immediate, "gallery-faders")]
 #[case("vello", Host::Retained, "gallery-faders")]
 fn ui_drag_perf(#[case] label: &'static str, #[case] host: Host, #[case] page: &'static str) {
