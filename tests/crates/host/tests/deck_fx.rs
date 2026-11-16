@@ -303,7 +303,7 @@ fn assert_same(actual: &[f32], expected: &[f32], what: &str) {
     );
 }
 
-#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(5895)))]
+#[kithara::test(tokio)]
 async fn deck_chain_neutral_is_slot_sum() {
     let take = plain_take(assets::fixed_constant_wav_cd_fifth_1323000(), Vec::new()).await;
     assert!(

@@ -101,7 +101,7 @@ struct PostSeekObservation {
     tokio,
     multi_thread,
     serial,
-    timeout(::std::time::Duration::from_millis(10000)),
+    timeout(Long),
     tracing("kithara_hls=debug,kithara_queue=debug,kithara_stream=debug")
 )]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]

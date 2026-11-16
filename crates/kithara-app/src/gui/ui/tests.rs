@@ -796,7 +796,7 @@ fn one_band_count_decides_which_eq_bank_a_deck_draws() {
     }
 }
 
-#[kithara::test(timeout(Short))]
+#[kithara::test]
 fn a_band_count_that_is_no_number_draws_the_three_band_bank() {
     for unstated in [
         None,
@@ -2283,11 +2283,7 @@ mod answered {
         );
     }
 
-    #[kithara::test(
-        native,
-        flash(false),
-        timeout(::std::time::Duration::from_millis(11621))
-    )]
+    #[kithara::test(native, flash(false), timeout(Long))]
     #[kithara::hang_watchdog]
     fn every_write_the_studio_declares_is_answered() {
         let mut declared = BTreeMap::new();

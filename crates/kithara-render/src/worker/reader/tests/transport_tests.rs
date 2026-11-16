@@ -144,7 +144,7 @@ fn blocking_recv_without_preload_panics_when_no_chunk_arrives(#[case] fixture_wa
 #[kithara::test(
     native,
     hang_timeout_secs(1),
-    timeout(::std::time::Duration::from_millis(2078))
+    timeout(::std::time::Duration::from_millis(2076))
 )]
 #[case::receiver(false)]
 #[case::fixture(true)]

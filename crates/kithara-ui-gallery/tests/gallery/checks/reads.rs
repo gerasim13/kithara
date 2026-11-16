@@ -598,7 +598,7 @@ fn breadcrumb_data_excludes_the_scope_prefix() {
     assert!(!CATALOG.breadcrumb.contains('\u{203a}'));
 }
 
-#[kithara::test(timeout(Short))]
+#[kithara::test]
 fn clock_controls_update_source_tempo_grid_and_key_lock() {
     let mut hand = Hand::at("clock");
 
@@ -723,7 +723,7 @@ fn pivot_controls_follow_the_handoff_ratio_range_and_loop_contract() {
 /// The stress page's waveform length is the one weight of that page a
 /// measurement can vary, so it has to follow the count it was built with rather
 /// than a constant baked into the demo model.
-#[kithara::test(timeout(Short))]
+#[kithara::test]
 fn the_stress_waveform_carries_the_bucket_count_it_was_built_with() {
     let mut reads = DemoReads::default();
     for buckets in [8_192_u16, 256] {

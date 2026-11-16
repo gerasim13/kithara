@@ -30,6 +30,10 @@ jobs:
       # every other lane shares. `deep-ui` therefore claims no pipeline kind -
       # nothing selects it - and this is the one caller that runs it.
       - name: Run every UI test and photograph both hosts
+        env:
+          NEXTEST_RETRIES: "0"
+          KITHARA_TEST_CLOCK_MEASUREMENT: "1"
+          NEXTEST_SUCCESS_OUTPUT: immediate
         run: |
           KITHARA_HANG_DUMP_DIR=$(mktemp -d "${TMPDIR:?}/kithara-ui-hang.XXXXXX")
           export KITHARA_HANG_DUMP_DIR

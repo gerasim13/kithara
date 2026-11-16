@@ -14,7 +14,7 @@ use vello::{Scene, kurbo::Affine, peniko::color::palette::css::BLACK};
 use super::{VelloBackend, conformance::rasterise_at};
 use crate::{
     draw::{DrawListBuilder, replay},
-    lottie::emit,
+    lottie::{Artwork, emit},
 };
 
 mod consts {
@@ -30,27 +30,29 @@ fn artwork() -> Composition {
         .unwrap_or_else(|error| panic!("the probe artwork must read: {error}"))
 }
 
-fn painted(scene: &Scene) -> Vec<u8> {
+fn painted(scene: &Scene, scale: f64) -> Vec<u8> {
     let side = u32::try_from(Apart::CANVAS).unwrap_or(u32::MAX);
-    rasterise_at(scene, (side, side), BLACK)
+    let mut scaled = Scene::new();
+    scaled.append(scene, Some(Affine::scale(scale)));
+    rasterise_at(&scaled, (side, side), BLACK)
         .unwrap_or_else(|error| panic!("vello must rasterise: {error}"))
 }
 
 /// What velato paints, which is the answer this emitter is measured against.
-fn oracle(frame: f64) -> Vec<u8> {
+fn oracle(artwork: &Composition, frame: f64, scale: f64) -> Vec<u8> {
     let mut scene = Scene::new();
-    LottieRenderer::new().append(&artwork(), frame, Affine::IDENTITY, 1.0, &mut scene);
-    painted(&scene)
+    LottieRenderer::new().append(artwork, frame, Affine::IDENTITY, 1.0, &mut scene);
+    painted(&scene, scale)
 }
 
 /// What the neutral list paints, through the backend the application uses.
-fn seam(frame: f64) -> Vec<u8> {
+fn seam(artwork: &Composition, frame: f64, scale: f64) -> Vec<u8> {
     let mut list = DrawListBuilder::default();
-    emit(&artwork(), frame, &mut list)
+    emit(artwork, frame, &mut list)
         .unwrap_or_else(|error| panic!("the probe artwork must draw: {error}"));
     let mut scene = Scene::new();
     replay(&list.finish(), &mut VelloBackend::new(&mut scene));
-    painted(&scene)
+    painted(&scene, scale)
 }
 
 /// What the two pictures disagree about.
@@ -94,7 +96,11 @@ impl Apart {
     const CANVAS: usize = 200;
 
     fn at(frame: f64) -> Self {
-        let (oracle, seam) = (oracle(frame), seam(frame));
+        let artwork = artwork();
+        Self::pixels(&oracle(&artwork, frame, 1.0), &seam(&artwork, frame, 1.0))
+    }
+
+    fn pixels(oracle: &[u8], seam: &[u8]) -> Self {
         assert_eq!(oracle.len(), seam.len(), "the two pictures are one size");
 
         let mut apart = Self {
@@ -142,12 +148,30 @@ impl Apart {
     }
 }
 
+#[kithara::test]
+fn admitted_external_animation_preserves_the_reference_at_authored_checkpoints() {
+    let bytes = include_bytes!("../../tests/fixtures/artwork.json");
+    let admitted = Artwork::parse(bytes).unwrap();
+    let reference = Composition::from_slice(bytes).unwrap();
+    for seconds in [0.0, 0.5, 0.75] {
+        let frame = admitted.frame_at(seconds, 1.0);
+        for scale in [1.0, 2.0] {
+            let apart = Apart::pixels(
+                &oracle(&reference, frame, scale),
+                &seam(admitted.composition(), frame, scale),
+            );
+            assert_eq!(apart.flat, 0, "{apart}");
+            assert!(apart.worst <= 1, "{apart}");
+        }
+    }
+}
+
 /// A fill is a fill: where the artwork is one flat colour, nothing is
 /// part-covered, so both paths write the fill's own bytes and the rounding an
 /// edge is allowed cannot reach. This is where a mispaired contour, a layer
 /// alpha folded into the wrong place or a ramp read the wrong way round would
 /// show, and it is asserted with no slack at all.
-#[kithara::test(timeout(Medium))]
+#[kithara::test]
 fn the_flat_paint_of_the_artwork_is_the_same_colour_in_both() {
     let apart = Apart::at(0.0);
 
@@ -160,7 +184,7 @@ fn the_flat_paint_of_the_artwork_is_the_same_colour_in_both() {
 /// adapter and not on another. Asking for identical bytes asks the instrument
 /// for precision it does not have; this asks for all of the precision it
 /// does, and a wrong rule is worth many steps rather than one.
-#[kithara::test(timeout(Medium))]
+#[kithara::test]
 fn no_pixel_of_the_artwork_is_off_by_more_than_the_target_can_hold() {
     let apart = Apart::at(0.0);
 
@@ -169,14 +193,14 @@ fn no_pixel_of_the_artwork_is_off_by_more_than_the_target_can_hold() {
 
 /// Halfway through, where a turned layer's own matrix is what the two have to
 /// agree about rather than the shapes alone.
-#[kithara::test(timeout(Medium))]
+#[kithara::test]
 fn the_flat_paint_stays_the_same_colour_partway_through() {
     let apart = Apart::at(30.0);
 
     assert_eq!(apart.flat, 0, "{apart}");
 }
 
-#[kithara::test(timeout(Medium))]
+#[kithara::test]
 fn no_pixel_is_off_by_more_than_the_target_can_hold_partway_through() {
     let apart = Apart::at(30.0);
 
