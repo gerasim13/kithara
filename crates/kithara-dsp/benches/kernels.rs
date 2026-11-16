@@ -136,6 +136,69 @@ fn vector(c: &mut Criterion) {
     group.finish();
 }
 
+fn routed_ramp(c: &mut Criterion) {
+    let mut group = c.benchmark_group("ramp");
+    for frames in [128, 512] {
+        let mut output = vec![0.0; frames];
+        for (name, kernel) in [
+            (
+                "simd",
+                kithara_dsp::ramp as fn(&mut [f32], f32, f32) -> usize,
+            ),
+            ("entry", kithara_dsp::ramp),
+        ] {
+            group.bench_function(BenchmarkId::new(name, frames), |b| {
+                b.iter(|| kernel(black_box(&mut output), black_box(0.25), black_box(0.001)));
+            });
+        }
+    }
+    group.finish();
+}
+
+fn routed_div(c: &mut Criterion) {
+    let mut group = c.benchmark_group("div");
+    for frames in [128, 512] {
+        let input = tone(frames);
+        for (name, kernel) in [
+            ("simd", kithara_dsp::div as fn(&mut [f32], f32) -> usize),
+            ("entry", kithara_dsp::div),
+        ] {
+            group.bench_function(BenchmarkId::new(name, frames), |b| {
+                b.iter_batched_ref(
+                    || input.clone(),
+                    |samples| kernel(black_box(samples), black_box(1.25)),
+                    BatchSize::SmallInput,
+                );
+            });
+        }
+    }
+    group.finish();
+}
+
+fn routed_mul_add(c: &mut Criterion) {
+    let mut group = c.benchmark_group("mul_add");
+    for frames in [128, 512] {
+        let input = tone(frames);
+        let acc = vec![0.25; frames];
+        for (name, kernel) in [
+            (
+                "simd",
+                kithara_dsp::mul_add as fn(&[f32], &[f32], &mut [f32]) -> usize,
+            ),
+            ("entry", kithara_dsp::mul_add),
+        ] {
+            group.bench_function(BenchmarkId::new(name, frames), |b| {
+                b.iter_batched_ref(
+                    || acc.clone(),
+                    |acc| kernel(black_box(&input), black_box(&input), black_box(acc)),
+                    BatchSize::SmallInput,
+                );
+            });
+        }
+    }
+    group.finish();
+}
+
 fn downmix(c: &mut Criterion) {
     let mut group = c.benchmark_group("downmix");
     for frames in consts::SIZES {
@@ -544,6 +607,9 @@ criterion_group!(
     crossfade,
     kernels,
     vector,
+    routed_ramp,
+    routed_div,
+    routed_mul_add,
     downmix,
     biquad,
     biquad_decay,
