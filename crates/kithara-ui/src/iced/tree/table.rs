@@ -52,7 +52,7 @@ impl TableHost {
             horizontal_path: format!("{path}/scroll-x"),
             path: path.to_owned(),
             row_target: format!("{path}/rows"),
-            skin: table.skin.clone(),
+            skin: *table.skin,
             frame: table.frame,
             viewport_width,
         }
