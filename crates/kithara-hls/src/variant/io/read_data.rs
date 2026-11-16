@@ -176,13 +176,31 @@ where
         }
         self.flow.reader.note_wait(range.end);
         let phase = self.range_wait_phase_with(&range, on_demand);
-        trace!(
-            variant = self.variant,
-            start = range.start,
-            end = range.end,
-            ?phase,
-            "wait_range: range not ready (budget exceeded)"
-        );
+        if tracing::enabled!(target: "kithara_hls::wait", tracing::Level::TRACE) {
+            let start_segment = self
+                .find_at_offset(range.start)
+                .map(|(segment, _, _)| segment);
+            let start_state = start_segment
+                .and_then(|segment| self.segments.get(segment as usize))
+                .map(Segment::state);
+            trace!(
+                target: "kithara_hls::wait",
+                variant_owner = ?std::ptr::from_ref(self),
+                variant = self.variant,
+                start = range.start,
+                end = range.end,
+                stable_pending,
+                ?phase,
+                ?start_segment,
+                start_loaded = ?start_state.map(|state| state.is_loaded()),
+                start_downloading = ?start_state.map(|state| state.is_downloading()),
+                start_failed = ?start_state.map(|state| state.is_failed()),
+                start_planned = ?start_segment
+                    .map(|segment| self.fetch_is_planned(PlannedFetch::Segment(segment))),
+                start_reader_demand = ?start_state.map(|state| state.is_reader_demanded()),
+                "wait_range: range not ready (budget exceeded)"
+            );
+        }
         Err(StreamError::Source(HlsError::WaitBudgetExceeded.into()))
     }
 

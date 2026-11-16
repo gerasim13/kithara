@@ -129,14 +129,35 @@ where
         if self.cancel.is_cancelled() {
             return Vec::new();
         }
-        self.variant.dispatch_from(
+        let projected_position = self.projected_position().byte;
+        let active = self.active.load(Ordering::Acquire);
+        let commands = self.variant.dispatch_from(
             ctx,
             budget,
-            self.projected_position().byte,
+            projected_position,
             construction_segment_end,
-            self.active.load(Ordering::Acquire),
+            active,
             self.cancel.dispatch_tokens(),
-        )
+        );
+        if !commands.is_empty() {
+            debug!(
+                target: "kithara_hls::wait",
+                session = ?std::ptr::from_ref(self),
+                variant_owner = ?Arc::as_ptr(&self.variant),
+                variant = self.variant_index,
+                transition = ?self.transition.map(VariantTransition::id),
+                active,
+                cancelled = self.cancel.is_cancelled(),
+                reader_position = self.position.load(Ordering::Acquire),
+                projected_position,
+                wait_end = ?self.variant.read_wait_end(),
+                budget,
+                construction_segment_end = ?construction_segment_end,
+                commands = commands.len(),
+                "session issued fetch commands"
+            );
+        }
+        commands
     }
 
     /// Fetches for an incoming session whose reader has not been handed to a
@@ -349,14 +370,37 @@ where
                     if self.cancel.root.is_cancelled() {
                         return Ok(WaitOutcome::Interrupted);
                     }
-                    let outcome = self.variant.wait_range(range.clone(), Some(Duration::ZERO));
+                    let outcome = {
+                        let _probe_trace = tracing::trace_span!(
+                            target: "kithara_hls::wait",
+                            "hls_blocking_probe",
+                            session = ?std::ptr::from_ref(self),
+                            variant_owner = ?Arc::as_ptr(&self.variant),
+                            variant = self.variant_index,
+                            transition = ?self.transition.map(VariantTransition::id)
+                        )
+                        .entered();
+                        self.variant.wait_range(range.clone(), Some(Duration::ZERO))
+                    };
                     if matches!(
                         outcome,
                         Err(StreamError::Source(SourceError::WaitBudgetExceeded))
                     ) {
                         debug!(
                             target: "kithara_hls::wait",
+                            session = ?std::ptr::from_ref(self),
+                            variant_owner = ?Arc::as_ptr(&self.variant),
                             variant = self.variant.variant_index_u32(),
+                            transition = ?self.transition.map(VariantTransition::id),
+                            active = self.active.load(Ordering::Acquire),
+                            cancelled = self.cancel.is_cancelled(),
+                            reader_cancelled = reader_cancel
+                                .is_some_and(|control| control.cancel_token().is_cancelled()),
+                            blocking_reader = reader_cancel.is_some_and(ReaderControl::is_blocking),
+                            reader_position = self.position.load(Ordering::Acquire),
+                            projected_anchor = ?self.variant.resolved_seek_projection(
+                                self.position.load(Ordering::Acquire)
+                            ).map(ResolvedSeekProjection::exact_anchor),
                             start = range.start,
                             end = range.end,
                             phase = ?self.variant.phase_at(range.clone()),

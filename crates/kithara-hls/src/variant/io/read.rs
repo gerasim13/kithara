@@ -2,6 +2,7 @@ use std::ops::Range;
 
 use kithara_bufpool::HasPool;
 use kithara_stream::{SourcePhase, needs_exact_byte_sizes};
+use tracing::trace;
 
 use crate::{segment::PlannedFetch, variant::HlsVariant};
 
@@ -270,9 +271,20 @@ where
         range: &Range<u64>,
         on_demand: impl FnMut(PlannedFetch),
     ) -> SourcePhase {
-        self.layout
-            .try_published(|| Some(self.range_wait_phase_published(range, on_demand)))
-            .unwrap_or(SourcePhase::WaitingDemand)
+        let phase = self
+            .layout
+            .try_published(|| Some(self.range_wait_phase_published(range, on_demand)));
+        trace!(
+            target: "kithara_hls::wait",
+            variant_owner = ?std::ptr::from_ref(self),
+            variant = self.variant,
+            start = range.start,
+            end = range.end,
+            published = phase.is_some(),
+            ?phase,
+            "range wait phase observed"
+        );
+        phase.unwrap_or(SourcePhase::WaitingDemand)
     }
 
     delegate::delegate! {

@@ -143,7 +143,9 @@ async fn mp3_stream_continues_after_seek(
     serial,
     timeout(Duration::from_secs(20)),
     hang_timeout_secs(3),
-    tracing("kithara_audio=info,kithara_hls=info")
+    tracing(
+        "kithara_audio=info,kithara_hls=info,kithara_hls::wait=debug,kithara_hls::wait[hls_blocking_probe]=trace,kithara_download::registry::slots=trace,kithara_download::request::transport=trace"
+    )
 )]
 async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
     seek::abr_frozen_during_seek_resumes_after(temp_dir).await;

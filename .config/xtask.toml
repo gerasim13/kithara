@@ -429,6 +429,8 @@ KITHARA_HANG_DUMP_DIR = "hang"
 [stress.modes.reproduction-no-block]
 flash = true
 no_block = true
+load = true
+test_threads = "1"
 
 [stress.modes.reproduction-no-block.set_env]
 KITHARA_FLASH_SYNC_TRACE = "1"
