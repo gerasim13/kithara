@@ -16,6 +16,7 @@ pub(crate) fn detect<T: StreamType>(
     stream: &SharedStream<T>,
     active: &DecoderGeneration,
 ) -> FormatDecision {
+    tracing::debug!(target: "kithara_source_lock", "format detect entered");
     let Some(current) = stream.media_info() else {
         return FormatDecision::None;
     };

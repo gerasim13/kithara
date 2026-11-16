@@ -407,6 +407,7 @@ KITHARA_HANG_DUMP_DIR = "hang"
 # above, however many times it repeats.
 [stress.modes.reproduction-flash-off]
 flash = false
+test_threads = "3"
 
 [stress.modes.reproduction-flash-off.set_env]
 KITHARA_FLASH_SYNC_TRACE = "1"

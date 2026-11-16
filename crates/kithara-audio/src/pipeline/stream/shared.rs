@@ -8,6 +8,7 @@ use kithara_abr::AbrHandle;
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex},
+    time::{Duration, WallInstant},
 };
 use kithara_stream::{
     ByteMap, ConstructionGate, DeferredWake, MediaInfo, OpenedReader, PendingReason, PlayheadWrite,
@@ -63,15 +64,42 @@ impl<T: StreamType> SharedStream<T> {
         }
     }
 
-    pub(crate) fn variant_control(&self) -> Option<Arc<dyn VariantControl>> {
-        self.variants.clone()
-    }
-
-    /// Header byte range for decoder recreate after a format change — via
-    /// the fixed variant-control handle; same answer as
-    /// [`Stream::format_change_segment_range`].
-    pub(crate) fn format_change_segment_range(&self) -> StreamResult<Range<u64>> {
-        format_change_segment_range(self.variants.as_deref())
+    delegate! {
+        to self.probe {
+            pub(crate) fn phase(&self) -> kithara_stream::SourcePhase;
+            /// Current read position — the source's atomic cursor.
+            pub(crate) fn position(&self) -> u64;
+            /// Absolute byte cursor set — forwards to the inner source's
+            /// atomic, used post-seek when the audio FSM lands at a known
+            /// byte position.
+            pub(crate) fn set_position(&self, pos: u64);
+            /// Total length if known.
+            pub(crate) fn len(&self) -> Option<u64>;
+            /// Optional byte-map handle; the decoder factory uses it to
+            /// activate the segment-by-segment fMP4 path.
+            pub(crate) fn byte_map(&self) -> Option<Arc<dyn ByteMap>>;
+        }
+        to self.abr {
+            /// Runtime ABR handle — `Some` for adaptive sources (HLS).
+            #[call(clone)]
+            pub(crate) fn abr_handle(&self) -> Option<AbrHandle>;
+        }
+        to self.peer_wake {
+            /// The reader→peer wake handle — `Some` for segmented sources
+            /// (HLS) that push a downloader peer.
+            #[call(clone)]
+            pub(crate) fn peer_wake(&self) -> Option<Arc<DeferredWake>>;
+        }
+        to self.variants {
+            #[call(clone)]
+            pub(crate) fn variant_control(&self) -> Option<Arc<dyn VariantControl>>;
+            /// Header byte range for decoder recreate after a format change — via
+            /// the fixed variant-control handle; same answer as
+            /// [`Stream::format_change_segment_range`].
+            #[expr(format_change_segment_range($))]
+            #[call(as_deref)]
+            pub(crate) fn format_change_segment_range(&self) -> StreamResult<Range<u64>>;
+        }
     }
 
     pub(crate) fn open_initial_reader(&self) -> OpenedReader {
@@ -170,44 +198,69 @@ impl<T: StreamType> SharedStream<T> {
         }
     }
 
-    delegate! {
-        to self.probe {
-            pub(crate) fn phase(&self) -> kithara_stream::SourcePhase;
-            /// Current read position — the source's atomic cursor.
-            pub(crate) fn position(&self) -> u64;
-            /// Absolute byte cursor set — forwards to the inner source's
-            /// atomic, used post-seek when the audio FSM lands at a known
-            /// byte position.
-            pub(crate) fn set_position(&self, pos: u64);
-            /// Total length if known.
-            pub(crate) fn len(&self) -> Option<u64>;
-            /// Optional byte-map handle; the decoder factory uses it to
-            /// activate the segment-by-segment fMP4 path.
-            pub(crate) fn byte_map(&self) -> Option<Arc<dyn ByteMap>>;
-        }
-        to self.abr {
-            /// Runtime ABR handle — `Some` for adaptive sources (HLS).
-            #[call(clone)]
-            pub(crate) fn abr_handle(&self) -> Option<AbrHandle>;
-        }
-        to self.peer_wake {
-            /// The reader→peer wake handle — `Some` for segmented sources
-            /// (HLS) that push a downloader peer.
-            #[call(clone)]
-            pub(crate) fn peer_wake(&self) -> Option<Arc<DeferredWake>>;
-        }
+    pub(crate) fn media_info(&self) -> Option<MediaInfo> {
+        with_inner(&self.inner, "media_info", |stream| stream.media_info())
     }
 
-    delegate! {
-        to self.inner.lock() {
-            pub(crate) fn media_info(&self) -> Option<MediaInfo>;
-            pub(crate) fn seek_time_anchor(&self, position: kithara_platform::time::Duration) -> Result<Option<SourceSeekAnchor>, io::Error>;
-            /// Build a fresh reader-side event-sink instance from the inner source.
-            pub(crate) fn take_reader_event_sink(&self) -> Option<kithara_stream::BoxedEventSink>;
-            /// Narrow mutating playhead handle.
-            pub(crate) fn playhead_write(&self) -> Arc<dyn PlayheadWrite>;
+    pub(crate) fn seek_time_anchor(
+        &self,
+        position: Duration,
+    ) -> Result<Option<SourceSeekAnchor>, io::Error> {
+        with_inner(&self.inner, "seek_time_anchor", |stream| {
+            stream.seek_time_anchor(position)
+        })
+    }
 
-        }
+    /// Build a fresh reader-side event-sink instance from the inner source.
+    pub(crate) fn take_reader_event_sink(&self) -> Option<kithara_stream::BoxedEventSink> {
+        with_inner(&self.inner, "take_reader_event_sink", |stream| {
+            stream.take_reader_event_sink()
+        })
+    }
+
+    /// Narrow mutating playhead handle.
+    pub(crate) fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
+        with_inner(&self.inner, "playhead_write", |stream| {
+            stream.playhead_write()
+        })
+    }
+}
+
+fn with_inner<T: StreamType, R>(
+    inner: &Mutex<Stream<T>>,
+    operation: &str,
+    apply: impl FnOnce(&mut Stream<T>) -> R,
+) -> R {
+    let started = WallInstant::now();
+    let mut stream = inner.lock();
+    let acquired = WallInstant::now();
+    let result = apply(&mut stream);
+    let released = WallInstant::now();
+    drop(stream);
+    trace_inner_lock(
+        std::ptr::from_ref(inner).addr(),
+        operation,
+        started,
+        acquired,
+        released,
+    );
+    result
+}
+
+fn trace_inner_lock(
+    lock_id: usize,
+    operation: &str,
+    started: WallInstant,
+    acquired: WallInstant,
+    released: WallInstant,
+) {
+    let waited = acquired.duration_since(started);
+    let held = released.duration_since(acquired);
+    if waited >= Duration::from_millis(1) || held >= Duration::from_millis(1) {
+        let thread = kithara_platform::thread::current();
+        tracing::debug!(target: "kithara_source_lock", lock = "inner", lock_id,
+            operation, pid = std::process::id(), thread = ?thread.id(), thread_name = ?thread.name(),
+            ?waited, ?held, "source lock cost");
     }
 }
 
@@ -219,12 +272,29 @@ impl<T: StreamType> Read for SharedStream<T> {
     /// construction waits for residual init lateness instead of erroring on
     /// the first not-ready probe.
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let started = WallInstant::now();
         let mut stream = self.inner.lock();
-        if self.is_blocking() {
+        let acquired = WallInstant::now();
+        let blocking = self.is_blocking();
+        let result = if blocking {
             stream.read_with_control(buf, self.reader_control.as_ref())
         } else {
             stream.probe_read(buf)
-        }
+        };
+        let released = WallInstant::now();
+        drop(stream);
+        trace_inner_lock(
+            Arc::as_ptr(&self.inner).addr(),
+            if blocking {
+                "read_blocking"
+            } else {
+                "read_probe"
+            },
+            started,
+            acquired,
+            released,
+        );
+        result
     }
 }
 
@@ -246,9 +316,9 @@ impl<T: StreamType> Seek for SharedStream<T> {
 
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
         if self.is_blocking() {
-            self.inner
-                .lock()
-                .seek_with_control(pos, self.reader_control.as_ref())
+            with_inner(&self.inner, "seek_blocking", |stream| {
+                stream.seek_with_control(pos, self.reader_control.as_ref())
+            })
         } else {
             self.probe_seek(pos)
         }

@@ -3,6 +3,7 @@ use std::{fmt, sync::OnceLock};
 use kithara_platform::{
     CancelScope, CancelToken,
     sync::{Arc, CondvarGate},
+    time::{Duration, WallInstant},
 };
 
 use crate::{PendingReason, WorkerWake};
@@ -85,18 +86,18 @@ impl ReaderControl {
             #[must_use]
             pub fn is_cancelled(&self) -> bool;
         }
-        to self.state.readiness {
-            /// Observe the readiness edge before attempting a read.
-            #[must_use]
-            #[expr($.revision)]
-            #[call(lock)]
-            pub fn revision(&self) -> u64;
-            /// Exact availability condition encountered by an operation still in flight.
-            #[must_use]
-            #[expr($.pending)]
-            #[call(lock)]
-            pub fn pending_reason(&self) -> Option<PendingReason>;
-        }
+    }
+
+    /// Observe the readiness edge before attempting a read.
+    #[must_use]
+    pub fn revision(&self) -> u64 {
+        with_readiness(&self.state, "revision", |readiness| readiness.revision)
+    }
+
+    /// Exact availability condition encountered by an operation still in flight.
+    #[must_use]
+    pub fn pending_reason(&self) -> Option<PendingReason> {
+        with_readiness(&self.state, "pending_reason", |readiness| readiness.pending)
     }
 
     /// Retire only this reader, leaving its source and siblings live.
@@ -107,23 +108,26 @@ impl ReaderControl {
 
     /// Publish availability after bytes or a terminal input result changed.
     pub fn notify(&self) {
-        {
-            let mut readiness = self.state.readiness.lock();
+        with_readiness(&self.state, "notify", |readiness| {
             readiness.revision = readiness.revision.wrapping_add(1);
             readiness.pending = None;
-        }
+        });
         self.state.readiness.notify_all();
     }
 
     /// Retain a source's typed condition without ending its parser operation.
     pub fn set_pending(&self, reason: PendingReason) {
-        self.state.readiness.lock().pending = Some(reason);
+        with_readiness(&self.state, "set_pending", |readiness| {
+            readiness.pending = Some(reason);
+        });
         self.wake_worker();
     }
 
     /// Clear a condition after source progress without manufacturing a readiness edge.
     pub fn clear_pending(&self) {
-        self.state.readiness.lock().pending = None;
+        with_readiness(&self.state, "clear_pending", |readiness| {
+            readiness.pending = None;
+        });
     }
 
     /// Wait for a source publication or this reader's cancellation.
@@ -136,12 +140,65 @@ impl ReaderControl {
             .cancel
             .token()
             .on_cancel(move || control.notify());
+        let started = WallInstant::now();
         let mut readiness = self.state.readiness.lock();
+        let acquired = WallInstant::now();
+        let mut held_since = acquired;
+        let mut held_max = Duration::ZERO;
+        let mut condvar_elapsed = Duration::ZERO;
         while readiness.revision == revision && !self.is_cancelled() {
+            let before_wait = WallInstant::now();
+            held_max = held_max.max(before_wait.duration_since(held_since));
             readiness = self.state.readiness.wait(readiness);
+            held_since = WallInstant::now();
+            condvar_elapsed += held_since.duration_since(before_wait);
         }
+        held_max = held_max.max(held_since.elapsed());
         drop(readiness);
+        trace_readiness_lock(
+            std::ptr::from_ref(self.state.as_ref()).addr(),
+            "wait",
+            acquired.duration_since(started),
+            held_max,
+            condvar_elapsed,
+        );
         !self.is_cancelled()
+    }
+}
+
+fn with_readiness<R>(
+    state: &ReaderState,
+    operation: &str,
+    apply: impl FnOnce(&mut Readiness) -> R,
+) -> R {
+    let started = WallInstant::now();
+    let mut readiness = state.readiness.lock();
+    let acquired = WallInstant::now();
+    let result = apply(&mut readiness);
+    let released = WallInstant::now();
+    drop(readiness);
+    trace_readiness_lock(
+        std::ptr::from_ref(state).addr(),
+        operation,
+        acquired.duration_since(started),
+        released.duration_since(acquired),
+        Duration::ZERO,
+    );
+    result
+}
+
+fn trace_readiness_lock(
+    lock_id: usize,
+    operation: &str,
+    waited: Duration,
+    held_max: Duration,
+    condvar_elapsed: Duration,
+) {
+    if waited >= Duration::from_millis(1) || held_max >= Duration::from_millis(1) {
+        let thread = kithara_platform::thread::current();
+        tracing::debug!(target: "kithara_source_lock", lock = "readiness", lock_id,
+            operation, pid = std::process::id(), thread = ?thread.id(), thread_name = ?thread.name(),
+            ?waited, ?held_max, ?condvar_elapsed, "source lock cost");
     }
 }
 

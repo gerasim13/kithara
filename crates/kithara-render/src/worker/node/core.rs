@@ -299,6 +299,8 @@ where
 
     #[kithara::hang_watchdog]
     fn recycle(&mut self) {
+        let span = tracing::debug_span!(target: "kithara_source_lock", "recycle");
+        let _entered = span.enter();
         while let Some(packet) = self.port.reclaim() {
             hang_tick!();
             self.retire(packet);
