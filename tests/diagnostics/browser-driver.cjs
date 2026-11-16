@@ -60,7 +60,8 @@ async function main() {
   assert(output, 'KITHARA_BOOTSTRAP_TRACE is required');
   fs.mkdirSync(require('node:path').dirname(output), { recursive: true });
   const record = (stage, data = {}) => fs.appendFileSync(output, JSON.stringify({
-    received: Date.now(), pid: process.pid, package: process.env.CARGO_PKG_NAME, stage, ...data
+    received: Date.now(), pid: process.pid, package: process.env.CARGO_PKG_NAME,
+    sha: process.env.GITHUB_SHA, run: process.env.GITHUB_RUN_ID, stage, ...data
   }) + '\n');
   const args = process.argv.slice(2);
   const portIndex = args.findIndex(arg => arg.startsWith('--port='));
@@ -118,6 +119,7 @@ async function main() {
     return server;
   }
 
+  let closing = false;
   const proxy = http.createServer((request, response) => {
     const chunks = [];
     request.on('data', chunk => chunks.push(chunk));
@@ -135,7 +137,17 @@ async function main() {
       }
       const upstream = http.request({ hostname: '127.0.0.1', port: realPort, path: request.url,
         method: request.method, headers: { ...request.headers, host: `127.0.0.1:${realPort}`, 'content-length': body.length }
-      }, result => { response.writeHead(result.statusCode, result.headers); result.pipe(response); });
+      }, result => {
+        if (request.method === 'DELETE' && /^\/session\/[^/]+(?:\/window)?$/.test(request.url)
+            && result.statusCode < 300) {
+          response.once('finish', () => {
+            closing = true;
+            record('driver-session-closed');
+            driver.kill('SIGTERM');
+          });
+        }
+        response.writeHead(result.statusCode, result.headers); result.pipe(response);
+      });
       upstream.on('error', error => {
         record('driver-error', { error: error.message }); response.writeHead(502); response.end();
       });
@@ -156,6 +168,7 @@ async function main() {
   driver.on('error', error => { record('driver-spawn-error', { error: error.message }); process.exit(2); });
   driver.on('exit', (code, signal) => {
     record('driver-exit', { code, signal });
+    if (closing) return;
     proxy.closeAllConnections();
     for (const server of resources) server.closeAllConnections();
     process.exit(code || (signal ? 1 : 0));

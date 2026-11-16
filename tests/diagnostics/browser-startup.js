@@ -69,9 +69,12 @@
     };
   }
 
-  const report = (stage, extra = {}) => navigator.sendBeacon('/__kithara_startup.jsonl', JSON.stringify({
-    at: performance.timeOrigin + performance.now(), realm: 'window', stage, ...extra
-  }));
+  const report = (stage, extra = {}) => {
+    const sent = navigator.sendBeacon('/__kithara_startup.jsonl', JSON.stringify({
+      at: performance.timeOrigin + performance.now(), realm: 'window', stage, ...extra
+    }));
+    if (!sent) console.error('STARTUP_TRACE_DROPPED', stage);
+  };
   observe(report);
   if (typeof window !== 'undefined') {
     const prototype = BaseAudioContext.prototype;
