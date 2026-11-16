@@ -238,7 +238,11 @@ where
     }
 
     fn poll(&mut self, cx: &mut Context<'_>, runtime_ready: bool) -> Poll<()> {
+        use kithara_platform::time::WallInstant;
+
+        let started = WallInstant::now();
         let mut progress = self.poll_openings(cx);
+        let opened = WallInstant::now();
         let _ = self.inbox.poll_drain(cx);
         if self.inbox.is_closed() {
             return Poll::Ready(());
@@ -332,11 +336,23 @@ where
                 }
             }
         }
+        let commanded = WallInstant::now();
         self.poll_lanes(cx, progress);
+        let finished = WallInstant::now();
+        if finished.duration_since(started) >= Duration::from_millis(10) {
+            tracing::debug!(
+                openings = ?opened.duration_since(started),
+                commands = ?commanded.duration_since(opened),
+                lanes = ?finished.duration_since(commanded),
+                "dispatcher poll phases"
+            );
+        }
         Poll::Pending
     }
 
     fn poll_lanes(&mut self, cx: &mut Context<'_>, mut progress: bool) {
+        use kithara_platform::time::WallInstant;
+
         self.lanes.sort_unstable_by(|left, right| {
             right
                 .task
@@ -358,10 +374,24 @@ where
             let _entered = span.enter();
             let visited = catch_unwind(AssertUnwindSafe(|| {
                 let lane = &mut resident.task;
+                let started = WallInstant::now();
                 let _ = lane.poll_commands(cx);
+                let commanded = WallInstant::now();
                 lane.recycle();
+                let recycled = WallInstant::now();
                 let result = lane.tick();
+                let rendered = WallInstant::now();
                 let preload = resident.admission.is_some().then(|| lane.preload_status());
+                let finished = WallInstant::now();
+                if finished.duration_since(started) >= Duration::from_millis(10) {
+                    tracing::debug!(
+                        commands = ?commanded.duration_since(started),
+                        recycle = ?recycled.duration_since(commanded),
+                        render = ?rendered.duration_since(recycled),
+                        preload = ?finished.duration_since(rendered),
+                        "dispatcher lane phases"
+                    );
+                }
                 (result, preload)
             }));
             let Ok((result, preload)) = visited else {

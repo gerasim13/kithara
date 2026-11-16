@@ -1097,6 +1097,7 @@ async fn run_census(prepared: PreparedTracks, seam: Seam, temp_dir: &TestTempDir
 #[kithara::test(
     native,
     tokio,
+    tracing("warn,kithara_render::dispatcher=debug"),
     timeout(Duration::from_secs(180)),
     hang_timeout_secs(20)
 )]
