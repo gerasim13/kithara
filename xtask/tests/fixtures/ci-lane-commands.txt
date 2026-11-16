@@ -2994,47 +2994,65 @@
   <require os> linux
   <require tools> chromium chromedriver just
   just test wasm chrome webcodecs include
+    CHROMEDRIVER=<root>/tests/diagnostics/browser-driver.cjs
     CHROMEDRIVER_ARGS=--verbose --log-path=<root>/target/web-chromium.log
+    KITHARA_BOOTSTRAP_TRACE=<root>/target/web-startup.jsonl
 # web-chromium / branch
   <require os> linux
   <require tools> chromium chromedriver just
   just test wasm chrome webcodecs include
+    CHROMEDRIVER=<root>/tests/diagnostics/browser-driver.cjs
     CHROMEDRIVER_ARGS=--verbose --log-path=<root>/target/web-chromium.log
+    KITHARA_BOOTSTRAP_TRACE=<root>/target/web-startup.jsonl
 # web-chromium / platforms
   <require os> linux
   <require tools> chromium chromedriver just
   just test wasm chrome webcodecs include
+    CHROMEDRIVER=<root>/tests/diagnostics/browser-driver.cjs
     CHROMEDRIVER_ARGS=--verbose --log-path=<root>/target/web-chromium.log
+    KITHARA_BOOTSTRAP_TRACE=<root>/target/web-startup.jsonl
 # web-chromium / merge-request
   <require os> linux
   <require tools> chromium chromedriver just
   just test wasm chrome webcodecs include
+    CHROMEDRIVER=<root>/tests/diagnostics/browser-driver.cjs
     CHROMEDRIVER_ARGS=--verbose --log-path=<root>/target/web-chromium.log
+    KITHARA_BOOTSTRAP_TRACE=<root>/target/web-startup.jsonl
 # web-chromium / quarantine
   <require os> linux
   <require tools> chromium chromedriver just
   just test wasm chrome webcodecs include
+    CHROMEDRIVER=<root>/tests/diagnostics/browser-driver.cjs
     CHROMEDRIVER_ARGS=--verbose --log-path=<root>/target/web-chromium.log
+    KITHARA_BOOTSTRAP_TRACE=<root>/target/web-startup.jsonl
 # web-chromium / main
   <require os> linux
   <require tools> chromium chromedriver just
   just test wasm chrome webcodecs include
+    CHROMEDRIVER=<root>/tests/diagnostics/browser-driver.cjs
     CHROMEDRIVER_ARGS=--verbose --log-path=<root>/target/web-chromium.log
+    KITHARA_BOOTSTRAP_TRACE=<root>/target/web-startup.jsonl
 # web-chromium / nightly
   <require os> linux
   <require tools> chromium chromedriver just
   just test wasm chrome webcodecs include
+    CHROMEDRIVER=<root>/tests/diagnostics/browser-driver.cjs
     CHROMEDRIVER_ARGS=--verbose --log-path=<root>/target/web-chromium.log
+    KITHARA_BOOTSTRAP_TRACE=<root>/target/web-startup.jsonl
 # web-chromium / weekly
   <require os> linux
   <require tools> chromium chromedriver just
   just test wasm chrome webcodecs include
+    CHROMEDRIVER=<root>/tests/diagnostics/browser-driver.cjs
     CHROMEDRIVER_ARGS=--verbose --log-path=<root>/target/web-chromium.log
+    KITHARA_BOOTSTRAP_TRACE=<root>/target/web-startup.jsonl
 # web-chromium / release
   <require os> linux
   <require tools> chromium chromedriver just
   just test wasm chrome webcodecs include
+    CHROMEDRIVER=<root>/tests/diagnostics/browser-driver.cjs
     CHROMEDRIVER_ARGS=--verbose --log-path=<root>/target/web-chromium.log
+    KITHARA_BOOTSTRAP_TRACE=<root>/target/web-startup.jsonl
 # web-firefox / bench
   <require os> linux
   <require tools> firefox geckodriver just

@@ -1693,13 +1693,13 @@ steps = [
     "chrome",
     "webcodecs",
     "include",
-  ], label = "Chromium WebCodecs tests", env = { CHROMEDRIVER_ARGS = "--verbose --log-path={root}/target/web-chromium.log" } },
+  ], label = "Chromium WebCodecs tests", env = { CHROMEDRIVER = "{root}/tests/diagnostics/browser-driver.cjs", KITHARA_BOOTSTRAP_TRACE = "{root}/target/web-startup.jsonl", CHROMEDRIVER_ARGS = "--verbose --log-path={root}/target/web-chromium.log" } },
 ]
 role = "gate"
 kinds = []
 kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 60
-artifact = { name = "web-chromium-driver", path = "target/web-chromium.log", when = "failure" }
+artifact = { name = "web-chromium-driver", path = "target/web-chromium.log\ntarget/web-startup.jsonl", when = "always" }
 
 # Nightly here, not on the push gate: the full integration suite does not
 # compile for wasm32 today. The lane reports the break every night instead of
