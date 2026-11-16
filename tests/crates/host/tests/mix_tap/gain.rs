@@ -17,7 +17,12 @@ use crate::underrun;
 
 const CALLBACK_FRAMES: usize = 64;
 
-#[kithara::test(tokio, tracing("render_refill=trace"))]
+#[kithara::test(
+    tokio,
+    tracing(
+        "render_refill=trace,kithara_render_probe=trace,kithara_audio_probe=trace,kithara_decode_probe=trace,kithara_worker_probe=trace,kithara_test::host_rate_telemetry=info"
+    )
+)]
 async fn public_queue_output_cubic_reaches_the_host_at_exact_frames() {
     let options = OfflinePlayerOptions::builder()
         .block_on_underrun(false)

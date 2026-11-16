@@ -23,7 +23,14 @@ use kithara_test_utils::cancel_token;
 
 use super::cases::render_effect_window;
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
+#[kithara::test(
+    tokio,
+    multi_thread,
+    timeout(Duration::from_secs(60)),
+    tracing(
+        "render_refill=trace,kithara_render_probe=trace,kithara_audio_probe=trace,kithara_decode_probe=trace,kithara_worker_probe=trace,kithara_test::host_rate_telemetry=info"
+    )
+)]
 async fn a_queue_item_recovers_from_three_withheld_segments_and_keeps_its_transport(
     cancel_token: CancelToken,
 ) {
