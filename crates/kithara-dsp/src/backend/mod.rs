@@ -38,4 +38,7 @@ pub(crate) use simd::{
     crossfade_linear, div, first_quiet, last_loud, mul_add, ramp, scale_in_place,
 };
 pub(crate) use strided::{gather, scatter};
-pub(crate) use svf::step as svf_step;
+#[cfg(not(all(target_vendor = "apple", target_arch = "aarch64")))]
+pub(crate) use svf::step_pair as svf_step_pair;
+#[cfg(all(target_vendor = "apple", target_arch = "aarch64"))]
+pub(crate) use svf::step_pair_scalar as svf_step_pair;
