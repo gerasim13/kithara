@@ -7,10 +7,11 @@ use std::{
 use biquad::{Biquad as _, DirectForm1};
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput};
 use kithara_dsp::{
-    filter::{Biquad, Coefficients, Crossover, Hertz, Type},
+    filter::{Biquad, Coefficients, Crossover, Hertz, Response, Type},
     param::{DEFAULT_GAIN_SPAN, MIN_SETTLE_RATIO, SmoothingFilter, SmoothingFilterCoeff},
 };
 use kithara_test_fixtures::portable;
+use kithara_test_utils::kithara_platform::time::Duration;
 use num_traits::AsPrimitive;
 
 const RATE: f32 = 48_000.0;
@@ -72,9 +73,14 @@ fn coefficients(kind: Type<f32>, frequency: f32, design: Design) -> Coefficients
     }
 }
 
-struct LegacySection(DirectForm1<f32>);
+trait ScalarSection {
+    fn new(kind: Type<f32>, frequency: f32) -> Self;
+    fn run(&mut self, input: f32, response: Response) -> f32;
+}
 
-impl LegacySection {
+struct Df1Section(DirectForm1<f32>);
+
+impl ScalarSection for Df1Section {
     fn new(kind: Type<f32>, frequency: f32) -> Self {
         Self(DirectForm1::new(
             Coefficients::from_normalized_params(
@@ -86,7 +92,7 @@ impl LegacySection {
         ))
     }
 
-    fn run(&mut self, input: f32) -> f32 {
+    fn run(&mut self, input: f32, _: Response) -> f32 {
         let output = self.0.run(input);
         if output.is_subnormal() && input.abs() < f32::MIN_POSITIVE {
             self.0.reset_state();
@@ -96,45 +102,109 @@ impl LegacySection {
     }
 }
 
-struct LegacySplit {
-    low: [LegacySection; 2],
-    high: [LegacySection; 2],
-    allpass: Vec<LegacySection>,
+const TPT_DAMPING: f64 = 1.0 / std::f64::consts::FRAC_1_SQRT_2;
+const TPT_SILENT_PEAK: f32 = 1.0e-9;
+const TPT_SECTION_MEMORY: usize = 2;
+
+struct TptSection {
+    state: [f64; 2],
+    quiet: usize,
+    coefficients: [f64; 3],
 }
 
-const LEGACY_GAIN_FRAMES: usize = 128;
+fn tpt_gain(frequency: f32) -> f64 {
+    let angle = std::f64::consts::PI * f64::from(frequency) / f64::from(RATE);
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    {
+        let mut gain = [0.0];
+        assert_eq!(
+            kithara_apple::accelerate::tangent_f64(&[angle], &mut gain),
+            1
+        );
+        gain[0]
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    angle.tan()
+}
 
-struct Legacy {
-    splits: Vec<LegacySplit>,
+impl ScalarSection for TptSection {
+    fn new(_: Type<f32>, frequency: f32) -> Self {
+        let gain = tpt_gain(frequency);
+        let a1 = (1.0 + gain * (gain + TPT_DAMPING)).recip();
+        let a2 = gain * a1;
+        Self {
+            state: [0.0; 2],
+            quiet: 0,
+            coefficients: [a1, a2, gain * a2],
+        }
+    }
+
+    #[inline(always)]
+    fn run(&mut self, input: f32, response: Response) -> f32 {
+        let x = f64::from(input);
+        let [s1, s2] = self.state;
+        let [a1, a2, a3] = self.coefficients;
+        let v3 = x - s2;
+        let v1 = a1 * s1 + a2 * v3;
+        let v2 = s2 + a2 * s1 + a3 * v3;
+        self.state = [2.0 * v1 - s1, 2.0 * v2 - s2];
+        let output: f32 = match response {
+            Response::LowPass => v2,
+            Response::HighPass => x - TPT_DAMPING * v1 - v2,
+            Response::AllPass => x - 2.0 * TPT_DAMPING * v1,
+        }
+        .as_();
+        self.quiet = if input.abs() <= TPT_SILENT_PEAK && output.abs() <= TPT_SILENT_PEAK {
+            self.quiet.saturating_add(1).min(TPT_SECTION_MEMORY)
+        } else {
+            0
+        };
+        if self.quiet == TPT_SECTION_MEMORY {
+            self.state = [0.0; 2];
+        }
+        output
+    }
+}
+
+struct ScalarSplit<S> {
+    low: [S; 2],
+    high: [S; 2],
+    allpass: Vec<S>,
+}
+
+const SCALAR_GAIN_FRAMES: usize = 128;
+
+struct Scalar<S> {
+    splits: Vec<ScalarSplit<S>>,
     frame: Vec<f32>,
-    gain_tiles: Vec<[f32; LEGACY_GAIN_FRAMES]>,
+    gain_tiles: Vec<[f32; SCALAR_GAIN_FRAMES]>,
 }
 
-impl Legacy {
+impl<S: ScalarSection> Scalar<S> {
     fn new(frequencies: &[f32]) -> Self {
         Self {
             splits: frequencies
                 .iter()
                 .enumerate()
-                .map(|(index, frequency)| LegacySplit {
-                    low: std::array::from_fn(|_| LegacySection::new(Type::LowPass, *frequency)),
-                    high: std::array::from_fn(|_| LegacySection::new(Type::HighPass, *frequency)),
+                .map(|(index, frequency)| ScalarSplit {
+                    low: std::array::from_fn(|_| S::new(Type::LowPass, *frequency)),
+                    high: std::array::from_fn(|_| S::new(Type::HighPass, *frequency)),
                     allpass: frequencies[index + 1..]
                         .iter()
-                        .map(|frequency| LegacySection::new(Type::AllPass, *frequency))
+                        .map(|frequency| S::new(Type::AllPass, *frequency))
                         .collect(),
                 })
                 .collect(),
             frame: vec![0.0; frequencies.len() + 1],
-            gain_tiles: vec![[0.0; LEGACY_GAIN_FRAMES]; frequencies.len() + 1],
+            gain_tiles: vec![[0.0; SCALAR_GAIN_FRAMES]; frequencies.len() + 1],
         }
     }
 
     fn sum<P: Deref<Target = [f32]>>(&mut self, samples: &mut [f32], gains: &[P]) {
         let count = samples.len();
         for (chunk, start) in samples
-            .chunks_mut(LEGACY_GAIN_FRAMES)
-            .zip((0..count).step_by(LEGACY_GAIN_FRAMES))
+            .chunks_mut(SCALAR_GAIN_FRAMES)
+            .zip((0..count).step_by(SCALAR_GAIN_FRAMES))
         {
             for (tile, gain) in self.gain_tiles.iter_mut().zip(gains) {
                 tile[..chunk.len()].copy_from_slice(&gain[start..start + chunk.len()]);
@@ -145,7 +215,7 @@ impl Legacy {
 
     #[inline(never)]
     fn weighted_block(&mut self, samples: &mut [f32]) {
-        for (sample, frame) in samples.iter_mut().zip(0..LEGACY_GAIN_FRAMES) {
+        for (sample, frame) in samples.iter_mut().zip(0..SCALAR_GAIN_FRAMES) {
             self.filter_sample(*sample);
             *sample = self
                 .frame
@@ -161,23 +231,25 @@ impl Legacy {
     fn filter_sample(&mut self, mut high: f32) {
         let (high_band, lower) = self.frame.split_last_mut().expect("legacy high band");
         for (split, low) in self.splits.iter_mut().zip(lower) {
-            *low = split.low[0].run(high);
-            *low = split.low[1].run(*low);
-            high = split.high[0].run(high);
-            high = split.high[1].run(high);
+            *low = split.low[0].run(high, Response::LowPass);
+            *low = split.low[1].run(*low, Response::LowPass);
+            high = split.high[0].run(high, Response::HighPass);
+            high = split.high[1].run(high, Response::HighPass);
             for section in &mut split.allpass {
-                *low = section.run(*low);
+                *low = section.run(*low, Response::AllPass);
             }
         }
         *high_band = high;
     }
 }
 
-struct Frame([Legacy; 2]);
+type Frame = ScalarFrame<Df1Section>;
 
-impl Frame {
+struct ScalarFrame<S>([Scalar<S>; 2]);
+
+impl<S: ScalarSection> ScalarFrame<S> {
     fn new(frequencies: &[f32]) -> Self {
-        Self(std::array::from_fn(|_| Legacy::new(frequencies)))
+        Self(std::array::from_fn(|_| Scalar::new(frequencies)))
     }
 
     fn sum<P: Deref<Target = [f32]>>(
@@ -191,6 +263,8 @@ impl Frame {
         }
     }
 }
+
+type SplitKernel = fn(&mut Crossover<2>, &[&[f32]; 2], &mut [[Vec<f32>; 2]]) -> usize;
 
 struct Svf {
     filter: Crossover<2>,
@@ -221,8 +295,20 @@ impl Svf {
         gains: &[P],
         frames: usize,
     ) {
+        self.sum_with(io, gains, frames, |filter, input, bands| {
+            filter.split(input, bands)
+        });
+    }
+
+    fn sum_with<P: Deref<Target = [f32]>>(
+        &mut self,
+        io: &mut [Vec<f32>; 2],
+        gains: &[P],
+        frames: usize,
+        split: SplitKernel,
+    ) {
         let input = io.each_ref().map(|plane| &plane[..frames]);
-        assert_eq!(self.filter.split(&input, &mut self.bands), frames);
+        assert_eq!(black_box(split)(&mut self.filter, &input, &mut self.bands), frames);
         for plane in &mut *io {
             plane[..frames].fill(0.0);
         }
@@ -301,6 +387,28 @@ impl Block {
             }
         }
     }
+}
+
+fn input_forms(frames: usize) -> [(&'static str, [Vec<f32>; 2]); 3] {
+    let stereo = |left: Vec<f32>| {
+        let right = left.iter().map(|sample| -0.75 * sample).collect();
+        [left, right]
+    };
+    let mut state = 0x9e37_79b9_u32;
+    let noise = std::iter::repeat_with(|| {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        let value = f32::from(u16::try_from(state >> 16).expect("upper noise bits"));
+        ((value + 0.5) / 65_536.0 - 0.5) * (TPT_SILENT_PEAK * 0.125)
+    })
+    .take(frames)
+    .collect();
+    [
+        ("signal", stereo(portable::eq_sine_440()[..frames].to_vec())),
+        ("silence", std::array::from_fn(|_| vec![0.0; frames])),
+        ("quiet_noise", stereo(noise)),
+    ]
 }
 
 fn gains(bands: usize, frames: usize, moving: bool) -> Vec<Vec<f32>> {
@@ -480,6 +588,67 @@ fn diagnose<K: Diagnostic>(frequencies: &[f32], frames: usize, label: &str, make
     }
 }
 
+fn assert_scalar_tpt_block(
+    scalar: &mut ScalarFrame<TptSection>,
+    native: &mut Svf,
+    input: &[Vec<f32>; 2],
+    quiet: bool,
+) {
+    let frames = input[0].len();
+    let planes = input.each_ref().map(Vec::as_slice);
+    assert_eq!(native.filter.split(&planes, &mut native.bands), frames);
+    for (channel, (filter, input)) in scalar.0.iter_mut().zip(input).enumerate() {
+        for (frame, input) in input.iter().enumerate() {
+            filter.filter_sample(*input);
+            for (expected, band) in filter.frame.iter().zip(&native.bands) {
+                assert_eq!(
+                    expected.to_bits(),
+                    band[channel][frame].to_bits(),
+                    "scalar-TPT/native bands={} frame={frame} channel={channel}",
+                    filter.frame.len()
+                );
+            }
+            if quiet {
+                for split in &filter.splits {
+                    for section in split.low.iter().chain(&split.high).chain(&split.allpass) {
+                        assert_ne!(section.quiet, 0, "every section frame is below threshold");
+                        if frame > 0 {
+                            assert_eq!(section.quiet, TPT_SECTION_MEMORY);
+                            assert_eq!(section.state.map(f64::to_bits), [0; 2]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn verify_scalar_tpt(frequencies: &[f32], frames: usize) {
+    let mut scalar = ScalarFrame::<TptSection>::new(frequencies);
+    let mut native = Svf::new(frequencies, frames);
+    for start in (0..4096).step_by(frames) {
+        let input: [Vec<f32>; 2] = std::array::from_fn(|channel| {
+            (start..start + frames)
+                .map(|frame| {
+                    (if frame < 257 {
+                        f32::from(u16::try_from(frame).expect("finite witness frame"))
+                    } else {
+                        [0.0, -0.0, f32::from_bits(1), -f32::from_bits(1)][frame % 4]
+                    }) * if channel == 0 { 0.001 } else { -0.00075 }
+                })
+                .collect()
+        });
+        assert_scalar_tpt_block(&mut scalar, &mut native, &input, false);
+    }
+    for (shape, input) in input_forms(frames) {
+        let mut scalar = ScalarFrame::<TptSection>::new(frequencies);
+        let mut native = Svf::new(frequencies, frames);
+        for _ in 0..2 {
+            assert_scalar_tpt_block(&mut scalar, &mut native, &input, shape != "signal");
+        }
+    }
+}
+
 pub(crate) fn bench(c: &mut Criterion) {
     verify_difference_accounting();
     let mut group = c.benchmark_group("crossover_df1_svf");
@@ -498,37 +667,69 @@ pub(crate) fn bench(c: &mut Criterion) {
             group.throughput(Throughput::Elements(
                 u64::try_from(frames).expect("stereo frames"),
             ));
-            let left = portable::eq_sine_440()[..frames].to_vec();
-            let input = [
-                left.clone(),
-                left.iter().map(|sample| -0.75 * sample).collect(),
-            ];
+            let (samples, seconds) = if bands == 3 && frames == 512 {
+                (100, 20)
+            } else {
+                (20, 5)
+            };
+            group
+                .sample_size(samples)
+                .measurement_time(Duration::from_secs(seconds));
+            println!(
+                "crossover_sampling bands={bands} frames={frames} samples={samples} measurement_seconds={seconds}"
+            );
+            let forms = input_forms(frames);
             let gains = gains(bands, frames, true);
-            let mut baseline = Frame::new(&frequencies);
-            group.bench_function(BenchmarkId::new(format!("df1_{bands}band"), frames), |b| {
-                b.iter_batched_ref(
-                    || input.clone(),
-                    |io| {
-                        baseline.sum(black_box(&mut *io), black_box(&gains), frames);
-                        black_box(&*io);
-                    },
-                    BatchSize::SmallInput,
-                );
-            });
+            verify_scalar_tpt(&frequencies, frames);
             diagnose(&frequencies, frames, "svf", || {
                 Svf::new(&frequencies, frames)
             });
-            let mut svf = Svf::new(&frequencies, frames);
-            group.bench_function(BenchmarkId::new(format!("svf_{bands}band"), frames), |b| {
-                b.iter_batched_ref(
-                    || input.clone(),
-                    |io| {
-                        svf.sum(black_box(&mut *io), black_box(&gains), frames);
-                        black_box(&*io);
-                    },
-                    BatchSize::SmallInput,
-                );
-            });
+            for (shape, input) in &forms {
+                let variant = if *shape == "signal" {
+                    format!("{bands}band")
+                } else {
+                    format!("{shape}_{bands}band")
+                };
+                let mut baseline = Frame::new(&frequencies);
+                group.bench_function(BenchmarkId::new(format!("df1_{variant}"), frames), |b| {
+                    b.iter_batched_ref(
+                        || (*input).clone(),
+                        |io| {
+                            baseline.sum(black_box(&mut *io), black_box(&gains), frames);
+                            black_box(&*io);
+                        },
+                        BatchSize::SmallInput,
+                    );
+                });
+                let execution_forms = [(
+                    "entry",
+                    |filter: &mut Crossover<2>,
+                     input: &[&[f32]; 2],
+                     bands: &mut [[Vec<f32>; 2]]| filter.split(input, bands),
+                )];
+                for (name, kernel) in execution_forms {
+                    let mut svf = Svf::new(&frequencies, frames);
+                    group.bench_function(
+                        BenchmarkId::new(format!("{name}_{variant}"), frames),
+                        |b| {
+                            b.iter_batched_ref(
+                                || (*input).clone(),
+                                |io| {
+                                    svf.sum_with(
+                                        black_box(&mut *io),
+                                        black_box(&gains),
+                                        frames,
+                                        kernel,
+                                    );
+                                    black_box(&*io);
+                                },
+                                BatchSize::SmallInput,
+                            );
+                        },
+                    );
+                }
+            }
+            let input = &forms[0].1;
             for design in [Design::WidenedF32, Design::NativeF64] {
                 diagnose(&frequencies, frames, &format!("biquad_{design:?}"), || {
                     Block::new(&frequencies, frames, design)
@@ -538,7 +739,7 @@ pub(crate) fn bench(c: &mut Criterion) {
                     BenchmarkId::new(format!("biquad_{design:?}_{bands}band"), frames),
                     |b| {
                         b.iter_batched_ref(
-                            || input.clone(),
+                            || (*input).clone(),
                             |io| {
                                 candidate.sum(black_box(&mut *io), black_box(&gains), frames);
                                 black_box(&*io);
