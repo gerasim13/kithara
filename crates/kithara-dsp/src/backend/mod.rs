@@ -11,6 +11,7 @@ mod fir;
 mod interpolate;
 #[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
 pub(crate) mod portable;
+pub(crate) mod route;
 mod simd;
 #[cfg(all(
     feature = "spectrum",
@@ -38,7 +39,3 @@ pub(crate) use simd::{
     crossfade_linear, div, first_quiet, last_loud, mul_add, ramp, scale_in_place,
 };
 pub(crate) use strided::{gather, scatter};
-#[cfg(not(all(target_vendor = "apple", target_arch = "aarch64")))]
-pub(crate) use svf::step_pair as svf_step_pair;
-#[cfg(all(target_vendor = "apple", target_arch = "aarch64"))]
-pub(crate) use svf::step_pair_scalar as svf_step_pair;

@@ -8,7 +8,10 @@ use num_traits::ToPrimitive;
 
 use super::FilterError;
 use crate::{
-    backend::{platform, svf_step_pair},
+    backend::{
+        platform,
+        route::{route, table},
+    },
     consts,
 };
 
@@ -261,15 +264,9 @@ impl<const CHANNELS: usize> StateVariableFilter<CHANNELS> {
             .zip(memory1.chunks_mut(2))
             .zip(memory2.chunks_mut(2))
         {
-            frame_quiet &= svf_step_pair(
-                simd,
-                samples,
-                memory1,
-                memory2,
-                [a1, a2, a3],
-                damping,
-                response,
-            );
+            frame_quiet &= route!(table::svf_pair => (
+                simd, samples, memory1, memory2, [a1, a2, a3], damping, response,
+            ));
         }
         self.reset_state = false;
         self.count(frame_quiet);

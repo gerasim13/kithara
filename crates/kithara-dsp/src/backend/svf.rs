@@ -1,8 +1,6 @@
-#[cfg(any(test, not(all(target_vendor = "apple", target_arch = "aarch64"))))]
-use std::ops::{Add, Sub};
 use std::{
     f64::consts::PI,
-    ops::{Div, Mul},
+    ops::{Add, Div, Mul, Sub},
 };
 
 use fearless_simd::{f64x2, prelude::*};
@@ -10,7 +8,6 @@ use num_traits::ToPrimitive;
 
 use crate::{consts::SILENT_PEAK, filter::Response};
 
-#[cfg(any(test, not(all(target_vendor = "apple", target_arch = "aarch64"))))]
 #[inline(always)]
 fn step<S: Simd>(
     simd: S,
@@ -36,9 +33,7 @@ fn step<S: Simd>(
 
 /// One channel-pair step in two-lane `f64x2`: gathers state and input, runs the
 /// TPT recurrence, scatters state and output back, and reports whether the pair
-/// stayed silent. Compiled on non-Apple targets and in tests everywhere so the
-/// scalar form can be pinned bit-exact against it on Apple too.
-#[cfg(any(test, not(all(target_vendor = "apple", target_arch = "aarch64"))))]
+/// stayed silent.
 #[inline(always)]
 pub(crate) fn step_pair<S: Simd>(
     simd: S,
@@ -77,8 +72,7 @@ pub(crate) fn step_pair<S: Simd>(
 }
 
 /// Scalar-`f64` channel-pair step, bit-exact with [`step_pair`]. This is the
-/// form the backend selects on Apple Silicon.
-#[cfg(any(test, all(target_vendor = "apple", target_arch = "aarch64")))]
+/// form the route selects on Apple Silicon.
 #[inline(always)]
 pub(crate) fn step_pair_scalar<S: Simd>(
     simd: S,
