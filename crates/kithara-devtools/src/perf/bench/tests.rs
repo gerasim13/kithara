@@ -577,10 +577,11 @@ fn bench_preflight_rejects_inherited_criterion_debug() {
             .env("CRITERION_DEBUG", "")
             .output()
             .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&[output.stdout, output.stderr].concat())
+            output.status.success() && stdout.contains("test result: ok. 1 passed;"),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
         );
         return;
     }
@@ -793,16 +794,32 @@ fn bench_preflight_callback_parser_accepts_diagnostics_between_records() {
 
 #[test]
 fn bench_preflight_callback_parser_rejects_malformed_records() {
-    for malformed in [
-        "diagnostic only\n",
-        "Success\n",
-        "Testing\n",
-        "Testing\tcase\nSuccess\n",
-        "Testing \nSuccess\n",
-        "Testing case\ndiagnostic\nSuccess\n",
-        "Testing case\nSuccess\nSuccess extra\n",
-        "Testing case\nSuccess\nTesting case\nSuccess\n",
+    for (malformed, expected) in [
+        ("diagnostic only\n", "no Criterion callbacks were reported"),
+        ("Success\n", "unexpected Criterion callback record"),
+        ("Testing\n", "unexpected Criterion callback record"),
+        (
+            "Testing\tcase\nSuccess\n",
+            "unexpected Criterion callback record",
+        ),
+        ("Testing \nSuccess\n", "Criterion callback needs an ID"),
+        (
+            "Testing case\ndiagnostic\nSuccess\n",
+            "did not report Success",
+        ),
+        (
+            "Testing case\nSuccess\nSuccess extra\n",
+            "unexpected Criterion callback record",
+        ),
+        (
+            "Testing case\nSuccess\nTesting case\nSuccess\n",
+            "duplicate Criterion callback",
+        ),
     ] {
-        assert!(callback_ids(malformed.as_bytes()).is_err(), "{malformed:?}");
+        let actual = callback_ids(malformed.as_bytes()).unwrap_err();
+        assert!(
+            actual.to_string().contains(expected),
+            "{malformed:?}: {actual:#}"
+        );
     }
 }
