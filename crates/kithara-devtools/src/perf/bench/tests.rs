@@ -60,7 +60,12 @@ fn main() {
     if let ["--bench", mode, filter @ ("paired" | "head-only")] = args.as_slice() {
         let mut events = OpenOptions::new().create(true).append(true).open(EVENTS).unwrap();
         writeln!(events, "{mode}:{filter}:{}", env::current_exe().unwrap().display()).unwrap();
-        let selected = ids.lines().filter(|id| *filter != "paired" || !id.starts_with("forms/"));
+        let mut selected: Vec<_> = ids.lines()
+            .filter(|id| *filter != "paired" || !id.starts_with("forms/"))
+            .collect();
+        if *mode == "--test" && selected.contains(&"group/reverse") {
+            selected.reverse();
+        }
         for id in selected {
             match *mode {
                 "--list" => println!("{id}: benchmark"),
@@ -363,6 +368,7 @@ fn assert_builds_before_measurements(log: &str, builds: usize) {
         "builds need distinct owned directories"
     );
     assert_eq!(log.matches("\"--no-run\"").count(), builds);
+    assert!(!before_measurement.contains("\"-v\""));
     assert_eq!(before_measurement.matches("\"--no-run\"").count(), builds);
 }
 
@@ -490,7 +496,7 @@ fn preflight_request(ctx: &Ctx, base: &str, id: &str) -> (Request, Value) {
 
 #[test]
 fn bench_preflight_builds_lists_then_executes_only_untimed_callbacks() {
-    let (temp, ctx, base) = fixture("group/a", "group/a\nforms/b");
+    let (temp, ctx, base) = fixture("group/a", "forms/b\ngroup/a");
     let (request, declaration) = preflight_request(&ctx, &base, "group/a");
     let raw = format!("{declaration}\n");
     execute(&ctx, &request, false, Some(&raw)).unwrap();
@@ -525,6 +531,7 @@ fn bench_preflight_builds_lists_then_executes_only_untimed_callbacks() {
     for build in builds {
         assert!(build.contains("CARGO_PROFILE_BENCH_STRIP=\"none\""));
         assert!(build.contains("CARGO_TARGET_DIR="));
+        assert!(build.contains("\"-v\""));
     }
     for marker in [
         "--sample-size",
@@ -542,17 +549,70 @@ fn bench_preflight_builds_lists_then_executes_only_untimed_callbacks() {
         .path();
     assert_eq!(
         fs::read_to_string(results.join("a-forms/head/test.txt")).unwrap(),
-        "Testing group/a\nSuccess\nTesting forms/b\nSuccess\n"
+        "Testing forms/b\nSuccess\nTesting group/a\nSuccess\n"
     );
     ensure_no_criterion_results(&results).unwrap();
     let proof = fs::read_to_string(results.join("provenance.txt")).unwrap();
     assert!(proof.contains(&format!("parent {base}")));
     assert!(proof.contains("CARGO_PROFILE_BENCH_STRIP=none"));
-    for arm in ["base", "head"] {
-        let digest = sha256(&fs::read(results.join("elf").join(arm)).unwrap());
-        assert!(proof.contains(&format!("{arm} ELF SHA-256 {digest}")));
+    for (arm, call) in [("base", 0), ("head", 1)] {
+        let binary_dir = results.join(PREFLIGHT_BINARY_DIR);
+        let digest = sha256(&fs::read(binary_dir.join(arm)).unwrap());
+        let cargo_json = fs::read_to_string(binary_dir.join(format!("{arm}.cargo.json"))).unwrap();
+        assert!(cargo_json.lines().any(|line| {
+            let entry: Value = serde_json::from_str(line).unwrap();
+            entry["reason"] == "compiler-artifact" && entry["executable"] == executable(call)
+        }));
+        assert!(proof.contains(&format!("{arm} {PREFLIGHT_BINARY_FORMAT} SHA-256 {digest}")));
         assert!(log.contains(&digest));
     }
+}
+
+#[test]
+fn bench_preflight_rejects_inherited_criterion_debug() {
+    if std::env::var_os("CRITERION_DEBUG").is_none() {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .arg("bench_preflight_rejects_inherited_criterion_debug")
+            .arg("--nocapture")
+            .env("CRITERION_DEBUG", "")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&[output.stdout, output.stderr].concat())
+        );
+        return;
+    }
+    let (temp, ctx, base) = fixture("group/a", "group/a\nforms/b");
+    let (request, declaration) = preflight_request(&ctx, &base, "group/a");
+    let actual = execute(&ctx, &request, false, Some(&declaration.to_string())).unwrap_err();
+    assert!(actual.to_string().contains("CRITERION_DEBUG"), "{actual:#}");
+    assert!(!ctx.root.join("bench-results.txt").exists());
+    assert!(!temp.path().join("events").exists());
+}
+
+#[test]
+fn bench_preflight_rejects_callback_reordering_for_the_same_binary() {
+    let (temp, ctx, base) = fixture("group/reverse\ngroup/a", "group/reverse\ngroup/a");
+    let (request, mut declaration) = preflight_request(&ctx, &base, "group/a");
+    let cases = json!(["group/a", "group/reverse"]);
+    declaration["collections"] = json!({"paired": {
+        "filter": "paired",
+        "expected_base_ids": cases,
+        "expected_head_ids": cases,
+    }});
+    let actual = execute(&ctx, &request, false, Some(&declaration.to_string())).unwrap_err();
+    assert!(
+        actual.to_string().contains("differ from inventory order"),
+        "{actual:#}"
+    );
+    let events = fs::read_to_string(temp.path().join("events")).unwrap();
+    let modes: Vec<_> = events
+        .lines()
+        .map(|line| line.split_once(':').unwrap().0)
+        .collect();
+    assert_eq!(modes, ["--list", "--list", "--test"]);
 }
 
 #[test]
@@ -614,6 +674,8 @@ fn bench_preflight_rejects_invalid_requests_before_children() {
         "a\\b",
         "x:\n",
         "elf",
+        "Mach-O",
+        "PROVENANCE.TXT",
         "provenance.txt",
     ] {
         let mut invalid = declaration.clone();
@@ -626,6 +688,28 @@ fn bench_preflight_rejects_invalid_requests_before_children() {
     }
     assert!(!ctx.root.join("bench-results.txt").exists());
     assert!(!temp.path().join("events").exists());
+}
+
+#[test]
+fn bench_preflight_collection_directories_are_distinct_on_the_host() {
+    let (temp, ctx, base) = fixture("group/a", "group/a");
+    let (request, mut declaration) = preflight_request(&ctx, &base, "group/a");
+    let paired = declaration["collections"]["z-paired"].clone();
+    declaration["collections"] = json!({"Paired": paired, "paired": paired});
+    fs::create_dir(temp.path().join("CaseProbe")).unwrap();
+    let aliases = temp.path().join("caseprobe").exists();
+    let outcome = execute(&ctx, &request, false, Some(&declaration.to_string()));
+    if aliases {
+        let error = outcome.unwrap_err();
+        assert!(error.to_string().contains("create preflight collection"));
+        assert!(!temp.path().join("events").exists());
+        let log = fs::read_to_string(ctx.root.join("bench-results.txt")).unwrap();
+        assert!(!log.contains("\"--no-run\""));
+    } else {
+        outcome.unwrap();
+        let events = fs::read_to_string(temp.path().join("events")).unwrap();
+        assert_eq!(events.lines().count(), 8);
+    }
 }
 
 #[test]
@@ -685,5 +769,40 @@ fn bench_preflight_requires_successful_callbacks_without_criterion_files() {
         );
         let log = fs::read_to_string(ctx.root.join("bench-results.txt")).unwrap();
         assert!(!log.contains("Untimed benchmark preflight evidence:"));
+    }
+}
+
+#[test]
+fn bench_preflight_callback_parser_accepts_diagnostics_between_records() {
+    let recorded = concat!(
+        "crossover_geometry rate=48000 channels=2 bands=3 frequencies=[249.70744, 4325.059] backend=portable target=x86_64\n",
+        "Testing crossover_df1_svf/df1_3band/128\n",
+        "Success\n",
+        "crossover_delta bands=3 block=512 candidate=svf case=retirement_bits moving=true finite_pairs=8 max_abs_finite=1.0141204801825835e31 bit_differences=5 nonfinite_df1=16398 nonfinite_candidate=16398 subnormal_df1=0 subnormal_candidate=0 last_nonzero_df1=Some(8202) last_nonzero_candidate=Some(8202)\n",
+        "Testing crossover_df1_svf/df1_3band/512\n",
+        "Success\n",
+    );
+    assert_eq!(
+        callback_ids(recorded.as_bytes()).unwrap(),
+        [
+            "crossover_df1_svf/df1_3band/128",
+            "crossover_df1_svf/df1_3band/512",
+        ],
+    );
+}
+
+#[test]
+fn bench_preflight_callback_parser_rejects_malformed_records() {
+    for malformed in [
+        "diagnostic only\n",
+        "Success\n",
+        "Testing\n",
+        "Testing\tcase\nSuccess\n",
+        "Testing \nSuccess\n",
+        "Testing case\ndiagnostic\nSuccess\n",
+        "Testing case\nSuccess\nSuccess extra\n",
+        "Testing case\nSuccess\nTesting case\nSuccess\n",
+    ] {
+        assert!(callback_ids(malformed.as_bytes()).is_err(), "{malformed:?}");
     }
 }
