@@ -44,6 +44,7 @@ use kithara_integration_tests::{
     event::TestEvent,
     fixture_protocol::PcmPattern,
     hls_fixture::create_test_downloader,
+    memory_asset_store,
     offline::{
         LOCAL_LOAD_DEADLINE, OfflinePlayer, OfflinePlayerOptions,
         linked::{LinkObservation, ObservedFactory},
@@ -315,6 +316,7 @@ fn census_queue<F: TrackFactory>(
     Queue::new(
         QueueConfig::with_factory(factory)
             .downloader(create_test_downloader())
+            .store(memory_asset_store())
             .prep(harness.resource_prep().clone())
             .settings(
                 ::kithara::queue::QueueSettings::builder()
@@ -345,6 +347,7 @@ async fn build_queue(
     .await;
     let explicit_store = backend.map(|_| {
         ::kithara::assets::AssetStore::builder(harness.resource_prep().worker.pools().clone())
+            .backend(::kithara::assets::StorageBackend::Memory)
             .build()
     });
     let startup = (origins == LOCAL_QUEUE && backend.is_none())
