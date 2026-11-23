@@ -1,6 +1,0 @@
-ruleDirs:
-  - .config/ast-grep
-languageGlobs:
-  Yaml:
-    - Cargo.toml
-    - crates/**/*.toml

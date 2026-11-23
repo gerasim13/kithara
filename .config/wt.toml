@@ -1,3 +1,0 @@
-[pre-merge]
-lint = "just lint fast"
-test = "just test all"
