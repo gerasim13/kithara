@@ -491,6 +491,28 @@ RUST_BACKTRACE = "1"
 [stress.modes.reproduction-load-flash-off.raw_path_env]
 KITHARA_HANG_DUMP_DIR = "hang"
 
+# The parallel-suite counterpart of the load modes above. Those pin
+# `test_threads = "1"`, so one test runs against its own spinners; a race that
+# needs many multi-threaded test processes contending for CPU, memory bandwidth
+# and IO at once never shows. This mode keeps the spinners but inherits the
+# run's `test_threads = "num-cpus"`, so the selected tests run at the lane's own
+# concurrency and the contention is the parallel suite's. Point `filter` at a
+# whole binary (e.g. `binary_id(=kithara-sync-tests::sync)`).
+[stress.modes.reproduction-suite-load-flash-off]
+flash = false
+load = true
+
+[stress.modes.reproduction-suite-load-flash-off.set_env]
+KITHARA_FLASH_SYNC_TRACE = "1"
+KITHARA_HANG_PREKILL_SECS = "630"
+NEXTEST_FINAL_STATUS_LEVEL = "fail"
+NEXTEST_SHOW_PROGRESS = "counter"
+NEXTEST_STATUS_LEVEL = "fail"
+RUST_BACKTRACE = "1"
+
+[stress.modes.reproduction-suite-load-flash-off.raw_path_env]
+KITHARA_HANG_DUMP_DIR = "hang"
+
 # The real-time contract, measured the same way. They belong in the run
 # because the violation is intermittent: one was seen firing on a single attempt
 # out of two, which a gate that runs each lane once reports as green half the
