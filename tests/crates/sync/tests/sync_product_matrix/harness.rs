@@ -239,25 +239,36 @@ fn stable_capture_at(
     declick: i64,
 ) -> Option<i64> {
     let stable = start.checked_add(declick)?;
-    let Some(speed) = observation
+    // Gate on the last speed the lane has actually applied, not the newest one
+    // planned. A drift correction is planned a whole horizon (~4s) ahead and stays
+    // pending until the deck reaches it; gating the capture on it made the harness
+    // render the track forward that whole horizon, over-advancing it past the take
+    // and off the end of a short track. The track is already steady at the last
+    // applied speed, so that is the frame to wait for; a still-pending relocation
+    // is caught instead by the playing/mark/segment checks in the caller.
+    let Some((speed, applied)) = observation
         .speeds
         .iter()
         .rev()
-        .find(|speed| speed.item == item)
+        .filter(|speed| speed.item == item)
+        .find_map(|speed| {
+            observation
+                .placement_receipts
+                .iter()
+                .find_map(|(owner, origin, receipt)| match receipt {
+                    Settled::Applied { seq, at }
+                        if *owner == item
+                            && *origin == LinkReceiptOrigin::Lane
+                            && *seq == speed.seq =>
+                    {
+                        Some((speed, i64::from(*at)))
+                    }
+                    _ => None,
+                })
+        })
     else {
         return Some(stable);
     };
-    let applied = observation
-        .placement_receipts
-        .iter()
-        .find_map(|(owner, origin, receipt)| match receipt {
-            Settled::Applied { seq, at }
-                if *owner == item && *origin == LinkReceiptOrigin::Lane && *seq == speed.seq =>
-            {
-                Some(i64::from(*at))
-            }
-            _ => None,
-        })?;
     let completed = if let Some((_, landing)) = speed.landing {
         let landing = i64::from(landing);
         let fade = landing.checked_sub(applied).filter(|frames| *frames >= 0)?;
@@ -2040,14 +2051,32 @@ impl ProductHarness {
                         let item = deck
                             .current()
                             .unwrap_or_else(|| {
+                                let (consumed, speeds) = deck.observe(|observation| {
+                                    let speeds: Vec<_> = observation
+                                        .speeds
+                                        .iter()
+                                        .map(|speed| {
+                                            (
+                                                u64::from(speed.item),
+                                                speed.seq.get(),
+                                                format!("{:?}", speed.at),
+                                                speed
+                                                    .landing
+                                                    .map(|(_, at)| i64::from(at)),
+                                            )
+                                        })
+                                        .collect();
+                                    (observation.consumed.clone(), speeds)
+                                });
                                 panic!(
-                                    "{}: capture lost its selected Playing item; deck={}, output_frame={}, captured_frames={}, expected_frames={}, consumed={:?}",
+                                    "{}: capture lost its selected Playing item; deck={}, output_frame={}, captured_frames={}, expected_frames={}, consumed={:?}, speeds(item,seq,at,landing)={:?}",
                                     case.id,
                                     u64::from(deck.id()),
                                     self.output_frames,
                                     pcm.len() / usize::from(CHANNELS),
                                     capture_frames,
-                                    deck.observe(|observation| observation.consumed.clone()),
+                                    consumed,
+                                    speeds,
                                 )
                             })
                             .id;
