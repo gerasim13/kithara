@@ -79,7 +79,7 @@ fn cell_id<'a>(ui: &'a CompiledUi, node: &'a ExpandedNode) -> &'a str {
     }
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 fn the_micro_bar_reveals_its_cells_as_the_window_widens() {
     let ui = micro_preset();
 

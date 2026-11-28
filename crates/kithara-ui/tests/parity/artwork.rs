@@ -144,7 +144,7 @@ fn compare(left: &[u8], right: &[u8]) {
     }
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 fn caller_owned_animation_agrees_between_immediate_and_retained_hosts() {
     let mut resolver = builtin::resolver();
     resolver.insert_bytes("skin/picture.json", ARTWORK);

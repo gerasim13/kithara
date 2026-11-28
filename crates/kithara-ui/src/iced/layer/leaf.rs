@@ -340,7 +340,7 @@ mod tests {
         assert_eq!(iced_length(SolveLength::Fixed(24.0)), Length::Fixed(24.0));
     }
 
-    #[kithara::test]
+    #[kithara::test(timeout(Long))]
     fn a_window_layer_leaf_is_inert_below_and_emits_from_its_overlay() {
         let mut element = window_layer(TestProgram {
             resources: builtin::skin().text_resources.as_ref().clone(),

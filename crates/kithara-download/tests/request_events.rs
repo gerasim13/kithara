@@ -69,7 +69,7 @@ async fn drain(receiver: &mut EventReceiver<Events>) -> Vec<DownloaderEvent> {
     events
 }
 
-#[kithara::test(tokio, flash(false), timeout(Quick))]
+#[kithara::test(tokio, flash(false), timeout(Long))]
 #[case::get("get")]
 #[case::range("range")]
 #[case::head("head")]

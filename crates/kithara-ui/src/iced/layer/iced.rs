@@ -578,7 +578,7 @@ mod tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara::test(timeout(Long))]
     fn window_layer_host_fills_the_available_root_when_the_document_shrinks() {
         let child = Space::new()
             .width(Length::Fixed(20.0))

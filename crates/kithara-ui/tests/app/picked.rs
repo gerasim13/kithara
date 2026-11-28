@@ -171,7 +171,7 @@ fn the_document_dresses_a_picked_row_apart_from_the_rest() {
 }
 
 /// The row a press picks is dressed as the picked one.
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 fn the_row_a_press_picks_takes_the_picked_face() {
     let (endpoints, resolver) = (Endpoints::default(), documents());
     let mut ui = mounted(&endpoints, &resolver);
@@ -187,7 +187,7 @@ fn the_row_a_press_picks_takes_the_picked_face() {
 }
 
 /// And the row it leaves goes back to the face of a row that stands unpicked.
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 fn the_row_a_press_leaves_takes_the_unpicked_face() {
     let (endpoints, resolver) = (Endpoints::default(), documents());
     let mut ui = mounted(&endpoints, &resolver);

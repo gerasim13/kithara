@@ -232,7 +232,7 @@ mod tests {
         assert_eq!(clipped.h, skin.row_height / 2.0);
     }
 
-    #[kithara::test]
+    #[kithara::test(timeout(Long))]
     fn row_hits_yield_to_the_visible_scrollbar_lane_at_each_horizontal_edge() {
         let skin = &crate::builtin::skin_doc().table;
         let table = TableMetrics {

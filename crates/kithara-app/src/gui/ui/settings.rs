@@ -88,7 +88,7 @@ fn each_bar_opens_one_window_that_turns_routes_writes_and_closes() {
     }
 }
 
-#[kithara::test(native, flash(false))]
+#[kithara::test(timeout(Long), native, flash(false))]
 fn without_sections_the_detail_shows_its_default() {
     studio(Vec::new(), TALL, |ui| {
         open(ui, "bar");

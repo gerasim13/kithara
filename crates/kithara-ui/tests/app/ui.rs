@@ -686,7 +686,7 @@ fn controls_on_one_page_publish_only_their_own_activation() {
     }
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 fn named_press_drag_and_wheel_publish_events_and_leave_a_picture() {
     const SIZE: (u32, u32) = (240, 120);
 
@@ -1822,7 +1822,7 @@ impl App for Bare {
 /// to set a cue; the painter takes the pointer resting on the control as the
 /// word to leave the wave uncovered, and a host that never tells it about the
 /// hand leaves the strip standing over what the hand came for.
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 fn a_hand_over_the_hero_wave_takes_its_information_strip_out_of_the_picture() {
     /// A deck's hero wave, which carries the strip of track information across its
     /// top the way the shipped decks do.

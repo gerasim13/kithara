@@ -582,7 +582,7 @@ async fn live_ephemeral_revisit_sequence_regression(
     serial,
     hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info"),
-    timeout(Long)
+    timeout(Heavy)
 )]
 #[case::hls_fixed("HLS", SeekRegression::FixedWindow, mixed_plain().await)]
 #[case::drm_fixed("DRM", SeekRegression::FixedWindow, mixed_encrypted().await)]

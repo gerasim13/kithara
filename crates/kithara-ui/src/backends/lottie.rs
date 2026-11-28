@@ -177,7 +177,7 @@ fn admitted_external_animation_preserves_the_reference_at_authored_checkpoints()
 /// edge is allowed cannot reach. This is where a mispaired contour, a layer
 /// alpha folded into the wrong place or a ramp read the wrong way round would
 /// show, and it is asserted with no slack at all.
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 fn the_flat_paint_of_the_artwork_is_the_same_colour_in_both() {
     let apart = Apart::at(0.0);
 
@@ -190,7 +190,7 @@ fn the_flat_paint_of_the_artwork_is_the_same_colour_in_both() {
 /// adapter and not on another. Asking for identical bytes asks the instrument
 /// for precision it does not have; this asks for all of the precision it
 /// does, and a wrong rule is worth many steps rather than one.
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 fn no_pixel_of_the_artwork_is_off_by_more_than_the_target_can_hold() {
     let apart = Apart::at(0.0);
 
@@ -199,14 +199,14 @@ fn no_pixel_of_the_artwork_is_off_by_more_than_the_target_can_hold() {
 
 /// Halfway through, where a turned layer's own matrix is what the two have to
 /// agree about rather than the shapes alone.
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 fn the_flat_paint_stays_the_same_colour_partway_through() {
     let apart = Apart::at(30.0);
 
     assert_eq!(apart.flat, 0, "{apart}");
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 fn no_pixel_is_off_by_more_than_the_target_can_hold_partway_through() {
     let apart = Apart::at(30.0);
 

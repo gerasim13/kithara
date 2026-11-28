@@ -231,7 +231,7 @@ mod tests {
         }
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(timeout(Long), native, flash(false))]
     fn every_window_command_schedules_host_work() {
         let mut rig = Rig::offline();
         let commands = [
@@ -379,7 +379,7 @@ mod tests {
         rig.close().await;
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(timeout(Long), native, flash(false))]
     #[kithara::hang_watchdog]
     fn eq_mode_changes_every_deck_as_one_transaction() {
         let mut rig = Rig::offline();

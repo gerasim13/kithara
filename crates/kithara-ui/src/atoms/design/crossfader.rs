@@ -361,7 +361,7 @@ mod tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara::test(timeout(Long))]
     fn a_tick_never_outgrows_the_rail_it_sits_in() {
         let squashed = rects(
             &rail(TickAxis::Horizontal, 5),

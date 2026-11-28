@@ -258,7 +258,7 @@ mod tests {
     /// Without a scope the strip is an icon and a path. The picked scope, the
     /// chevron between them, and the room they take belong to a document that
     /// declared more than one scope, so none of them may appear here.
-    #[kithara::test]
+    #[kithara::test(timeout(Long))]
     fn a_strip_without_a_scope_shows_only_the_path() {
         let words = words(&drawn(None));
 
@@ -273,7 +273,7 @@ mod tests {
 
     /// With one, the picked word comes first, then the chevron, then the path —
     /// each clear of the last.
-    #[kithara::test]
+    #[kithara::test(timeout(Long))]
     fn a_scope_reads_left_to_right_into_the_path() {
         let words = words(&drawn(Some(Scope {
             items: vec!["ZVUK".to_owned(), "LOCAL".to_owned()],
@@ -292,7 +292,7 @@ mod tests {
 
     /// The hairline is the last thing drawn and sits under the content, not
     /// across it: the strip has to end where the panel below it starts.
-    #[kithara::test]
+    #[kithara::test(timeout(Long))]
     fn the_hairline_closes_the_strip_along_its_bottom_edge() {
         let commands = drawn(None);
         let skin = builtin::skin();

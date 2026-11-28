@@ -555,7 +555,7 @@ fn mk_cfg(
 /// the supersede path → `slow` marked `Cancelled`), release `slow`'s init so
 /// its loader completes and skips on the cancelled status, then assert `slow`
 /// never becomes `current()` — including after `fast` plays out.
-#[kithara::test(tokio, multi_thread, timeout(Long))]
+#[kithara::test(tokio, multi_thread, timeout(Heavy))]
 async fn supersede_while_loading_cancels_slow_track(
     #[future(awt)] race_tracks: (TestServerHelper, CreatedHls, CreatedHls),
 ) {

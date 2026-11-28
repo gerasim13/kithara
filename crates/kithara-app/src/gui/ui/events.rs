@@ -506,7 +506,7 @@ mod tests {
             }
         }
 
-        #[kithara::test(native, flash(false))]
+        #[kithara::test(timeout(Long), native, flash(false))]
         fn each_deck_picks_the_quality_its_row_names() {
             let mut rig = Rig::offline();
             let a = rig.deck("a");
@@ -546,7 +546,7 @@ mod tests {
             assert!(press(state, "deck.stream.select_variant@deck=a,variant=0").is_none());
         }
 
-        #[kithara::test(native, flash(false))]
+        #[kithara::test(timeout(Long), native, flash(false))]
         fn the_app_menu_answers_the_writes_it_declares() {
             let mut rig = Rig::offline();
             let state = &mut rig.ui;

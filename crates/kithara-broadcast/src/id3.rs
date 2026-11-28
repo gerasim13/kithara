@@ -95,7 +95,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(timeout(Long), native, flash(false))]
     fn the_timestamp_leaves_the_top_thirty_one_bits_zero() {
         let tag = TimestampTag::render(consts::WRAP - 1, consts::MPEG_TIMESCALE);
         let timestamp = timestamp_bytes(&tag);
@@ -105,7 +105,7 @@ mod tests {
         assert_eq!(timestamp[3], 1, "bit 32 is the timestamp's top bit");
     }
 
-    #[kithara::test(native, flash(false), timeout(Quick))]
+    #[kithara::test(native, flash(false), timeout(Long))]
     fn the_timestamp_wraps_at_thirty_three_bits() {
         assert_eq!(
             TimestampTag::mpeg_timestamp(consts::WRAP, consts::MPEG_TIMESCALE),

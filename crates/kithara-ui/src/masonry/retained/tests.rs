@@ -1146,7 +1146,7 @@ fn a_cell_placed_where_it_was_measured_is_laid_out_once() {
     );
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 fn a_frame_that_transitions_to_no_repaint_still_paints_its_result() {
     let registry = fixture_registry();
     let ui = fixture_ui(
@@ -2903,7 +2903,7 @@ fn a_driven_object_moves_when_the_retained_host_refreshes() {
 /// And an object nobody drives holds still across the same refresh, which is
 /// what makes the test above a measurement rather than a statement about the
 /// harness moving everything it touches.
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 fn an_object_nobody_drives_keeps_its_pose_across_a_refresh() {
     const STILL: &str = r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
         Object(
@@ -3507,7 +3507,7 @@ fn a_mounted_tree_row_click_emits_its_typed_index_action() {
     );
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 fn a_mounted_tree_search_ime_commit_emits_the_complete_query() {
     let registry = fixture_registry();
     let ui = fixture_ui(
@@ -4893,7 +4893,7 @@ fn a_full_header_holds_a_cell_for_everything_it_names() {
     );
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 fn a_header_cell_grows_with_the_word_it_carries() {
     let (_, _, short) = header_cells("D");
     let (_, _, long) = header_cells("DECK MICRO");

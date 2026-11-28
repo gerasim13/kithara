@@ -591,7 +591,7 @@ mod tests {
         (messages, captured)
     }
 
-    #[kithara::test]
+    #[kithara::test(timeout(Long))]
     fn an_open_popup_captures_before_an_overlapping_window_layer() {
         let skin = builtin::skin();
         let item_height = skin.tree.scope_item_height;

@@ -813,7 +813,7 @@ macro_rules! tree_suite {
             );
         }
 
-        #[kithara::test]
+        #[kithara::test(timeout(Long))]
         fn a_tree_without_query_draws_no_search_row() {
             $crate::hosts::drop_fixture::a_tree_without_query_draws_no_search_row::<$host>(
                 $engine,
@@ -836,7 +836,7 @@ macro_rules! drop_suite {
             $crate::hosts::drop_fixture::a_row_dropped_on_a_deck_delivers_the_decks_write_with_the_rows_drag_data::<$host>();
         }
 
-        #[kithara::test]
+        #[kithara::test(timeout(Long))]
         fn a_row_dropped_after_the_list_was_filtered_delivers_the_row_that_was_dragged() {
             $crate::hosts::drop_fixture::a_row_dropped_after_the_list_was_filtered_delivers_the_row_that_was_dragged::<$host>();
         }

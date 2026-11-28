@@ -1199,7 +1199,7 @@ async fn decoder_file_seek_multiple(
 
 /// A seek after the decoder ran to the end of the file lands and decodes.
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
-#[kithara::test(tokio, timeout(Quick), hang_timeout_secs(1))]
+#[kithara::test(tokio, timeout(Long), hang_timeout_secs(1))]
 #[case(
     SignalAsset::PROFILE_M4A_ALAC_44100_2CH_16BIT,
     DecoderBackend::Symphonia

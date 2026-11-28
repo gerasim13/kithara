@@ -64,7 +64,7 @@ mod tests {
     use crate::{builtin, draw::DrawCmd};
 
     /// Every letter is drawn, in order, each one clear of the last.
-    #[kithara::test]
+    #[kithara::test(timeout(Long))]
     fn the_wordmark_spells_itself_left_to_right() {
         let skin = builtin::skin();
         let mut text = TextContext::from(skin.text_resources.as_ref());

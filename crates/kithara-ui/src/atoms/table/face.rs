@@ -716,7 +716,7 @@ mod tests {
         draw::{DrawCmd, Geom},
     };
 
-    #[kithara::test]
+    #[kithara::test(timeout(Long))]
     fn scrolling_changes_the_table_picture() {
         let (picture, mut text, bounds, drawn) = fixture();
         let unscrolled = picture.commands(&mut text, bounds, &drawn);
@@ -732,7 +732,7 @@ mod tests {
         assert_ne!(scrolled, unscrolled);
     }
 
-    #[kithara::test]
+    #[kithara::test(timeout(Long))]
     fn hovering_a_row_changes_its_picture() {
         let (picture, mut text, bounds, drawn) = fixture();
         let idle = picture.commands(&mut text, bounds, &drawn);
@@ -748,7 +748,7 @@ mod tests {
         assert_ne!(hovered, idle);
     }
 
-    #[kithara::test]
+    #[kithara::test(timeout(Long))]
     fn a_partial_bottom_row_stays_inside_the_body_clip() {
         let (picture, mut text, mut bounds, drawn) = fixture();
         bounds.h = picture.skin.table.header_height

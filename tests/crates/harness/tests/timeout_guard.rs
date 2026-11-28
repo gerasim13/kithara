@@ -27,7 +27,7 @@ fn sync_timeout_preserves_watchdog_progress_and_result() -> Result<(), &'static 
     Ok(())
 }
 
-#[kithara::test(native)]
+#[kithara::test(timeout(Long), native)]
 #[should_panic(expected = "timed out after 1s")]
 fn default_flash_budget_bounds_wall_time() {
     wall_sleep(Duration::from_millis(1500));

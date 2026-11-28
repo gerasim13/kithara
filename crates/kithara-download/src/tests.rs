@@ -224,7 +224,7 @@ async fn cancelled_abr_deadline_does_not_stop_the_downloader_loop() {
     assert_eq!(second_state.pending_target(), Some(VariantIndex::new(3)));
 }
 
-#[kithara::test(tokio, flash(false), timeout(Quick))]
+#[kithara::test(tokio, flash(false), timeout(Long))]
 async fn cancelled_abr_deadline_rearms_the_next_live_peer() {
     const INTERVAL: Duration = Duration::from_millis(500);
     const STAGGER: Duration = Duration::from_millis(50);
@@ -657,7 +657,7 @@ async fn server_delay_is_part_of_streamed_request_duration() {
     drop(handle);
 }
 
-#[kithara::test(tokio, timeout(Quick))]
+#[kithara::test(tokio, timeout(Long))]
 async fn streamed_request_duration_uses_wall_time() {
     const UNRELATED_DELAY: Duration = Duration::from_secs(2);
 

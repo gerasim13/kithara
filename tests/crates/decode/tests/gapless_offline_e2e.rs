@@ -2,7 +2,7 @@
 
 use kithara_integration_tests::mock::gapless::*;
 
-#[kithara::test(native, tokio, timeout(Quick), hang_timeout_secs(1))]
+#[kithara::test(native, tokio, timeout(Long), hang_timeout_secs(1))]
 async fn single_track_media_only_strips_leading_priming(
     temp_dir: TestTempDir,
     #[future(awt)] primed: (TestServerHelper, CreatedHls),

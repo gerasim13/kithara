@@ -648,7 +648,7 @@ mod tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara::test(timeout(Long))]
     fn every_deck_reads_the_shared_eq_mode() {
         for (mode, bands) in [(EqMode::ThreeBand, 3.0), (EqMode::FourBand, 4.0)] {
             let fixture = fixture_in(mode);

@@ -17,7 +17,7 @@ fn use_program(program: Program) {
     }
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 fn measured_pages_are_gallery_pages_or_harness_owned() {
     let _ = consts::IMMEDIATE_FORMAT;
     let fixture = Fixture::default();

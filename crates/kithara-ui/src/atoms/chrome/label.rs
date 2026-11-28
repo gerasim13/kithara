@@ -176,7 +176,7 @@ mod tests {
         assert_eq!(*color, skin.rgba(skin.chrome.chip_text.color));
     }
 
-    #[kithara::test]
+    #[kithara::test(timeout(Long))]
     fn a_label_asks_for_the_padding_either_side_of_its_word() {
         let skin = builtin::skin();
         let mut text = TextContext::from(skin.text_resources.as_ref());

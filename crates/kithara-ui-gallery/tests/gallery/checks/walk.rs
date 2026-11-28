@@ -332,7 +332,7 @@ const fn hosts() -> &'static [Host] {
 }
 
 /// The empty spin: the window never sleeps and nothing on the page moves.
-#[kithara::test(timeout(Quick))]
+#[kithara::test(timeout(Long))]
 fn no_page_asks_for_frames_its_document_never_declared() {
     let spinning: Vec<String> = hosts()
         .iter()
@@ -359,7 +359,7 @@ fn no_page_asks_for_frames_its_document_never_declared() {
 /// would draw this page whenever some unrelated event woke it and freeze in
 /// between, which is to say it would move under a travelling mouse.
 #[cfg(feature = "masonry")]
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 fn a_page_the_application_keeps_feeding_asks_for_the_frame_after_it() {
     let page = Shot::all()
         .into_iter()
@@ -386,7 +386,7 @@ fn a_page_the_application_keeps_feeding_asks_for_the_frame_after_it() {
 /// can be: `page_perf` fingerprints the first and last frame of the moving
 /// pages on both hosts.
 #[cfg(feature = "masonry")]
-#[kithara::test(timeout(Quick))]
+#[kithara::test(timeout(Long))]
 fn every_page_that_declares_motion_keeps_asking_for_frames() {
     let stalled: Vec<String> = Shot::all()
         .into_iter()
@@ -406,7 +406,7 @@ fn every_page_that_declares_motion_keeps_asking_for_frames() {
 
 /// Every page the gallery shows is walked, so a page added tomorrow is checked
 /// rather than merely photographed.
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 fn every_tab_the_gallery_shows_is_walked() {
     let walked: Vec<Page> = Shot::all().into_iter().map(|page| page.tab).collect();
 

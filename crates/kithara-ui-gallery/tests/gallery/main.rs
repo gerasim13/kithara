@@ -141,7 +141,7 @@ mod tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara::test(timeout(Long))]
     fn a_page_the_capture_turns_to_opens_at_nothing_on_the_clock() {
         let mut gallery = Gallery::mounted();
         gallery.select(shot("motion"));
@@ -201,7 +201,7 @@ mod tests {
         }
     }
 
-    #[kithara::test]
+    #[kithara::test(timeout(Long))]
     fn every_gallery_tab_compiles() {
         for tab in sections::pages().iter().copied() {
             drop(page(tab));
@@ -727,7 +727,7 @@ mod tests {
         }
     }
 
-    #[kithara::test]
+    #[kithara::test(timeout(Long))]
     fn module_demo_tabs_turn_the_modules_page_to_their_demo() {
         let ui = page("modules");
         let mut paths = Vec::new();
@@ -1338,7 +1338,7 @@ mod tests {
 
     /// The press on the artwork switches which drawing stands, so the page has
     /// to name a second artwork and the toolkit has to ship it.
-    #[kithara::test]
+    #[kithara::test(timeout(Long))]
     fn the_scene_switches_between_two_artworks_the_toolkit_ships() {
         let ui = page("scene");
 

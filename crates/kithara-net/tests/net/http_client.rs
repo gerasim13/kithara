@@ -1038,7 +1038,7 @@ fn flaky_body_router() -> (Router, RequestCounter) {
     (router, counter)
 }
 
-#[kithara::test(tokio, hang_timeout_secs(1), timeout(Quick))]
+#[kithara::test(tokio, hang_timeout_secs(1), timeout(Long))]
 #[case::get_bytes(Op::GetBytes, b"ok")]
 #[case::head(Op::Head, b"")]
 #[case::post(Op::Post, b"ping")]

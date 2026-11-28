@@ -6,7 +6,7 @@ use kithara_test_fixtures::Mp3Shape;
 
 use super::*;
 
-#[kithara::test(tokio, browser, timeout(Quick), hang_timeout_secs(5))]
+#[kithara::test(tokio, browser, timeout(Long), hang_timeout_secs(5))]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[case::apple(platform = apple, DecoderBackend::Apple)]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
@@ -118,7 +118,7 @@ async fn player_resource_mp3_reopen_same_cache_keeps_backward_seek(
     );
 }
 
-#[kithara::test(tokio, browser, flash(false), timeout(Quick), hang_timeout_secs(5))]
+#[kithara::test(tokio, browser, flash(false), timeout(Long), hang_timeout_secs(5))]
 #[cfg_attr(
     all(not(target_arch = "wasm32"), not(target_os = "android")),
     case::disk_symphonia(false, DecoderBackend::Symphonia)

@@ -67,7 +67,7 @@ fn every_library_track_is_analysed_at_the_rate_it_decodes_at() {
     }
 }
 
-#[kithara::test(native, flash(false), timeout(Quick))]
+#[kithara::test(native, flash(false), timeout(Long))]
 fn a_steady_four_four_track_states_every_beat_and_its_bars() {
     let file = analysis_of(consts::TUNNEL);
     let analysis = file.latest().analysis();

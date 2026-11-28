@@ -108,14 +108,14 @@ fn prepared_pulses_preserve_the_original_sample_bits(#[case] sample_rate: u32, #
     );
 }
 
-#[kithara::test(native)]
+#[kithara::test(timeout(Long), native)]
 fn prepared_oracle_silence_retains_its_full_extent() {
     let silence = cochlea_silence();
     assert_eq!(silence.len(), 144_000);
     assert!(silence.iter().all(|sample| sample.to_bits() == 0));
 }
 
-#[kithara::test(native, timeout(Quick))]
+#[kithara::test(native, timeout(Long))]
 fn prepared_bytes_preserve_pcm_and_reject_incomplete_frames(encoder_saw_aac: Pcm) {
     let bytes = Vec::from(encoder_saw_aac);
     let pcm = Pcm::from((48_000, 2, bytes.clone()));

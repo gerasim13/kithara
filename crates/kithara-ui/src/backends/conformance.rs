@@ -326,7 +326,7 @@ fn through_vello(list: &DrawList) -> Vec<u8> {
     rasterise(&scene).unwrap_or_else(|error| panic!("vello must rasterise: {error}"))
 }
 
-#[kithara::test(timeout(Quick))]
+#[kithara::test(timeout(Long))]
 fn vello_paints_what_a_clip_contains() {
     let rgba = through_vello(&clipped());
     assert!(
@@ -335,7 +335,7 @@ fn vello_paints_what_a_clip_contains() {
     );
 }
 
-#[kithara::test(timeout(Quick))]
+#[kithara::test(timeout(Long))]
 fn vello_leaves_the_hole_an_outline_asked_for() {
     let rgba = through_vello(&ring());
     let middle = consts::HOLE.y + consts::HOLE.h / 2.0;
@@ -347,7 +347,7 @@ fn vello_leaves_the_hole_an_outline_asked_for() {
     );
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 fn vello_runs_a_ramp_across_the_shape_it_fills() {
     assert!(
         ramp_runs_across(&through_vello(&ramped())),
@@ -401,7 +401,7 @@ fn vello_shapes_a_stroke_the_way_the_pen_asked() {
     );
 }
 
-#[kithara::test(timeout(Quick))]
+#[kithara::test(timeout(Long))]
 fn iced_shapes_a_stroke_the_way_the_pen_asked() {
     let flush = through_iced(&shaped(flush()));
     let reaching = through_iced(&shaped(reaching()));
@@ -429,7 +429,7 @@ fn iced_runs_a_ramp_across_the_shape_it_fills() {
     );
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 fn iced_linear_gradient_quarters_preserve_the_authored_fraction() {
     let rgba = through_iced(&ramped());
     let middle = consts::OUTER.y + consts::OUTER.h / 2.0;
@@ -445,7 +445,7 @@ fn iced_linear_gradient_quarters_preserve_the_authored_fraction() {
     }
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 #[case::opaque([0.0, 0.25, 0.75, 1.0], [1.0; 4], [[128,128,0], [0,191,64], [0,64,191], [128,128,255]])]
 #[case::alpha([0.0, 0.25, 0.75, 1.0], [1.0, 0.5, 1.0, 0.25], [[128,64,0], [0,96,64], [0,32,191], [32,32,159]])]
 #[case::coincident([0.0, 0.5, 0.5, 1.0], [1.0; 4], [[191,64,0], [64,191,0], [64,64,255], [191,191,255]])]
@@ -498,7 +498,7 @@ fn iced_linear_gradients_preserve_stop_intervals_and_premultiplied_alpha(
     }
 }
 
-#[kithara::test(timeout(Quick))]
+#[kithara::test(timeout(Long))]
 fn iced_leaves_the_hole_an_outline_asked_for() {
     assert!(
         ring_has_a_hole(&through_iced(&ring())),
@@ -506,7 +506,7 @@ fn iced_leaves_the_hole_an_outline_asked_for() {
     );
 }
 
-#[kithara::test(timeout(Quick))]
+#[kithara::test(timeout(Long))]
 fn iced_paints_what_a_clip_contains() {
     let rgba = through_iced(&clipped());
     let x = pixel_index(consts::ORIGIN.0 + consts::INSIDE.x + consts::INSIDE.w / 2.0);

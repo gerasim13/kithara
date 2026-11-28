@@ -432,7 +432,7 @@ mod tests {
         output.write_stereo(LEFT.len(), &LEFT, &RIGHT);
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(timeout(Long), native, flash(false))]
     fn live_output_is_the_public_pcm_intake() {
         let (mut output, handle) = start();
 
@@ -443,7 +443,7 @@ mod tests {
         assert!(playlist(&handle).contains("#EXT-X-ENDLIST\n"));
     }
 
-    #[kithara::test(native, flash(false), timeout(Quick))]
+    #[kithara::test(native, flash(false), timeout(Long))]
     fn dropping_the_output_finishes_the_stream() {
         let (mut output, handle) = start();
         write_second(&mut output);

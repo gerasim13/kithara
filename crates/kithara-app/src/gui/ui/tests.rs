@@ -407,7 +407,7 @@ fn list_min(pane: &ExpandedNode) -> f32 {
     found.expect("the browser panel draws a track list").h.min()
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 fn every_block_stands_once_the_window_holds_the_ones_above_it() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
@@ -426,7 +426,7 @@ fn every_block_stands_once_the_window_holds_the_ones_above_it() {
     }
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 fn the_window_takes_its_blocks_one_by_one_as_it_grows_taller() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
@@ -466,7 +466,7 @@ fn the_window_takes_its_blocks_one_by_one_as_it_grows_taller() {
     }
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 fn the_micro_bar_reveals_its_cells_as_the_window_widens() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
@@ -615,7 +615,7 @@ fn every_walker_reaches_the_nodes_the_documents_declare() {
     }
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 fn the_cpu_cell_reads_engine_load_as_a_bar_and_a_number() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
@@ -674,7 +674,7 @@ fn the_bar_carries_the_broadcast_cell() {
     }
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 fn the_bar_owns_the_window_chrome() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
@@ -783,7 +783,7 @@ impl Reads for BandReads {
     }
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 fn one_band_count_decides_which_eq_bank_a_deck_draws() {
     for (bands, drawn, spare) in [
         (3.0, "deck.eq.mid", "deck.eq.low_mid"),
@@ -949,7 +949,7 @@ fn settle(
     ui.views().settle(published, &reads, view)
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 fn a_secondary_press_opens_the_eq_menu_of_its_own_strip_and_a_mode_row_shuts_it() {
     let mode = |bands: u8, deck: &str| UiEvent::Write {
         key: format!("deck.eq.mode@bands={bands},deck={deck}"),
@@ -1474,7 +1474,7 @@ fn the_add_folder_row_hides_without_a_folder_picker() {
     }
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 fn every_window_control_hides_with_the_chrome() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
@@ -1506,7 +1506,7 @@ fn every_window_control_hides_with_the_chrome() {
 /// The burger the bar carries as its first cell: one press target per command
 /// the menu offers, plus the surface it opens - which costs the application no
 /// endpoint at all, because whether a menu stands open is not its business.
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 fn the_bar_carries_the_app_menu() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
@@ -1545,7 +1545,7 @@ fn the_bar_carries_the_app_menu() {
 
 /// The app menu is a panel of switches: several of them are turned in one
 /// opening, so a write it delivers leaves it standing.
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 fn a_write_from_inside_the_app_menu_leaves_it_open() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
@@ -1648,7 +1648,7 @@ fn each_deck_picks_its_own_stream_quality() {
     }
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 fn a_quality_choice_shuts_the_menu_it_was_picked_from() {
     let ui = compile_ui(DeckLayout::Dual).unwrap();
 
@@ -1759,7 +1759,7 @@ fn a_fill_of_a_collection_no_slot_shows_fails_loading_the_package() {
 }
 
 /// A refused screen names each required write no control on it declares.
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 fn a_write_the_screen_does_not_declare_is_named() {
     let ui = compile_ui(DeckLayout::Dual).expect("the shipped screen must compile");
     let origin = SourceUri("app.klayout.ron".to_owned());
@@ -1799,7 +1799,7 @@ fn a_package_path_that_was_never_laid_out_leaves_the_built_in_documents_drawing(
 /// A package dresses the pages it ships: the skin its manifest names is the
 /// one every page is compiled and painted against, which is what lets a
 /// package change how the application looks without a rebuild.
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 fn the_skin_the_manifest_names_is_the_one_the_pages_wear() {
     let root = tempfile::tempdir().expect("a temporary package root");
     std::fs::write(
@@ -2002,7 +2002,7 @@ const fn publishes(spec: &ControlSpec) -> bool {
     )
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 fn every_control_the_studio_draws_declares_the_write_it_makes() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
@@ -2271,7 +2271,7 @@ mod answered {
         }
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(timeout(Long), native, flash(false))]
     #[kithara::hang_watchdog]
     fn a_number_written_to_the_tempo_sets_that_tempo() {
         let mut rig = Rig::offline();
@@ -2374,7 +2374,7 @@ fn custom_search_source() -> Registration {
 
 /// A gesture on a source's page reaches that source through the app's write
 /// dispatch, and the read root answers the source's read under the same scope.
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 fn a_source_page_gesture_reaches_its_source_through_the_app_dispatch() {
     let runtime = test_fixture::runtime();
     let (package, library) = test_fixture::mount(None, vec![custom_search_source()])

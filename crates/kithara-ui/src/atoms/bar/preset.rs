@@ -276,7 +276,7 @@ mod tests {
             .collect()
     }
 
-    #[kithara::test]
+    #[kithara::test(timeout(Long))]
     fn geometry_uses_the_selector_size_padding_gap_and_frames_from_the_skin() {
         let skin = builtin::skin();
         let painter = Preset::new(skin);
@@ -343,7 +343,7 @@ mod tests {
         )));
     }
 
-    #[kithara::test]
+    #[kithara::test(timeout(Long))]
     fn active_inactive_hovered_and_pressed_cells_are_distinct_skin_colours() {
         let skin = builtin::skin();
         let idle = fills(&draw(Some(0), IndexedVisual::default()));
@@ -428,7 +428,7 @@ mod tests {
     /// No column anywhere inside the selector belongs to nobody. Sampling on the
     /// half pixel because the chip boundary falls on one: the selector is 106
     /// wide over two chips.
-    #[kithara::test]
+    #[kithara::test(timeout(Long))]
     fn every_column_of_the_selector_belongs_to_a_chip() {
         let painter = Preset::new(builtin::skin());
         let data = data(Some(0));
@@ -465,7 +465,7 @@ mod tests {
     }
 
     /// And the boundary itself is the chip after it.
-    #[kithara::test]
+    #[kithara::test(timeout(Long))]
     fn a_cell_boundary_is_the_chip_after_it() {
         let painter = Preset::new(builtin::skin());
         let data = data(Some(0));

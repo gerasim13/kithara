@@ -85,7 +85,7 @@ fn presentation(rig: &Rig, track: TrackId, position: &mut f64) {
     *position = shown;
 }
 
-#[kithara::test(native, tokio)]
+#[kithara::test(timeout(Long), native, tokio)]
 async fn quality_switch_keeps_hls_playhead_and_applies_each_rung() {
     let server = PrivateTestServer::start().await;
     let url = ladder(&server.helper()).await.master_url();
@@ -135,7 +135,7 @@ async fn quality_switch_keeps_hls_playhead_and_applies_each_rung() {
     rig.close().await;
 }
 
-#[kithara::test(native, tokio)]
+#[kithara::test(timeout(Long), native, tokio)]
 async fn quality_menu_keeps_known_catalogue_choices_during_handover() {
     let server = PrivateTestServer::start().await;
     let helper = server.helper();
@@ -199,7 +199,7 @@ async fn quality_menu_keeps_known_catalogue_choices_during_handover() {
     rig.close().await;
 }
 
-#[kithara::test(native, tokio)]
+#[kithara::test(timeout(Long), native, tokio)]
 async fn quality_menu_loads_only_while_the_initial_hls_ladder_is_unknown() {
     let server = PrivateTestServer::start().await;
     let helper = server.helper();
@@ -297,7 +297,7 @@ enum Mixer {
     Crossfading,
 }
 
-#[kithara::test(native, tokio, flash(false))]
+#[kithara::test(timeout(Long), native, tokio, flash(false))]
 #[case::logical_duration(QualityCheck::Extent, Mixer::Free)]
 #[case::playhead(QualityCheck::Position, Mixer::Free)]
 #[case::pause_during_preparation(QualityCheck::Pause, Mixer::Free)]

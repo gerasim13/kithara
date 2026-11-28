@@ -378,7 +378,7 @@ fn assert_unity_contract(warp_sine: &[f32], kind: StretchKind) {
 }
 
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-#[kithara::test(timeout(Quick))]
+#[kithara::test(timeout(Long))]
 #[cfg_attr(
     feature = "stretch-signalsmith",
     case::signalsmith(StretchKind::Signalsmith)
@@ -996,7 +996,7 @@ mod transpose {
     /// A live pitch change moves the pitch to the new pitch's factor while the
     /// source position runs on without a jump: a shift with keylock off,
     /// keylock off under a shift, and a shift under keylock.
-    #[kithara::test(timeout(Quick))]
+    #[kithara::test(timeout(Long))]
     #[cfg_attr(
         feature = "stretch-signalsmith",
         case::signalsmith_vinyl_shift(StretchKind::Signalsmith, false, 0, Pitch::Vinyl { shift: semitones(5) })

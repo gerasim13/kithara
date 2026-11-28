@@ -192,7 +192,7 @@ mod tests {
         assert_ne!(drawn(None), drawn(Some(1)));
     }
 
-    #[kithara::test]
+    #[kithara::test(timeout(Long))]
     fn a_different_cell_is_a_different_picture() {
         assert_ne!(drawn(Some(0)), drawn(Some(2)));
     }

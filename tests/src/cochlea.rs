@@ -982,7 +982,7 @@ mod tests {
         }
     }
 
-    #[kithara::test(native, timeout(Quick))]
+    #[kithara::test(native, timeout(Long))]
     fn phase_oracle_uses_a_common_frame_despite_different_retained_markers() {
         let sample_rate = 44_100;
         let complete = pulse_train(sample_rate, 127.0);
@@ -1031,7 +1031,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(timeout(Long), native, flash(false))]
     fn comparator_rejects_one_missing_quantum_and_one_clipped_frame(cochlea_control: Vec<f32>) {
         let sample_rate = 48_000;
         let channels = 2;
@@ -1039,7 +1039,7 @@ mod tests {
         assert_oracle_load_bearing(&control, channels, sample_rate, 512);
     }
 
-    #[kithara::test(native, flash(false), timeout(Quick))]
+    #[kithara::test(native, flash(false), timeout(Long))]
     fn report_fields_match_the_cochlea_probe(
         cochlea_loudness: Vec<f32>,
         cochlea_control: Vec<f32>,

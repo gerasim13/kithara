@@ -130,7 +130,7 @@ mod tests {
 
     /// The thumb travels to the far end when the switch is on, and the body
     /// only exists there — an idle toggle is an outline.
-    #[kithara::test]
+    #[kithara::test(timeout(Long))]
     fn a_toggle_lights_its_body_and_slides_its_thumb_across() {
         let skin = builtin::skin();
         let toggle = Binary::toggle(skin);

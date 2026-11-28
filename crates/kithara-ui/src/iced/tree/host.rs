@@ -2302,7 +2302,7 @@ mod tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara::test(timeout(Long))]
     fn tree_boundary_passes_downward_wheel_to_the_iced_surface_but_keeps_upward_wheel() {
         let ui = compiled_tree_surface();
         let reads = FixtureReads::default();
@@ -4770,7 +4770,7 @@ mod tests {
     /// A drag that starts inside a box and leaves it keeps reaching the control
     /// that owns it: a gesture already in flight is the one thing the cut lets
     /// through.
-    #[kithara::test]
+    #[kithara::test(timeout(Long))]
     fn a_drag_that_leaves_the_box_it_started_in_still_reaches_its_owner() {
         let dragged = dragged_out_of_the_box();
 

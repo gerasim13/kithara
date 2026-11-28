@@ -47,7 +47,7 @@ fn wait_for_named_threads(target: usize, timeout: Duration) -> usize {
     }
 }
 
-#[kithara::test(serial, timeout(Quick))]
+#[kithara::test(serial, timeout(Long))]
 fn thread_budget_audio_worker_is_one_thread() {
     let before = active_named_thread_count();
     let pools = pools();

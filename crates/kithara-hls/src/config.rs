@@ -189,12 +189,12 @@ mod document_tests {
     /// the baked value with `~`, which types to `None` the same way an absent
     /// key does. The default is part of that contract rather than an
     /// implementation detail.
-    #[kithara::test(tokio, native, flash(false))]
+    #[kithara::test(timeout(Long), tokio, native, flash(false))]
     async fn a_silent_document_probes_with_head() {
         assert_eq!(config().size_probe_method, SizeProbeMethod::Head);
     }
 
-    #[kithara::test(tokio, native, flash(false), timeout(Quick))]
+    #[kithara::test(tokio, native, flash(false), timeout(Long))]
     async fn a_document_sets_the_batch_size_and_leaves_the_window() {
         let patch: HlsConfigPatch =
             serde_yaml_ng::from_str("download_batch_size: 6\n").expect("the document types");

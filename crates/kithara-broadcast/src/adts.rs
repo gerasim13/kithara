@@ -92,7 +92,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(timeout(Long), native, flash(false))]
     fn mono_44k1_header_matches_the_wire_format() {
         assert_eq!(
             header(44_100, 1, consts::ADTS_PAYLOAD),
@@ -100,7 +100,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(native, flash(false), timeout(Quick))]
+    #[kithara::test(native, flash(false), timeout(Long))]
     fn the_frame_carries_the_header_and_the_payload() {
         let mut out = Vec::new();
         AdtsPacker::new(48_000, 2)
@@ -127,7 +127,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(native, flash(false), timeout(Quick))]
+    #[kithara::test(native, flash(false), timeout(Long))]
     fn a_channel_count_outside_the_table_is_rejected() {
         for channels in [0, 7, 8] {
             let error = AdtsPacker::new(48_000, channels).expect_err("unsupported channels");

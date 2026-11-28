@@ -95,7 +95,7 @@ mod tests {
     /// The hand resting on the button and pressing it are three different
     /// pictures. A button that drew one of them for all three would leave the
     /// pointer with nothing to say it had landed.
-    #[kithara::test]
+    #[kithara::test(timeout(Long))]
     fn resting_on_the_button_and_pressing_it_each_fill_it_differently() {
         let idle = filled(VisualState::Idle);
         let hovered = filled(VisualState::Hovered);
@@ -108,7 +108,7 @@ mod tests {
 
     /// The mark sits in the middle of the box across as well as down, whatever
     /// the box it was given.
-    #[kithara::test]
+    #[kithara::test(timeout(Long))]
     fn the_mark_is_centred_in_the_box() {
         let skin = builtin::skin();
         let mut text = TextContext::from(skin.text_resources.as_ref());

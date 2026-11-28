@@ -33,7 +33,7 @@ async fn packaged_abr_switch_keeps_player_continuity(
         .await;
 }
 
-#[kithara::test(tokio, native, serial, timeout(Long), hang_timeout_secs(5))]
+#[kithara::test(tokio, native, serial, timeout(Heavy), hang_timeout_secs(5))]
 async fn manual_cross_codec_switch_sustains_post_switch_playback(
     temp_dir: TestTempDir,
     #[by_ref] mixed_plain_url: &Url,

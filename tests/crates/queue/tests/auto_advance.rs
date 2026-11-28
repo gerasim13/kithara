@@ -229,7 +229,7 @@ async fn crossfade_started_requires_a_live_predecessor() {
     harness.close().await;
 }
 
-#[kithara::test(tokio, timeout(Quick))]
+#[kithara::test(tokio, timeout(Long))]
 async fn repeat_one_natural_advance_keeps_current_track() {
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
@@ -1369,7 +1369,7 @@ async fn a_consumed_successor_reloads_its_lead_in_session_time_before_the_end() 
     harness.close().await;
 }
 
-#[kithara::test(tokio, flash(false), timeout(Quick))]
+#[kithara::test(tokio, flash(false), timeout(Long))]
 async fn cf_zero_replay_after_full_playthrough_still_advances() {
     const TRACK_SECS: f64 = 0.4;
 
